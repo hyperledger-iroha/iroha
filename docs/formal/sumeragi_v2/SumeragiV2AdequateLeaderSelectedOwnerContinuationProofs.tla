@@ -26,10 +26,13 @@ two smaller obligations:
   2. an active-continuation residual, which still must materialize into the
      existing universal occurrence-service goal.
 
-No live provider is asserted for either property below.  The transition-level
-source theorem may close the first obligation only after it covers every
-ignored/no-state-change departure.  The second obligation additionally needs
-fair service of the retained continuation; preservation alone is insufficient.
+The transition-level source theorem may close the first obligation only after
+it covers every ignored/no-state-change departure.  The second obligation is
+closed below for the exact frozen-voter owner: ordinary timeout progress
+either makes a dormant Reserved record ready/stale, then the existing three
+source-class actions fairly drain the finite retained prefix.  Preservation
+alone remains insufficient, and no fairness is added for non-voter historical
+targets.
 ***************************************************************************)
 
 AdequateLeaderTargetSelectedOwnerExactProducerContinuation(
@@ -1042,8 +1045,9 @@ clauses without importing liveness theorems back into the base transition
 module.
 ***************************************************************************)
 THEOREM AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix ==
-  \A target, leaderContext, leader, leaderView,
+  \A initialContext, target, leaderContext, leader, leaderView,
      subject, sourceOccurrenceRank, known, owner, sourceCandidates:
+    /\ AsyncFrozenContextAt(initialContext)
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -1064,10 +1068,12 @@ THEOREM AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix ==
                 AdequateLeaderFrozenCandidateOwnerIdentity(
                   candidate, sourceOccurrenceRank[1],
                   target, leaderContext, leader, leaderView, subject)
+           /\ record.node \in AsyncVotersAt(initialContext)
            /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
                 record.node, record.identity, record.ordinal,
                 record.address.stage, "Reserved", budget)
 BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
+   FrozenContextFixesResponsiveVoters,
    IsaT(900)
    DEF AdequateLeaderTargetSelectedOwnerReservedContinuationResidual,
        AdequateLeaderTargetSelectedOwnerExactReservedContinuation,
@@ -1076,6 +1082,7 @@ BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
        AdequateLeaderTargetSelectedOwnerNonContinuationTerminal,
        AdequateLeaderFrozenTargetCandidateIdentity,
        AdequateLeaderFrozenTargetCorridor,
+       ExactLeaderFrozenSemanticIdentity,
        AsyncCandidateProducerContinuationFrozenPrefixAtBudget,
        AsyncCandidateProducerContinuationTargetAtStatus,
        AsyncCandidateProducerContinuationFrozenPrefixRank,
@@ -1085,12 +1092,15 @@ BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationRecordSet,
        AsyncCandidateProducerContinuationRecord,
+       AsyncCandidateServiceIdentity,
+       AsyncCurrentResponsiveVoters, CurrentVoters,
        AsyncControlServiceStateTypeInvariant,
        AsyncStrongTypeInvariant
 
 THEOREM AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix ==
-  \A target, leaderContext, leader, leaderView,
+  \A initialContext, target, leaderContext, leader, leaderView,
      subject, sourceOccurrenceRank, known, owner, sourceCandidates:
+    /\ AsyncFrozenContextAt(initialContext)
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ AsyncCandidateServiceLifecycleInvariant
@@ -1111,10 +1121,12 @@ THEOREM AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix ==
                 AdequateLeaderFrozenCandidateOwnerIdentity(
                   candidate, sourceOccurrenceRank[1],
                   target, leaderContext, leader, leaderView, subject)
+           /\ record.node \in AsyncVotersAt(initialContext)
            /\ AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
                 record.node, record.identity, record.ordinal,
                 record.address.stage, "Materialized", budget)
 BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
+   FrozenContextFixesResponsiveVoters,
    IsaT(900)
    DEF AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual,
        AdequateLeaderTargetSelectedOwnerExactMaterializedContinuation,
@@ -1123,6 +1135,7 @@ BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
        AdequateLeaderTargetSelectedOwnerNonContinuationTerminal,
        AdequateLeaderFrozenTargetCandidateIdentity,
        AdequateLeaderFrozenTargetCorridor,
+       ExactLeaderFrozenSemanticIdentity,
        AsyncCandidateProducerContinuationFrozenPrefixAtBudget,
        AsyncCandidateProducerContinuationTargetAtStatus,
        AsyncCandidateProducerContinuationFrozenPrefixRank,
@@ -1132,6 +1145,8 @@ BY CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationRecordSet,
        AsyncCandidateProducerContinuationRecord,
+       AsyncCandidateServiceIdentity,
+       AsyncCurrentResponsiveVoters, CurrentVoters,
        AsyncControlServiceStateTypeInvariant,
        AsyncStrongTypeInvariant
 
@@ -1240,12 +1255,101 @@ BY IsaT(1200)
        AsyncCandidateProducerContinuationRecordsForIdentityIn,
        AdequateLeaderFrozenTargetCorridor
 
+(***************************************************************************
+Unconditional voter-scoped dormant-reservation closure.
+
+The retained record is not granted a new fair action.  Its frozen voter owns
+the ordinary timeout/view corridor already provided by AsyncLiveSpec.  If no
+concrete successor or deterministic retirement makes the Reserved record
+ready first, timeout progress makes its immutable view stale (or installs a
+Decision), which is exactly the existing durable-terminal arm.
+
+The helper is deliberately scoped to AsyncVotersAt(initialContext).  The two
+adequate-leader continuation entry theorems below derive that membership from
+the selected frozen candidate identity before consuming the helper.
+
+The timeout premise below is the direct lower per-voter residual/decomposition:
+it does not use AsyncTemporalClosureTimeoutViewProgressObligation, rotating
+leader convergence, adequate-leader closure, or any selected-owner/Authority
+provider.  Although that lower theorem is visible here through the transitive
+RotatingLeaderProgressProofs import, no rotating theorem is a proof dependency.
+This keeps the continuation supplier below those composition layers.
+***************************************************************************)
+THEOREM AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure ==
+  \A initialContext:
+    AsyncCandidateProducerContinuationDormantReservationClosureProperty(
+      AsyncLiveSpecAt(initialContext), initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE
+           AsyncCandidateProducerContinuationDormantReservationClosureProperty(
+             AsyncLiveSpecAt(initialContext), initialContext)
+    <2>1. TimeoutViewProgressProperty(AsyncLiveSpecAt(initialContext))
+      BY AsyncLiveProvidesDirectTimeoutViewClosureResidual,
+         DirectTimeoutViewDecompositionClosesTimeoutViewProgress
+    <2>2. AsyncLiveSpecAt(initialContext)
+            => [](AsyncCurrentResponsiveVoters
+                    = AsyncVotersAt(initialContext))
+      BY AsyncLiveSpecProjectsAsyncSpec,
+         AsyncSpecAlwaysUsesFixedResponsiveVoters, PTL
+    <2>3. ASSUME NEW node \in AsyncVotersAt(initialContext),
+                  NEW record
+                    \in AsyncCandidateProducerContinuationRecordSet,
+                  AsyncLiveSpecAt(initialContext)
+           PROVE
+             /\ gst
+             /\ record =
+                  AsyncCandidateProducerContinuationSelectedResolutionRecord(
+                    node)
+             /\ record.status = "Reserved"
+             /\ record
+                  \in
+                    AsyncCandidateProducerContinuationResolutionRecordsForNode(
+                      node)
+               ~>
+                 AsyncCandidateProducerContinuationDormantReservationGoal(
+                   record)
+      <3>1. []( /\ gst
+                 /\ record =
+                      AsyncCandidateProducerContinuationSelectedResolutionRecord(
+                        node)
+                 /\ record.status = "Reserved"
+                 /\ record
+                      \in
+                        AsyncCandidateProducerContinuationResolutionRecordsForNode(
+                          node)
+                   => /\ node \in AsyncCurrentResponsiveVoters
+                      /\ record.node = node
+                      /\ nodeView[node] = record.view
+                      /\ ~NodeHasDecision(node))
+        BY <2>2, <2>3, PTL, Isa
+           DEF AsyncCandidateProducerContinuationResolutionRecordsForNode
+      <3>2. (gst
+                /\ nodeView[node] = record.view
+                /\ ~NodeHasDecision(node))
+               ~> (nodeView[node] > record.view
+                     \/ NodeHasDecision(node))
+        BY <2>1, <2>2, <2>3, PTL
+           DEF TimeoutViewProgressProperty
+      <3>3. []( /\ record.node = node
+                 /\ (nodeView[node] > record.view
+                       \/ NodeHasDecision(node))
+                   => AsyncCandidateProducerContinuationDormantReservationGoal(
+                        record))
+        BY Isa, PTL
+           DEF AsyncCandidateProducerContinuationDormantReservationGoal,
+               AsyncCandidateProducerContinuationDurableTerminal
+      <3> QED BY <3>1, <3>2, <3>3, PTL
+    <2> QED BY <2>3
+         DEF AsyncCandidateProducerContinuationDormantReservationClosureProperty
+  <1> QED BY <1>1
+
 THEOREM CandidateProducerDormantClosureProvidesFrozenPrefixDescent ==
   \A initialContext:
     AsyncCandidateProducerContinuationDormantReservationClosureProperty(
-      AsyncLiveSpecAt(initialContext))
+      AsyncLiveSpecAt(initialContext), initialContext)
       => AsyncCandidateProducerContinuationFrozenPrefixDescentProperty(
-           AsyncLiveSpecAt(initialContext))
+           AsyncLiveSpecAt(initialContext), initialContext)
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
    AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
@@ -1273,9 +1377,9 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
 THEOREM CandidateProducerDormantClosureClosesFrozenPrefix ==
   \A initialContext:
     AsyncCandidateProducerContinuationDormantReservationClosureProperty(
-      AsyncLiveSpecAt(initialContext))
+      AsyncLiveSpecAt(initialContext), initialContext)
       => AsyncCandidateProducerContinuationFrozenPrefixClosureProperty(
-           AsyncLiveSpecAt(initialContext))
+           AsyncLiveSpecAt(initialContext), initialContext)
 BY CandidateProducerDormantClosureProvidesFrozenPrefixDescent,
    CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded,
    WellFoundedLeadsTo
@@ -1284,6 +1388,13 @@ BY CandidateProducerDormantClosureProvidesFrozenPrefixDescent,
        AsyncCandidateProducerContinuationPrefixDescentGoal,
        AsyncCandidateProducerContinuationFrozenPrefixRankOrdering,
        AsyncCandidateProducerContinuationFrozenPrefixRankCarrier
+
+THEOREM AsyncLiveProvidesCandidateProducerContinuationFrozenPrefixClosure ==
+  \A initialContext:
+    AsyncCandidateProducerContinuationFrozenPrefixClosureProperty(
+      AsyncLiveSpecAt(initialContext), initialContext)
+BY AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure,
+   CandidateProducerDormantClosureClosesFrozenPrefix
 
 AdequateLeaderTargetSelectedOwnerContinuationOriginExposureProperty(
     specification) ==
@@ -1489,12 +1600,13 @@ AdequateLeaderTargetSelectedOwnerActiveContinuationClosureProperty(
 THEOREM CandidateProducerDormantClosureProvidesReservedContinuationStep ==
   \A initialContext:
     AsyncCandidateProducerContinuationDormantReservationClosureProperty(
-      AsyncLiveSpecAt(initialContext))
+      AsyncLiveSpecAt(initialContext), initialContext)
       => AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty(
            AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
    AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysKeepsFrozenContext,
    CandidateProducerDormantClosureClosesFrozenPrefix,
    AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix,
    AdequateLeaderSelectedOwnerSemanticDebtPersistsUnlessUniversalGoal,
@@ -1510,12 +1622,13 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
 THEOREM CandidateProducerDormantClosureProvidesMaterializedContinuationStep ==
   \A initialContext:
     AsyncCandidateProducerContinuationDormantReservationClosureProperty(
-      AsyncLiveSpecAt(initialContext))
+      AsyncLiveSpecAt(initialContext), initialContext)
       => AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty(
            AsyncLiveSpecAt(initialContext))
 BY AsyncSpecAlwaysStrongTypeInvariant,
    AsyncSpecAlwaysProgressOwnershipInvariant,
    AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysKeepsFrozenContext,
    CandidateProducerDormantClosureClosesFrozenPrefix,
    AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix,
    AdequateLeaderSelectedOwnerSemanticDebtPersistsUnlessUniversalGoal,
@@ -1526,6 +1639,20 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
        AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual,
        AsyncCandidateProducerContinuationFrozenPrefixClosureProperty,
        AsyncCandidateProducerContinuationTargetStatusExit
+
+THEOREM AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerReservedContinuationStep ==
+  \A initialContext:
+    AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure,
+   CandidateProducerDormantClosureProvidesReservedContinuationStep
+
+THEOREM AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerMaterializedContinuationStep ==
+  \A initialContext:
+    AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure,
+   CandidateProducerDormantClosureProvidesMaterializedContinuationStep
 
 THEOREM AdequateLeaderMaterializedStepAndTerminalProjectionProvideClosure ==
   \A specification:

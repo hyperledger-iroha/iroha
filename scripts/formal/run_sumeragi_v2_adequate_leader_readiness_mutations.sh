@@ -55,6 +55,8 @@ models=(
   SumeragiV2AdequateLeaderCrashParkingMutation
   SumeragiV2AdequateLeaderMutualOwnerAnchorMutation
   SumeragiV2AdequateLeaderBusyIdleProvenanceMutation
+  SumeragiV2AdequateLeaderDormantNonDescentMutation
+  SumeragiV2AdequateLeaderSubjectReplacementDormantMutation
 )
 
 for module in "${models[@]}"; do
@@ -155,5 +157,36 @@ run_case busy-idle-provenance-mutation \
   'phase = "Idle"' \
   "2 states generated, 2 distinct states found, 0 states left on queue." \
   "depth of the complete state graph search is 2"
+
+run_case dormant-non-descent-inert-fixed \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_inert_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case dormant-non-descent-inert-owner-mutation \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_inert_owner_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "Stuttering"
+
+run_case dormant-non-descent-retry-fixed \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_retry_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case dormant-non-descent-omitted-potential-mutation \
+  SumeragiV2AdequateLeaderDormantNonDescentMutation.tla \
+  adequate_leader_dormant_non_descent_omitted_potential_bug.cfg 12 \
+  "Invariant ReactivationConsumesFrozenPotentialBudget is violated."
+
+run_case subject-replacement-dormant-fixed \
+  SumeragiV2AdequateLeaderSubjectReplacementDormantMutation.tla \
+  adequate_leader_subject_replacement_dormant_fixed.cfg 0 \
+  "Model checking completed. No error has been found."
+
+run_case subject-replacement-dormant-omitted-potential-mutation \
+  SumeragiV2AdequateLeaderSubjectReplacementDormantMutation.tla \
+  adequate_leader_subject_replacement_dormant_omitted_potential_bug.cfg 12 \
+  "Invariant ActivationConsumesPotentialBeforeAddingPredecessor is violated."
 
 echo "[tlc] adequate-leader readiness mutation matrix passed"

@@ -24,15 +24,25 @@ use norito::codec::{Decode, DecodeAll, Encode};
 use super::{
     FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken,
     v2_body_store::DurableBodyReceipt,
+    v2_core::{
+        CanonicalIdentityProjection, IDENTITY_DOMAIN_PROCESS_LOCAL,
+        IDENTITY_KIND_LEADER_WIRE_LIFECYCLE, LEADER_WIRE_ADMISSION_COALESCE,
+        LEADER_WIRE_ADMISSION_INSERT, LEADER_WIRE_ADMISSION_REACTIVATE,
+        LEADER_WIRE_ADMISSION_REPLACE_TERMINAL, LEADER_WIRE_LIFECYCLE_ABSENT,
+        LEADER_WIRE_LIFECYCLE_DORMANT, LEADER_WIRE_LIFECYCLE_INGRESS,
+        LEADER_WIRE_LIFECYCLE_RUNTIME, LEADER_WIRE_LIFECYCLE_TERMINAL,
+        LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL, ProductionLeaderWireAdmissionTraceProjection,
+        check_production_leader_wire_admission_transition,
+    },
 };
 
 // Version 3 records only restart-safe terminal retirements. Version 4 adds a
 // separate, equally bounded producer-continuation lifecycle table. Active
 // records retain identity/slot/ordinal metadata but never claim to persist the
-// command payload: restart normalizes them to Reserved and admits exact replay
-// under the same immutable identity. Version 2 snapshots contained volatile
-// successful-service markers and must still fail closed instead of suppressing
-// reconstruction after restart.
+// command payload: restart normalizes them to selector-inert Dormant and
+// admits exact replay under the same immutable identity. Version 2 snapshots
+// contained volatile successful-service markers and must still fail closed
+// instead of suppressing reconstruction after restart.
 const FORMAT_VERSION_V3: u16 = 3;
 const FORMAT_VERSION: u16 = 4;
 const FRAME_MAGIC: &[u8; 8] = b"SUMVCAND";
@@ -573,8 +583,22 @@ pub(crate) enum LeaderWireLifecycleStatus {
 }
 
 impl LeaderWireLifecycleStatus {
+    /// Whether this logical lifecycle still blocks replacement of its slot.
+    ///
+    /// Dormant is live for anti-ABA ownership but owns no selector turn until
+    /// exact atomic readmission publishes `Ingress`.
     const fn is_active(self) -> bool {
         matches!(self, Self::Dormant | Self::Ingress | Self::Runtime)
+    }
+
+    const fn refinement_code(self) -> u8 {
+        match self {
+            Self::Dormant => LEADER_WIRE_LIFECYCLE_DORMANT,
+            Self::Ingress => LEADER_WIRE_LIFECYCLE_INGRESS,
+            Self::Runtime => LEADER_WIRE_LIFECYCLE_RUNTIME,
+            Self::VolatileTerminal => LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL,
+            Self::Terminal => LEADER_WIRE_LIFECYCLE_TERMINAL,
+        }
     }
 }
 
@@ -752,6 +776,122 @@ struct LeaderWireLifecycleState {
     /// the exact packet passes current ingress capacity checks and
     /// `admit_ingress` atomically reactivates the slot.
     replay_dormant: BTreeSet<FairV2IngressLeaderWireSlot>,
+}
+
+fn leader_wire_lifecycle_identity_projection(
+    token: &FairV2IngressLeaderWireToken,
+) -> CanonicalIdentityProjection {
+    let identity = token.identity_hash();
+    CanonicalIdentityProjection::from_bytes(
+        IDENTITY_DOMAIN_PROCESS_LOCAL,
+        IDENTITY_KIND_LEADER_WIRE_LIFECYCLE,
+        *identity.as_ref(),
+    )
+}
+
+fn leader_wire_admission_trace_projection(
+    state: &LeaderWireLifecycleState,
+    capacity: usize,
+    token: &FairV2IngressLeaderWireToken,
+    incumbent: Option<&PersistedLeaderWireLifecycleRecord>,
+    operation: u8,
+) -> Result<ProductionLeaderWireAdmissionTraceProjection, String> {
+    let records_before = u64::try_from(state.records.len())
+        .map_err(|_| "leader-wire lifecycle record count is not representable".to_owned())?;
+    let capacity = u64::try_from(capacity)
+        .map_err(|_| "leader-wire lifecycle capacity is not representable".to_owned())?;
+    let records_after = if operation == LEADER_WIRE_ADMISSION_INSERT {
+        records_before
+            .checked_add(1)
+            .ok_or_else(|| "leader-wire lifecycle record count overflowed".to_owned())?
+    } else {
+        records_before
+    };
+    let incoming_identity = leader_wire_lifecycle_identity_projection(token);
+    let incumbent_identity = incumbent.map_or_else(CanonicalIdentityProjection::zero, |record| {
+        leader_wire_lifecycle_identity_projection(&record.token)
+    });
+    let status_before = incumbent
+        .map(|record| record.status.refinement_code())
+        .unwrap_or(LEADER_WIRE_LIFECYCLE_ABSENT);
+    let status_after = incumbent
+        .filter(|_| operation == LEADER_WIRE_ADMISSION_COALESCE)
+        .map(|record| record.status.refinement_code())
+        .unwrap_or(LEADER_WIRE_LIFECYCLE_INGRESS);
+    let last_admission_ordinal_before = u128::from(state.last_admission_ordinal);
+    let updates_high_watermarks = matches!(
+        operation,
+        LEADER_WIRE_ADMISSION_INSERT | LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+    );
+    let runtime_owner_before = incumbent.is_some_and(|record| record.runtime_owner.is_some());
+    let terminal_evidence_before =
+        incumbent.is_some_and(|record| record.terminal_evidence.is_some());
+    let retains_incumbent_runtime_owner = matches!(
+        operation,
+        LEADER_WIRE_ADMISSION_COALESCE | LEADER_WIRE_ADMISSION_REACTIVATE
+    );
+    let retains_incumbent_ordinals = matches!(
+        operation,
+        LEADER_WIRE_ADMISSION_COALESCE | LEADER_WIRE_ADMISSION_REACTIVATE
+    );
+    let stored_admission_ordinal = if retains_incumbent_ordinals {
+        incumbent
+            .map(|record| u128::from(record.token.admission_ordinal))
+            .ok_or_else(|| {
+                "leader-wire retry projection lost its incumbent admission ordinal".to_owned()
+            })?
+    } else {
+        u128::from(token.admission_ordinal)
+    };
+    let stored_scheduler_ordinal = if retains_incumbent_ordinals {
+        incumbent
+            .map(|record| record.token.scheduler_ordinal)
+            .ok_or_else(|| {
+                "leader-wire retry projection lost its incumbent scheduler ordinal".to_owned()
+            })?
+    } else {
+        token.scheduler_ordinal
+    };
+    Ok(ProductionLeaderWireAdmissionTraceProjection {
+        operation,
+        incoming_identity,
+        incumbent_identity,
+        stored_identity: incoming_identity,
+        incoming_view: token.identity.view,
+        incumbent_view: incumbent.map_or(0, |record| record.token.identity.view),
+        stored_view: token.identity.view,
+        incoming_admission_ordinal: u128::from(token.admission_ordinal),
+        incumbent_admission_ordinal: incumbent
+            .map_or(0, |record| u128::from(record.token.admission_ordinal)),
+        stored_admission_ordinal,
+        incoming_scheduler_ordinal: token.scheduler_ordinal,
+        incumbent_scheduler_ordinal: incumbent.map_or(0, |record| record.token.scheduler_ordinal),
+        stored_scheduler_ordinal,
+        last_admission_ordinal_before,
+        last_admission_ordinal_after: if updates_high_watermarks {
+            u128::from(token.admission_ordinal)
+        } else {
+            last_admission_ordinal_before
+        },
+        scheduler_ordinal_high_watermark_before: state.scheduler_ordinal_high_watermark,
+        scheduler_ordinal_high_watermark_after: if updates_high_watermarks {
+            token.scheduler_ordinal
+        } else {
+            state.scheduler_ordinal_high_watermark
+        },
+        records_before,
+        records_after,
+        capacity,
+        status_before,
+        status_after,
+        replay_dormant_before: state.replay_dormant.contains(&token.slot),
+        replay_dormant_after: false,
+        runtime_owner_before,
+        runtime_owner_after: retains_incumbent_runtime_owner && runtime_owner_before,
+        terminal_evidence_before,
+        terminal_evidence_after: operation == LEADER_WIRE_ADMISSION_COALESCE
+            && terminal_evidence_before,
+    })
 }
 
 /// Validated restart image for binding the fair-ingress in-memory owner table.
@@ -1461,9 +1601,25 @@ impl LeaderWireLifecycleStoreGate {
             .state
             .lock()
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
-        if let Some(incumbent) = state.records.get(&token.slot).cloned() {
+        let incumbent = state.records.get(&token.slot).cloned();
+        if let Some(incumbent) = incumbent.as_ref() {
             if incumbent.token.identity == token.identity {
                 if incumbent.status == LeaderWireLifecycleStatus::Dormant {
+                    let trace = leader_wire_admission_trace_projection(
+                        &state,
+                        self.capacity,
+                        &token,
+                        Some(incumbent),
+                        LEADER_WIRE_ADMISSION_REACTIVATE,
+                    )?;
+                    let checked_transition = check_production_leader_wire_admission_transition(
+                        trace,
+                    )
+                    .ok_or_else(|| {
+                        "leader-wire Dormant reactivation failed its lifecycle refinement"
+                            .to_owned()
+                    })?;
+                    let _authorized_transition = checked_transition.into_projection();
                     let previous = state.clone();
                     state
                         .records
@@ -1476,13 +1632,25 @@ impl LeaderWireLifecycleStoreGate {
                         return Err(error);
                     }
                     return Ok(LeaderWireLifecycleAdmissionReceipt {
-                        token: incumbent.token,
+                        token: incumbent.token.clone(),
                         status: LeaderWireLifecycleStatus::Ingress,
                         inserted: false,
                     });
                 }
+                let trace = leader_wire_admission_trace_projection(
+                    &state,
+                    self.capacity,
+                    &token,
+                    Some(incumbent),
+                    LEADER_WIRE_ADMISSION_COALESCE,
+                )?;
+                let checked_transition = check_production_leader_wire_admission_transition(trace)
+                    .ok_or_else(|| {
+                    "leader-wire exact retry failed its coalescing lifecycle refinement".to_owned()
+                })?;
+                let _authorized_transition = checked_transition.into_projection();
                 return Ok(LeaderWireLifecycleAdmissionReceipt {
-                    token: incumbent.token,
+                    token: incumbent.token.clone(),
                     status: incumbent.status,
                     inserted: false,
                 });
@@ -1507,6 +1675,21 @@ impl LeaderWireLifecycleStoreGate {
         if token.scheduler_ordinal <= state.scheduler_ordinal_high_watermark {
             return Err("new leader-wire admission reused an old scheduler ordinal".to_owned());
         }
+        let operation = if incumbent.is_some() {
+            LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
+        } else {
+            LEADER_WIRE_ADMISSION_INSERT
+        };
+        let trace = leader_wire_admission_trace_projection(
+            &state,
+            self.capacity,
+            &token,
+            incumbent.as_ref(),
+            operation,
+        )?;
+        let checked_transition = check_production_leader_wire_admission_transition(trace)
+            .ok_or_else(|| "leader-wire admission failed its lifecycle refinement".to_owned())?;
+        let _authorized_transition = checked_transition.into_projection();
         let previous = state.clone();
         state.last_admission_ordinal = token.admission_ordinal;
         state.scheduler_ordinal_high_watermark = token.scheduler_ordinal;

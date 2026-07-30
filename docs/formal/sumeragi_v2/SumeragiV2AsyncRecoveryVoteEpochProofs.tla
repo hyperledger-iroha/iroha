@@ -2036,6 +2036,8 @@ BY PopSelectedIngressDoesNotCreateServeIngressOwners,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AsyncIoVars, AsyncServeIngressAdmissionVars,
        AsyncServeLifecycleVars, AsyncDeferredVars,
        AsyncLocalAdmissionVars, vars
@@ -2292,6 +2294,11 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncTransportTypeInvariant,
              AsyncTransportClockTypeInvariant
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      BY <2>1r, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
@@ -2322,7 +2329,7 @@ PROOF
       BY <2>5, Isa DEF AsyncServeIngressTargetOnlyTurn, vars
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <2>6, SerializedLocalPredecessorLeavesOutstandingTags
-    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <1>1, <2>1r, <2>2, <2>3, <2>4, <2>5, <2>6
          DEF RunNodeWork
   <1> QED BY <1>1
 
@@ -2651,6 +2658,8 @@ BY ReplayingLocalAdmissionDoesNotCreateRecoveryCandidate,
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AsyncRecoveryExecutionInvariant,
        AsyncRecoveryControlVars, AsyncRecoveryVars, vars
 
@@ -2775,12 +2784,18 @@ PROOF
          PROVE asyncOutstandingTags'[node] = {}
     <2>1. asyncOutstandingTags[node] = {}
       BY <1>1 DEF AsyncRecoveryExecutionInvariant
-    <2>1a. \/ LocalAdmissionStep(node)
+    <2>1a. \/ ResolveRunNodeCandidateProducerContinuation(node)
+            \/ LocalAdmissionStep(node)
             \/ IngressDrainStep(node)
             \/ SerializedRunnerRuntimeStep(node)
             \/ SerializedLocalPrecedesServeIngressStep(node)
             \/ AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, RunNodeWorkConcreteActionCaseSplit
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      BY <2>1, <2>1r, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService
     <2>2. CASE LocalAdmissionStep(node)
       BY <2>1, <2>2, LocalAdmissionStepLeavesOutstandingTags
     <2>3. CASE IngressDrainStep(node)
@@ -2795,7 +2810,7 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <2>1, <2>6,
          SerializedLocalPredecessorLeavesOutstandingTags
-    <2> QED BY <2>1a, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <2>1a, <2>1r, <2>2, <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
 
 THEOREM ReplayingRunNodeWorkPreservesRecoveryTags ==

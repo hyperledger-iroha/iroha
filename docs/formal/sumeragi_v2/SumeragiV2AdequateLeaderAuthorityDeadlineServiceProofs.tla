@@ -28,10 +28,10 @@ Operators explicitly named `...ProviderProperty` are proof boundaries, not
 assumptions hidden inside a release theorem.  They isolate immutable token
 ownership, coalesced producer episodes, the frozen global fixed-clock blocker
 prefix, exact fair-owner selection, and per-action absolute-ceiling carry.
-Weak fairness proves occurrence of the selected concrete action.  Equal-count
-replacement, count-increasing replenishment, and unrelated due work are never
-called pipeline progress; each is charged to a separate finite episode before
-the pipeline rank may descend.
+Weak fairness proves occurrence of the selected concrete action.  Dormant
+reactivation, equal-count replacement, count-increasing replenishment, and
+unrelated due work are never called pipeline progress; each is charged to a
+separate finite episode before the pipeline rank may descend.
 ***************************************************************************)
 
 (***************************************************************************
@@ -220,6 +220,16 @@ AdequateLeaderAuthorityDeadlineReceipt(
        leader, leaderContext, leaderView, startTime),
    subject |-> subject]
 
+\* A pure receipt is authoritative for this frozen corridor only while its
+\* immutable deadline is no later than every member's actual timeout
+\* deadline.  `AdequateLeaderFixedCorridorDeadlineSource` establishes exactly
+\* this relation.  Carrying it here excludes a fabricated future receipt from
+\* extending the quantitative window after the real roster deadline.
+AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow(
+    leaderContext, receipt) ==
+  \A node \in AdequateLeaderFrozenResponsiveRoster(leaderContext):
+    receipt.deadlineReceipt.deadline <= asyncNodeDeadlines[node]
+
 AdequateLeaderAuthorityDeadlineFreshSelfWindowActive(
     target, leaderContext, leader, leaderView, receipt) ==
   /\ target = leader
@@ -230,6 +240,8 @@ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive(
          receipt.deadlineReceipt.armedAt)
   /\ AdequateLeaderFrozenTargetCorridor(
        leader, leaderContext, leader, leaderView)
+  /\ AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow(
+       leaderContext, receipt)
   /\ receipt.deadlineReceipt.armedAt <= asyncNow
   /\ asyncNow < receipt.deadlineReceipt.deadline
 
@@ -337,6 +349,17 @@ AdequateLeaderAuthorityDeadlineFreshSource(
        receipt.deadlineReceipt.deadline)
   /\ AdequateLeaderAuthorityDeadlineFreshSelfWindowActive(
        target, leaderContext, leader, leaderView, receipt)
+
+THEOREM AdequateLeaderAuthorityDeadlineFreshSourceOwnsFrozenRosterWindow ==
+  \A target, leaderContext, leader, leaderView, receipt:
+    AdequateLeaderAuthorityDeadlineFreshSource(
+      target, leaderContext, leader, leaderView, receipt)
+      => AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow(
+           leaderContext, receipt)
+BY Isa
+   DEF AdequateLeaderAuthorityDeadlineFreshSource,
+       AdequateLeaderAuthorityDeadlineFreshSelfWindowActive,
+       AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow
 
 AdequateLeaderAuthorityDeadlineStrictCorridorExit(
     target, leaderContext, leader, leaderView) ==
@@ -824,31 +847,34 @@ Source-frozen subject-replacement owners.
 
 `PersistObservePrepare` may replace the proposal subject without changing the
 fresh context or view.  The fixed-subject rank below therefore cannot start
-until every exact replacement owner ahead of its admitted target has either
-retired or handed the same scheduler ordinal to a causal child for the final
-subject.
+until every exact replacement owner whose physical carrier was admitted
+before the source cut has either retired or handed the same logical lifecycle
+token to a causal child for the final subject.
 
 The admitted owner identity is receiver-local proof data.  It contains the
-complete frozen corridor identity, the immutable causal origin, and the
-shared scheduler ordinal minted by local FairV2Ingress acceptance.  The same
-value is recovered from the Pending/Ingress/Runtime wire lifecycle, a
-restart-parked Dormant lifecycle, and the Reserved/Materialized producer
-continuation.  Dormant retains its old ordinal only as pre-admission transport
-ownership; it is not active ingress authority and must pass the current
-capacity gates before it can return to Pending.  Those carriers are a union,
-so a handoff never increments the logical owner count.
+complete frozen corridor identity, immutable causal origin and lifecycle
+ordinal, plus the current all-ingress physical carrier ordinal.  Active
+Ingress/Runtime wire and Reserved/Materialized producer views recover both
+values from the same leader-wire lifecycle record, so a handoff does not
+increment the logical owner count.
+
+A restart-parked Dormant lifecycle retains only the immutable lifecycle token;
+it owns no physical predecessor.  A real retry must reserve a fresh physical
+ordinal before publication.  Consequently it may remain in the coalescing
+universe, but its old lifecycle ordinal never places it before an already
+admitted target.
 
 An in-flight or sender-retained packet has no recipient ordinal.  It is
 tracked separately below by its stable route-neutral identity and the
 existing finite transport/non-descent episode.  Only its atomic local
 acceptance may project that route into an admitted owner.
 
-The source cut separates active owners from source-frozen potential owners.
-Terminal records and strict slot high-watermarks are consulted solely as the
-serviced subtraction.  A Dormant record remains admitted as parked transport
-ownership but owns no ingress selector barrier; a Terminal record cannot be
-selected as fresh work, and an exact retry cannot recharge an already serviced
-identity.
+The source cut contains only active owners whose current physical carrier is
+strictly before its frozen all-ingress high-watermark.  Terminal records and
+strict slot high-watermarks are consulted solely as the serviced subtraction.
+A Dormant record remains admitted as parked transport ownership but owns no
+ingress selector barrier; a Terminal record cannot be selected as fresh work,
+and an exact retry cannot recharge an already serviced identity.
 ***************************************************************************)
 
 AdequateLeaderFixedSubjectReplacementOwnerIdentitySet ==
@@ -860,10 +886,12 @@ AdequateLeaderFixedSubjectReplacementOwnerIdentitySet ==
    phase: AsyncWorkKinds,
    node: ValidatorIds,
    origin: AsyncCandidateCausalOriginSet,
-   ordinal: Nat \ {0}]
+   ordinal: Nat \ {0},
+   carrierOrdinal: Nat]
 
 AdequateLeaderFixedSubjectReplacementOwnerIdentity(
-    target, leaderContext, leader, leaderView, node, origin, ordinal) ==
+    target, leaderContext, leader, leaderView,
+    node, origin, ordinal, carrierOrdinal) ==
   [target |-> target,
    context |-> leaderContext,
    leader |-> leader,
@@ -872,7 +900,8 @@ AdequateLeaderFixedSubjectReplacementOwnerIdentity(
    phase |-> origin.phase,
    node |-> node,
    origin |-> origin,
-   ordinal |-> ordinal]
+   ordinal |-> ordinal,
+   carrierOrdinal |-> carrierOrdinal]
 
 \* Only an authenticated PrepareQC delivery to the fresh self leader can run
 \* the ObservePrepare WAL path which changes `AsyncProposalSubject(leader)`.
@@ -954,7 +983,8 @@ AdequateLeaderFixedActiveWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
   {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
      target, leaderContext, leader, leaderView,
-     record.recipient, record.causalOrigin, record.schedulerOrdinal):
+     record.recipient, record.causalOrigin, record.schedulerOrdinal,
+     record.physicalAdmissionOrdinal):
      record \in asyncLeaderWireLifecycles,
      /\ AsyncLeaderWireLifecycleActive(record)
      /\ AdequateLeaderFixedSubjectReplacementOrigin(
@@ -965,7 +995,8 @@ AdequateLeaderFixedDormantWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
   {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
      target, leaderContext, leader, leaderView,
-     record.recipient, record.causalOrigin, record.schedulerOrdinal):
+     record.recipient, record.causalOrigin, record.schedulerOrdinal,
+     record.physicalAdmissionOrdinal):
      record \in asyncLeaderWireLifecycles,
      /\ AsyncLeaderWireLifecycleDormant(record)
      /\ AdequateLeaderFixedSubjectReplacementOrigin(
@@ -981,9 +1012,14 @@ AdequateLeaderFixedProducerSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
   {AdequateLeaderFixedSubjectReplacementOwnerIdentity(
      target, leaderContext, leader, leaderView,
-     record.node, record.causalOrigin, record.ordinal):
+     record.node, record.causalOrigin, record.ordinal,
+     lifecycle.physicalAdmissionOrdinal):
      record \in AsyncCandidateProducerContinuations,
+     lifecycle \in asyncLeaderWireLifecycles,
      /\ record.status \in {"Reserved", "Materialized"}
+     /\ lifecycle.recipient = record.node
+     /\ lifecycle.causalOrigin = record.causalOrigin
+     /\ lifecycle.schedulerOrdinal = record.ordinal
      /\ AdequateLeaderFixedSubjectReplacementOrigin(
           record.causalOrigin,
           target, leaderContext, leader, leaderView)}
@@ -998,19 +1034,27 @@ AdequateLeaderFixedLiveSubjectReplacementOwners(
 
 AdequateLeaderFixedPotentialSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
-  AdequateLeaderFixedDormantWireSubjectReplacementOwners(
-    target, leaderContext, leader, leaderView)
+  {owner
+     \in AdequateLeaderFixedDormantWireSubjectReplacementOwners(
+          target, leaderContext, leader, leaderView):
+     \E record
+          \in AsyncLeaderWirePhysicalPredecessorRecordsBefore(
+               owner.node, AsyncNextIngressPhysicalOrdinal(owner.node)):
+       /\ record.recipient = owner.node
+       /\ record.causalOrigin = owner.origin
+       /\ record.schedulerOrdinal = owner.ordinal}
 
-\* "Admitted" is the finite lifecycle universe, whereas "live" above is the
-\* set which owns a concrete fair service action now.  A Dormant record stays
-\* admitted so an exact retained retry cannot be misclassified as a fresh
-\* post-target route, but it is never selected as an active service owner.
+\* "Admitted" is the finite lifecycle/coalescing universe, whereas "live"
+\* above is the set which owns a concrete fair service action now.  Dormant
+\* remains admitted so an exact retained retry cannot be misclassified as a
+\* fresh post-target route, but it is absent from the physical predecessor
+\* set and never selected as an active service owner.
 AdequateLeaderFixedAdmittedSubjectReplacementOwners(
     target, leaderContext, leader, leaderView) ==
   AdequateLeaderFixedLiveSubjectReplacementOwners(
     target, leaderContext, leader, leaderView)
     \cup
-  AdequateLeaderFixedPotentialSubjectReplacementOwners(
+  AdequateLeaderFixedDormantWireSubjectReplacementOwners(
     target, leaderContext, leader, leaderView)
 
 THEOREM AdequateLeaderFixedDormantSubjectReplacementOwnsNoIngressAuthority ==
@@ -1054,6 +1098,36 @@ AdequateLeaderFixedSubjectReplacementOwnerConfiguredBoundProperty(
     specification) ==
   specification
     => []AdequateLeaderFixedSubjectReplacementOwnerConfiguredBound
+
+THEOREM AdequateLeaderFixedSubjectReplacementOwnersFitConfiguredTables ==
+  AsyncStrongTypeInvariant
+    => AdequateLeaderFixedSubjectReplacementOwnerConfiguredBound
+BY AsyncLeaderWireLifecycleSlotUniverseIsFinite,
+   AsyncCandidateProducerContinuationsInjectIntoLifecycleStageOwners,
+   FS_Image, FS_Union, FS_Subset, FS_CardinalityType, IsaT(900)
+   DEF AdequateLeaderFixedSubjectReplacementOwnerConfiguredBound,
+       AdequateLeaderFixedSubjectReplacementOwnerCapacity,
+       AdequateLeaderFixedAdmittedSubjectReplacementOwners,
+       AdequateLeaderFixedLiveSubjectReplacementOwners,
+       AdequateLeaderFixedPotentialSubjectReplacementOwners,
+       AdequateLeaderFixedWireSubjectReplacementOwners,
+       AdequateLeaderFixedActiveWireSubjectReplacementOwners,
+       AdequateLeaderFixedDormantWireSubjectReplacementOwners,
+       AdequateLeaderFixedProducerSubjectReplacementOwners,
+       AsyncStrongTypeInvariant, AsyncTypeInvariant,
+       AsyncIngressTypeInvariant,
+       AsyncLeaderWireLifecycleTypeInvariant,
+       AsyncControlServiceStateTypeInvariant
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementOwnerConfiguredBound ==
+  \A initialContext:
+    AdequateLeaderFixedSubjectReplacementOwnerConfiguredBoundProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AdequateLeaderFixedSubjectReplacementOwnersFitConfiguredTables,
+   PTL
+   DEF AdequateLeaderFixedSubjectReplacementOwnerConfiguredBoundProperty
 
 \* A terminal wire lifecycle or terminal producer handoff is an exact
 \* tombstone.  Pre-admission routes are deliberately absent: they may become
@@ -1198,6 +1272,95 @@ AdequateLeaderFixedSubjectReplacementRemainingBudget(cut) ==
   Cardinality(
     AdequateLeaderFixedSubjectReplacementRemainingPredecessors(cut))
 
+\* Only a source-frozen Dormant ordinal strictly below the active anchor can
+\* preempt that anchor after exact retry admission.  A parked identity at or
+\* above the anchor owns no current turn and is left to the later fixed-pipeline
+\* cut.  The source set is immutable proof data in `cut`; the current set is
+\* read only to detect which exact source identity has left Dormant.
+AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners(cut) ==
+  {owner \in cut.potentialOwners:
+     owner.ordinal < cut.targetOwner.ordinal}
+
+AdequateLeaderFixedSubjectReplacementCurrentBlockingPotentialOwners(cut) ==
+  AdequateLeaderFixedPotentialSubjectReplacementOwnersBeforeOrdinal(
+    cut.target, cut.context, cut.leader, cut.view,
+    cut.targetOwner.ordinal)
+
+AdequateLeaderFixedSubjectReplacementPotentialKnownExact(
+    cut, knownPotential) ==
+  LET sourcePotential ==
+        AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners(cut)
+      currentPotential ==
+        AdequateLeaderFixedSubjectReplacementCurrentBlockingPotentialOwners(cut)
+  IN /\ IsFiniteSet(sourcePotential)
+     /\ currentPotential \subseteq sourcePotential
+     /\ knownPotential \subseteq sourcePotential
+     /\ sourcePotential \ currentPotential \subseteq knownPotential
+     /\ knownPotential \cap currentPotential = {}
+
+AdequateLeaderFixedSubjectReplacementPotentialDiscovered(
+    cut, knownPotential) ==
+  (AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners(cut)
+    \ AdequateLeaderFixedSubjectReplacementCurrentBlockingPotentialOwners(cut))
+    \ knownPotential
+
+\* Activated source potentials become ordinary predecessor debt.  A Terminal
+\* identity is immediately subtracted by the existing tombstone predicate.
+\* Packetless Dormant identities never enter this active set and therefore
+\* receive no invented fairness obligation.
+AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners(
+    cut, knownPotential) ==
+  cut.predecessorOwners \cup knownPotential
+
+AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners(
+    cut, knownPotential) ==
+  {owner
+     \in AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners(
+          cut, knownPotential):
+     AdequateLeaderFixedSubjectReplacementOwnerServiced(owner)}
+
+AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+    cut, knownPotential) ==
+  AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners(
+    cut, knownPotential)
+    \ AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners(
+        cut, knownPotential)
+
+AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier ==
+  Nat \X Nat
+
+AdequateLeaderFixedSubjectReplacementEpisodeRankOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OpToRel(<, Nat), Nat, Nat)
+
+THEOREM AdequateLeaderFixedSubjectReplacementEpisodeRankOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    AdequateLeaderFixedSubjectReplacementEpisodeRankOrdering,
+    AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier)
+BY NatLessThanWellFounded, WFLexPairOrdering
+   DEF AdequateLeaderFixedSubjectReplacementEpisodeRankOrdering,
+       AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier
+
+AdequateLeaderFixedSubjectReplacementEpisodeDebtAtRank(
+    cut, knownPotential, episodeRank) ==
+  LET sourcePotential ==
+        AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners(cut)
+      remaining ==
+        AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+          cut, knownPotential)
+  IN /\ AdequateLeaderFixedSubjectReplacementPotentialKnownExact(
+           cut, knownPotential)
+     /\ episodeRank
+          \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier
+     /\ episodeRank[1] =
+          Cardinality(sourcePotential \ knownPotential)
+     /\ episodeRank[2] = Cardinality(remaining)
+
+AdequateLeaderFixedSubjectReplacementInitialEpisodeRank(cut) ==
+  <<Cardinality(
+       AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners(cut)),
+    AdequateLeaderFixedSubjectReplacementRemainingBudget(cut)>>
+
 THEOREM AdequateLeaderFixedSubjectReplacementBudgetIsExactAndFinite ==
   \A cut \in AdequateLeaderFixedSubjectReplacementCutSet:
     IsFiniteSet(cut.owners)
@@ -1209,6 +1372,26 @@ BY FS_Subset, FS_CardinalityType, Isa
    DEF AdequateLeaderFixedSubjectReplacementRemainingBudget,
        AdequateLeaderFixedSubjectReplacementRemainingPredecessors,
        AdequateLeaderFixedSubjectReplacementServicedOwners
+
+THEOREM AdequateLeaderFixedSubjectReplacementInitialEpisodeRankIsFinite ==
+  \A target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     sourceSubject \in Subjects,
+     sourceTargetOrdinal \in Nat \ {0},
+     cut \in AdequateLeaderFixedSubjectReplacementCutSet:
+    AdequateLeaderFixedSubjectReplacementCutSource(
+      target, leaderContext, leader, leaderView,
+      sourceSubject, sourceTargetOrdinal, cut)
+      => AdequateLeaderFixedSubjectReplacementInitialEpisodeRank(cut)
+           \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier
+BY AdequateLeaderFixedSubjectReplacementBudgetIsExactAndFinite,
+   FS_Subset, FS_CardinalityType, Isa
+   DEF AdequateLeaderFixedSubjectReplacementCutSource,
+       AdequateLeaderFixedSubjectReplacementInitialEpisodeRank,
+       AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier
 
 AdequateLeaderFixedDiscoveredPipelineOriginPairs(
     leaderContext, leader, leaderView, subject) ==
@@ -1908,6 +2091,33 @@ BY NatLessThanWellFounded, WFLexPairOrdering
    DEF AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering,
        AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier
 
+\* This fixed-token episode follows the selected lifecycle, not the globally
+\* least semantic occurrence.  An unrelated lower occurrence may already be
+\* live at another node/token; it neither ends nor replenishes this episode.
+\* Only disappearance of the selected same-or-higher occurrence into the
+\* exact producer/transport corridor changes the carrier arm.  The route arm
+\* below still binds the immutable token and lifecycle cut.
+AdequateLeaderFixedSelectedOccurrenceProducerResidual(
+    episodeTarget, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank) ==
+  /\ sourceOccurrenceRank
+       \in AdequateLeaderTargetOccurrenceRankCarrier
+  /\ ~AdequateLeaderTargetSameOrHigherOccurrenceFrontier(
+       episodeTarget, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank)
+  /\ AdequateLeaderTargetProducerTransportResidual(
+       episodeTarget, leaderContext, leader, leaderView, subject)
+
+AdequateLeaderFixedSelectedOccurrenceLifecycleActive(
+    episodeTarget, leaderContext, leader, leaderView,
+    subject, sourceOccurrenceRank) ==
+  \/ AdequateLeaderTargetSameOrHigherOccurrenceFrontier(
+       episodeTarget, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank)
+  \/ AdequateLeaderFixedSelectedOccurrenceProducerResidual(
+       episodeTarget, leaderContext, leader, leaderView,
+       subject, sourceOccurrenceRank)
+
 AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
     episodeTarget, leaderContext, leader, leaderView, subject,
     sourceOccurrenceRank, sourceCutoffOrdinal,
@@ -1928,9 +2138,18 @@ AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget(
   /\ budget \in AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier
   /\ budget[1] =
        Cardinality(sourceDormantPotential \ knownDormantPotential)
-  /\ AdequateLeaderTargetNonDescentEpisodeAtBudget(
+  /\ AdequateLeaderTargetEpisodeKnownOwnerSet(
+       episodeTarget, leaderContext, leader, leaderView, subject, known)
+  /\ AdequateLeaderFixedSelectedOccurrenceLifecycleActive(
        episodeTarget, leaderContext, leader, leaderView,
-       subject, sourceOccurrenceRank, known, budget[2])
+       subject, sourceOccurrenceRank)
+  /\ AdequateLeaderTargetLiveOwnerIdentitySet(
+       episodeTarget, leaderContext, leader, leaderView, subject)
+       \subseteq known
+  /\ budget[2] =
+       AdequateLeaderTargetNonDescentEpisodeBudget(
+         episodeTarget, leaderContext, leader, leaderView,
+         subject, known)
 
 \* A serviced parent may leave an immutable producer continuation before its
 \* child candidate is scheduled.  That gap is part of the same occurrence
@@ -1961,7 +2180,7 @@ AdequateLeaderFixedPipelineProducerHandoffFrontier(
        episodeTarget, leaderContext, leader, leaderView,
        receipt.subject,
        sourceOccurrenceRank, known, sourceOccurrenceOwner)
-  /\ AdequateLeaderTargetProducerTransportResidualAtOccurrence(
+  /\ AdequateLeaderFixedSelectedOccurrenceProducerResidual(
        episodeTarget, leaderContext, leader, leaderView,
        receipt.subject, sourceOccurrenceRank)
   /\ ~AdequateLeaderFixedPipelineStrictRankGoal(
@@ -2009,13 +2228,16 @@ AdequateLeaderFixedCutPerActionProvider ==
                initialContext, target, leaderContext,
                leader, leaderView,
                receipt, sourceRank)'
-          \/ /\ AdequateLeaderFixedPipelineSameRankFrontier(
-                  initialContext, target, leaderContext,
-                  leader, leaderView,
-                  receipt, sourceRank)'
+          \/ /\ (AdequateLeaderFixedSelectedPipelineRankFrontier(
+                    initialContext, target, leaderContext,
+                    leader, leaderView, receipt,
+                    token, candidate, cutoffOrdinal, semanticRank,
+                    owner, packet, sourceRank))'
                /\ AdequateLeaderFixedPipelineOriginSlotsPreservedAction(
                     token, leaderContext, leader, leaderView,
                     receipt.subject)
+               /\ ~<<AdequateLeaderFixedSelectedServiceOwnerAction(
+                         owner)>>_AsyncAllVars
           \/ AdequateLeaderFixedPipelineOriginEqualCountReplacementAction(
                candidate.node, token, leaderContext, leader, leaderView,
                receipt.subject, semanticRank)
@@ -2056,7 +2278,7 @@ AdequateLeaderFixedCutPerActionProviderProperty(specification) ==
   specification => []AdequateLeaderFixedCutPerActionProvider
 
 (***************************************************************************
-Pinned finite/coalesced semantic non-descent episode.
+Pinned finite/coalesced selected-lifecycle episode.
 
 The lexicographic budget has two finite complements.  Its first coordinate is
 the source-frozen set of Dormant leader-wire identities below the selected
@@ -2084,6 +2306,14 @@ occurrence, source owner, source rank, and receipt ceiling remain parameters of
 the episode.  The step property remains the explicit deadline-carry provider.
 Replenishment is not its goal; only strict source-rank descent or a smaller
 identity complement is.
+
+An already-live lower semantic occurrence outside this selected token/cut is
+deliberately ignored.  It is not a physical descent witness and it does not
+prevent initialization of this episode.  The selected candidate remains on
+the same-or-higher carrier until its exact action either produces a real
+lower physical rank or transfers the same token/cut to the pre-candidate
+route.  The outer occurrence-rank composition in
+`SumeragiV2AdequateLeaderServiceClosureProofs` remains unchanged.
 ***************************************************************************)
 
 AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible(
@@ -2298,49 +2528,11 @@ BY AdequateLeaderFixedPipelineOriginEpisodeBudgetOrderingIsWellFounded,
        AdequateLeaderFixedPipelineOriginEpisodeBudgetOrdering,
        AdequateLeaderFixedPipelineOriginEpisodeBudgetCarrier
 
-\* A semantic strict occurrence decrease must consume, rather than reset, the
-\* frozen physical token/rank.  This is a narrower handoff seam than selected
-\* service itself and is independently mutation-pinned.
-AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProvider ==
-  \A initialContext \in ContextRecords,
-     target \in ValidatorIds,
-     leaderContext \in ContextRecords,
-     leader \in ValidatorIds,
-     leaderView \in Views,
-     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-     token \in AdequateLeaderFixedPipelineTokenCarrier(leaderContext),
-     candidate \in AsyncCandidateSet,
-     cutoffOrdinal \in Nat,
-     semanticRank \in (1..4) \X (0..9),
-     occurrenceRank \in AdequateLeaderTargetOccurrenceRankCarrier,
-     occurrenceOwner
-       \in AdequateLeaderFrozenCandidateOwnerUniverse(
-            candidate.node, leaderContext, leader, leaderView,
-            receipt.subject),
-     owner \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-     packet \in AsyncPacketSet,
-     sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
-    /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
-         initialContext, target, leaderContext,
-         leader, leaderView, receipt,
-         token, candidate, cutoffOrdinal, semanticRank,
-         owner, packet, sourceRank)
-    /\ AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates(
-         candidate, leaderContext, leader, leaderView,
-         receipt.subject, semanticRank,
-         occurrenceRank, occurrenceOwner)
-    /\ AdequateLeaderTargetStrictOccurrenceDescentGoal(
-         candidate.node, leaderContext, leader, leaderView,
-         receipt.subject, occurrenceRank)
-    => AdequateLeaderFixedPipelineStrictRankGoal(
-         initialContext, target, leaderContext,
-         leader, leaderView, receipt, sourceRank)
-
-AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty(
-    specification) ==
-  specification
-    => []AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProvider
-
+\* No state-level semantic shortcut is permitted here.  A lower occurrence
+\* which merely coexists with the selected candidate need not have a lower
+\* physical pipeline rank.  The episode therefore starts for the selected
+\* lifecycle unconditionally; only the carried `CutPerAction` transition may
+\* establish `AdequateLeaderFixedPipelineStrictRankGoal`.
 THEOREM AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank ==
   \A initialContext \in ContextRecords,
      target \in ValidatorIds,
@@ -2354,10 +2546,9 @@ THEOREM AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank ==
      semanticRank \in (1..4) \X (0..9),
      owner
        \in AdequateLeaderFixedSelectedServiceOwnerSet(initialContext),
-     packet \in AsyncPacketSet,
-     sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+    packet \in AsyncPacketSet,
+    sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
     /\ AsyncStrongTypeInvariant
-    /\ AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProvider
     /\ AdequateLeaderFixedSelectedPipelineRankFrontier(
          initialContext, target, leaderContext,
          leader, leaderView, receipt,
@@ -2409,7 +2600,8 @@ BY AdequateLeaderTargetCurrentOwnersInitializeKnownEpisode,
        AsyncLeaderWireDormantPotentialOwnerIdentitiesBefore,
        AsyncLeaderWireDormantPotentialOwnerIdentitiesIn,
        AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible,
-       AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProvider
+       AdequateLeaderFixedSelectedOccurrenceLifecycleActive,
+       AdequateLeaderFixedSelectedOccurrenceProducerResidual
 
 AdequateLeaderFixedSelectedOwnerServiceProperty(specification) ==
   specification
@@ -2441,14 +2633,11 @@ AdequateLeaderFixedSelectedOwnerServiceProperty(specification) ==
 THEOREM AdequateLeaderFixedOriginEpisodeClosureSuppliesSelectedOwnerService ==
   \A specification:
     /\ (specification => []AsyncStrongTypeInvariant)
-    /\ AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty(
-         specification)
     /\ AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty(
          specification)
       => AdequateLeaderFixedSelectedOwnerServiceProperty(specification)
 BY AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank, PTL
    DEF AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty,
-       AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty,
        AdequateLeaderFixedSelectedOwnerServiceProperty
 
 (***************************************************************************
@@ -3283,17 +3472,19 @@ AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider ==
                     THEN TRUE
                     ELSE \E cut
                            \in AdequateLeaderFixedSubjectReplacementCutSet,
-                             replacementBudget \in Nat:
+                             replacementRank
+                               \in
+                                 AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
                            /\ AdequateLeaderFixedSubjectReplacementCutSource(
                                 target, leaderContext, leader, leaderView,
                                 receipt.subject, targetOrdinal, cut)
-                           /\ replacementBudget =
-                                AdequateLeaderFixedSubjectReplacementRemainingBudget(
+                           /\ replacementRank =
+                                AdequateLeaderFixedSubjectReplacementInitialEpisodeRank(
                                   cut)
                            /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
                                 initialContext, target, leaderContext,
                                 leader, leaderView, receipt,
-                                cut, replacementBudget)
+                                cut, {}, replacementRank)
 
 AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
     specification) ==
@@ -3643,13 +3834,15 @@ AdequateLeaderFixedSubjectReplacementReceipt(sourceReceipt, subject) ==
 
 \* After every earlier owner in the frozen cut is serviced, the selected last
 \* owner may enter the fixed kernel only through its exact scheduler ordinal
-\* (or a causal child which retains its origin and ordinal).  Owners outside
-\* the source cut remain strictly later.  The receipt keeps the original
-\* `armedAt` value, and the ordinary rank cell must still satisfy its absolute
-\* ceiling; subject replacement therefore cannot reset the 4*N window.
+\* (or a causal child which retains its origin and ordinal).  Every activated
+\* source Dormant ordinal below that anchor is included in the parameterized
+\* predecessor subtraction; still-parked identities own no turn.  Other owners
+\* remain at or after the anchor.  The receipt keeps the original `armedAt`
+\* value, and the ordinary rank cell must still satisfy its absolute ceiling;
+\* subject replacement therefore cannot reset the 4*N window.
 AdequateLeaderFixedAnchoredSubjectPipelineServiceRankFrontier(
     initialContext, target, leaderContext, leader, leaderView,
-    sourceReceipt, cut, sourceRank) ==
+    sourceReceipt, cut, knownPotential, sourceRank) ==
   LET anchor == cut.targetOwner
       receipt ==
         AdequateLeaderFixedSubjectReplacementReceipt(
@@ -3657,15 +3850,24 @@ AdequateLeaderFixedAnchoredSubjectPipelineServiceRankFrontier(
       live ==
         AdequateLeaderFixedLiveSubjectReplacementOwners(
           target, leaderContext, leader, leaderView)
+      remaining ==
+        AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+          cut, knownPotential)
   IN /\ cut \in AdequateLeaderFixedSubjectReplacementCutSet
      /\ receipt \in AdequateLeaderAuthorityDeadlineReceiptSet
      /\ cut.target = target
      /\ cut.context = leaderContext
      /\ cut.leader = leader
      /\ cut.view = leaderView
-     /\ AdequateLeaderFixedSubjectReplacementRemainingBudget(cut) = 0
-     /\ \A later \in live \ cut.owners:
-          anchor.ordinal < later.ordinal
+     /\ AdequateLeaderFixedSubjectReplacementPotentialKnownExact(
+          cut, knownPotential)
+     /\ remaining = {}
+     /\ \A later
+          \in live
+                \ (AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners(
+                     cut, knownPotential)
+                    \cup {anchor}):
+          anchor.ordinal <= later.ordinal
      /\ AsyncCausalEpisodeFrozenPredecessorOrigins(
           leader, anchor.ordinal)
           \subseteq cut.predecessorOrigins
@@ -4514,6 +4716,46 @@ AdequateLeaderFixedPreAdmissionSubjectReplacementBudgetDescentGoal(
          target, leaderContext, leader, leaderView,
          targetOrdinal, schedulerCeiling, knownRoutes, lowerBudget)
 
+\* Retained retransmission is an ordinary source-owned fair action.  It emits
+\* the exact immutable PrepareQC item and leaves the route-neutral identity
+\* unchanged; the new packet's time fields are deliberately absent here.
+\* This theorem does not grant the retained item a scheduler ordinal.  Only
+\* the later atomic local admission action can mint or recover that ordinal.
+THEOREM AdequateLeaderFixedRetainedSubjectReplacementRetryKeepsExactRoute ==
+  \A target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     item \in asyncRetainedControl:
+    LET route ==
+          AdequateLeaderFixedPreAdmissionSubjectReplacementRouteIdentity(
+            item, target, leaderContext, leader, leaderView)
+        packet == PacketForItem(item)
+    IN /\ item.source
+             \in AdequateLeaderFrozenResponsiveRoster(leaderContext)
+       /\ AdequateLeaderFixedSubjectReplacementOrigin(
+            AsyncLeaderWireLifecycleCausalOriginAt(item, leaderContext),
+            target, leaderContext, leader, leaderView)
+       /\ UNCHANGED vars
+       /\ SendNodeRetransmissions(item.source)
+       => /\ route
+                \in
+                  (AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes(
+                     target, leaderContext, leader, leaderView))'
+          /\ packet \in asyncTransport'
+          /\ packet.item = item
+          /\ packet.transportIdentity = route.routeIdentity
+          /\ AsyncLeaderWireServiceIdentity(packet.item)
+               = route.routeIdentity
+BY PacketForItemExactRetryRetainsRouteIdentity, IsaT(600)
+   DEF AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRouteIdentity,
+       AdequateLeaderFixedSubjectReplacementOrigin,
+       SendNodeRetransmissions, RetryableItems,
+       RetainedControlEmissionItems, SendableItems,
+       PacketsForItems, PacketForItem,
+       AsyncTransportRouteIdentity
+
 AdequateLeaderFixedPreAdmissionSubjectReplacementStepProperty(
     specification) ==
   specification
@@ -4532,6 +4774,55 @@ AdequateLeaderFixedPreAdmissionSubjectReplacementStepProperty(
            ~> AdequateLeaderFixedPreAdmissionSubjectReplacementBudgetDescentGoal(
                 target, leaderContext, leader, leaderView,
                 targetOrdinal, schedulerCeiling, knownRoutes, budget)
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedPreAdmissionSubjectReplacementStep ==
+  \A initialContext:
+    AdequateLeaderFixedPreAdmissionSubjectReplacementStepProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AdequateLeaderFixedRetainedSubjectReplacementRetryKeepsExactRoute,
+   ExactDecisionTargetNeutralFixedClockOrderingIsWellFounded,
+   ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
+   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralFairOwnerUsesAsyncFairness,
+   ExactDecisionRequestIngressRankOrderingIsWellFounded,
+   AsyncLiveProvidesAdequateLeaderWirePhysicalConvergence,
+   AsyncLiveProvidesExactLeaderCandidateSemanticHandoffs,
+   AsyncLiveProvidesCandidateProducerContinuationFrozenPrefixClosure,
+   StarvationFreedomObligation,
+   AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut,
+   AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal,
+   AdmitDormantLeaderWireRetainsOrdinalsAndFrozenPrefix,
+   AtomicDormantLeaderWireAdmissionConsumesRealPacketAndPotential,
+   PTL, IsaT(9000)
+   DEF AdequateLeaderFixedPreAdmissionSubjectReplacementStepProperty,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementEpisode,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementBudgetDescentGoal,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRemainingRoutes,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRouteResolved,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRouteIdentity,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRouteCapacity,
+       AdequateLeaderFixedLiveSubjectReplacementOwners,
+       AdequateLeaderFixedWireSubjectReplacementOwners,
+       AdequateLeaderFixedActiveWireSubjectReplacementOwners,
+       AdequateLeaderFixedProducerSubjectReplacementOwners,
+       AdequateLeaderFixedSubjectReplacementOwnerServiced,
+       AdequateLeaderFixedSubjectReplacementOwnerIdentity,
+       AdequateLeaderFixedSubjectReplacementOrigin,
+       AdequateLeaderFixedOriginRootItem,
+       AdequateLeaderWirePhysicalConvergenceProperty,
+       ExactLeaderCandidateSemanticHandoffProperty,
+       AsyncCandidateProducerContinuationFrozenPrefixClosureProperty,
+       StarvationFreedomProperty,
+       AsyncLiveSpecAt, AsyncFairnessAt
 
 AdequateLeaderFixedPreAdmissionSubjectReplacementClosureProperty(
     specification) ==
@@ -4566,28 +4857,35 @@ BY NatLessThanWellFounded, WellFoundedLeadsTo
 
 (***************************************************************************
 Finite source-frozen admitted subject-replacement episode.
+
+The first rank coordinate is the immutable Dormant potential below the active
+anchor minus exact discoveries.  The second is the currently unserviced active
+predecessor set, including discovered potentials.  A parked identity receives
+no fair service obligation.  If a real retry atomically activates it, the
+first coordinate strictly falls before the second may rise; that activation
+is finite non-descent debt, not protocol progress.
 ***************************************************************************)
 
-AdequateLeaderFixedSubjectReplacementSelectedPredecessor(cut) ==
+AdequateLeaderFixedSubjectReplacementSelectedPredecessor(
+    cut, knownPotential) ==
   LET remaining ==
-        AdequateLeaderFixedSubjectReplacementRemainingPredecessors(cut)
+        AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+          cut, knownPotential)
   IN CHOOSE owner \in remaining:
        \A other \in remaining: owner.ordinal <= other.ordinal
 
 AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
     initialContext, target, leaderContext, leader, leaderView,
-    sourceReceipt, cut, budget) ==
+    sourceReceipt, cut, knownPotential, episodeRank) ==
   LET live ==
         AdequateLeaderFixedLiveSubjectReplacementOwners(
           target, leaderContext, leader, leaderView)
-      potential ==
-        AdequateLeaderFixedPotentialSubjectReplacementOwnersBeforeOrdinal(
-          target, leaderContext, leader, leaderView,
-          cut.sourceTargetOrdinal)
       serviced ==
-        AdequateLeaderFixedSubjectReplacementServicedOwners(cut)
+        AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners(
+          cut, knownPotential)
       remaining ==
-        AdequateLeaderFixedSubjectReplacementRemainingPredecessors(cut)
+        AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+          cut, knownPotential)
   IN /\ cut \in AdequateLeaderFixedSubjectReplacementCutSet
      /\ sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet
      /\ cut.target = target
@@ -4604,15 +4902,18 @@ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
           <= AdequateLeaderFixedSubjectReplacementOwnerCapacity
      /\ cut.targetOwner \in cut.owners
      /\ cut.predecessorOwners = cut.owners \ {cut.targetOwner}
-     /\ budget =
-          AdequateLeaderFixedSubjectReplacementRemainingBudget(cut)
-     /\ budget \in Nat
+     /\ AdequateLeaderFixedSubjectReplacementEpisodeDebtAtRank(
+          cut, knownPotential, episodeRank)
      /\ remaining \subseteq live
      /\ cut.targetOwner \in live
-     /\ potential \subseteq cut.potentialOwners
      /\ serviced \cap live = {}
-     /\ \A later \in live \ cut.owners:
-          \/ later \in cut.potentialOwners
+     /\ \A later
+          \in live
+                \ (AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners(
+                     cut, knownPotential)
+                    \cup {cut.targetOwner}):
+          \/ /\ later \in cut.potentialOwners
+                /\ cut.targetOwner.ordinal <= later.ordinal
           \/ cut.sourceTargetOrdinal < later.ordinal
      /\ AsyncCausalEpisodeFrozenPredecessorOrigins(
           leader, cut.targetOwner.ordinal)
@@ -4628,28 +4929,46 @@ AdequateLeaderFixedSubjectReplacementTerminalGoal(
     sourceReceipt, cut) ==
   \/ AdequateLeaderFixedCutTerminalForAuthority(
        target, leaderContext, leader, leaderView, sourceReceipt)
-  \/ \E sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
+  \/ \E knownPotential
+         \in SUBSET
+              AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+       sourceRank \in AdequateLeaderFixedPipelineRankCarrier:
        AdequateLeaderFixedAnchoredSubjectPipelineServiceRankFrontier(
          initialContext, target, leaderContext,
-         leader, leaderView, sourceReceipt, cut, sourceRank)
+         leader, leaderView, sourceReceipt, cut,
+         knownPotential, sourceRank)
 
 AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
     initialContext, target, leaderContext, leader, leaderView,
-    sourceReceipt, cut, sourceBudget) ==
+    sourceReceipt, cut, knownPotential, sourceRank) ==
   \/ AdequateLeaderFixedSubjectReplacementTerminalGoal(
        initialContext, target, leaderContext,
        leader, leaderView, sourceReceipt, cut)
-  \/ \E lowerBudget
-       \in SetLessThan(sourceBudget, OpToRel(<, Nat), Nat):
-       AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
-         initialContext, target, leaderContext,
-         leader, leaderView, sourceReceipt, cut, lowerBudget)
+  \/ \E discoveredPotential,
+       knownPotential2
+         \in SUBSET
+              AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+       lowerRank
+         \in SetLessThan(
+              sourceRank,
+              AdequateLeaderFixedSubjectReplacementEpisodeRankOrdering,
+              AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier):
+       /\ discoveredPotential =
+            AdequateLeaderFixedSubjectReplacementPotentialDiscovered(
+              cut, knownPotential)
+       /\ knownPotential2 = knownPotential \cup discoveredPotential
+       /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
+            initialContext, target, leaderContext,
+            leader, leaderView, sourceReceipt, cut,
+            knownPotential2, lowerRank)
 
-\* The lower proof must carry the immutable cut, monotone serviced
-\* subtraction, same-origin child, shared scheduler high-watermark, and the
-\* original absolute receipt ceiling.  A fresh in-flight packet has only the
-\* pre-admission route identity above and cannot appear in this ordinal set
-\* until its local FairV2Ingress acceptance.
+\* The lower proof must carry the immutable cut, exact potential-known set,
+\* monotone serviced subtraction, same-origin child, shared scheduler
+\* high-watermark, and the original absolute receipt ceiling.  A fresh
+\* in-flight packet has only the pre-admission route identity above and cannot
+\* appear in this ordinal set until its local FairV2Ingress acceptance.  Once a
+\* frozen Dormant identity leaves Dormant, the same-rank carry arm is false, so
+\* the action must expose the lexicographically lower non-descent episode.
 AdequateLeaderFixedSubjectReplacementCutCarryProvider ==
   \A initialContext \in ContextRecords,
      target \in ValidatorIds,
@@ -4658,45 +4977,129 @@ AdequateLeaderFixedSubjectReplacementCutCarryProvider ==
      leaderView \in Views,
      sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
      cut \in AdequateLeaderFixedSubjectReplacementCutSet,
-     budget \in Nat:
+     knownPotential
+       \in SUBSET AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+     sourceRank
+       \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
     LET serviced ==
-          AdequateLeaderFixedSubjectReplacementServicedOwners(cut)
+          AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners(
+            cut, knownPotential)
     IN /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
              initialContext, target, leaderContext,
-             leader, leaderView, sourceReceipt, cut, budget)
+             leader, leaderView, sourceReceipt, cut,
+             knownPotential, sourceRank)
        /\ [AsyncNext]_AsyncAllVars
        => \/ AdequateLeaderFixedCutTerminalForAuthority(
                target, leaderContext, leader, leaderView, sourceReceipt)'
+          \/ (AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
+                initialContext, target, leaderContext,
+                leader, leaderView, sourceReceipt, cut,
+                knownPotential, sourceRank))'
           \/ /\ serviced
                   \subseteq
-                    (AdequateLeaderFixedSubjectReplacementServicedOwners(
-                       cut))'
+                    (AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners(
+                       cut, knownPotential))'
              /\ serviced
                   \cap
                     (AdequateLeaderFixedLiveSubjectReplacementOwners(
                        target, leaderContext, leader, leaderView))'
                     = {}
-             /\ (AdequateLeaderFixedPotentialSubjectReplacementOwnersBeforeOrdinal(
-                    target, leaderContext, leader, leaderView,
-                    cut.sourceTargetOrdinal))'
-                  \subseteq cut.potentialOwners
              /\ \A later
                   \in
                     (AdequateLeaderFixedLiveSubjectReplacementOwners(
                        target, leaderContext, leader, leaderView))'
-                      \ cut.owners:
-                  \/ later \in cut.potentialOwners
+                      \ (AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners(
+                           cut, knownPotential)
+                         \cup {cut.targetOwner}):
+                  \/ /\ later \in cut.potentialOwners
+                        /\ cut.targetOwner.ordinal <= later.ordinal
                   \/ cut.sourceTargetOrdinal < later.ordinal
              /\ (AsyncCausalEpisodeFrozenPredecessorOrigins(
                     leader, cut.targetOwner.ordinal))'
                   \subseteq cut.predecessorOrigins
              /\ cut.schedulerCeiling
                   <= AsyncNextCandidateLifecycleOrdinal(leader)'
+             /\ (AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
+                    initialContext, target, leaderContext,
+                    leader, leaderView, sourceReceipt, cut,
+                    knownPotential, sourceRank))'
 
 AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty(
     specification) ==
   specification
     => []AdequateLeaderFixedSubjectReplacementCutCarryProvider
+
+\* Exhaustive AsyncNext projection for the immutable subject cut.  The only
+\* step which may move an owner from the source-frozen Dormant set into the
+\* active predecessor set is atomic admission of a real exact packet; that
+\* step removes the owner from the first rank coordinate.  Fresh lifecycle,
+\* Candidate, Serve, Control, Completion, and priority allocations consume the
+\* shared high-watermark and therefore remain after the frozen anchor.  A
+\* terminal wire/producer record is monotone service memory, not a replacement
+\* live owner.
+THEOREM AdequateLeaderFixedSubjectReplacementCutFollowsAsyncStep ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    => AdequateLeaderFixedSubjectReplacementCutCarryProvider
+BY PostGstStepCannotCreateDormantLeaderWirePotential,
+   PostGstLeaderWireLifecycleRestartIsDisabled,
+   AtomicDormantLeaderWireAdmissionConsumesRealPacketAndPotential,
+   AdmitDormantLeaderWireRetainsOrdinalsAndFrozenPrefix,
+   AdmitDormantLeaderWirePreservesPotentialPredecessorOrdinals,
+   CoalescedDueLeaderWireLifecycleRetryPreservesFrozenOwner,
+   AsyncFreshLeaderWireAdmissionProjectionFollowsRetainedOwners,
+   AsyncLeaderWireAdmissionPrecedesSameStepCandidateAllocation,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   AsyncCandidateProducerContinuationPreservedOrTerminal,
+   AsyncCandidateProducerContinuationTerminalRecordIsFixed,
+   AsyncCandidateProducerContinuationReplacementRetiresOnlyTerminal,
+   AdequateLeaderAsyncBracketStepPreservesTargetDecision,
+   FS_Subset, FS_CardinalityType, SMT, IsaT(12000)
+   DEF AdequateLeaderFixedSubjectReplacementCutCarryProvider,
+       AdequateLeaderFixedSubjectReplacementEpisodeFrontier,
+       AdequateLeaderFixedSubjectReplacementBudgetDescentGoal,
+       AdequateLeaderFixedSubjectReplacementTerminalGoal,
+       AdequateLeaderFixedSubjectReplacementEpisodeDebtAtRank,
+       AdequateLeaderFixedSubjectReplacementPotentialKnownExact,
+       AdequateLeaderFixedSubjectReplacementPotentialDiscovered,
+       AdequateLeaderFixedSubjectReplacementBlockingPotentialOwners,
+       AdequateLeaderFixedSubjectReplacementCurrentBlockingPotentialOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors,
+       AdequateLeaderFixedSubjectReplacementOwnerServiced,
+       AdequateLeaderFixedLiveSubjectReplacementOwners,
+       AdequateLeaderFixedWireSubjectReplacementOwners,
+       AdequateLeaderFixedActiveWireSubjectReplacementOwners,
+       AdequateLeaderFixedPotentialSubjectReplacementOwners,
+       AdequateLeaderFixedDormantWireSubjectReplacementOwners,
+       AdequateLeaderFixedProducerSubjectReplacementOwners,
+       AdequateLeaderFixedSubjectReplacementOwnerIdentity,
+       AdequateLeaderFixedSubjectReplacementOrigin,
+       AdequateLeaderAuthorityDeadlineFreshSelfWindowActive,
+       AdequateLeaderFixedCutTerminalForAuthority,
+       AdequateLeaderFrozenTargetCorridor,
+       AsyncCausalEpisodeFrozenPredecessorOrigins,
+       AsyncLeaderWireLifecycleActive,
+       AsyncLeaderWireLifecycleDormant,
+       AsyncLeaderWireLifecycleTransition,
+       AsyncCandidateProducerContinuations,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementCutCarry ==
+  \A initialContext:
+    AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderFixedSubjectReplacementCutFollowsAsyncStep,
+   PTL
+   DEF AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty
 
 AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty(
     specification) ==
@@ -4708,29 +5111,110 @@ AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty(
           leaderView \in Views,
           sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
           cut \in AdequateLeaderFixedSubjectReplacementCutSet,
-          budget \in Nat:
+          knownPotential
+            \in SUBSET
+                 AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+          sourceRank
+            \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
          LET selected ==
-               AdequateLeaderFixedSubjectReplacementSelectedPredecessor(cut)
+               AdequateLeaderFixedSubjectReplacementSelectedPredecessor(
+                 cut, knownPotential)
          IN /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
                   initialContext, target, leaderContext,
-                  leader, leaderView, sourceReceipt, cut, budget)
-            /\ budget > 0
+                  leader, leaderView, sourceReceipt, cut,
+                  knownPotential, sourceRank)
+            /\ sourceRank[2] > 0
             /\ selected
                  \in
-                   AdequateLeaderFixedSubjectReplacementRemainingPredecessors(
-                     cut)
-              ~> (AdequateLeaderFixedSubjectReplacementTerminalGoal(
-                    initialContext, target, leaderContext,
-                    leader, leaderView, sourceReceipt, cut)
-                   \/ /\ AdequateLeaderFixedSubjectReplacementOwnerServiced(
-                            selected)
-                      /\ \E lowerBudget
-                           \in SetLessThan(
-                                budget, OpToRel(<, Nat), Nat):
-                           AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
-                             initialContext, target, leaderContext,
-                             leader, leaderView,
-                             sourceReceipt, cut, lowerBudget))
+                   AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors(
+                     cut, knownPotential)
+              ~> AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
+                   initialContext, target, leaderContext,
+                   leader, leaderView, sourceReceipt, cut,
+                   knownPotential, sourceRank)
+
+\* Membership in the live replacement set always exposes an existing physical
+\* carrier with the same immutable causal origin and scheduler ordinal.  This
+\* is a state decomposition only; it grants no fairness to a Dormant record.
+THEOREM AdequateLeaderFixedLiveSubjectReplacementOwnerHasExactCarrier ==
+  \A target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     owner
+       \in AdequateLeaderFixedLiveSubjectReplacementOwners(
+            target, leaderContext, leader, leaderView):
+    \/ \E record \in asyncLeaderWireLifecycles:
+         /\ AsyncLeaderWireLifecycleActive(record)
+         /\ record.recipient = owner.node
+         /\ record.causalOrigin = owner.origin
+         /\ record.schedulerOrdinal = owner.ordinal
+         /\ AdequateLeaderFixedSubjectReplacementOrigin(
+              record.causalOrigin,
+              target, leaderContext, leader, leaderView)
+    \/ \E record \in AsyncCandidateProducerContinuations:
+         /\ record.status \in {"Reserved", "Materialized"}
+         /\ record.node = owner.node
+         /\ record.causalOrigin = owner.origin
+         /\ record.ordinal = owner.ordinal
+         /\ AdequateLeaderFixedSubjectReplacementOrigin(
+              record.causalOrigin,
+              target, leaderContext, leader, leaderView)
+BY Isa
+   DEF AdequateLeaderFixedLiveSubjectReplacementOwners,
+       AdequateLeaderFixedWireSubjectReplacementOwners,
+       AdequateLeaderFixedActiveWireSubjectReplacementOwners,
+       AdequateLeaderFixedProducerSubjectReplacementOwners,
+       AdequateLeaderFixedSubjectReplacementOwnerIdentity
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementSelectedOwnerService ==
+  \A initialContext:
+    AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementCutCarry,
+   AdequateLeaderFixedLiveSubjectReplacementOwnerHasExactCarrier,
+   AsyncLiveProvidesAdequateLeaderWirePhysicalConvergence,
+   AsyncLiveProvidesExactLeaderCandidateSemanticHandoffs,
+   AsyncLiveProvidesCandidateProducerContinuationFrozenPrefixClosure,
+   AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerReservedContinuationStep,
+   AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerMaterializedContinuationStep,
+   AsyncLiveProvidesAdequateLeaderSelectedOwnerPhysicalOutcome,
+   StarvationFreedomObligation,
+   LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   AsyncCandidateProducerContinuationTerminalRecordIsFixed,
+   AsyncCandidateProducerContinuationPreservedOrTerminal,
+   PTL, IsaT(12000)
+   DEF AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty,
+       AdequateLeaderFixedSubjectReplacementSelectedPredecessor,
+       AdequateLeaderFixedSubjectReplacementEpisodeFrontier,
+       AdequateLeaderFixedSubjectReplacementBudgetDescentGoal,
+       AdequateLeaderFixedSubjectReplacementTerminalGoal,
+       AdequateLeaderFixedSubjectReplacementEpisodeDebtAtRank,
+       AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors,
+       AdequateLeaderFixedSubjectReplacementOwnerServiced,
+       AdequateLeaderFixedSubjectReplacementOwnerIdentity,
+       AdequateLeaderFixedLiveSubjectReplacementOwners,
+       AdequateLeaderFixedWireSubjectReplacementOwners,
+       AdequateLeaderFixedActiveWireSubjectReplacementOwners,
+       AdequateLeaderFixedProducerSubjectReplacementOwners,
+       AdequateLeaderFixedSubjectReplacementOrigin,
+       AdequateLeaderFixedOriginRootItem,
+       AdequateLeaderWirePhysicalConvergenceProperty,
+       ExactLeaderCandidateSemanticHandoffProperty,
+       AsyncCandidateProducerContinuationFrozenPrefixClosureProperty,
+       AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty,
+       AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty,
+       AdequateLeaderTargetSelectedOwnerPhysicalOutcomeProperty,
+       StarvationFreedomProperty,
+       AsyncLiveSpecAt, AsyncFairnessAt
 
 AdequateLeaderFixedSubjectReplacementTargetHandoffProperty(
     specification) ==
@@ -4741,15 +5225,111 @@ AdequateLeaderFixedSubjectReplacementTargetHandoffProperty(
           leader \in ValidatorIds,
           leaderView \in Views,
           sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
-          cut \in AdequateLeaderFixedSubjectReplacementCutSet:
+          cut \in AdequateLeaderFixedSubjectReplacementCutSet,
+          knownPotential
+            \in SUBSET
+                 AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+          sourceRank
+            \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
          /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
               initialContext, target, leaderContext,
-              leader, leaderView, sourceReceipt, cut, 0)
+              leader, leaderView, sourceReceipt, cut,
+              knownPotential, sourceRank)
+         /\ sourceRank[2] = 0
          /\ ~AdequateLeaderFixedSubjectReplacementOwnerServiced(
                cut.targetOwner)
-           ~> AdequateLeaderFixedSubjectReplacementTerminalGoal(
+           ~> AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
                 initialContext, target, leaderContext,
-                leader, leaderView, sourceReceipt, cut)
+                leader, leaderView, sourceReceipt, cut,
+                knownPotential, sourceRank)
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementTargetHandoff ==
+  \A initialContext:
+    AdequateLeaderFixedSubjectReplacementTargetHandoffProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementCutCarry,
+   AdequateLeaderFixedLiveSubjectReplacementOwnerHasExactCarrier,
+   AsyncLiveProvidesAdequateLeaderWirePhysicalConvergence,
+   AsyncLiveProvidesExactLeaderCandidateSemanticHandoffs,
+   AsyncLiveProvidesCandidateProducerContinuationFrozenPrefixClosure,
+   AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerReservedContinuationStep,
+   AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerMaterializedContinuationStep,
+   AsyncLiveProvidesAdequateLeaderSelectedOwnerPhysicalOutcome,
+   StarvationFreedomObligation,
+   AdequateLeaderFixedPreCandidateReservedTailFitsConfiguredCharge,
+   AdequateLeaderFixedCandidatePhysicalWindowFitsConfiguredBudget,
+   AdequateLeaderFixedPipelineOriginSlotCarrierFitsConfiguredTail,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncLeaderWireAdmissionPrecedesSameStepCandidateAllocation,
+   LeaderWireIgnoredOrServicedLastConsumerTerminalizesAtomically,
+   RetireLeaderWireLifecycleRetainsTerminalTombstone,
+   AsyncCandidateProducerContinuationTerminalRecordIsFixed,
+   PTL, IsaT(15000)
+   DEF AdequateLeaderFixedSubjectReplacementTargetHandoffProperty,
+       AdequateLeaderFixedSubjectReplacementEpisodeFrontier,
+       AdequateLeaderFixedSubjectReplacementBudgetDescentGoal,
+       AdequateLeaderFixedSubjectReplacementTerminalGoal,
+       AdequateLeaderFixedSubjectReplacementEpisodeDebtAtRank,
+       AdequateLeaderFixedSubjectReplacementEpisodePredecessorOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeServicedOwners,
+       AdequateLeaderFixedSubjectReplacementEpisodeRemainingPredecessors,
+       AdequateLeaderFixedSubjectReplacementOwnerServiced,
+       AdequateLeaderFixedLiveSubjectReplacementOwners,
+       AdequateLeaderFixedWireSubjectReplacementOwners,
+       AdequateLeaderFixedActiveWireSubjectReplacementOwners,
+       AdequateLeaderFixedProducerSubjectReplacementOwners,
+       AdequateLeaderFixedSubjectReplacementOrigin,
+       AdequateLeaderFixedOriginRootItem,
+       AdequateLeaderFixedAnchoredSubjectPipelineServiceRankFrontier,
+       AdequateLeaderFixedSubjectReplacementReceipt,
+       AdequateLeaderFixedPreCandidateRouteCarriesSubjectReplacementOrigin,
+       AdequateLeaderFixedPreCandidateEntryRankCell,
+       AdequateLeaderFixedPreCandidateEntryRank,
+       AdequateLeaderFixedPreCandidateRouteStageCandidate,
+       AdequateLeaderFixedPreCandidateRouteStageIsUnique,
+       AdequateLeaderFixedWirePreCandidateRoute,
+       AdequateLeaderFixedProducerPreCandidateRoute,
+       AdequateLeaderFixedPipelineRankCell,
+       AdequateLeaderFixedPipelineRank,
+       AdequateLeaderWirePhysicalConvergenceProperty,
+       ExactLeaderCandidateSemanticHandoffProperty,
+       AsyncCandidateProducerContinuationFrozenPrefixClosureProperty,
+       AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty,
+       AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty,
+       AdequateLeaderTargetSelectedOwnerPhysicalOutcomeProperty,
+       StarvationFreedomProperty,
+       AsyncLiveSpecAt, AsyncFairnessAt
+
+\* Exact conjunction consumed by the fresh-self bundle.  Keeping this operator
+\* equal to the five individual providers makes the aggregate a convenience,
+\* not a stronger premise or a weakened release boundary.
+AdequateLeaderFixedSubjectReplacementProviderProperties(specification) ==
+  /\ AdequateLeaderFixedPreAdmissionSubjectReplacementStepProperty(
+       specification)
+  /\ AdequateLeaderFixedSubjectReplacementOwnerConfiguredBoundProperty(
+       specification)
+  /\ AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty(
+       specification)
+  /\ AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty(
+       specification)
+  /\ AdequateLeaderFixedSubjectReplacementTargetHandoffProperty(
+       specification)
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementProviders ==
+  \A initialContext:
+    AdequateLeaderFixedSubjectReplacementProviderProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesAdequateLeaderFixedPreAdmissionSubjectReplacementStep,
+   AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementOwnerConfiguredBound,
+   AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementCutCarry,
+   AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementSelectedOwnerService,
+   AsyncLiveProvidesAdequateLeaderFixedSubjectReplacementTargetHandoff
+   DEF AdequateLeaderFixedSubjectReplacementProviderProperties
 
 AdequateLeaderFixedSubjectReplacementBudgetDescentProperty(
     specification) ==
@@ -4761,13 +5341,19 @@ AdequateLeaderFixedSubjectReplacementBudgetDescentProperty(
           leaderView \in Views,
           sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
           cut \in AdequateLeaderFixedSubjectReplacementCutSet,
-          budget \in Nat:
+          knownPotential
+            \in SUBSET
+                 AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+          sourceRank
+            \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
          AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
            initialContext, target, leaderContext,
-           leader, leaderView, sourceReceipt, cut, budget)
+           leader, leaderView, sourceReceipt, cut,
+           knownPotential, sourceRank)
            ~> AdequateLeaderFixedSubjectReplacementBudgetDescentGoal(
                 initialContext, target, leaderContext,
-                leader, leaderView, sourceReceipt, cut, budget)
+                leader, leaderView, sourceReceipt, cut,
+                knownPotential, sourceRank)
 
 THEOREM AdequateLeaderFixedSubjectReplacementServicesSupplyBudgetDescent ==
   \A specification:
@@ -4792,10 +5378,15 @@ AdequateLeaderFixedSubjectReplacementClosureProperty(specification) ==
           leaderView \in Views,
           sourceReceipt \in AdequateLeaderAuthorityDeadlineReceiptSet,
           cut \in AdequateLeaderFixedSubjectReplacementCutSet,
-          budget \in Nat:
+          knownPotential
+            \in SUBSET
+                 AdequateLeaderFixedSubjectReplacementOwnerIdentitySet,
+          sourceRank
+            \in AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
          AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
            initialContext, target, leaderContext,
-           leader, leaderView, sourceReceipt, cut, budget)
+           leader, leaderView, sourceReceipt, cut,
+           knownPotential, sourceRank)
            ~> AdequateLeaderFixedSubjectReplacementTerminalGoal(
                 initialContext, target, leaderContext,
                 leader, leaderView, sourceReceipt, cut)
@@ -4805,10 +5396,13 @@ THEOREM AdequateLeaderFixedSubjectReplacementBudgetDescentClosesEpisode ==
     AdequateLeaderFixedSubjectReplacementBudgetDescentProperty(
       specification)
       => AdequateLeaderFixedSubjectReplacementClosureProperty(specification)
-BY NatLessThanWellFounded, WellFoundedLeadsTo
+BY AdequateLeaderFixedSubjectReplacementEpisodeRankOrderingIsWellFounded,
+   WellFoundedLeadsTo
    DEF AdequateLeaderFixedSubjectReplacementBudgetDescentProperty,
        AdequateLeaderFixedSubjectReplacementClosureProperty,
-       AdequateLeaderFixedSubjectReplacementBudgetDescentGoal
+       AdequateLeaderFixedSubjectReplacementBudgetDescentGoal,
+       AdequateLeaderFixedSubjectReplacementEpisodeRankOrdering,
+       AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier
 
 (***************************************************************************
 Fresh-self quantitative composition.
@@ -4833,17 +5427,19 @@ AdequateLeaderAuthorityDeadlineFreshSubjectReplacementEntryGoal(
              THEN TRUE
              ELSE \E cut
                     \in AdequateLeaderFixedSubjectReplacementCutSet,
-                      replacementBudget \in Nat:
+                      replacementRank
+                        \in
+                          AdequateLeaderFixedSubjectReplacementEpisodeRankCarrier:
                     /\ AdequateLeaderFixedSubjectReplacementCutSource(
                          target, leaderContext, leader, leaderView,
                          receipt.subject, targetOrdinal, cut)
-                    /\ replacementBudget =
-                         AdequateLeaderFixedSubjectReplacementRemainingBudget(
+                    /\ replacementRank =
+                         AdequateLeaderFixedSubjectReplacementInitialEpisodeRank(
                            cut)
                     /\ AdequateLeaderFixedSubjectReplacementEpisodeFrontier(
                          initialContext, target, leaderContext,
                          leader, leaderView, receipt,
-                         cut, replacementBudget)
+                         cut, {}, replacementRank)
 
 AdequateLeaderAuthorityDeadlineFreshSubjectReplacementEntryProperty(
     specification) ==
@@ -4952,6 +5548,504 @@ BY AdequateLeaderFreshReceiptOwnsCompatibleConfiguredCeiling,
        AdequateLeaderAuthorityDeadlineLeaderPipelineCorridorExit,
        AdequateLeaderAuthorityDeadlineStrictCorridorExit
 
+(***************************************************************************
+Reachable AsyncLive suppliers for the fresh-self safety/action seams.
+
+These lemmas project the already-proved Async invariants and concrete
+`AsyncNext` classifications.  They introduce no temporal fairness: the
+selected-action predicates below are safety statements about an action which
+has already occurred.  Fair occurrence remains confined to the separately
+proved selected-owner and finite producer-prefix closures.
+***************************************************************************)
+
+\* Finite lifecycle admissions, their injective ordinary-slot allocation, and
+\* the shared ordinal high-watermark determine both the exact protocol slot
+\* projection and one maximal cutoff for every nonempty same-token node set.
+THEOREM AdequateLeaderFixedLifecycleTablesSupplyPipelineTokenOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    => AdequateLeaderFixedPipelineTokenOwnershipAndTailCarry
+BY AsyncCandidateLifecycleReviewedBucketsPartitionRecords,
+   AsyncCandidateLifecycleActiveRecordsInjectIntoPhysicalOwners,
+   AsyncCandidateLifecycleReviewedBucketsImplyPerNodeCapacity,
+   AsyncCandidateLifecycleSlotInjectionBoundsGlobalOwners,
+   AsyncCandidateLifecycleReviewedTokenOwnsOneOrigin,
+   AdequateLeaderFixedPipelineOriginSlotCarrierFitsConfiguredTail,
+   FS_Image, FS_Subset, FS_CardinalityType, IsaT(7200)
+   DEF AdequateLeaderFixedPipelineTokenOwnershipAndTailCarry,
+       AdequateLeaderFixedLivePipelineOriginPairs,
+       AdequateLeaderFixedDiscoveredPipelineOriginPairs,
+       AdequateLeaderFixedLivePipelineOriginsForToken,
+       AdequateLeaderFixedDiscoveredPipelineOriginsForToken,
+       AdequateLeaderFixedLivePipelineOriginSlotsForToken,
+       AdequateLeaderFixedDiscoveredPipelineOriginSlotsForToken,
+       AdequateLeaderFixedLivePipelineOriginsForTokenAtNode,
+       AdequateLeaderFixedPipelineTokenNodeCutoff,
+       AdequateLeaderFixedAuthorityPipelineRemainingTokens,
+       AdequateLeaderFixedOriginProtocolToken,
+       AdequateLeaderFixedOriginProtocolSlot,
+       AdequateLeaderFixedOriginProtocolPhase,
+       AdequateLeaderFixedOriginProtocolPeer,
+       AdequateLeaderFixedOriginIsExactPipelineEpisode,
+       AdequateLeaderFixedPipelineOriginSlotCarrier,
+       AsyncCandidateLifecycleActiveOriginsForNodeIn,
+       AsyncCandidateLifecycleOrdinaryOriginsForNodeIn,
+       AsyncCandidateLifecycleRecordsForNodeIn,
+       AsyncCandidateLifecycleOrdinaryRecordBucketIn,
+       AsyncCandidateLifecycleActiveSlots,
+       AsyncCandidateLifecycleReviewedCapacityInvariantIn,
+       AsyncCandidateLifecycleSlotInjectionInvariantIn,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncControlServiceStateTypeInvariant,
+       AsyncStrongTypeInvariant
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedPipelineTokenOwnershipAndTailCarry ==
+  \A initialContext:
+    AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderFixedLifecycleTablesSupplyPipelineTokenOwnership,
+   PTL
+   DEF AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty
+
+\* Within a frozen GST corridor, ordinary lifecycle history cannot compact a
+\* current-view exact origin.  Candidate/Serve/Control terminal memory and
+\* producer-continuation high-watermarks reject the only transitions which
+\* could otherwise recreate a drained token.
+THEOREM AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    => AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProvider
+BY AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncCandidateSuccessfulServiceInstallsTombstone,
+   AsyncCandidateDiscardInstallsTerminalTombstone,
+   AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst,
+   AsyncCandidateInternalBodyAvailableStageRetirementIsMonotoneAtGst,
+   AsyncCandidateServiceTombstoneRejectsTransportReadmission,
+   AsyncCandidateTerminalTombstonePersistsWithoutExit,
+   AsyncCandidateSameHeightRestartPreservesTombstone,
+   AsyncControlServiceExactRetryCoalesces,
+   AsyncControlServiceServicedIdentityCannotResurrect,
+   AsyncControlServiceTombstoneCannotReactivate,
+   AsyncCandidateProducerContinuationExactRetryCoalesces,
+   AsyncCandidateProducerContinuationHighWatermarkBlocksOldStage,
+   AsyncCandidateProducerContinuationPreservedOrTerminal,
+   AsyncCandidateProducerContinuationTerminalRecordIsFixed,
+   PostGstLeaderWireLifecycleRestartIsDisabled,
+   AdequateLeaderTerminalWireLifecycleCannotReactivate,
+   AdequateLeaderAsyncBracketStepPreservesTargetDecision,
+   FS_Subset, IsaT(9600)
+   DEF AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProvider,
+       AdequateLeaderFixedAuthorityPipelineRemainingTokens,
+       AdequateLeaderFixedAuthorityPipelineTokenCompleted,
+       AdequateLeaderFixedLivePipelineOriginPairs,
+       AdequateLeaderFixedDiscoveredPipelineOriginPairs,
+       AdequateLeaderFixedLivePipelineOriginsForToken,
+       AdequateLeaderFixedDiscoveredPipelineOriginsForToken,
+       AdequateLeaderFixedOriginIsExactPipelineEpisode,
+       AdequateLeaderFixedOriginProtocolToken,
+       AsyncCandidateLifecycleActiveOriginsForNodeIn,
+       AsyncCandidateLifecycleOrdinaryOriginsForNodeIn,
+       AsyncCandidateLifecycleRecordsForNodeIn,
+       AsyncCandidateLifecycleOrdinaryRecordBucketIn,
+       AsyncCandidateLifecycleActiveSlots,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AdequateLeaderFrozenTargetCorridor,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedPipelineOriginHistory ==
+  \A initialContext:
+    AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,
+   PTL
+   DEF
+     AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty
+
+\* The source decomposition is immediate state evidence: the fresh
+\* synchronized self corridor exposes its deterministic productive subject,
+\* and the exact scheduler/wire/continuation lifecycle already owns a shared
+\* ordinal strictly below the current high-watermark.  Finite pre-admission
+\* routes and any earlier replacement owners are frozen at that same point.
+THEOREM AdequateLeaderAuthorityDeadlineFreshSourceHasImmediateEntry ==
+  \A initialContext \in ContextRecords,
+     target \in ValidatorIds,
+     leaderContext \in ContextRecords,
+     leader \in ValidatorIds,
+     leaderView \in Views,
+     receipt \in AdequateLeaderAuthorityDeadlineReceiptSet:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    /\ AdequateLeaderFixedPipelineTokenOwnershipAndTailCarry
+    /\ AdequateLeaderAuthorityDeadlineFreshSource(
+         target, leaderContext, leader, leaderView, receipt)
+    /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+      => AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider
+BY AdequateLeaderFreshSelfCorridorOpensOriginalTarget,
+   AdequateLeaderScheduledProducerOriginUsesBoundedLifecycleToken,
+   AdequateLeaderProducerOriginSourceNamesExactReceiptOrPhysicalTerminal,
+   AdequateLeaderProducerOriginReceiptExposesExactReplacement,
+   AdequateLeaderFixedPerTokenDebtFitsConfiguredCharge,
+   AdequateLeaderFixedPreCandidateReservedTailFitsConfiguredCharge,
+   AdequateLeaderFixedPipelineClockPotentialFitsConfiguredBudget,
+   AdequateLeaderFixedSubjectReplacementOwnersFitConfiguredTables,
+   AdequateLeaderFixedSubjectReplacementInitialEpisodeRankIsFinite,
+   AsyncCandidateSchedulerCoverageExposesBoundedProducerOrigin,
+   AsyncSharedSchedulerHighWatermarkIsMonotone,
+   AsyncLeaderWireLifecycleSlotUniverseIsFinite,
+   FS_Image, FS_Union, FS_Subset, FS_CardinalityType, IsaT(15000)
+   DEF AdequateLeaderAuthorityDeadlineImmediateSourceEntryProvider,
+       AdequateLeaderAuthorityDeadlineFreshSource,
+       AdequateLeaderAuthorityDeadlineTargetDecision,
+       AdequateLeaderFixedFreshPipelineServiceRankFrontierAtOrdinal,
+       AdequateLeaderFixedFreshPreCandidateEntryRankCell,
+       AdequateLeaderFixedPreCandidateEntryRankCell,
+       AdequateLeaderFixedPreCandidateEntryRank,
+       AdequateLeaderFixedPreCandidateRouteStageIsUnique,
+       AdequateLeaderFixedPreCandidateRouteStageSet,
+       AdequateLeaderFixedPreCandidateRouteStageCandidate,
+       AdequateLeaderFixedPreCandidateRouteTyped,
+       AdequateLeaderFixedLocalPreCandidateRoute,
+       AdequateLeaderFixedWirePreCandidateRoute,
+       AdequateLeaderFixedProducerPreCandidateRoute,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementEpisode,
+       AdequateLeaderFixedUnacceptedPreAdmissionSubjectReplacementRoutes,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRoutes,
+       AdequateLeaderFixedPreAdmissionSubjectReplacementRouteIdentity,
+       AdequateLeaderFixedSubjectReplacementOwnersBeforeOrdinal,
+       AdequateLeaderFixedSubjectReplacementCutSource,
+       AdequateLeaderFixedSubjectReplacementEpisodeFrontier,
+       AdequateLeaderFixedSubjectReplacementEpisodeDebtAtRank,
+       AdequateLeaderFixedSubjectReplacementInitialEpisodeRank,
+       AdequateLeaderTargetProductiveSubjectOpenFrontier,
+       AdequateLeaderTargetOpenFrontier,
+       AdequateLeaderTargetProtocolSubjectSource,
+       AdequateLeaderTargetProducerTransportResidual,
+       AdequateLeaderTargetProducerResidual,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncStrongTypeInvariant
+
+THEOREM AsyncLiveProvidesAdequateLeaderAuthorityDeadlineImmediateSourceEntry ==
+  \A initialContext:
+    AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysUsesFixedResponsiveVoters,
+   AsyncLiveProvidesAdequateLeaderFixedPipelineTokenOwnershipAndTailCarry,
+   AdequateLeaderAuthorityDeadlineFreshSourceHasImmediateEntry,
+   PTL
+   DEF AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty
+
+\* This is the exhaustive selected-candidate/pre-candidate action
+\* classification.  Parent departure carries the immutable causal cut,
+\* intermediate stages cannot recharge it, and the selected due action either
+\* reaches the exact terminal/lower rank or enters one of the two explicitly
+\* charged non-descent arms.  An unrelated step retains the exact selected
+\* token, candidate, lifecycle ordinal, semantic rank, owner, packet, and
+\* physical source rank; an existential same-rank B is not a carry witness.
+\* Tick changes only the selected slack and every deadline reset remains below
+\* the receipt's absolute ceiling.
+THEOREM AdequateLeaderFixedSelectedActionsCarryPipelineRank ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    => /\ AdequateLeaderFixedCutPerActionProvider
+       /\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider
+       /\ AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling
+       /\ AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling
+BY AdequateLeaderFixedPipelineOriginHistoryFollowsAsyncStep,
+   AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut,
+   AdequateLeaderFixedOwnedFinalRouteParentConsumesCumulativeDebt,
+   AdequateLeaderFixedIntermediateRouteCarrierCannotRechargeCut,
+   AdequateLeaderFixedCutCumulativeActionDebtFitsEpisodeBudget,
+   AsyncCandidateProducerContinuationHandoffRetainsExactLifecycle,
+   CandidateProducerContinuationFrozenOriginsCannotReplenish,
+   AsyncCandidateProducerSourceTransitionInstallsExactContinuation,
+   AsyncCandidateProducerContinuationPreservedOrTerminal,
+   ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
+   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralRankCellStepIsSafe,
+   ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
+   ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock,
+   DueIoServiceEnablesConcreteLocalProgress,
+   HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   AdequateLeaderTargetEqualCountReplacementIntroducesAndRetires,
+   AdequateLeaderTargetCountIncreaseIntroducesOwnerIdentity,
+   AdequateLeaderFixedPipelineClockPotentialFitsConfiguredBudget,
+   AdequateLeaderFixedPreCandidateReservedTailFitsConfiguredCharge,
+   AdequateLeaderAsyncBracketStepPreservesTargetDecision,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   IsaT(18000)
+   DEF AdequateLeaderFixedCutPerActionProvider,
+       AdequateLeaderFixedPipelineStrictRankGoal,
+       AdequateLeaderFixedPipelineOriginSlotsPreservedAction,
+       AdequateLeaderFixedPipelineOriginEqualCountReplacementAction,
+       AdequateLeaderFixedPipelineOriginCountIncreasingReplenishmentAction,
+       AdequateLeaderFixedPipelineProducerHandoffFrontier,
+       AdequateLeaderFixedPreCandidateSelectedOwnerStepProvider,
+       AdequateLeaderFixedSelectedPreCandidateEntryFrontier,
+       AdequateLeaderFixedPreCandidateEntryStrictRankGoal,
+       AdequateLeaderFixedSelectedCandidateActionCarriesAbsoluteCeiling,
+       AdequateLeaderFixedSelectedEntryActionCarriesAbsoluteCeiling,
+       AdequateLeaderFixedPipelineOriginEpisodeFrontier,
+       AdequateLeaderFixedPipelineOriginEpisodeBudgetDescentGoal,
+       AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible,
+       AdequateLeaderFixedCandidateSemanticOccurrenceCoordinates,
+       AdequateLeaderFixedSelectedPipelineRankFrontier,
+       AdequateLeaderFixedPipelineRankCell,
+       AdequateLeaderFixedPipelineRank,
+       AdequateLeaderFixedPipelineAbsoluteCeiling,
+       AdequateLeaderFixedPipelineAbsoluteCeilingAtUnknownBudget,
+       AdequateLeaderFixedCandidateSelectedServiceSlack,
+       AdequateLeaderFixedEntryServiceSlack,
+       AdequateLeaderFixedSelectedServiceOwnerAction,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedCutPerAction ==
+  \A initialContext:
+    AdequateLeaderFixedCutPerActionProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderFixedSelectedActionsCarryPipelineRank,
+   PTL
+   DEF AdequateLeaderFixedCutPerActionProviderProperty
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep ==
+  \A initialContext:
+    AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderFixedSelectedActionsCarryPipelineRank,
+   PTL
+   DEF AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry ==
+  \A initialContext:
+    AdequateLeaderFixedSelectedActionClockCarryProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderFixedSelectedActionsCarryPipelineRank,
+   PTL
+   DEF AdequateLeaderFixedSelectedActionClockCarryProviderProperty
+
+\* Concrete global fixed-clock ownership.  This projection deliberately ends
+\* at this pipeline's selected rank cell, not at an Exact-Decision residual.
+\* The target-neutral lemmas below are used only for their concrete blocker
+\* partition, immutable predecessor snapshot, ordinal consumption, and exact
+\* fair-action classifications.  Candidate/pre-candidate target state is
+\* carried by the local route/cut lemmas, so an unrelated exact-Decision exit
+\* is never accepted as this provider's goal.
+THEOREM AdequateLeaderFixedGlobalBlockerFactsSupplyProviders ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+  /\ PostGstReplayQuarantineExcluded
+    => /\ AdequateLeaderFixedGlobalBlockerEntryProvider
+       /\ AdequateLeaderFixedGlobalProducerEpisodeEntryProvider
+       /\ AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider
+       /\ AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider
+       /\ AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider
+       /\ AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider
+BY HistoricalDiscoveryFixedClockBlockerCharacterization,
+   ExactDecisionTargetNeutralSnapshotIsFinite,
+   ExactDecisionTargetNeutralEpisodeBudgetIsNatural,
+   ExactDecisionTargetNeutralConcreteRankInCarrier,
+   ExactDecisionTargetNeutralFixedClockDoesNotAddDuePackets,
+   ExactDecisionTargetNeutralLaterWorkCannotAcquirePredecessor,
+   ExactDecisionTargetNeutralAtomicAdmissionLowersPacketRank,
+   ExactDecisionTargetNeutralServeOrdinalAdvanceLowersFrozenPacketRank,
+   ExactDecisionTargetNeutralOrdinalCeilingsCarryUntilStrictRankGoal,
+   ExactDecisionTargetNeutralNonGoalEpisodeHasRemainingOrdinal,
+   ExactDecisionTargetNeutralNonDescentConsumesOrdinal,
+   ExactDecisionTargetNeutralRankCellHasConcreteFairOwner,
+   ExactDecisionTargetNeutralRankCellStepIsSafe,
+   ExactDecisionTargetNeutralSelectedOwnerConsumesRankCell,
+   ExactDecisionTargetNeutralLastOrdinalForcesStrictRankGoal,
+   OverdueResponsivePacketEnablesConcreteProgress,
+   DueNodeServiceEnablesConcreteGateProgress,
+   ConcreteDueNodeServiceActionsResetDeadlineAboveFixedClock,
+   DueIoServiceEnablesConcreteLocalProgress,
+   HistoricalDiscoveryFixedClockIngressRemovesOneDuePacket,
+   HistoricalDiscoverySelectedNonOverdueShadowStrictlyDescends,
+   HistoricalDiscoveryRetainedPacketMinimumStepCases,
+   HistoricalDiscoveryLowerCandidateInsertionReselectsLower,
+   HistoricalDiscoveryLowerServeInsertionReselectsLower,
+   HistoricalDiscoveryCandidateExitClassifiesOccurrenceDebt,
+   HistoricalDiscoveryServeExitEitherLowersOrReplenishes,
+   HistoricalDiscoveryServeFairActionLowersOccurrenceDebt,
+   AdequateLeaderFixedExactParentDepartureCarriesLifecycleCut,
+   AdequateLeaderFixedOwnedFinalRouteParentConsumesCumulativeDebt,
+   AdequateLeaderFixedIntermediateRouteCarrierCannotRechargeCut,
+   AsyncCandidateProducerContinuationHandoffRetainsExactLifecycle,
+   CandidateProducerContinuationFrozenOriginsCannotReplenish,
+   AsyncCandidateProducerSourceTransitionInstallsExactContinuation,
+   AdequateLeaderAsyncBracketStepPreservesTargetDecision,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   FS_Interval, FS_Image, FS_Union, FS_Product,
+   FS_CardinalityType, IsaT(24000)
+   DEF AdequateLeaderFixedGlobalBlockerEntryProvider,
+       AdequateLeaderFixedGlobalProducerEpisodeEntryProvider,
+       AdequateLeaderFixedGlobalBlockerConcreteOwnerProvider,
+       AdequateLeaderFixedGlobalBlockerSelectedOwnerStepProvider,
+       AdequateLeaderFixedGlobalBlockerOrdinalCeilingCarryProvider,
+       AdequateLeaderFixedGlobalBlockerLastOrdinalForcesGoalProvider,
+       AdequateLeaderFixedConfiguredGlobalBlockerSnapshot,
+       AdequateLeaderFixedGlobalBlockerSnapshotActive,
+       AdequateLeaderFixedGlobalBlockerAtRank,
+       AdequateLeaderFixedGlobalBlockerPending,
+       AdequateLeaderFixedGlobalBlockerStrictRankGoal,
+       AdequateLeaderFixedGlobalBlockerSelectionGoal,
+       AdequateLeaderFixedGlobalProducerEpisodeAtBudget,
+       AdequateLeaderFixedGlobalProducerEpisodeOutcome,
+       AdequateLeaderFixedGlobalBlockerOwnerReady,
+       AdequateLeaderFixedSelectedGlobalBlockerOwner,
+       AdequateLeaderFixedGlobalBlockerProducerEpisodeBudget,
+       AdequateLeaderFixedGlobalBlockerProducerEpisodeTokens,
+       AdequateLeaderFixedGlobalBlockerCandidateOrdinalTokens,
+       AdequateLeaderFixedGlobalBlockerServeOrdinalTokens,
+       AdequateLeaderFixedConcreteGlobalBlockerRank,
+       AdequateLeaderFixedGlobalBlockerProducerPrefix,
+       AdequateLeaderFixedGlobalBlockerRankCarrier,
+       AdequateLeaderFixedGlobalBlockerRankOrdering,
+       AdequateLeaderFixedPipelineServiceRankFrontier,
+       AdequateLeaderFixedSelectedPipelineServiceRankFrontier,
+       AdequateLeaderFixedPipelineServiceRankDescentGoal,
+       AdequateLeaderFixedSelectedServiceOwnerSet,
+       AdequateLeaderFixedSelectedServiceOwnerAction,
+       AdequateLeaderFixedPipelineRankCell,
+       AdequateLeaderFixedPreCandidateEntryRankCell,
+       AdequateLeaderFixedPipelineRank,
+       AdequateLeaderFixedPreCandidateEntryRank,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderFixedGlobalBlockerProviders ==
+  \A initialContext:
+    AdequateLeaderFixedGlobalBlockerProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AsyncSpecAlwaysExcludesPostGstReplayQuarantine,
+   AdequateLeaderFixedGlobalBlockerFactsSupplyProviders,
+   PTL
+   DEF AdequateLeaderFixedGlobalBlockerProviderProperty
+
+\* The roster-bound receipt makes every pre-deadline timeout exit impossible.
+\* The frozen dual quorum excludes a same-or-higher TC, while bracket steps
+\* preserve the immutable context/view/leader key, the real node deadlines,
+\* and the receipt's source clock until Decision or its exact deadline.
+THEOREM AdequateLeaderAuthorityDeadlineWindowFollowsAsyncStep ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateServiceTombstoneLifecycleInvariant
+    => AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider
+BY DualQuorumIntersectionHasHonest,
+   AdequateLeaderAsyncBracketStepPreservesTargetDecision,
+   AsyncFixedCorridorDeadlineAsyncNextClockIsMonotone,
+   AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   AsyncNextPreservesCandidateServiceTombstoneLifecycle,
+   GstAsyncStepIsMonotone,
+   PostGstAsyncBracketAdvancesEveryNodeView,
+   ExecutePersistInstallAdvancesCertifiedView,
+   IsaT(15000)
+   DEF AdequateLeaderAuthorityDeadlineNoPrematureExitStepProvider,
+       AdequateLeaderAuthorityDeadlineFreshSelfWindowActive,
+       AdequateLeaderAuthorityDeadlineReceiptOwnsFrozenRosterWindow,
+       AdequateLeaderFrozenTargetCorridor,
+       AdequateLeaderCorridorAuthorityReceipt,
+       AdequateLeaderCorridorAuthorityReceiptValid,
+       AdequateLeaderResponsiveViewSynchronized,
+       AdequateLeaderActiveTargetLeaderServiceWindow,
+       AdequateLeaderActiveNodeServiceWindow,
+       AdequateLeaderFrozenResponsiveRoster,
+       FormedTimeoutCertificatesSound,
+       CurrentIntentViewsBound,
+       TimeoutVotesBindCertificate,
+       TimeoutSignerSet,
+       NodeTimedOut,
+       AsyncCandidateServiceTombstoneLifecycleInvariant,
+       AsyncCandidateServiceLifecycleInvariant,
+       AsyncNext, AsyncAllVars
+
+THEOREM AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep ==
+  \A initialContext:
+    AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveSpecProjectsAsyncSpec,
+   AsyncSpecAlwaysStrongTypeInvariant,
+   AsyncSpecAlwaysProgressOwnershipInvariant,
+   AsyncSpecAlwaysCandidateServiceTombstoneLifecycle,
+   AdequateLeaderAuthorityDeadlineWindowFollowsAsyncStep,
+   PTL
+   DEF AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty
+
+\* Exact conjunction proved in this slice.  The semantic-occurrence/physical
+\* cut bridge remains deliberately separate below; this operator must not be
+\* mistaken for the complete fresh-self quantitative bundle.
+AdequateLeaderAuthorityDeadlineFreshSelfSafetyActionProviderProperties(
+    specification) ==
+  /\ AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
+       specification)
+  /\ AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty(
+       specification)
+  /\ AdequateLeaderFixedPipelineOriginHistoryAndNoResurrectionProviderProperty(
+       specification)
+  /\ AdequateLeaderFixedCutPerActionProviderProperty(specification)
+  /\ AdequateLeaderFixedSelectedActionClockCarryProviderProperty(
+       specification)
+  /\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
+       specification)
+  /\ AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty(
+       specification)
+
+THEOREM AsyncLiveProvidesAdequateLeaderAuthorityDeadlineFreshSelfSafetyActions ==
+  \A initialContext:
+    AdequateLeaderAuthorityDeadlineFreshSelfSafetyActionProviderProperties(
+      AsyncLiveSpecAt(initialContext))
+BY AsyncLiveProvidesAdequateLeaderAuthorityDeadlineImmediateSourceEntry,
+   AsyncLiveProvidesAdequateLeaderFixedPipelineTokenOwnershipAndTailCarry,
+   AsyncLiveProvidesAdequateLeaderFixedPipelineOriginHistory,
+   AsyncLiveProvidesAdequateLeaderFixedCutPerAction,
+   AsyncLiveProvidesAdequateLeaderFixedSelectedActionClockCarry,
+   AsyncLiveProvidesAdequateLeaderFixedPreCandidateSelectedOwnerStep,
+   AsyncLiveProvidesAdequateLeaderAuthorityDeadlineNoPrematureExitStep
+   DEF
+     AdequateLeaderAuthorityDeadlineFreshSelfSafetyActionProviderProperties
+
 AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle(
     specification) ==
   /\ ModelConfiguration
@@ -4960,15 +6054,7 @@ AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle(
   /\ (specification => []AsyncStrongTypeInvariant)
   /\ AdequateLeaderAuthorityDeadlineImmediateSourceEntryProviderProperty(
        specification)
-  /\ AdequateLeaderFixedPreAdmissionSubjectReplacementStepProperty(
-       specification)
-  /\ AdequateLeaderFixedSubjectReplacementOwnerConfiguredBoundProperty(
-       specification)
-  /\ AdequateLeaderFixedSubjectReplacementCutCarryProviderProperty(
-       specification)
-  /\ AdequateLeaderFixedSubjectReplacementSelectedOwnerServiceProperty(
-       specification)
-  /\ AdequateLeaderFixedSubjectReplacementTargetHandoffProperty(
+  /\ AdequateLeaderFixedSubjectReplacementProviderProperties(
        specification)
   /\ AdequateLeaderFixedPipelineTokenOwnershipAndTailCarryProperty(
        specification)
@@ -4980,8 +6066,6 @@ AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle(
   /\ AdequateLeaderFixedPreCandidateSelectedOwnerStepProviderProperty(
        specification)
   /\ AdequateLeaderFixedPipelineOriginNonDescentEpisodeStepProperty(
-       specification)
-  /\ AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty(
        specification)
   /\ AdequateLeaderFixedGlobalBlockerProviderProperty(specification)
   /\ AdequateLeaderAuthorityDeadlineNoPrematureExitStepProviderProperty(
@@ -5022,7 +6106,8 @@ BY AdequateLeaderFixedPipelineOriginEpisodeStepClosesNonDescentEpisode,
    AdequateLeaderFixedGlobalSelectionAndSelectedServiceSupplyPipelineRankDescent,
    AdequateLeaderFixedPipelineRankDescentClosesService,
    AdequateLeaderAuthorityDeadlineStepCarryPreventsPrematureExit
-   DEF AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle
+   DEF AdequateLeaderAuthorityDeadlineFreshSelfQuantitativeProviderBundle,
+       AdequateLeaderFixedSubjectReplacementProviderProperties
 
 THEOREM AdequateLeaderAuthorityDeadlineFreshSelfBundleSuppliesPipelineService ==
   \A specification:

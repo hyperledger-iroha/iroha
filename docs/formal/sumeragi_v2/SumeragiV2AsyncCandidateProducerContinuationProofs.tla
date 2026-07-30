@@ -376,6 +376,8 @@ THEOREM AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed ==
     /\ record.status \in {"Reserved", "Materialized"}
     /\ ~AsyncCandidateProducerContinuationTerminalAfter(record)
     /\ ~AsyncCandidateProducerContinuationSelectedForResolution(record)
+    /\ ~AsyncCandidateProducerContinuationSelectedForRunnerResolution(
+         record)
       => AsyncCandidateProducerContinuationRecordAfterStep(
            state, record) = record
 BY SMT DEF AsyncCandidateProducerContinuationRecordAfterStep
@@ -390,7 +392,8 @@ BY DEF ResolveCandidateProducerContinuation
 THEOREM CandidateProducerContinuationBlocksRunnerUntilHandoffResolution ==
   \A node \in ValidatorIds:
     RunNodeWork(node)
-      => ~AsyncCandidateProducerContinuationResolutionRequired(node)
+      => \/ ~AsyncCandidateProducerContinuationResolutionRequired(node)
+         \/ ResolveRunNodeCandidateProducerContinuation(node)
 BY DEF RunNodeWork
 
 THEOREM CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner ==
@@ -743,10 +746,74 @@ AsyncCandidateProducerContinuationTargetStatusExit(identity, status) ==
        AsyncCandidateProducerContinuationStatusRank(record.status)
          < AsyncCandidateProducerContinuationStatusRank(status)
 
+HistoricalCandidateProducerContinuationAtStatus(node, record, status) ==
+  /\ gst
+  /\ HistoricalRecoveryTarget(node)
+  /\ status \in {"Reserved", "Materialized"}
+  /\ record.status = status
+  /\ record
+       \in AsyncCandidateProducerContinuationResolutionRecordsForNode(node)
+
+HistoricalCandidateProducerContinuationSelectedAtStatus(
+    node, record, status) ==
+  /\ HistoricalCandidateProducerContinuationAtStatus(
+       node, record, status)
+  /\ record =
+       AsyncCandidateProducerContinuationSelectedResolutionRecord(node)
+
+THEOREM HistoricalCandidateProducerContinuationTurnIsResolutionOnly ==
+  \A node \in ValidatorIds:
+    /\ AsyncCandidateProducerContinuationResolutionRequired(node)
+    /\ RunHistoricalRecoveryNode(node)
+      => /\ ResolveRunNodeCandidateProducerContinuation(node)
+         /\ UNCHANGED vars
+         /\ UNCHANGED asyncCausalQueues
+         /\ UNCHANGED AsyncSchedulerExceptCausalControlAndNodeService
+BY DEF RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation
+
+THEOREM HistoricalCandidateProducerContinuationTurnTerminalizesSelected ==
+  \A state,
+     record \in AsyncCandidateProducerContinuationRecordSet:
+    /\ record.status \in {"Reserved", "Materialized"}
+    /\ AsyncCandidateProducerContinuationSelectedForRunnerResolution(
+         record)
+      => (AsyncCandidateProducerContinuationRecordAfterStep(
+            state, record)).status = "Terminal"
+BY SMT
+   DEF AsyncCandidateProducerContinuationRecordAfterStep
+
+THEOREM HistoricalCandidateProducerContinuationTurnExitsSelectedStatus ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet,
+     status \in {"Reserved", "Materialized"}:
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ HistoricalCandidateProducerContinuationSelectedAtStatus(
+         node, record, status)
+    /\ PostGstRunHistoricalRecoveryNode(node)
+      => AsyncCandidateProducerContinuationTargetStatusExit(
+           record.identity, status)'
+BY HistoricalCandidateProducerContinuationTurnIsResolutionOnly,
+   HistoricalCandidateProducerContinuationTurnTerminalizesSelected,
+   IsaT(900)
+   DEF HistoricalCandidateProducerContinuationSelectedAtStatus,
+       HistoricalCandidateProducerContinuationAtStatus,
+       AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+       AsyncCandidateProducerContinuationTargetStatusExit,
+       AsyncCandidateProducerContinuationStatusRank,
+       AsyncCandidateProducerContinuationRecordsForIdentity,
+       AsyncCandidateProducerContinuationRecordsForIdentityIn,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncControlServiceSlotTransition,
+       PostGstRunHistoricalRecoveryNode
+
 AsyncCandidateProducerContinuationFrozenPrefixAtBudget(
     node, identity, targetOrdinal, targetStage, status, budget) ==
   /\ gst
-  /\ node \in AsyncCurrentResponsiveVoters
+  /\ node \in
+       AsyncCurrentResponsiveVoters
+         \cup asyncHistoricalRecoveryTargets
   /\ status \in {"Reserved", "Materialized"}
   /\ AsyncCandidateProducerContinuationTargetAtStatus(
        node, identity, targetOrdinal, targetStage, status)
@@ -961,9 +1028,9 @@ BY ExternalContinuationFairServiceStrictlyDropsStatusRank,
        SetLessThan, OpToRel
 
 AsyncCandidateProducerContinuationFrozenPrefixDescentProperty(
-    specification) ==
+    specification, initialContext) ==
   specification
-    => \A node \in ValidatorIds,
+    => \A node \in AsyncVotersAt(initialContext),
           identity,
           targetOrdinal \in Nat \ {0},
           targetStage \in AsyncCandidateServiceStageClasses,
@@ -977,9 +1044,9 @@ AsyncCandidateProducerContinuationFrozenPrefixDescentProperty(
                 status, budget)
 
 AsyncCandidateProducerContinuationFrozenPrefixClosureProperty(
-    specification) ==
+    specification, initialContext) ==
   specification
-    => \A node \in ValidatorIds,
+    => \A node \in AsyncVotersAt(initialContext),
           identity,
           targetOrdinal \in Nat \ {0},
           targetStage \in AsyncCandidateServiceStageClasses,
@@ -998,14 +1065,20 @@ AsyncCandidateProducerContinuationDormantReservationGoal(record) ==
   \/ AsyncCandidateProducerContinuationTargetStatusExit(
        record.identity, "Reserved")
 
-\* This leaf is deliberately post-GST.  Before GST a volatile Terminal may be
-\* reopened by responsive restart/replay, and that recovery is discharged by
-\* the separate reset/replay kernel rather than by this fixed reservation
-\* episode.
+\* This leaf is deliberately post-GST and scoped to the frozen voters for
+\* which AsyncFairnessAt provides the three producer-continuation actions.
+\* Adequate-leader callers prove that their selected immutable candidate and
+\* its retained continuation have the same voter owner before applying it.
+\* Historical recovery targets outside the frozen roster use their separate
+\* indexed recovery corridor and are not silently granted voter fairness.
+\*
+\* Before GST a volatile Terminal may be reopened by responsive
+\* restart/replay, and that recovery is discharged by the separate
+\* reset/replay kernel rather than by this fixed reservation episode.
 AsyncCandidateProducerContinuationDormantReservationClosureProperty(
-    specification) ==
+    specification, initialContext) ==
   specification
-    => \A node \in ValidatorIds,
+    => \A node \in AsyncVotersAt(initialContext),
           record \in AsyncCandidateProducerContinuationRecordSet:
          /\ gst
          /\ record =

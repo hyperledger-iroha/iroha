@@ -79,6 +79,8 @@ models=(
   SumeragiV2FixedCorridorActionCreditMutation.tla
   SumeragiV2ProposalPipelineBudgetMutation.tla
   SumeragiV2AuthorityDeadlineCarryMutation.tla
+  SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla
+  SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla
   SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla
 )
 
@@ -99,7 +101,7 @@ for model in "${models[@]}"; do
     exit 1
   }
 done
-echo "[sany] all twenty-five liveness-ownership mutation models parsed with frozen Java 21.0.12"
+echo "[sany] all twenty-seven liveness-ownership mutation models parsed with frozen Java 21.0.12"
 
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC
@@ -174,6 +176,8 @@ fixed_cases=(
   "fixed-corridor-action-credit|SumeragiV2FixedCorridorActionCreditMutation.tla|fixed_corridor_action_credit_fixed.cfg"
   "proposal-pipeline-budget|SumeragiV2ProposalPipelineBudgetMutation.tla|proposal_pipeline_budget_fixed.cfg"
   "authority-deadline-carry|SumeragiV2AuthorityDeadlineCarryMutation.tla|authority_deadline_carry_fixed.cfg"
+  "adequate-leader-deadline-authority|SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla|adequate_leader_deadline_authority_fixed.cfg"
+  "adequate-leader-selected-lifecycle-episode|SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla|adequate_leader_selected_lifecycle_episode_fixed.cfg"
   "fixed-corridor-receipt-acquisition|SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla|fixed_corridor_receipt_acquisition_fixed.cfg"
 )
 
@@ -242,6 +246,8 @@ mutation_cases=(
   "proposal-pipeline-additive-budget|SumeragiV2ProposalPipelineBudgetMutation.tla|proposal_pipeline_budget_additive_bug.cfg|PipelineBudgetCoversEveryCrossSlotEpisode"
   "authority-deadline-expired-receipt|SumeragiV2AuthorityDeadlineCarryMutation.tla|authority_deadline_carry_expired_receipt_bug.cfg|ImmutableReceiptCannotExpireBeforeDecision"
   "authority-deadline-kernel-recharge|SumeragiV2AuthorityDeadlineCarryMutation.tla|authority_deadline_carry_kernel_recharge_bug.cfg|ImmutableReceiptCannotExpireBeforeDecision"
+  "adequate-leader-deadline-omitted-roster-bound|SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla|adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg|NoPrematureExit"
+  "adequate-leader-selected-lifecycle-semantic-shortcut|SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla|adequate_leader_selected_lifecycle_episode_semantic_shortcut_bug.cfg|SelectedLifecycleEpisodeOrPhysicalDescent"
   "fixed-corridor-receipt-prestate-gap|SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla|fixed_corridor_receipt_acquisition_prestate_only_bug.cfg|ReceiptAcquisitionAndRetention"
   "fixed-corridor-receipt-global-retirement|SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla|fixed_corridor_receipt_acquisition_global_retire_bug.cfg|ReceiptAcquisitionAndRetention"
 )
@@ -253,4 +259,4 @@ for case_spec in "${mutation_cases[@]}"; do
     "Error: The behavior up to this point is:"
 done
 
-echo "[tlc] all 54 liveness-ownership mutations produced their exact named counterexamples; repaired models passed"
+echo "[tlc] all 61 liveness-ownership mutations produced their exact named counterexamples; repaired models passed"

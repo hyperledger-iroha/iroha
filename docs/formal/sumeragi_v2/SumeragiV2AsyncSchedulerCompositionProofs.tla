@@ -659,12 +659,23 @@ PROOF
                /\ DeferredProgressCommitHistoryInvariant'
                /\ CausalProgressCommitHistoryInvariant'
                /\ ProtectedDeferredProgressInvariant'
-    <2>1. \/ LocalAdmissionStep(node)
+    <2>1. \/ ResolveRunNodeCandidateProducerContinuation(node)
+           \/ LocalAdmissionStep(node)
            \/ IngressDrainStep(node)
            \/ SerializedRunnerRuntimeStep(node)
            \/ SerializedLocalPrecedesServeIngressStep(node)
            \/ AsyncServeIngressTargetOnlyTurn(node)
       BY <1>1, RunNodeWorkConcreteActionCaseSplit
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      <3>1. UNCHANGED <<asyncCommandQueues,
+                        asyncDeferredProgressQueues,
+                        asyncCausalQueues>>
+        BY <2>1r, Isa
+           DEF ResolveRunNodeCandidateProducerContinuation,
+               AsyncSchedulerExceptCausalControlAndNodeService
+      <3> QED BY <1>1, <3>1,
+           UnchangedSchedulerCarriersPreserveProgressCommitSlots
     <2>2. CASE LocalAdmissionStep(node)
       BY <1>1, <2>2,
          LocalAdmissionPreservesProgressCommitSlotInvariant
@@ -689,7 +700,7 @@ PROOF
     <2>6. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>6,
          SerializedLocalPredecessorPreservesProgressCommitSlotInvariant
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <2>1, <2>1r, <2>2, <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
 
 THEOREM RunHistoricalServerLeavesProgressCarriers ==

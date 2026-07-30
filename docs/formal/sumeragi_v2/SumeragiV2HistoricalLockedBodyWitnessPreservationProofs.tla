@@ -1293,7 +1293,9 @@ BY LocalAdmissionPreservesHistoricalLockedBodyLineageSourceRetention,
    IngressDrainPreservesHistoricalLockedBodyLineageSourceRetention,
    SerializedRuntimePreservesHistoricalLockedBodyLineageSourceRetention,
    Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService
 
 THEOREM RunNodePreservesHistoricalLockedBodyLineageSourceRetention ==
   \A node \in ValidatorIds:

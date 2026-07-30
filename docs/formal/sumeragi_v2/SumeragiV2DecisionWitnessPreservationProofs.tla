@@ -1107,7 +1107,9 @@ BY LocalAdmissionPreservesDecisionExactSourceRetention,
    SerializedLocalPredecessorPreservesDecisionExactSourceRetention,
    IngressDrainPreservesDecisionExactSourceRetention,
    SerializedRuntimePreservesDecisionExactSourceRetention, Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService
 
 THEOREM AsyncRunnerPreservesDecisionExactSourceRetention ==
   /\ AsyncStrongTypeInvariant

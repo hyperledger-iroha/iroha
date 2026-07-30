@@ -1088,6 +1088,8 @@ BY HistoricalRuntimeCreatesDecisionOnlyForRunner, IsaT(90)
        SerializedRunnerRuntimeStep, SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AdmitProducerCompletion, AdmitCausalHead,
        UpdateLocalAdmissionMetadata, DrainFairIngressSelected, vars
 

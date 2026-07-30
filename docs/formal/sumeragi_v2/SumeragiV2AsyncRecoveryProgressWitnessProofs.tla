@@ -722,6 +722,11 @@ PROOF
                     PersistLockCommitSourceTransition(request)
                \/ \E request \in pendingInstallTC:
                     PersistInstallCommitSourceTransition(request)
+    <2>0. CASE
+            ResolveRunNodeCandidateProducerContinuation(node)
+      BY <2>0, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             CommitCoreSourceProjection, vars
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, Isa
          DEF LocalAdmissionStep, AdmitProducerCompletion,
@@ -756,7 +761,7 @@ PROOF
              CommitCoreSourceProjection,
              ResponsiveCommitSignRequests,
              ResponsiveRetainedCommitItems, vars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>0, <2>1, <2>2, <2>3, <2>4, <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 

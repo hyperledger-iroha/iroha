@@ -26792,6 +26792,285 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle() {
+        let (service, keys) = fixture();
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let request = authenticated_serve_request(
+            &service.context,
+            &keys[1],
+            proposal.round,
+            proposal.subject,
+            wire::GlobalPhase::Prepare,
+        );
+        let requester = request.request().requester.clone();
+        let via = service.context.roster[0].validator.clone();
+        let proposer = service.context.roster
+            [usize::try_from(proposal.proposer).expect("fixture proposer index fits usize")]
+        .validator
+        .clone();
+        let leader_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+        ));
+        let BlockMessage::V2(leader_envelope) = &leader_message else {
+            unreachable!("leader fixture is a v2 envelope");
+        };
+
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(4);
+        let leader_scheduler_ordinal = (1_u128..=41)
+            .map(|expected| {
+                let ordinal = command_tx
+                    .queue
+                    .lifecycle_ordinals
+                    .reserve_one()
+                    .expect("reserve the pre-restart shared lifecycle prefix");
+                assert_eq!(ordinal, expected);
+                ordinal
+            })
+            .last()
+            .expect("the shared prefix is non-empty");
+        let ingress = FairV2Ingress::new(
+            128,
+            128 * 1024 * 1024,
+            64 * 1024 * 1024,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+        );
+        let roster = service
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<BTreeSet<_>>();
+        ingress
+            .configure_roster_for_context(
+                roster.iter().cloned(),
+                &service.context.chain_id,
+                service.context.da_layout,
+            )
+            .expect("configure the combined Serve/leader ingress");
+        ingress.require_certified_serve_gate();
+        ingress.require_leader_wire_lifecycle_gate();
+
+        let (identity, slot) = {
+            let state = ingress.state.lock();
+            match super::super::fair_v2_ingress_leader_wire_identity(
+                &state,
+                &leader_message,
+                &proposer,
+                Hash::new(leader_envelope.encode()),
+            ) {
+                super::super::FairV2IngressLeaderWireDerivation::Exact { identity, slot } => {
+                    (identity, slot)
+                }
+                _ => panic!("proposal fixture must derive one exact leader lifecycle"),
+            }
+        };
+        let leader_token = super::super::FairV2IngressLeaderWireToken {
+            identity,
+            slot,
+            admission_ordinal: 7,
+            scheduler_ordinal: leader_scheduler_ordinal,
+            source_class: super::super::FairV2IngressLeaderWireSourceClass::Consensus,
+        };
+        assert_eq!(leader_token.scheduler_ordinal(), 41);
+
+        let directory = TempDir::new().expect("temporary combined ingress gate");
+        let wal_path = directory.path().join("serve-leader-order.wal");
+        let owner = [0xA9; 32];
+        let capacity =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
+                roster.len(),
+                service.context.da_layout.max_chunk_count,
+            )
+            .expect("derive finite leader lifecycle capacity");
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                service.context.id(),
+                service.context.height,
+                owner,
+                0,
+                false,
+            );
+        let (leader_gate, _) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &wal_path,
+                service.context.id(),
+                service.context.height,
+                owner,
+                roster.clone(),
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("open pre-restart leader lifecycle gate");
+        leader_gate
+            .reserve(leader_token.clone())
+            .expect("reserve the pre-restart leader lifecycle");
+        drop(leader_gate);
+
+        let recovery_authority =
+            super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+                service.context.id(),
+                service.context.height,
+                owner,
+                0,
+                false,
+            );
+        let (leader_gate, restore) =
+            super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+                &wal_path,
+                service.context.id(),
+                service.context.height,
+                owner,
+                roster,
+                capacity,
+                service.context.da_layout.max_chunk_count,
+                recovery_authority,
+                &[],
+                &[],
+            )
+            .expect("restore the dormant leader lifecycle");
+        assert_eq!(restore.records().len(), 1);
+        assert_eq!(
+            restore.records()[0].status(),
+            super::super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+        );
+        let serve_gate = CertifiedServeIngressGate {
+            queue: Arc::clone(&command_tx.queue),
+        };
+        ingress
+            .bind_certified_serve_gate(serve_gate.clone())
+            .expect("bind the real Serve ingress gate");
+        ingress
+            .bind_leader_wire_lifecycle_gate(
+                Arc::clone(&leader_gate),
+                restore,
+                command_tx.queue.lifecycle_ordinals.clone(),
+                service.context.id(),
+                service.context.height,
+            )
+            .expect("bind the restored leader lifecycle to the shared source");
+        ingress.open().expect("open the combined production ingress");
+
+        let mut route_fixture = NetworkReplyRouteTestFixture::new(via.clone());
+        let route = route_fixture.mint_via(requester.clone(), via.clone());
+        assert!(matches!(
+            ingress.try_push(certified_serve_inbound_with_route(
+                request.request(),
+                via,
+                route,
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let serve_barrier = serve_gate
+            .selected_barrier()
+            .expect("inspect the bound Serve gate")
+            .expect("the exact Serve request owns the selected barrier");
+        assert_eq!(serve_barrier.lifecycle_ordinal(), 42);
+        assert_eq!(serve_barrier.carrier_ordinal(), 8);
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                leader_message,
+                Some(proposer),
+            )),
+            Ok(FairV2IngressPushDisposition::Enqueued)
+        ));
+        let leader_carrier_ordinal = {
+            let state = ingress.state.lock();
+            let record = state
+                .leader_wire_lifecycles
+                .get(&leader_token.slot)
+                .expect("reactivated leader lifecycle remains indexed");
+            assert_eq!(record.status, super::super::FairV2IngressLeaderWireStatus::Ingress);
+            assert_eq!(record.token, leader_token);
+            state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .find(|entry| entry.leader_wire_token.as_ref() == Some(&leader_token))
+                .expect("reactivated leader owns one exact physical carrier")
+                .admission_ordinal
+        };
+        assert_eq!(leader_carrier_ordinal, 9);
+        assert!(
+            serve_barrier.lifecycle_ordinal() > leader_token.scheduler_ordinal(),
+            "the retained leader scheduler identity is older than the selected Serve identity"
+        );
+        assert!(
+            serve_barrier.carrier_ordinal() < leader_carrier_ordinal,
+            "the selected Serve occurrence owns the earlier physical position"
+        );
+        assert_eq!(
+            leader_gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("inspect durable leader selector"),
+            Some(leader_token.scheduler_ordinal())
+        );
+
+        assert!(
+            ingress
+                .try_recv_if_checked(|inbound| {
+                    matches!(
+                        inbound.message(),
+                        BlockMessage::V2(wire::ConsensusMessageV2 {
+                            payload: wire::ConsensusMessageV2Payload::Proposal(candidate),
+                            ..
+                        }) if candidate.round == proposal.round
+                            && candidate.subject == proposal.subject
+                    )
+                })
+                .expect("checked selector preserves both durable gates")
+                .is_none(),
+            "an older retained scheduler identity cannot cross the earlier Serve carrier"
+        );
+
+        let (_admission, committed) = drain_and_commit_gated_serve(
+            &ingress,
+            &command_tx,
+            CertifiedServeOwnerKey::Roster(requester),
+            &request,
+        );
+        assert!(matches!(committed, CertifiedServeCommit::Queued));
+        assert!(
+            serve_gate
+                .selected_barrier()
+                .expect("inspect Serve gate after physical retirement")
+                .is_none()
+        );
+
+        let mut leader = ingress
+            .try_recv_if_checked(|inbound| {
+                matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::Proposal(candidate),
+                        ..
+                    }) if candidate.round == proposal.round
+                        && candidate.subject == proposal.subject
+                )
+            })
+            .expect("checked leader dequeue validates the exact durable carrier")
+            .expect("leader follows after the selected Serve retires");
+        let mut ownership = leader
+            .take_ingress_ownership()
+            .expect("leader retains its exact fair-ingress ownership");
+        assert_eq!(ownership.leader_wire_token(), Some(&leader_token));
+        ingress
+            .bind_leader_wire_runtime_ownership(&mut ownership)
+            .expect("bind the exact leader carrier to runtime");
+        let runtime = ownership
+            .leader_wire_runtime_receipt()
+            .expect("leader runtime receipt is installed");
+        assert_eq!(runtime.token(), &leader_token);
+        ingress
+            .mark_leader_wire_volatile_terminal(runtime)
+            .expect("retire the validated leader runtime owner");
+    }
+
+    #[test]
     fn fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers() {
         let (service, keys) = fixture();
         let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);

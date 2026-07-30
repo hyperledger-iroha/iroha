@@ -5181,7 +5181,8 @@ BY FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
 THEOREM RunNodeWorkConcreteActionCaseSplit ==
   \A node:
     RunNodeWork(node)
-      => \/ LocalAdmissionStep(node)
+      => \/ ResolveRunNodeCandidateProducerContinuation(node)
+         \/ LocalAdmissionStep(node)
          \/ IngressDrainStep(node)
          \/ SerializedRunnerRuntimeStep(node)
          \/ SerializedLocalPrecedesServeIngressStep(node)
@@ -5199,6 +5200,10 @@ PROOF
                  RunNodeWork(node) => [Next]_vars
     <2>1. ASSUME NEW node \in ValidatorIds, RunNodeWork(node)
            PROVE [Next]_vars
+      <3>1r. CASE
+                ResolveRunNodeCandidateProducerContinuation(node)
+        BY <3>1r, Isa
+           DEF ResolveRunNodeCandidateProducerContinuation, vars
       <3>1. CASE LocalAdmissionStep(node)
         BY <3>1, LocalAdmissionStepRefinesCoreBracketNext
       <3>2. CASE IngressDrainStep(node)
@@ -5211,7 +5216,7 @@ PROOF
       <3>5. CASE SerializedLocalPrecedesServeIngressStep(node)
         BY <3>5,
            SerializedLocalPrecedesServeIngressRefinesCoreBracketNext
-      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5,
+      <3> QED BY <2>1, <3>1r, <3>1, <3>2, <3>3, <3>4, <3>5,
            RunNodeWorkConcreteActionCaseSplit
     <2> QED BY <2>1
   <1> QED BY <1>1
@@ -5232,6 +5237,35 @@ PROOF
                 AsyncControlServiceSlotTransition,
                 RunNodeWork(node)
          PROVE AsyncSchedulerTypeInvariant'
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>1r,
+         FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
+         AsyncCausalTypeStutter,
+         AsyncIoTopologyTypeStutter, AsyncIoContentTypeStutter,
+         AsyncIoCapacityTypeStutter,
+         AsyncDeferredTopologyTypeStutter, AsyncDeferredContentTypeStutter,
+         RunnerServiceFramePreservesClockType,
+         AsyncTransportContentTypeStutter,
+         AsyncIngressTopologyTypeStutter,
+         AsyncIngressCapacityTypeStutter, AsyncIngressContentTypeStutter,
+         HistoricalRecoveryFramePreservesType,
+         FunctionalUpdatePreservesType, IsaT(300)
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+             AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
+             AsyncTransportTypeInvariant, AsyncIngressTypeInvariant,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
+             RunNodeWork, RunnerServiceFrame,
+             AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+             AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
+             AsyncIoCapacityTypeVars, AsyncDeferredTopologyTypeVars,
+             AsyncTransportContentTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars,
+             AsyncIngressTopologyTypeVars,
+             AsyncHistoricalRecoveryFrameVars,
+             AsyncConfiguration, vars
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, LocalAdmissionRunnerPreservesSchedulerType
     <2>2. CASE IngressDrainStep(node)
@@ -5244,7 +5278,7 @@ PROOF
     <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>5,
          SerializedLocalPrecedesServeIngressPreservesSchedulerType
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
+    <2> QED BY <1>1, <2>1r, <2>1, <2>2, <2>3, <2>4, <2>5,
          RunNodeWorkConcreteActionCaseSplit
   <1> QED BY <1>1
 
@@ -5346,6 +5380,12 @@ PROOF
                 AsyncCertifiedResponseClaimIngressOwnershipInvariant,
                 RunNodeWork(node)
          PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1r. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>1r,
+         CertifiedResponseClaimIngressOwnershipStutter, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1,
          LocalAdmissionStepPreservesClaimIngressOwnership
@@ -5361,7 +5401,7 @@ PROOF
     <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
       BY <1>1, <2>5,
          SerializedLocalPrecedesServeIngressPreservesClaimIngressOwnership
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
+    <2> QED BY <1>1, <2>1r, <2>1, <2>2, <2>3, <2>4, <2>5,
          RunNodeWorkConcreteActionCaseSplit
   <1> QED BY <1>1
 

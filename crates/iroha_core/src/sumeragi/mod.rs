@@ -1105,7 +1105,10 @@ impl FairV2IngressLeaderWireIdentity {
 pub(crate) struct FairV2IngressLeaderWireToken {
     identity: FairV2IngressLeaderWireIdentity,
     slot: FairV2IngressLeaderWireSlot,
-    /// Physical carrier position in the bounded fair-ingress queue.
+    /// Immutable first-reservation position for this logical lifecycle.
+    ///
+    /// A restart retry retains this identity ordinal while its new physical
+    /// fair-ingress carrier receives a fresh `FairV2IngressEntry` ordinal.
     admission_ordinal: u64,
     /// Actor-global producer/runtime scheduler position.
     scheduler_ordinal: u128,
@@ -5289,13 +5292,20 @@ impl FairV2Ingress {
                 .checked_add(encoded_len)
                 .expect("validated transport-completion byte reserve prevents overflow");
         }
+        // Reserve the physical carrier position before publishing any durable
+        // lifecycle transition. A restored logical owner retains its immutable
+        // token ordinals, but its new queue occurrence must be strictly newer
+        // than every carrier admitted since the restart.
+        let Some(carrier_admission_ordinal) = state.last_admission_ordinal.checked_add(1) else {
+            state.open = false;
+            return Err(FairV2IngressPushError::FailStop(inbound));
+        };
         // This is the atomic admission cut: the ingress lock still excludes
-        // competing producers, all message/byte/protected-class capacity has
-        // been proved, and the durable lifecycle is published directly as
-        // Ingress. A Dormant retry retains its old ordinals and counts only
-        // all-class lane entries with a strictly smaller actor-global
-        // admission ordinal, so post-restart arrivals cannot recharge its
-        // predecessor cutoff.
+        // competing producers, all message/byte/protected-class capacity and
+        // physical-ordinal availability have been proved, and the durable
+        // lifecycle is published directly as Ingress. A Dormant retry retains
+        // its frozen lifecycle predecessor cut while the fresh physical
+        // ordinal keeps work already admitted after restart ahead of it.
         if let Some(derivation) = ready_leader_wire_derivation.take() {
             leader_wire_token = match fair_v2_ingress_admit_leader_wire(
                 &mut state,
@@ -5347,15 +5357,7 @@ impl FairV2Ingress {
             }
             return Err(FairV2IngressPushError::Rejected(inbound));
         }
-        let admission_ordinal = if let Some(token) = leader_wire_token.as_ref() {
-            token.admission_ordinal
-        } else {
-            let Some(admission_ordinal) = state.last_admission_ordinal.checked_add(1) else {
-                state.open = false;
-                return Err(FairV2IngressPushError::FailStop(inbound));
-            };
-            admission_ordinal
-        };
+        let admission_ordinal = carrier_admission_ordinal;
         let certified_request = match inbound.message() {
             BlockMessage::V2(ConsensusMessageV2 {
                 payload: ConsensusMessageV2Payload::CertifiedBodyRequest(request),
@@ -5405,7 +5407,8 @@ impl FairV2Ingress {
         } else {
             None
         };
-        state.last_admission_ordinal = state.last_admission_ordinal.max(admission_ordinal);
+        debug_assert!(state.last_admission_ordinal <= admission_ordinal);
+        state.last_admission_ordinal = admission_ordinal;
         inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(
             occurrence,
             leader_wire_token.clone(),
@@ -5600,13 +5603,13 @@ impl FairV2Ingress {
                 );
             }
         }
-        if let Some(owner) = leader_wire_barrier.as_ref() {
+        let leader_wire_carrier_ordinal = if let Some(owner) = leader_wire_barrier.as_ref() {
             let mut carriers = state
                 .lanes
                 .values()
                 .flat_map(|lane| lane.entries.iter())
                 .filter(|entry| entry.leader_wire_token.as_ref() == Some(&owner.token));
-            let _carrier = carriers.next().ok_or_else(|| {
+            let carrier = carriers.next().ok_or_else(|| {
                 "leader-wire selector lost its exact fair-ingress carrier".to_owned()
             })?;
             if carriers.next().is_some() {
@@ -5614,16 +5617,18 @@ impl FairV2Ingress {
                     "leader-wire selector duplicated its exact fair-ingress carrier".to_owned(),
                 );
             }
-        }
-        // The actor-global ordinal first arbitrates the two independently
-        // durable reservation classes. A strictly older leader-wire owner keeps
-        // its exact carrier and frozen per-source prefix even when a restart
-        // gives that carrier a position physically after the selected Serve
-        // occurrence.
+            Some(carrier.admission_ordinal)
+        } else {
+            None
+        };
+        // Physical admission order arbitrates the two independently durable
+        // reservation classes. A Dormant leader-wire retains its lifecycle
+        // and runtime scheduler identity across restart, but owns no queue
+        // position until an exact retry acquires a fresh carrier. That later
+        // carrier cannot pass an already-admitted selected Serve occurrence.
         if selected_serve_barrier.is_some_and(|serve| {
-            leader_wire_barrier
-                .as_ref()
-                .is_some_and(|leader| serve.lifecycle_ordinal() <= leader.token.scheduler_ordinal)
+            leader_wire_carrier_ordinal
+                .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
         }) {
             leader_wire_barrier = None;
         }
@@ -5662,10 +5667,8 @@ impl FairV2Ingress {
                             });
                         let ingress_barrier_allows =
                             if let Some(owner) = leader_wire_barrier.as_ref() {
-                                // An older actor-global leader turn exclusively
-                                // drains its immutable physical episode. In
-                                // particular, its fresh restart carrier may lie
-                                // beyond the selected Serve carrier.
+                                // A physically older leader turn exclusively
+                                // drains its immutable ingress-prefix episode.
                                 index
                                     < owner
                                         .ingress_predecessors
@@ -7836,6 +7839,39 @@ mod authoritative_runtime_gate_tests {
         assert!(retry.ingress_ownership().is_some_and(|ownership| {
             ownership.leader_wire_token() == Some(&fixture.token)
         }));
+    }
+
+    #[test]
+    fn restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant() {
+        let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
+        fixture.ingress.state.lock().last_admission_ordinal = u64::MAX;
+
+        assert!(matches!(
+            fixture.ingress.try_push(InboundBlockMessage::new(
+                fixture.message.clone(),
+                Some(fixture.validator.clone()),
+            )),
+            Err(super::FairV2IngressPushError::FailStop(_))
+        ));
+        {
+            let state = fixture.ingress.state.lock();
+            assert!(!state.open, "physical ordinal exhaustion fails admission closed");
+            assert_eq!(state.len, 0, "no carrier was admitted");
+            let record = state
+                .leader_wire_lifecycles
+                .get(&fixture.token.slot)
+                .expect("restored lifecycle remains retained");
+            assert_eq!(record.status, super::FairV2IngressLeaderWireStatus::Dormant);
+            assert_eq!(record.token, fixture.token);
+        }
+        assert_eq!(
+            fixture
+                .gate
+                .earliest_ingress_scheduler_ordinal()
+                .expect("read dormant durable selector"),
+            None,
+            "ordinal exhaustion cannot publish a carrierless scheduler owner"
+        );
     }
 
     #[test]

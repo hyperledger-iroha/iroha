@@ -1319,6 +1319,8 @@ BY RuntimeStepCreatesValidationOnlyForRunner, IsaT(90)
        SerializedLocalPrecedesServeIngressStep,
        SelectedLocalAdmissionAdvance,
        AsyncServeIngressTargetOnlyTurn,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService,
        AdmitProducerCompletion, AdmitCausalHead,
        DrainFairIngressSelected, vars
 

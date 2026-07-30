@@ -2894,6 +2894,19 @@ PROOF
                 AsyncNext,
                 RunNodeWork(node)
          PROVE ExactLeaderSchedulerOriginProvenanceInvariant'
+    <2>0. CASE
+            ResolveRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>0, IsaT(1200)
+         DEF ExactLeaderSchedulerOriginInductionContext,
+             ExactLeaderSchedulerOriginReadinessInvariant,
+             ExactLeaderSchedulerOriginProvenanceInvariant,
+             ResolveRunNodeCandidateProducerContinuation,
+             AsyncSchedulerExceptCausalControlAndNodeService,
+             AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+             AsyncCandidateProducerContinuationRecordAfterStep,
+             AsyncCandidateServiceStateAfterReclamation,
+             AsyncControlServiceSlotTransition,
+             AsyncNext
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1,
          AsyncLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance
@@ -2918,7 +2931,7 @@ PROOF
         BY <2>5 DEF SerializedLocalPrecedesServeIngressStep
       <3> QED BY <1>1, <3>1,
            AsyncSelectedLocalAdmissionPreservesExactLeaderSchedulerOriginProvenance
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>0, <2>1, <2>2, <2>3, <2>4, <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 
@@ -5604,7 +5617,9 @@ THEOREM AdequateLeaderProtectedIngressWindowPreventsTimeoutOvertake ==
              /\ asyncRunnerPhase[node] = "Runtime")
              => /\ ~SerializedRuntimePrecedesServeIngressStep(node)
                 /\ (RunNodeWork(node)
-                      => AsyncServeIngressTargetOnlyTurn(node)))
+                      => \/ ResolveRunNodeCandidateProducerContinuation(
+                               node)
+                         \/ AsyncServeIngressTargetOnlyTurn(node)))
 BY AdequateLeaderProtectedIngressLifecyclePrecedesTimeout,
    AsyncLeaderWireIngressTicketExcludesLaterLocalWork,
    AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake, PTL

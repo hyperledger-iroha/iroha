@@ -750,6 +750,10 @@ PROOF
               RunNodeWork(node),
               receivedTimeoutVotes' # receivedTimeoutVotes
          PROVE \E command: ExecuteCommand(command)
+    <2>0. CASE
+            ResolveRunNodeCandidateProducerContinuation(node)
+      BY <1>1, <2>0, Isa
+         DEF ResolveRunNodeCandidateProducerContinuation, vars
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, Isa
          DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
@@ -774,7 +778,7 @@ PROOF
          DEF SerializedLocalPrecedesServeIngressStep,
              SelectedLocalAdmissionAdvance,
              AdmitProducerCompletion, AdmitCausalHead, vars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+    <2> QED BY <1>1, <2>0, <2>1, <2>2, <2>3, <2>4, <2>5
          DEF RunNodeWork
   <1> QED BY <1>1
 

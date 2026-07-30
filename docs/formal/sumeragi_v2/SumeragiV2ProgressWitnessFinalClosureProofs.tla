@@ -827,7 +827,9 @@ THEOREM RunNodeWorkPreservesResponsiveReplayLineagedCarrier ==
 BY LocalAdmissionPreservesResponsiveReplayLineagedCarrier,
    IngressDrainPreservesResponsiveReplayLineagedCarrier,
    SerializedRuntimePreservesResponsiveReplayLineagedCarrier, Isa
-   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncSchedulerExceptCausalControlAndNodeService
 
 THEOREM RunHistoricalServerEstablishesFinalMonotoneCarrierFrame ==
   \A node \in ValidatorIds:

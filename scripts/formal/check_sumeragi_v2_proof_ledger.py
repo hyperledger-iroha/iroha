@@ -562,6 +562,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "SumeragiV2FixedCorridorActionCreditMutation.tla",
     "SumeragiV2ProposalPipelineBudgetMutation.tla",
     "SumeragiV2AuthorityDeadlineCarryMutation.tla",
+    "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
+    "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
     "exact_ingress_ticket_priority_fixed.cfg",
     "exact_ingress_ticket_runtime_first_bug.cfg",
@@ -644,6 +646,10 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS = (
     "authority_deadline_carry_fixed.cfg",
     "authority_deadline_carry_expired_receipt_bug.cfg",
     "authority_deadline_carry_kernel_recharge_bug.cfg",
+    "adequate_leader_deadline_authority_fixed.cfg",
+    "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg",
+    "adequate_leader_selected_lifecycle_episode_fixed.cfg",
+    "adequate_leader_selected_lifecycle_episode_semantic_shortcut_bug.cfg",
     "fixed_corridor_receipt_acquisition_fixed.cfg",
     "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg",
     "fixed_corridor_receipt_acquisition_global_retire_bug.cfg",
@@ -1055,6 +1061,12 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2AuthorityDeadlineCarryMutation.tla": (
         "f574dc972bd94a8d780c908b0f6e2e4d6db633f5dc871304556f42bedfa9c674"
     ),
+    "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla": (
+        "c2a17bc53f7cfa52cfb40bc4d4c97b59b8615fcf363c01ec1a4b0788785e0e6f"
+    ),
+    "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla": (
+        "b812e0d3a0cbdb3300979e12c1e2a63198bf092f9d20c817e83587a268853ae7"
+    ),
     "authority_deadline_carry_fixed.cfg": (
         "2b01485673bfed56d68a82fab2d4856051a68ef44eb754cae71e003b753a8973"
     ),
@@ -1063,6 +1075,18 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     ),
     "authority_deadline_carry_kernel_recharge_bug.cfg": (
         "306ffcd5a1199fb0857627842bafc68221ca1c61fb01141e96eff69b6d616857"
+    ),
+    "adequate_leader_deadline_authority_fixed.cfg": (
+        "cd06ab8ad3f9230aa0b89e80e696deb8b92c69e5f75de0d6c560aa9050869916"
+    ),
+    "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg": (
+        "baa7b9385882f260ba15c9db6c7e8c29102ef0f7c0cb3a8e3da558709d54cc6e"
+    ),
+    "adequate_leader_selected_lifecycle_episode_fixed.cfg": (
+        "c47dfb2365f45d19fba12f6ae12ec3b7ad74081b058c678ae4b5768ef432e0ce"
+    ),
+    "adequate_leader_selected_lifecycle_episode_semantic_shortcut_bug.cfg": (
+        "f1829446aa850f90a5958f2df2c311cd10b512ec2267b1984e8d08844febc7d8"
     ),
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla": (
         "20808fe38c7b518cf50f3fdc70544be91debc1c27b631ac9aa94567eb5890115"
@@ -1077,7 +1101,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "a94a946e62230d7a656c0945737b744945e73051f812c7ece7d6c35f107a7e2a"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "bd98cec9fc7671d6fd411f6bdff4de583ca4ae8ae7fda093ff1ad683c2228eb2"
+        "6ab0a34ea46efb754dee4cb6847c6d820a74e19a254e34985a9fa9ca9754d43e"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -1105,6 +1129,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "SumeragiV2FixedCorridorActionCreditMutation*.tla",
     "SumeragiV2ProposalPipelineBudgetMutation*.tla",
     "SumeragiV2AuthorityDeadlineCarryMutation*.tla",
+    "SumeragiV2AdequateLeaderDeadlineAuthorityMutation*.tla",
+    "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation*.tla",
     "SumeragiV2FixedCorridorReceiptAcquisitionMutation*.tla",
     "exact_ingress_ticket_*.cfg",
     "exact_serve_restart_tombstone_*.cfg",
@@ -1130,6 +1156,8 @@ LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
     "fixed_corridor_action_credit_*.cfg",
     "proposal_pipeline_budget_*.cfg",
     "authority_deadline_carry_*.cfg",
+    "adequate_leader_deadline_authority_*.cfg",
+    "adequate_leader_selected_lifecycle_episode_*.cfg",
     "fixed_corridor_receipt_acquisition_*.cfg",
 )
 
@@ -1547,6 +1575,7 @@ class CrossToolProductionCallContract:
     gate_arguments: tuple[str, ...] = ()
     token_consumptions: tuple[str, ...] = ()
     mutation_boundaries: tuple[str, ...] = ()
+    mutation_authorization_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1559,6 +1588,7 @@ class CrossToolLinkedConsumerContract:
     mutation_boundaries: tuple[str, ...]
     brace_context: tuple[tuple[str, ...], ...] = ()
     item_token_sha256: str | None = None
+    token_consumptions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1613,6 +1643,9 @@ class CrossToolSupplementalKernelContract:
     verified_kernel_shared_macro_sha256: tuple[tuple[str, str], ...] = ()
     production_call_sites: tuple[CrossToolProductionCallContract, ...] = ()
     total_gate: CrossToolTotalGateContract | None = None
+    auxiliary_verus_theorem: str | None = None
+    auxiliary_verus_parameters: str | None = None
+    auxiliary_verus_theorem_item_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -2271,7 +2304,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source=(
                             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
                         ),
-                        item="accepts",
+                        item="check",
                         item_token_sha256=(
                             "208714b6905a5f92c18f43115d46889b10ea422cd5581dfb0f1923b8d2485bdb"
                         ),
@@ -2314,13 +2347,46 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     selected: 0,
                                     cursor_after: 0,
                                 };
-                                if !production_enter_view_uses_post_install_effective_lock_kernel(
-                                    trace, enter_view
-                                ) {
-                                    return false;
-                                }
+                                let checked_effective_lock =
+                                    check_production_enter_view_effective_lock_transition(
+                                        trace, enter_view
+                                    )?;
+                                let _authorized_effective_lock =
+                                    checked_effective_lock.into_projection();
                             }
                         """,
+                        token_consumptions=(
+                            """
+                                let _authorized_effective_lock =
+                                    checked_effective_lock.into_projection();
+                            """,
+                        ),
+                    ),
+                ),
+                linked_consumers=(
+                    CrossToolLinkedConsumerContract(
+                        source=(
+                            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs"
+                        ),
+                        item="step",
+                        required_expression="""
+                            let Some(checked_refinement) =
+                                refinement::check(transition)
+                            else {
+                                return Err(ReducerError::RefinementViolation);
+                            };
+                        """,
+                        mutation_boundaries=("*self = next;",),
+                        brace_context=(("impl", "Reducer"),),
+                        item_token_sha256=(
+                            "973c0e730c20011084928eab3fa0339fe2a6a8b25a4fa8aea891373131a89dfe"
+                        ),
+                        token_consumptions=(
+                            """
+                                let _authorized_refinement =
+                                    checked_refinement.into_projection();
+                            """,
+                        ),
                     ),
                 ),
             ),
@@ -2468,15 +2534,53 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 selected: 0,
                                 cursor_after: 0,
                             };
-                            if !production_body_ownership_preserves_effective_lock_kernel(
-                                ownership_trace
-                            ) {
+                            let Some(checked_effective_lock) =
+                                check_production_body_ownership_effective_lock_transition(
+                                    ownership_trace
+                                )
+                            else {
                                 return Err(EffectExecutorError::Contract(
                                     "exact body ownership did not refine the effective-lock trace"
                                         .to_owned(),
                                 ));
-                            }
+                            };
+                            Ok(BodyPipelineOwnerBindingPlan {
+                                key,
+                                owner: BodyPipelineOwner {
+                                    tag,
+                                    manifest_hash: binding.owner.manifest_hash,
+                                },
+                                already_owned: binding.already_owned,
+                                checked_effective_lock,
+                            })
                         """,
+                    ),
+                ),
+                linked_consumers=(
+                    CrossToolLinkedConsumerContract(
+                        source="crates/iroha_core/src/sumeragi/v2_effects.rs",
+                        item="commit_body_pipeline_owner",
+                        required_expression="""
+                            let BodyPipelineOwnerBindingPlan {
+                                key,
+                                owner,
+                                already_owned: _,
+                                checked_effective_lock,
+                            } = plan;
+                        """,
+                        mutation_boundaries=(
+                            "self.body_pipeline_owners.insert(key, owner);",
+                        ),
+                        brace_context=((
+                            "impl", "<", "R", ":", "EffectRuntime", ">",
+                            "V2EffectExecutor", "<", "R", ">",
+                        ),),
+                        token_consumptions=(
+                            """
+                                let _authorized_ownership =
+                                    checked_effective_lock.into_projection();
+                            """,
+                        ),
                     ),
                 ),
             ),
@@ -2610,15 +2714,30 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 selected: 0,
                                 cursor_after: 0,
                             };
-                            if !production_body_capacity_retirement_preserves_effective_lock_kernel(
-                                retirement_trace
-                            ) {
+                            let Some(checked_retirement) =
+                                check_production_body_capacity_retirement_effective_lock_transition(
+                                    retirement_trace
+                                )
+                            else {
                                 return Err(EffectExecutorError::Contract(
                                     "body retirement did not refine exact effective-lock capacity"
                                         .to_owned(),
                                 ));
-                            }
+                            };
                         """,
+                        token_consumptions=(
+                            """
+                                let _authorized_retirement =
+                                    checked_retirement.into_projection();
+                            """,
+                        ),
+                        mutation_boundaries=(
+                            """
+                                self.runtime.retire_body_pipeline_completions(
+                                    owner.tag, *round, *subject
+                                )
+                            """,
+                        ),
                     ),
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_effects.rs",
@@ -2672,15 +2791,58 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 selected: 0,
                                 cursor_after: 0,
                             };
-                            if !production_body_capacity_retirement_preserves_effective_lock_kernel(
-                                cleanup_trace
-                            ) {
+                            let Some(checked_effective_lock) =
+                                check_production_body_capacity_retirement_effective_lock_transition(
+                                    cleanup_trace
+                                )
+                            else {
                                 return Err(EffectExecutorError::Contract(
                                     "certified-view cleanup did not refine exact effective-lock capacity"
                                         .to_owned(),
                                 ));
-                            }
+                            };
+                            Ok(CertifiedViewBodyCleanupPlan {
+                                stale_stores,
+                                stale_ready,
+                                protected_ready_rebinds,
+                                accounting,
+                                checked_effective_lock,
+                            })
                         """,
+                    ),
+                ),
+                linked_consumers=(
+                    CrossToolLinkedConsumerContract(
+                        source="crates/iroha_core/src/sumeragi/v2_effects.rs",
+                        item="install_view",
+                        required_expression="""
+                            let stale_body_cleanup =
+                                self.plan_certified_view_body_cleanup(
+                                    tag, protected_body
+                                )?;
+                        """,
+                        mutation_boundaries=(
+                            "services.cancel_body_store(*id).map_err(service_error)?;",
+                            """
+                                self.ready_body_bytes =
+                                    stale_body_cleanup.accounting.ready_after;
+                            """,
+                            """
+                                self.pending_store_bytes =
+                                    stale_body_cleanup.accounting.store_after;
+                            """,
+                        ),
+                        brace_context=((
+                            "impl", "<", "R", ":", "EffectRuntime", ">",
+                            "V2EffectExecutor", "<", "R", ">",
+                        ),),
+                        token_consumptions=(
+                            """
+                                let _authorized_body_cleanup =
+                                    stale_body_cleanup.checked_effective_lock
+                                        .into_projection();
+                            """,
+                        ),
                     ),
                 ),
             ),
@@ -2792,13 +2954,22 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                             "3487fa62cd12853581116460243e2914096a23abb31efd308b366c69ff673efd"
                         ),
                         brace_context=((
-                            "impl", "<", "C", ">", "BoundedIngress", "<", "C", ">",
+                            "impl", "<", "C", ":", "ExactRuntimeCommandIdentity",
+                            ">", "BoundedIngress", "<", "C", ">",
                         ),),
                         projection="service_trace",
                         required_expression="""
+                            let queue_before = self.ownership_projection();
                             let cursor_before = self.next_class.service_code();
+                            let Some(oldest_lifecycle_ordinal) =
+                                self.oldest_lifecycle_ordinal()?
+                            else {
+                                return Ok(None);
+                            };
                             let (completion_ready, progress_ready, normal_ready) =
-                                self.class_readiness();
+                                self.class_readiness_at_lifecycle(
+                                    oldest_lifecycle_ordinal
+                                );
                             let selection = select_bounded_service_class(
                                 cursor_before,
                                 completion_ready,
@@ -2832,14 +3003,53 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                 selected: selection.selected,
                                 cursor_after: selection.next,
                             };
-                            if !production_body_service_refines_async_fairness_kernel(
-                                service_trace
-                            ) {
+                            let Some(checked_service) =
+                                check_production_body_service_effective_lock_transition(
+                                    service_trace
+                                )
+                            else {
                                 panic!(
                                     "Sumeragi v2 bounded service violated the effective-lock trace"
                                 );
-                            }
+                            };
                         """,
+                        token_consumptions=(
+                            """
+                                let _authorized_service =
+                                    checked_service.into_projection();
+                                self.next_class = next;
+                                return Ok(None);
+                            """,
+                            """
+                                let _authorized_service =
+                                    checked_service.into_projection();
+                                self.next_class = next;
+                                for skipped_class in [
+                            """,
+                        ),
+                        mutation_boundaries=(
+                            """
+                                self.next_class = next;
+                                return Ok(None);
+                            """,
+                            """
+                                self.next_class = next;
+                                for skipped_class in [
+                            """,
+                            """
+                                oldest.eligible_skips = oldest
+                                    .eligible_skips
+                                    .checked_add(1)
+                                    .expect("service debt overflow was preflighted");
+                            """,
+                            """
+                                let command = self.commands
+                                    .remove(index)
+                                    .expect(
+                                        "selected runtime FIFO owner remains present"
+                                    );
+                            """,
+                        ),
                     ),
                 ),
             ),
@@ -4702,6 +4912,101 @@ _LEGACY_EFFECTIVE_LOCK_CLAIM_CONSTANTS = (
     "ProductionBodyCapacityRetirementPreservesEffectiveLock",
     "ProductionBodyServiceRefinesAsyncFairness",
 )
+_EFFECTIVE_LOCK_CHECKED_GATE_BY_CLAIM = {
+    "ProductionEnterViewUsesPostInstallEffectiveLock": (
+        "check_production_enter_view_effective_lock_transition"
+    ),
+    "ProductionBodyOwnershipPreservesEffectiveLock": (
+        "check_production_body_ownership_effective_lock_transition"
+    ),
+    "ProductionBodyCapacityRetirementPreservesEffectiveLock": (
+        "check_production_body_capacity_retirement_effective_lock_transition"
+    ),
+    "ProductionBodyServiceRefinesAsyncFairness": (
+        "check_production_body_service_effective_lock_transition"
+    ),
+}
+_EFFECTIVE_LOCK_CHECKED_CALL_SHAPES = {
+    "ProductionEnterViewUsesPostInstallEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "check",
+            1,
+            0,
+        ),
+    ),
+    "ProductionBodyOwnershipPreservesEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "plan_body_pipeline_owner_hash",
+            0,
+            0,
+        ),
+    ),
+    "ProductionBodyCapacityRetirementPreservesEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "reconcile_protected_lock",
+            1,
+            1,
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "plan_certified_view_body_cleanup",
+            0,
+            0,
+        ),
+    ),
+    "ProductionBodyServiceRefinesAsyncFairness": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_runtime.rs",
+            "pop_next_with_ownership",
+            2,
+            4,
+        ),
+    ),
+}
+_EFFECTIVE_LOCK_LINKED_CONSUMER_SHAPES = {
+    "ProductionEnterViewUsesPostInstallEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "step",
+            1,
+            1,
+        ),
+    ),
+    "ProductionBodyOwnershipPreservesEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "commit_body_pipeline_owner",
+            1,
+            1,
+        ),
+    ),
+    "ProductionBodyCapacityRetirementPreservesEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "install_view",
+            1,
+            3,
+        ),
+    ),
+    "ProductionBodyServiceRefinesAsyncFairness": (),
+}
+_EFFECTIVE_LOCK_PLAN_CARRIERS = {
+    "ProductionBodyOwnershipPreservesEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "BodyPipelineOwnerBindingPlan",
+        ),
+    ),
+    "ProductionBodyCapacityRetirementPreservesEffectiveLock": (
+        (
+            "crates/iroha_core/src/sumeragi/v2_effects.rs",
+            "CertifiedViewBodyCleanupPlan",
+        ),
+    ),
+}
 
 
 def _total_gate(
@@ -4844,6 +5149,163 @@ _RELIABLE_FLUSH_APPLICATION_GATE = _total_gate(
     "537c4cddae9c210d4f899e3949b07f3d6621f4df623feccbbc2e1a0af4eb7195",
     parameters="projection: ProductionReliableFlushApplicationProjection,",
     theorem_arguments="application",
+)
+_LEADER_WIRE_ADMISSION_GATE = _total_gate(
+    "check_production_leader_wire_admission_transition",
+    "ProductionLeaderWireAdmissionTraceProjection",
+    "projection",
+    "318cf388efe2a8777d5a5c005aee114dc97017f75611683510780c4ecb891b5d",
+    "8590c7f5b987a3552bb2ec9d43858a13cb89223033adb6a08ac267c82bb94784",
+)
+_LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "CanonicalIdentityProjection",
+        "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "CanonicalIdentityProjection",
+        "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6",
+        "struct",
+        (("verus", "!"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "ProductionLeaderWireAdmissionTraceProjection",
+        "ea211b5db207669fe33f0777a4d6b23ba27f2274567f93c05667ba32132b9e80",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+        "ProductionLeaderWireAdmissionTraceProjection",
+        "f7eb87962b42a18b8ae689b9bff673920ee5734e4d5712f5331a8fa8d1d0a9a0",
+        "struct",
+        (("verus", "!"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "FairV2IngressLeaderWireSlot",
+        "29714d7d18df1c872954f73ad4c9cf75b1e0d61f3fac262a42ba23708ed79d12",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "FairV2IngressLeaderWireIdentity",
+        "8269d6986cdadc5c350ce1b5c445734c882200138ccd7c7bfe622d19543dc278",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "FairV2IngressLeaderWireToken",
+        "7900112e1176192bbd2cb0331fe6d5ec223d469cebd5e7053190e8468549820f",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "projection_hash",
+        "dc911c8edb2b747a61bd527fbf4fb0cf7fea3d1c92697bf0ceedb24af553c40f",
+        brace_context=(("impl", "FairV2IngressLeaderWireIdentity"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/mod.rs",
+        "identity_hash",
+        "02b5062fca7b9b8e0236a1545c61752b9a7e2fef016524d76aedfcb9d61c9403",
+        brace_context=(("impl", "FairV2IngressLeaderWireToken"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "PersistedLeaderWireLifecycleRecord",
+        "7e5200773894bdc734e5684d92e13fcf945417a167efa92e3bb174b2a73a72c6",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "LeaderWireLifecycleState",
+        "92eb2b3c27b28527e46082f1c17479206cc71301d8bb18cc5fdeea19c06b19d2",
+        "struct",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "is_active",
+        "f642810d473388834bc05f779fe475362363f121e2e23475359e34bd0298250d",
+        brace_context=(("impl", "LeaderWireLifecycleStatus"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "refinement_code",
+        "661c2a9bebfbab989cb5e827354dad8b4c07948909f0ad2686f20b882502ea9c",
+        brace_context=(("impl", "LeaderWireLifecycleStatus"),),
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "leader_wire_lifecycle_identity_projection",
+        "63afe0600b428d7959e7cf3224695d93f5822d933a2c31eff4a6aba409602436",
+    ),
+    CrossToolSourceItemSeal(
+        "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        "leader_wire_admission_trace_projection",
+        "aeb0f964af869ae011f3546eb00a70c1bacebbf1160c82ceb88ef9c2ca281755",
+    ),
+    *(
+        CrossToolSourceItemSeal(
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            name,
+            sha256,
+            "const",
+        )
+        for name, sha256 in (
+            (
+                "IDENTITY_DOMAIN_PROCESS_LOCAL",
+                "b3c5efe194c5e5efe52590912006aea56019f100efcb19bf8bfe3d1785207cc4",
+            ),
+            (
+                "IDENTITY_KIND_LEADER_WIRE_LIFECYCLE",
+                "06f0d63f833d027c298ccf6e79ad238b0b3e8a264f7dfb5a6fc814f30c3fe9aa",
+            ),
+            (
+                "LEADER_WIRE_LIFECYCLE_ABSENT",
+                "6963374896f96dacad97638f14bc20f993747a11ab031ff8249f3c45a9cd567d",
+            ),
+            (
+                "LEADER_WIRE_LIFECYCLE_DORMANT",
+                "7f00914ac18f8c875b17a46310e8ff1046ce9605bab19a3b9855fac1dfd03215",
+            ),
+            (
+                "LEADER_WIRE_LIFECYCLE_INGRESS",
+                "89e291f7e47c6f2958fe9b9d3566fb1dc96a084ab2461a1493503996c87b5719",
+            ),
+            (
+                "LEADER_WIRE_LIFECYCLE_RUNTIME",
+                "bfdfa03d36a5816e7be151bf278c5c16ba1c61bc978c047bc62a83f455fe18cc",
+            ),
+            (
+                "LEADER_WIRE_LIFECYCLE_VOLATILE_TERMINAL",
+                "35d38b1d09d50ad9778b5b7ee5b39fde473a325da9bf6dfbce106961c8ee3702",
+            ),
+            (
+                "LEADER_WIRE_LIFECYCLE_TERMINAL",
+                "f294807f2a4f9c7310aaeef4bb4737e084df3c524b7f7deb13b86ca90a1d5223",
+            ),
+            (
+                "LEADER_WIRE_ADMISSION_INSERT",
+                "88948496767b6a3f806a381746cba7b3b5948d379bfda2581b0c508f973d5294",
+            ),
+            (
+                "LEADER_WIRE_ADMISSION_REACTIVATE",
+                "954869493b86dc0b8f252f57e60446508c24eacbb656d5a0bf664eab12346b67",
+            ),
+            (
+                "LEADER_WIRE_ADMISSION_COALESCE",
+                "c893b34acbfe0ebc18c82988aa256c4e238018ba1e0729b3b73d3eec69bbfc4d",
+            ),
+            (
+                "LEADER_WIRE_ADMISSION_REPLACE_TERMINAL",
+                "04a2482f732b892a8b16e1af1590e44afdd1ebedb2081067fd87cc3721f46505",
+            ),
+        )
+    ),
 )
 _RELIABLE_FLUSH_LINK_GATE = CrossToolTotalGateContract(
     name="check_production_reliable_flush_link_transition",
@@ -5500,6 +5962,94 @@ def _reliable_flush_supplemental_total_contracts(
     )
 
 
+def _leader_wire_admission_supplemental_total_contract(
+) -> CrossToolSupplementalKernelContract:
+    """Bind durable leader-wire admission as auxiliary ingress evidence."""
+
+    call_site = CrossToolProductionCallContract(
+        source="crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+        item="admit_ingress",
+        projection="trace",
+        required_expression="""
+            let checked_transition =
+                check_production_leader_wire_admission_transition(trace)
+                    .ok_or_else(|| {
+                        "leader-wire Dormant reactivation failed its lifecycle refinement"
+                            .to_owned()
+                    })?;
+            let _authorized_transition = checked_transition.into_projection();
+        """,
+        brace_context=(("impl", "LeaderWireLifecycleStoreGate"),),
+        item_token_sha256=(
+            "63fa62149b425ccc550f90aca763b3d978f329347e9d636e1a1791376cb495ee"
+        ),
+        gate_call_count=3,
+        gate_arguments=("trace,", "trace", "trace"),
+        token_consumptions=(
+            "let _authorized_transition = checked_transition.into_projection();",
+            "let _authorized_transition = checked_transition.into_projection();",
+            "let _authorized_transition = checked_transition.into_projection();",
+        ),
+        mutation_boundaries=(
+            ".status = LeaderWireLifecycleStatus::Ingress;",
+            "state.replay_dormant.remove(&token.slot);",
+            "state.last_admission_ordinal = token.admission_ordinal;",
+            "state.scheduler_ordinal_high_watermark = token.scheduler_ordinal;",
+            "state.records.insert(",
+        ),
+        mutation_authorization_indices=(0, 0, 2, 2, 2),
+    )
+    return CrossToolSupplementalKernelContract(
+        verified_kernel=(
+            "production_leader_wire_admission_refines_lifecycle_ownership_kernel"
+        ),
+        verified_kernel_source=(
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
+        ),
+        verified_kernel_parameters=(
+            "projection: ProductionLeaderWireAdmissionTraceProjection,"
+        ),
+        verified_kernel_body=(
+            "production_leader_wire_admission_trace_body!(projection)"
+        ),
+        theorem_kernel_projection="projection",
+        theorem_projection_builders=(),
+        verified_kernel_shared_macro_sha256=(
+            (
+                "refinement_tag_value",
+                "c9db1bb31593739398ae19abf9000ebd3ca8ea7b044aeb7d70afb071def6a607",
+            ),
+            (
+                "canonical_identity_is_typed_body",
+                "8031c3fce9aa31c612f61c4e969ef3709f3494063cf46007634f7e66c2b43f76",
+            ),
+            (
+                "canonical_identity_equal_body",
+                "f69b194278ecc6d1c17bd77f7e6abc279dd58894cdee3817eed727f6127afff3",
+            ),
+            (
+                "canonical_identity_is_zero_body",
+                "659e4ab0b79335d08311a07134239aa7338818f507fb721b71c336fc65a52f6d",
+            ),
+            (
+                "production_leader_wire_admission_trace_body",
+                "5ea12af9c322bd6ed26c51b17d884852e3647386c93b4036ba95d0aa3177a3a7",
+            ),
+        ),
+        production_call_sites=(call_site,),
+        total_gate=_LEADER_WIRE_ADMISSION_GATE,
+        auxiliary_verus_theorem=(
+            "production_leader_wire_admission_trace_refines_lifecycle_ownership"
+        ),
+        auxiliary_verus_parameters=(
+            "projection: ProductionLeaderWireAdmissionTraceProjection,"
+        ),
+        auxiliary_verus_theorem_item_sha256=(
+            "5bdde2aaa7d01511752aac612a8d4d90a5bd30e15ac238a43cf8b54170ce4e7b"
+        ),
+    )
+
+
 def _install_total_checked_gate_contracts(
     contracts: tuple[CrossToolObligationContract, ...],
 ) -> tuple[CrossToolObligationContract, ...]:
@@ -5515,6 +6065,28 @@ def _install_total_checked_gate_contracts(
                 continue
             call_sites, linked_consumers = _total_gate_call_sites(claim.constant)
             supplemental = claim.supplemental_kernels
+            production_sources = claim.production_sources
+            supplemental_source_item_seals: tuple[
+                CrossToolSourceItemSeal, ...
+            ] = ()
+            if (
+                claim.constant
+                == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
+            ):
+                if supplemental:
+                    raise RuntimeError(
+                        "ingress claim may not predeclare supplemental kernels"
+                    )
+                supplemental = (
+                    _leader_wire_admission_supplemental_total_contract(),
+                )
+                production_sources = (
+                    *production_sources,
+                    "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+                )
+                supplemental_source_item_seals = (
+                    _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS
+                )
             if claim.constant == "ProductionReliableFlushTraceRefinesOutboundOwnership":
                 supplemental = _reliable_flush_supplemental_total_contracts(
                     supplemental
@@ -5550,7 +6122,10 @@ def _install_total_checked_gate_contracts(
                         seal.item_token_sha256,
                     ),
                 )
-                for seal in claim.source_item_seals
+                for seal in (
+                    *claim.source_item_seals,
+                    *supplemental_source_item_seals,
+                )
             )
             claims.append(
                 replace(
@@ -5571,6 +6146,7 @@ def _install_total_checked_gate_contracts(
                     total_gate=gate,
                     linked_consumers=linked_consumers,
                     source_item_seals=source_item_seals,
+                    production_sources=production_sources,
                 )
             )
         upgraded.append(replace(obligation, claims=tuple(claims)))
@@ -25393,6 +25969,7 @@ def _cross_tool_contract_errors() -> list[str]:
 
     constants: list[str] = []
     verus_theorems: list[str] = []
+    auxiliary_verus_theorems: list[str] = []
     tla_theorems: list[str] = []
     proof_modes: list[str] = []
     total_gate_names: list[str] = []
@@ -25443,6 +26020,11 @@ def _cross_tool_contract_errors() -> list[str]:
                 kernel.total_gate.name
                 for kernel in claim.supplemental_kernels
                 if kernel.total_gate is not None
+            )
+            auxiliary_verus_theorems.extend(
+                kernel.auxiliary_verus_theorem
+                for kernel in claim.supplemental_kernels
+                if kernel.auxiliary_verus_theorem is not None
             )
             if not claim.production_sources:
                 errors.append(
@@ -25513,7 +26095,7 @@ def _cross_tool_contract_errors() -> list[str]:
     )
     if observed_legacy_constants != _LEGACY_EFFECTIVE_LOCK_CLAIM_CONSTANTS:
         errors.append(
-            "cross-tool legacy mode must contain exactly the four unchanged "
+            "cross-tool legacy mode must contain exactly the four canonical "
             "effective-lock claims"
         )
     observed_total_constants = tuple(
@@ -25534,10 +26116,17 @@ def _cross_tool_contract_errors() -> list[str]:
     )
     if unknown_modes:
         errors.append(f"cross-tool claims have unknown proof modes {unknown_modes!r}")
-    if len(total_gate_names) != 15 or len(set(total_gate_names)) != 15:
+    if auxiliary_verus_theorems != [
+        "production_leader_wire_admission_trace_refines_lifecycle_ownership"
+    ]:
+        errors.append(
+            "cross-tool auxiliary Verus theorem inventory must contain exactly "
+            "the durable leader-wire admission proof"
+        )
+    if len(total_gate_names) != 16 or len(set(total_gate_names)) != 16:
         errors.append(
             "cross-tool total checked-gate inventory must contain exactly "
-            "fifteen unique gates"
+            "sixteen unique gates"
         )
     return errors
 
@@ -25776,6 +26365,9 @@ class _CrossToolKernelContractView:
     theorem_projection_builders: tuple[CrossToolProjectionBuilderContract, ...]
     production_call_sites: tuple[CrossToolProductionCallContract, ...]
     total_gate: CrossToolTotalGateContract | None
+    auxiliary_verus_theorem: str | None
+    auxiliary_verus_parameters: str | None
+    auxiliary_verus_theorem_item_sha256: str | None
 
 
 def _cross_tool_kernel_views(
@@ -25846,6 +26438,9 @@ def _cross_tool_kernel_views(
         theorem_projection_builders=builders,
         production_call_sites=claim.production_call_sites,
         total_gate=claim.total_gate,
+        auxiliary_verus_theorem=None,
+        auxiliary_verus_parameters=None,
+        auxiliary_verus_theorem_item_sha256=None,
     )
     supplemental = tuple(
         _CrossToolKernelContractView(
@@ -25862,6 +26457,11 @@ def _cross_tool_kernel_views(
             theorem_projection_builders=contract.theorem_projection_builders,
             production_call_sites=contract.production_call_sites,
             total_gate=contract.total_gate,
+            auxiliary_verus_theorem=contract.auxiliary_verus_theorem,
+            auxiliary_verus_parameters=contract.auxiliary_verus_parameters,
+            auxiliary_verus_theorem_item_sha256=(
+                contract.auxiliary_verus_theorem_item_sha256
+            ),
         )
         for contract in claim.supplemental_kernels
     )
@@ -25937,6 +26537,25 @@ def _cross_tool_total_gate_promotion_contract_errors(
         )
     if (
         claim.constant
+        == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
+    ):
+        canonical_supplemental = (
+            _leader_wire_admission_supplemental_total_contract(),
+        )
+        if claim.supplemental_kernels != canonical_supplemental:
+            errors.append(
+                f"cross-tool claim {claim.constant} changed its canonical "
+                "durable leader-wire auxiliary kernel/gate/proof contract"
+            )
+        if tuple(claim.source_item_seals) != tuple(
+            _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS
+        ):
+            errors.append(
+                f"cross-tool claim {claim.constant} changed its canonical "
+                "durable leader-wire type/identity/lifecycle source seals"
+            )
+    if (
+        claim.constant
         == "ProductionReliableFlushTraceRefinesOutboundOwnership"
         and len(claim.supplemental_kernels) == 2
     ):
@@ -25984,6 +26603,49 @@ def _cross_tool_total_gate_promotion_contract_errors(
     for kernel_index, kernel_view in enumerate(kernel_views):
         kernel = kernel_view.verified_kernel
         gate = kernel_view.total_gate
+        auxiliary_values = (
+            kernel_view.auxiliary_verus_theorem,
+            kernel_view.auxiliary_verus_parameters,
+            kernel_view.auxiliary_verus_theorem_item_sha256,
+        )
+        if any(value is not None for value in auxiliary_values) and not all(
+            _nonempty_string(value) for value in auxiliary_values
+        ):
+            errors.append(
+                f"cross-tool claim {claim.constant} kernel {kernel} has an "
+                "incomplete auxiliary Verus theorem contract"
+            )
+        if all(_nonempty_string(value) for value in auxiliary_values):
+            auxiliary_theorem = kernel_view.auxiliary_verus_theorem
+            auxiliary_parameters = kernel_view.auxiliary_verus_parameters
+            auxiliary_sha256 = (
+                kernel_view.auxiliary_verus_theorem_item_sha256
+            )
+            assert isinstance(auxiliary_theorem, str)
+            assert isinstance(auxiliary_parameters, str)
+            assert isinstance(auxiliary_sha256, str)
+            if (
+                kernel_index == 0
+                or re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_]*", auxiliary_theorem
+                )
+                is None
+                or auxiliary_theorem == claim.verus_theorem
+            ):
+                errors.append(
+                    f"cross-tool claim {claim.constant} kernel {kernel} has an "
+                    "invalid auxiliary Verus theorem name"
+                )
+            if re.fullmatch(r"[0-9a-f]{64}", auxiliary_sha256) is None:
+                errors.append(
+                    f"cross-tool claim {claim.constant} kernel {kernel} has an "
+                    "invalid auxiliary Verus theorem token seal"
+                )
+            kernel_theorem_parameter_names = _rust_parameter_names(
+                auxiliary_parameters
+            )
+        else:
+            kernel_theorem_parameter_names = theorem_parameter_names
         if gate is None:
             errors.append(
                 f"cross-tool claim {claim.constant} kernel {kernel} has no "
@@ -25992,6 +26654,12 @@ def _cross_tool_total_gate_promotion_contract_errors(
             continue
         if kernel_index == 0:
             canonical_gate = _TOTAL_GATE_BY_CLAIM.get(claim.constant)
+        elif (
+            claim.constant
+            == "ProductionIngressIdentityAndClassTraceRefinesProtectedOwnership"
+            and kernel_index == 1
+        ):
+            canonical_gate = _LEADER_WIRE_ADMISSION_GATE
         elif (
             claim.constant
             == "ProductionReliableFlushTraceRefinesOutboundOwnership"
@@ -26070,7 +26738,7 @@ def _cross_tool_total_gate_promotion_contract_errors(
             token
             for token in theorem_argument_tokens
             if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", token)
-            and token not in theorem_parameter_names
+            and token not in kernel_theorem_parameter_names
         ]
         if disconnected_theorem_arguments:
             errors.append(
@@ -26165,6 +26833,19 @@ def _cross_tool_total_gate_promotion_contract_errors(
                     f"{call_site.source}!{call_site.item} does not consume its "
                     "opaque checked token"
                 )
+            if call_site.mutation_authorization_indices and (
+                len(call_site.mutation_authorization_indices)
+                != len(call_site.mutation_boundaries)
+                or any(
+                    index < 0 or index >= call_site.gate_call_count
+                    for index in call_site.mutation_authorization_indices
+                )
+            ):
+                errors.append(
+                    f"cross-tool claim {claim.constant} production call site "
+                    f"{call_site.source}!{call_site.item} must map every mutation "
+                    "boundary to an exact checked-gate occurrence"
+                )
 
     for consumer in claim.linked_consumers:
         if (
@@ -26185,6 +26866,173 @@ def _cross_tool_total_gate_promotion_contract_errors(
                 "production source inventory"
             )
     return errors, gate_names, call_site_keys
+
+
+def _cross_tool_effective_lock_checked_contract_errors(
+    claim: CrossToolClaimContract,
+    *,
+    kernel: str,
+) -> list[str]:
+    """Reject a weakened effective-lock checked-token production seam."""
+
+    errors: list[str] = []
+    gate = _EFFECTIVE_LOCK_CHECKED_GATE_BY_CLAIM.get(claim.constant)
+    expected_calls = _EFFECTIVE_LOCK_CHECKED_CALL_SHAPES.get(claim.constant)
+    expected_consumers = _EFFECTIVE_LOCK_LINKED_CONSUMER_SHAPES.get(
+        claim.constant
+    )
+    if gate is None or expected_calls is None or expected_consumers is None:
+        return [
+            f"cross-tool legacy claim {claim.constant} is not a canonical "
+            "effective-lock checked-token claim"
+        ]
+
+    observed_calls = tuple(
+        (
+            call_site.source,
+            call_site.item,
+            len(call_site.token_consumptions),
+            len(call_site.mutation_boundaries),
+        )
+        for call_site in claim.production_call_sites
+    )
+    if observed_calls != expected_calls:
+        errors.append(
+            f"cross-tool effective-lock claim {claim.constant} changed its "
+            "canonical checked constructor/consumer shape"
+        )
+    observed_consumers = tuple(
+        (
+            consumer.source,
+            consumer.item,
+            len(consumer.token_consumptions),
+            len(consumer.mutation_boundaries),
+        )
+        for consumer in claim.linked_consumers
+    )
+    if observed_consumers != expected_consumers:
+        errors.append(
+            f"cross-tool effective-lock claim {claim.constant} changed its "
+            "canonical linked token-consumer shape"
+        )
+    expected_plan_carriers = _EFFECTIVE_LOCK_PLAN_CARRIERS.get(
+        claim.constant, ()
+    )
+    transferred_tokens = sum(
+        not call_site.token_consumptions
+        for call_site in claim.production_call_sites
+    )
+    if len(expected_plan_carriers) != transferred_tokens:
+        errors.append(
+            f"cross-tool effective-lock claim {claim.constant} changed its "
+            "canonical checked-token plan-carrier closure"
+        )
+
+    for call_site in claim.production_call_sites:
+        expression_tokens = rust_code_tokens(call_site.required_expression)
+        gate_arguments = call_site.gate_arguments or (call_site.projection,)
+        if (
+            call_site.gate_call_count != 1
+            or len(gate_arguments) != 1
+            or not _nonempty_string(gate_arguments[0])
+        ):
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} must bind "
+                "one exact checked constructor invocation per call site"
+            )
+        else:
+            exact_gate_call = rust_code_tokens(f"{gate}({gate_arguments[0]})")
+            if (
+                _token_sequence_count(expression_tokens, exact_gate_call) != 1
+                or _token_sequence_count(expression_tokens, (gate, "(")) != 1
+            ):
+                errors.append(
+                    f"cross-tool effective-lock claim {claim.constant} required "
+                    f"expression must invoke {gate} exactly once"
+                )
+        if _token_sequence_count(expression_tokens, (kernel, "(")):
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} may not "
+                "substitute the direct boolean kernel for opaque checked evidence"
+            )
+        fail_closed = "?" in expression_tokens or (
+            "else" in expression_tokens
+            and ("return" in expression_tokens or "panic" in expression_tokens)
+        )
+        if not fail_closed:
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} checked "
+                "constructor rejection must fail closed"
+            )
+        for consumption in call_site.token_consumptions:
+            consumption_tokens = rust_code_tokens(consumption)
+            if (
+                not consumption_tokens
+                or _token_sequence_count(
+                    consumption_tokens, ("into_projection", "(")
+                )
+                != 1
+            ):
+                errors.append(
+                    f"cross-tool effective-lock claim {claim.constant} has a "
+                    "non-opaque or incomplete checked-token consumption"
+                )
+        if call_site.mutation_boundaries and not call_site.token_consumptions:
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} mutates "
+                "without consuming its checked token"
+            )
+        if not call_site.token_consumptions:
+            # Ownership and certified cleanup deliberately transfer the only
+            # token into a private plan. The exact constructor expression must
+            # therefore bind it and return it as part of that plan.
+            if (
+                expression_tokens.count("checked_effective_lock") < 2
+                or "Ok" not in expression_tokens
+            ):
+                errors.append(
+                    f"cross-tool effective-lock claim {claim.constant} drops "
+                    "checked evidence from its mutation plan"
+                )
+
+    for consumer in claim.linked_consumers:
+        if (
+            not _nonempty_string(consumer.required_expression)
+            or not consumer.token_consumptions
+            or not consumer.mutation_boundaries
+        ):
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} has an "
+                "incomplete linked checked-token consumer"
+            )
+        if consumer.source not in claim.production_sources:
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} linked "
+                f"consumer {consumer.source}!{consumer.item} is outside its "
+                "reviewed production source inventory"
+            )
+        if consumer.item_token_sha256 is not None and re.fullmatch(
+            r"[0-9a-f]{64}", consumer.item_token_sha256
+        ) is None:
+            errors.append(
+                f"cross-tool effective-lock claim {claim.constant} linked "
+                f"consumer {consumer.source}!{consumer.item} has an invalid "
+                "item token seal"
+            )
+        for consumption in consumer.token_consumptions:
+            consumption_tokens = rust_code_tokens(consumption)
+            if (
+                not consumption_tokens
+                or _token_sequence_count(
+                    consumption_tokens, ("into_projection", "(")
+                )
+                != 1
+            ):
+                errors.append(
+                    f"cross-tool effective-lock claim {claim.constant} linked "
+                    "consumer does not consume opaque evidence"
+                )
+    return errors
 
 
 def _cross_tool_promotion_contract_errors(
@@ -26213,9 +27061,12 @@ def _cross_tool_promotion_contract_errors(
                     f"{claim.proof_mode!r}"
                 )
                 continue
+            effective_lock_checked = (
+                claim.constant in _LEGACY_EFFECTIVE_LOCK_CLAIM_CONSTANTS
+            )
             if (
                 claim.total_gate is not None
-                or claim.linked_consumers
+                or (claim.linked_consumers and not effective_lock_checked)
                 or claim.verus_theorem_item_sha256 is not None
                 or any(
                     supplemental.total_gate is not None
@@ -26224,7 +27075,8 @@ def _cross_tool_promotion_contract_errors(
             ):
                 errors.append(
                     f"cross-tool legacy claim {claim.constant} may not carry "
-                    "total-gate, checked-token, or implication-seal fields"
+                    "total-gate, non-effective checked-token, or "
+                    "implication-seal fields"
                 )
             fields = {
                 "verus_parameters": claim.verus_parameters,
@@ -26308,6 +27160,12 @@ def _cross_tool_promotion_contract_errors(
                 )
             else:
                 kernel_names.append(kernel)
+            if effective_lock_checked:
+                errors.extend(
+                    _cross_tool_effective_lock_checked_contract_errors(
+                        claim, kernel=kernel
+                    )
+                )
             path = Path(kernel_source)
             if path.is_absolute() or ".." in path.parts:
                 errors.append(
@@ -26515,24 +27373,37 @@ def _cross_tool_promotion_contract_errors(
                         f"cross-tool claim {claim.constant} has unsafe call-site source "
                         f"{call_site.source!r}"
                     )
-                call_tokens = rust_code_tokens(
-                    f"{kernel}({call_site.projection})"
-                )
-                expression_tokens = rust_code_tokens(call_site.required_expression)
-                if _token_sequence_count(expression_tokens, call_tokens) != 1:
-                    errors.append(
-                        f"cross-tool claim {claim.constant} required production "
-                        f"expression must invoke {kernel} with its exact projection once"
+                if not effective_lock_checked:
+                    call_tokens = rust_code_tokens(
+                        f"{kernel}({call_site.projection})"
                     )
-                if not (
-                    {"assert", "assert_eq", "ensure", "if", "match", "return"}
-                    & set(expression_tokens)
-                ):
-                    errors.append(
-                        f"cross-tool claim {claim.constant} production expression "
-                        "must enforce the verified boolean kernel result"
+                    expression_tokens = rust_code_tokens(
+                        call_site.required_expression
                     )
-
+                    if _token_sequence_count(
+                        expression_tokens, call_tokens
+                    ) != 1:
+                        errors.append(
+                            f"cross-tool claim {claim.constant} required production "
+                            f"expression must invoke {kernel} with its exact "
+                            "projection once"
+                        )
+                    if not (
+                        {
+                            "assert",
+                            "assert_eq",
+                            "ensure",
+                            "if",
+                            "match",
+                            "return",
+                        }
+                        & set(expression_tokens)
+                    ):
+                        errors.append(
+                            f"cross-tool claim {claim.constant} production "
+                            "expression must enforce the verified boolean kernel "
+                            "result"
+                        )
             for supplemental in claim.supplemental_kernels:
                 supplemental_fields = (
                     supplemental.verified_kernel,
@@ -27244,6 +28115,9 @@ def _cross_tool_claim_contract_document(
                 _normalized_rust_contract(expression)
                 for expression in call_site.mutation_boundaries
             ],
+            "mutation_authorization_indices": list(
+                call_site.mutation_authorization_indices
+            ),
         }
 
     return {
@@ -27318,6 +28192,13 @@ def _cross_tool_claim_contract_document(
                     for builder in kernel.theorem_projection_builders
                 ],
                 "total_gate": gate_document(kernel.total_gate),
+                "auxiliary_verus_theorem": kernel.auxiliary_verus_theorem,
+                "auxiliary_verus_parameters": _normalized_rust_contract(
+                    kernel.auxiliary_verus_parameters or ""
+                ),
+                "auxiliary_verus_theorem_item_sha256": (
+                    kernel.auxiliary_verus_theorem_item_sha256
+                ),
                 "production_call_sites": [
                     call_site_document(call_site)
                     for call_site in kernel.production_call_sites
@@ -27348,6 +28229,10 @@ def _cross_tool_claim_contract_document(
                 "required_expression": _normalized_rust_contract(
                     consumer.required_expression
                 ),
+                "token_consumptions": [
+                    _normalized_rust_contract(expression)
+                    for expression in consumer.token_consumptions
+                ],
                 "mutation_boundaries": [
                     _normalized_rust_contract(expression)
                     for expression in consumer.mutation_boundaries
@@ -27355,6 +28240,20 @@ def _cross_tool_claim_contract_document(
                 "item_token_sha256": consumer.item_token_sha256,
             }
             for consumer in claim.linked_consumers
+        ],
+        "effective_lock_plan_carriers": [
+            {
+                "source": relative,
+                "struct": struct_name,
+                "field": _normalized_rust_contract(
+                    "checked_effective_lock: "
+                    "CheckedProductionTransition<"
+                    "EffectiveLockTraceProjection>,"
+                ),
+            }
+            for relative, struct_name in _EFFECTIVE_LOCK_PLAN_CARRIERS.get(
+                claim.constant, ()
+            )
         ],
     }
 
@@ -28196,6 +29095,284 @@ def _cross_tool_total_kernel_payload(
     )
 
 
+def _cross_tool_effective_lock_call_site_payload(
+    claim: CrossToolClaimContract,
+    call_site: CrossToolProductionCallContract,
+    *,
+    source_entries: list[Any],
+    root_dir: Path,
+) -> dict[str, Any]:
+    """Validate one legacy theorem's opaque production authorization seam."""
+
+    gate = _EFFECTIVE_LOCK_CHECKED_GATE_BY_CLAIM.get(claim.constant)
+    kernel = claim.verified_kernel
+    if gate is None or not _nonempty_string(kernel):
+        raise ValueError(
+            f"cross-tool claim {claim.constant} has no effective-lock checked gate"
+        )
+    expected_seal = call_site.item_token_sha256
+    if re.fullmatch(r"[0-9a-f]{64}", expected_seal or "") is None:
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} lacks an exact item token seal"
+        )
+    source_entry = _verus_source_entry(
+        source_entries,
+        call_site.source,
+        description="effective-lock authoritative checked call-site source",
+    )
+    path = root_dir / call_site.source
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(
+            f"cross-tool effective-lock call-site source is not a regular file: {path}"
+        )
+    source_sha256 = _sha256_file(path)
+    if source_entry.get("sha256") != source_sha256:
+        raise ValueError(
+            "cross-tool effective-lock call-site source digest mismatch: "
+            f"{call_site.source}"
+        )
+    source = path.read_text(encoding="utf-8")
+    items = tuple(
+        item
+        for item in rust_items(source, call_site.item)
+        if item.brace_context == call_site.brace_context
+    )
+    if len(items) != 1:
+        raise ValueError(
+            f"cross-tool claim {claim.constant} requires exactly one "
+            f"effective-lock checked consumer {call_site.source}!"
+            f"{call_site.item}; found {len(items)}"
+        )
+    item = items[0]
+    unexpected_attributes = tuple(
+        attribute
+        for attribute in item.attributes
+        if not (
+            (tokens := rust_code_tokens(attribute))[:3]
+            == ("#", "[", "must_use")
+            and tokens[-1:] == ("]",)
+        )
+    )
+    if unexpected_attributes or item.ancestor_inner_attributes:
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} has an unreviewed gating attribute"
+        )
+
+    body_tokens = rust_code_tokens(item.body)
+    required_tokens = rust_code_tokens(call_site.required_expression)
+    required_count = _token_sequence_count(body_tokens, required_tokens)
+    if required_count != 1:
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} must contain its exact checked constructor seam "
+            f"once; found {required_count}"
+        )
+    gate_arguments = call_site.gate_arguments or (call_site.projection,)
+    gate_positions: list[int] = []
+    for arguments in dict.fromkeys(gate_arguments):
+        expected_count = gate_arguments.count(arguments)
+        positions = _token_sequence_positions(
+            body_tokens, rust_code_tokens(f"{gate}({arguments})")
+        )
+        if len(positions) != expected_count:
+            raise ValueError(
+                f"cross-tool effective-lock call site {call_site.source}!"
+                f"{call_site.item} must invoke {gate} with every exact reviewed "
+                f"argument list; {arguments!r} occurred {len(positions)} "
+                f"time(s), expected {expected_count}"
+            )
+        gate_positions.extend(positions)
+    gate_positions.sort()
+    generic_gate_count = _token_sequence_count(body_tokens, (gate, "("))
+    if (
+        len(gate_positions) != call_site.gate_call_count
+        or generic_gate_count != call_site.gate_call_count
+    ):
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} must invoke {gate} exactly "
+            f"{call_site.gate_call_count} time(s); found {generic_gate_count}"
+        )
+    assert isinstance(kernel, str)
+    direct_kernel_count = _token_sequence_count(body_tokens, (kernel, "("))
+    if direct_kernel_count:
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} may not use the direct boolean kernel as a "
+            "production authorization fallback"
+        )
+
+    consumption_positions: list[int] = []
+    for expression in call_site.token_consumptions:
+        positions = _token_sequence_positions(
+            body_tokens, rust_code_tokens(expression)
+        )
+        if len(positions) != 1:
+            raise ValueError(
+                f"cross-tool effective-lock call site {call_site.source}!"
+                f"{call_site.item} must consume each opaque checked token "
+                "exactly once"
+            )
+        consumption_positions.extend(positions)
+    consumption_positions.sort()
+    if consumption_positions and any(
+        gate_position >= consumption_position
+        for gate_position in gate_positions
+        for consumption_position in consumption_positions
+    ):
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} must acquire checked evidence before consuming it"
+        )
+
+    mutation_positions: list[int] = []
+    for expression in call_site.mutation_boundaries:
+        positions = _token_sequence_positions(
+            body_tokens, rust_code_tokens(expression)
+        )
+        if len(positions) != 1:
+            raise ValueError(
+                f"cross-tool effective-lock call site {call_site.source}!"
+                f"{call_site.item} lost its exact reviewed mutation boundary"
+            )
+        mutation_positions.extend(positions)
+    mutation_positions.sort()
+    for index, mutation_position in enumerate(mutation_positions):
+        gate_index = min(index, len(gate_positions) - 1)
+        consumption_index = min(index, len(consumption_positions) - 1)
+        if (
+            not consumption_positions
+            or gate_positions[gate_index] >= mutation_position
+            or consumption_positions[consumption_index] >= mutation_position
+            or gate_positions[gate_index] >= consumption_positions[consumption_index]
+        ):
+            raise ValueError(
+                f"cross-tool effective-lock call site {call_site.source}!"
+                f"{call_site.item} must consume opaque authorization before "
+                "its exact state-changing linearization point"
+            )
+
+    observed_seal = _rust_sealed_item_token_sha256(item)
+    if observed_seal != expected_seal:
+        raise ValueError(
+            f"cross-tool effective-lock call site {call_site.source}!"
+            f"{call_site.item} does not match its exact reviewed source seal "
+            f"(item token seal) {expected_seal}; found {observed_seal}"
+        )
+    return {
+        "gate": gate,
+        "source": call_site.source,
+        "source_sha256": source_sha256,
+        "item": call_site.item,
+        "item_token_sha256": observed_seal,
+        "brace_context": [list(header) for header in call_site.brace_context],
+        "gate_call_count": len(gate_positions),
+        "gate_arguments": [
+            _normalized_rust_contract(arguments) for arguments in gate_arguments
+        ],
+        "required_expression": _normalized_rust_contract(
+            call_site.required_expression
+        ),
+        "token_consumptions": [
+            _normalized_rust_contract(expression)
+            for expression in call_site.token_consumptions
+        ],
+        "mutation_boundaries": [
+            _normalized_rust_contract(expression)
+            for expression in call_site.mutation_boundaries
+        ],
+    }
+
+
+def _cross_tool_effective_lock_plan_carrier_payload(
+    claim: CrossToolClaimContract,
+    *,
+    source_entries: list[Any],
+    root_dir: Path,
+) -> list[dict[str, Any]]:
+    """Bind private plans that linearly carry checked evidence to mutation."""
+
+    payloads: list[dict[str, Any]] = []
+    expected_field = rust_code_tokens(
+        "checked_effective_lock: "
+        "CheckedProductionTransition<EffectiveLockTraceProjection>,"
+    )
+    for relative, struct_name in _EFFECTIVE_LOCK_PLAN_CARRIERS.get(
+        claim.constant, ()
+    ):
+        source_entry = _verus_source_entry(
+            source_entries,
+            relative,
+            description="effective-lock checked-token plan-carrier source",
+        )
+        path = root_dir / relative
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(
+                "cross-tool effective-lock plan-carrier source is not a "
+                f"regular file: {path}"
+            )
+        source_sha256 = _sha256_file(path)
+        if source_entry.get("sha256") != source_sha256:
+            raise ValueError(
+                "cross-tool effective-lock plan-carrier source digest "
+                f"mismatch: {relative}"
+            )
+        source = path.read_text(encoding="utf-8")
+        structs = rust_struct_items(source, struct_name)
+        if len(structs) != 1:
+            raise ValueError(
+                f"cross-tool effective-lock claim {claim.constant} requires "
+                f"exactly one private plan carrier {relative}!{struct_name}; "
+                f"found {len(structs)}"
+            )
+        struct = structs[0]
+        attribute_tokens = tuple(
+            rust_code_tokens(attribute) for attribute in struct.attributes
+        )
+        body_tokens = rust_code_tokens(struct.body)
+        if (
+            struct.brace_context
+            or struct.ancestor_inner_attributes
+            or _rust_item_is_test_only(struct)
+            or any(
+                token in {"Clone", "Copy"}
+                for attribute in attribute_tokens
+                for token in attribute
+            )
+        ):
+            raise ValueError(
+                f"cross-tool effective-lock plan carrier {relative}!"
+                f"{struct_name} must remain private, linear, and unconditional"
+            )
+        if (
+            _token_sequence_count(body_tokens, expected_field) != 1
+            or _token_sequence_count(
+                body_tokens, ("CheckedProductionTransition", "<")
+            )
+            != 1
+        ):
+            raise ValueError(
+                f"cross-tool effective-lock plan carrier {relative}!"
+                f"{struct_name} must retain exactly one opaque checked-token "
+                "field"
+            )
+        payloads.append(
+            {
+                "source": relative,
+                "source_sha256": source_sha256,
+                "struct": struct_name,
+                "field": _normalized_rust_contract(
+                    "checked_effective_lock: "
+                    "CheckedProductionTransition<"
+                    "EffectiveLockTraceProjection>,"
+                ),
+            }
+        )
+    return payloads
+
+
 def _cross_tool_total_call_site_payload(
     claim: CrossToolClaimContract,
     kernel_view: _CrossToolKernelContractView,
@@ -28308,22 +29485,44 @@ def _cross_tool_total_call_site_payload(
             f"{call_site.item} must invoke {gate.name} exactly "
             f"{call_site.gate_call_count} time(s); found {generic_gate_count}"
         )
+    direct_kernel_count = _token_sequence_count(
+        body_tokens, (kernel_view.verified_kernel, "(")
+    )
+    if direct_kernel_count:
+        raise ValueError(
+            f"cross-tool total gate call site {call_site.source}!"
+            f"{call_site.item} may not use the direct boolean kernel as a "
+            "production authorization fallback"
+        )
     consumption_positions: list[int] = []
-    for expression in call_site.token_consumptions:
+    for expression in dict.fromkeys(call_site.token_consumptions):
+        expected_count = call_site.token_consumptions.count(expression)
         positions = _token_sequence_positions(
             body_tokens, rust_code_tokens(expression)
         )
-        if len(positions) != 1:
+        if len(positions) != expected_count:
             raise ValueError(
                 f"cross-tool total gate call site {call_site.source}!"
-                f"{call_site.item} must consume each checked token exactly once"
+                f"{call_site.item} must consume each checked token exactly once; "
+                f"{expression!r} occurred {len(positions)} time(s), expected "
+                f"{expected_count}"
             )
         consumption_positions.extend(positions)
     consumption_positions.sort()
-    if len(consumption_positions) < len(gate_positions):
+    if len(consumption_positions) != len(gate_positions):
         raise ValueError(
             f"cross-tool total gate call site {call_site.source}!"
             f"{call_site.item} reuses or does not consume a checked token"
+        )
+    if any(
+        gate_position >= consumption_position
+        for gate_position, consumption_position in zip(
+            gate_positions, consumption_positions
+        )
+    ):
+        raise ValueError(
+            f"cross-tool total gate call site {call_site.source}!"
+            f"{call_site.item} must acquire each checked token before consuming it"
         )
 
     mutation_positions: list[int] = []
@@ -28338,13 +29537,27 @@ def _cross_tool_total_call_site_payload(
             )
         mutation_positions.extend(positions)
     mutation_positions.sort()
-    for index, mutation_position in enumerate(mutation_positions):
-        gate_index = min(index, len(gate_positions) - 1)
-        consumption_index = min(index, len(consumption_positions) - 1)
+    authorization_indices = call_site.mutation_authorization_indices or tuple(
+        min(index, len(gate_positions) - 1)
+        for index in range(len(mutation_positions))
+    )
+    if len(authorization_indices) != len(mutation_positions):
+        raise ValueError(
+            f"cross-tool total gate call site {call_site.source}!"
+            f"{call_site.item} must map every mutation boundary to its exact "
+            "checked authorization"
+        )
+    for mutation_position, authorization_index in zip(
+        mutation_positions, authorization_indices
+    ):
+        if authorization_index < 0 or authorization_index >= len(gate_positions):
+            raise ValueError(
+                f"cross-tool total gate call site {call_site.source}!"
+                f"{call_site.item} has an invalid checked-authorization index"
+            )
         if (
-            gate_positions[gate_index] >= mutation_position
-            or consumption_positions[consumption_index] >= mutation_position
-            or gate_positions[gate_index] >= consumption_positions[consumption_index]
+            gate_positions[authorization_index] >= mutation_position
+            or consumption_positions[authorization_index] >= mutation_position
         ):
             raise ValueError(
                 f"cross-tool total gate call site {call_site.source}!"
@@ -28383,6 +29596,7 @@ def _cross_tool_total_call_site_payload(
             _normalized_rust_contract(expression)
             for expression in call_site.mutation_boundaries
         ],
+        "mutation_authorization_indices": list(authorization_indices),
     }
 
 
@@ -28436,6 +29650,18 @@ def _cross_tool_linked_consumer_payload(
             f"cross-tool linked consumer {consumer.source}!{consumer.item} "
             "must invoke its exact checked helper once"
         )
+    consumption_positions: list[int] = []
+    for expression in consumer.token_consumptions:
+        positions = _token_sequence_positions(
+            body_tokens, rust_code_tokens(expression)
+        )
+        if len(positions) != 1 or helper_positions[0] >= positions[0]:
+            raise ValueError(
+                f"cross-tool linked consumer {consumer.source}!{consumer.item} "
+                "must consume its exact opaque checked evidence after receiving it"
+            )
+        consumption_positions.extend(positions)
+    consumption_positions.sort()
     mutation_payload: list[str] = []
     for expression in consumer.mutation_boundaries:
         positions = _token_sequence_positions(
@@ -28446,9 +29672,17 @@ def _cross_tool_linked_consumer_payload(
                 f"cross-tool linked consumer {consumer.source}!{consumer.item} "
                 "must receive checked evidence before mutating state"
             )
+        if consumption_positions and consumption_positions[-1] >= positions[0]:
+            raise ValueError(
+                f"cross-tool linked consumer {consumer.source}!{consumer.item} "
+                "must consume checked evidence before mutating state"
+            )
         mutation_payload.append(_normalized_rust_contract(expression))
     observed_seal = _rust_sealed_item_token_sha256(item)
-    if observed_seal != consumer.item_token_sha256:
+    if (
+        consumer.item_token_sha256 is not None
+        and observed_seal != consumer.item_token_sha256
+    ):
         raise ValueError(
             f"cross-tool linked consumer {consumer.source}!{consumer.item} "
             "does not match its exact reviewed source seal (item token seal)"
@@ -28462,6 +29696,10 @@ def _cross_tool_linked_consumer_payload(
         "required_expression": _normalized_rust_contract(
             consumer.required_expression
         ),
+        "token_consumptions": [
+            _normalized_rust_contract(expression)
+            for expression in consumer.token_consumptions
+        ],
         "mutation_boundaries": mutation_payload,
     }
 
@@ -28471,7 +29709,7 @@ def _all_total_gate_kernel_views(
 ) -> tuple[
     tuple[CrossToolClaimContract, _CrossToolKernelContractView], ...
 ]:
-    """Return the canonical fifteen total gate/kernel pairs."""
+    """Return the canonical sixteen total gate/kernel pairs."""
 
     return tuple(
         (claim, kernel_view)
@@ -28584,10 +29822,12 @@ def _cross_tool_checked_token_payload(
     constructor_count = _token_sequence_count(
         source_tokens, ("CheckedProductionTransition", "{")
     )
-    if constructor_count != 15:
+    if constructor_count != 21:
         raise ValueError(
-            "cross-tool opaque token closure must contain exactly fifteen gate "
-            f"constructors; found {constructor_count}"
+            "cross-tool opaque token closure must contain exactly twenty-one "
+            "checked constructors (sixteen total gates, four effective-lock gates, and "
+            "the outer reducer transition gate); "
+            f"found {constructor_count}"
         )
     structural = mask_rust_comments_and_literals(source)
     if re.search(
@@ -28972,6 +30212,115 @@ def _cross_tool_total_gate_inventory_payload(
     ]
 
 
+def _cross_tool_auxiliary_total_theorem_payload(
+    claim: CrossToolClaimContract,
+    kernel_view: _CrossToolKernelContractView,
+    *,
+    verus_source: str,
+) -> dict[str, Any]:
+    """Validate one separately named auxiliary checked-gate implication."""
+
+    theorem = kernel_view.auxiliary_verus_theorem
+    parameters = kernel_view.auxiliary_verus_parameters
+    expected_sha256 = kernel_view.auxiliary_verus_theorem_item_sha256
+    gate = kernel_view.total_gate
+    if (
+        not _nonempty_string(theorem)
+        or not _nonempty_string(parameters)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_sha256 or "") is None
+        or gate is None
+    ):
+        raise ValueError(
+            f"cross-tool claim {claim.constant} has an incomplete auxiliary "
+            "Verus checked-gate theorem contract"
+        )
+    assert isinstance(theorem, str)
+    assert isinstance(parameters, str)
+    assert isinstance(expected_sha256, str)
+    items = rust_items(verus_source, theorem)
+    if len(items) != 1:
+        raise ValueError(
+            f"cross-tool claim {claim.constant} requires exactly one auxiliary "
+            f"Verus theorem {theorem}; found {len(items)}"
+        )
+    item = items[0]
+    if (
+        item.brace_context != (("verus", "!"),)
+        or item.attributes
+        or item.ancestor_inner_attributes
+    ):
+        raise ValueError(
+            f"cross-tool auxiliary Verus theorem {theorem} must be an "
+            "unconditional top-level verus! item"
+        )
+    observed_sha256 = _rust_item_token_sha256(item)
+    if observed_sha256 != expected_sha256:
+        raise ValueError(
+            f"cross-tool auxiliary Verus theorem {theorem} does not match its "
+            f"exact reviewed implication token seal {expected_sha256}; found "
+            f"{observed_sha256}"
+        )
+    header_tokens = _rust_item_header_tokens(item)
+    expected_prefix = rust_code_tokens(
+        f"pub proof fn {theorem}({parameters}) ensures"
+    )
+    if (
+        header_tokens[: len(expected_prefix)] != expected_prefix
+        or "requires" in header_tokens
+    ):
+        raise ValueError(
+            f"cross-tool auxiliary Verus theorem {theorem} must use the exact "
+            "unconditional implication signature with no requires clause"
+        )
+    implication_positions = _token_sequence_positions(
+        header_tokens, ("==", ">")
+    )
+    if not implication_positions:
+        raise ValueError(
+            f"cross-tool auxiliary Verus theorem {theorem} must retain a "
+            "checked-gate implication"
+        )
+    outer_implication = implication_positions[0]
+    theorem_success = _total_gate_theorem_success(gate)
+    gate_antecedent = rust_code_tokens(
+        f"{gate.name}({gate.theorem_arguments}) == Some({theorem_success})"
+    )
+    gate_positions = _token_sequence_positions(
+        header_tokens, gate_antecedent
+    )
+    if len(gate_positions) != 1 or gate_positions[0] >= outer_implication:
+        raise ValueError(
+            f"cross-tool auxiliary Verus theorem {theorem} must use "
+            f"{gate.name}'s exact successful Option result once in its antecedent"
+        )
+    kernel_call = rust_code_tokens(
+        f"{kernel_view.verified_kernel}"
+        f"({kernel_view.theorem_kernel_projection})"
+    )
+    kernel_positions = _token_sequence_positions(header_tokens, kernel_call)
+    if len(kernel_positions) != 1 or kernel_positions[0] <= outer_implication:
+        raise ValueError(
+            f"cross-tool auxiliary Verus theorem {theorem} must derive "
+            f"{kernel_view.verified_kernel}'s exact result in its consequent"
+        )
+    body_tokens = rust_code_tokens(item.body)
+    for revealed_name in (gate.name, kernel_view.verified_kernel):
+        reveal = rust_code_tokens(f"reveal({revealed_name})")
+        if _token_sequence_count(body_tokens, reveal) != 1:
+            raise ValueError(
+                f"cross-tool auxiliary Verus theorem {theorem} must reveal "
+                f"{revealed_name} exactly once"
+            )
+    return {
+        "name": theorem,
+        "parameters": _normalized_rust_contract(parameters),
+        "item_token_sha256": observed_sha256,
+        "signature": " ".join(header_tokens),
+        "gate": gate.name,
+        "kernel": kernel_view.verified_kernel,
+    }
+
+
 def _cross_tool_total_checked_claim_payload(
     claim: CrossToolClaimContract,
     *,
@@ -29056,6 +30405,7 @@ def _cross_tool_total_checked_claim_payload(
     proof_body_tokens = rust_code_tokens(theorem_item.body)
     kernel_payloads: list[dict[str, Any]] = []
     call_payloads: list[dict[str, Any]] = []
+    auxiliary_theorem_payloads: list[dict[str, Any]] = []
     for kernel_view in kernel_views:
         kernel_payload, _production_source = _cross_tool_total_kernel_payload(
             claim,
@@ -29067,36 +30417,54 @@ def _cross_tool_total_checked_claim_payload(
         kernel_payloads.append(kernel_payload)
         gate = kernel_view.total_gate
         assert gate is not None
-        theorem_success = _total_gate_theorem_success(gate)
-        gate_antecedent = rust_code_tokens(
-            f"{gate.name}({gate.theorem_arguments}) == Some({theorem_success})"
-        )
-        gate_positions = _token_sequence_positions(
-            header_tokens, gate_antecedent
-        )
-        if len(gate_positions) != 1 or gate_positions[0] >= outer_implication:
-            raise ValueError(
-                f"cross-tool Verus theorem {claim.verus_theorem} must use "
-                f"{gate.name}'s exact successful Option result once in its "
-                "antecedent"
-            )
-        kernel_call = rust_code_tokens(
-            f"{kernel_view.verified_kernel}"
-            f"({kernel_view.theorem_kernel_projection})"
-        )
-        kernel_positions = _token_sequence_positions(header_tokens, kernel_call)
-        if len(kernel_positions) != 1 or kernel_positions[0] <= outer_implication:
-            raise ValueError(
-                f"cross-tool Verus theorem {claim.verus_theorem} must derive "
-                f"{kernel_view.verified_kernel}'s exact result in its consequent"
-            )
-        for revealed_name in (gate.name, kernel_view.verified_kernel):
-            reveal = rust_code_tokens(f"reveal({revealed_name})")
-            if _token_sequence_count(proof_body_tokens, reveal) != 1:
-                raise ValueError(
-                    f"cross-tool Verus theorem {claim.verus_theorem} must reveal "
-                    f"{revealed_name} exactly once"
+        if kernel_view.auxiliary_verus_theorem is not None:
+            auxiliary_theorem_payloads.append(
+                _cross_tool_auxiliary_total_theorem_payload(
+                    claim,
+                    kernel_view,
+                    verus_source=verus_source,
                 )
+            )
+        else:
+            theorem_success = _total_gate_theorem_success(gate)
+            gate_antecedent = rust_code_tokens(
+                f"{gate.name}({gate.theorem_arguments}) == Some({theorem_success})"
+            )
+            gate_positions = _token_sequence_positions(
+                header_tokens, gate_antecedent
+            )
+            if (
+                len(gate_positions) != 1
+                or gate_positions[0] >= outer_implication
+            ):
+                raise ValueError(
+                    f"cross-tool Verus theorem {claim.verus_theorem} must use "
+                    f"{gate.name}'s exact successful Option result once in its "
+                    "antecedent"
+                )
+            kernel_call = rust_code_tokens(
+                f"{kernel_view.verified_kernel}"
+                f"({kernel_view.theorem_kernel_projection})"
+            )
+            kernel_positions = _token_sequence_positions(
+                header_tokens, kernel_call
+            )
+            if (
+                len(kernel_positions) != 1
+                or kernel_positions[0] <= outer_implication
+            ):
+                raise ValueError(
+                    f"cross-tool Verus theorem {claim.verus_theorem} must derive "
+                    f"{kernel_view.verified_kernel}'s exact result in its "
+                    "consequent"
+                )
+            for revealed_name in (gate.name, kernel_view.verified_kernel):
+                reveal = rust_code_tokens(f"reveal({revealed_name})")
+                if _token_sequence_count(proof_body_tokens, reveal) != 1:
+                    raise ValueError(
+                        f"cross-tool Verus theorem {claim.verus_theorem} must "
+                        f"reveal {revealed_name} exactly once"
+                    )
         for call_site in kernel_view.production_call_sites:
             call_payloads.append(
                 _cross_tool_total_call_site_payload(
@@ -29148,6 +30516,7 @@ def _cross_tool_total_checked_claim_payload(
         "verus_signature": " ".join(header_tokens),
         "verus_parameters": _normalized_rust_contract(parameters),
         "implication_gate_count": len(kernel_views),
+        "auxiliary_verus_theorems": auxiliary_theorem_payloads,
         "verified_kernels": kernel_payloads,
         "verified_kernel": kernel_payloads[0],
         "supplemental_verified_kernels": kernel_payloads[1:],
@@ -29444,108 +30813,13 @@ def _cross_tool_claim_payload(
 
     call_site_payloads: list[dict[str, Any]] = []
     for call_site in claim.production_call_sites:
-        expected_call_item_sha256 = call_site.item_token_sha256
-        if re.fullmatch(r"[0-9a-f]{64}", expected_call_item_sha256 or "") is None:
-            if _nonempty_string(call_site.unfrozen_reason):
-                raise ValueError(
-                    f"cross-tool production call site {call_site.source}!"
-                    f"{call_site.item} remains intentionally unfrozen: "
-                    f"{call_site.unfrozen_reason}"
-                )
-            raise ValueError(
-                f"cross-tool production call site {call_site.source}!"
-                f"{call_site.item} lacks an exact item token seal"
-            )
-        call_source_entry = _verus_source_entry(
-            source_entries,
-            call_site.source,
-            description="authoritative production call-site source",
-        )
-        call_path = root_dir / call_site.source
-        if not call_path.is_file() or call_path.is_symlink():
-            raise ValueError(
-                f"cross-tool production call-site source is not a regular file: {call_path}"
-            )
-        call_sha256 = _sha256_file(call_path)
-        if call_source_entry.get("sha256") != call_sha256:
-            raise ValueError(
-                f"cross-tool production call-site source digest mismatch: "
-                f"{call_site.source}"
-            )
-        call_source = call_path.read_text(encoding="utf-8")
-        call_items = rust_items(call_source, call_site.item)
-        if len(call_items) != 1:
-            raise ValueError(
-                f"cross-tool claim {claim.constant} requires exactly one "
-                f"authoritative production item {call_site.source}!{call_site.item}; "
-                f"found {len(call_items)}"
-            )
-        call_item = call_items[0]
-        if call_item.brace_context != call_site.brace_context:
-            raise ValueError(
-                f"cross-tool production call site {call_site.source}!{call_site.item} "
-                f"must have brace context {call_site.brace_context!r}; found "
-                f"{call_item.brace_context!r}"
-            )
-        allowed_call_attributes = {("#", "[", "must_use", "]")}
-        if (
-            call_site.source == "crates/iroha_core/src/sumeragi/v2_runner.rs"
-            and call_site.item == "run_inner"
-        ):
-            allowed_call_attributes.add(
-                (
-                    "#",
-                    "[",
-                    "allow",
-                    "(",
-                    "clippy",
-                    "::",
-                    "too_many_lines",
-                    ")",
-                    "]",
-                )
-            )
-        unexpected_call_attributes = tuple(
-            attribute
-            for attribute in call_item.attributes
-            if rust_code_tokens(attribute) not in allowed_call_attributes
-        )
-        if unexpected_call_attributes or call_item.ancestor_inner_attributes:
-            raise ValueError(
-                f"cross-tool production call site {call_site.source}!{call_site.item} "
-                "may use only the non-gating approved attributes; found "
-                f"{unexpected_call_attributes!r}"
-            )
-        required_expression = rust_code_tokens(call_site.required_expression)
-        observed_expression_count = _token_sequence_count(
-            rust_code_tokens(call_item.body), required_expression
-        )
-        if observed_expression_count != 1:
-            raise ValueError(
-                f"cross-tool production call site {call_site.source}!{call_site.item} "
-                "must contain its exact kernel enforcement and projection once; "
-                f"found {observed_expression_count}"
-            )
-        observed_call_item_sha256 = _rust_sealed_item_token_sha256(call_item)
-        if observed_call_item_sha256 != expected_call_item_sha256:
-            raise ValueError(
-                f"cross-tool production call site {call_site.source}!{call_site.item} "
-                "does not match its exact reviewed source seal "
-                "(item token seal) "
-                f"{expected_call_item_sha256}; found {observed_call_item_sha256}"
-            )
         call_site_payloads.append(
-            {
-                "source": call_site.source,
-                "source_sha256": call_sha256,
-                "item": call_site.item,
-                "item_token_sha256": observed_call_item_sha256,
-                "brace_context": [list(header) for header in call_site.brace_context],
-                "projection": _normalized_rust_contract(call_site.projection),
-                "required_expression": _normalized_rust_contract(
-                    call_site.required_expression
-                ),
-            }
+            _cross_tool_effective_lock_call_site_payload(
+                claim,
+                call_site,
+                source_entries=source_entries,
+                root_dir=root_dir,
+            )
         )
 
     supplemental_kernel_payloads: list[dict[str, Any]] = []
@@ -29562,6 +30836,21 @@ def _cross_tool_claim_payload(
         )
         supplemental_kernel_payloads.append(supplemental_payload)
         call_site_payloads.extend(supplemental_calls)
+
+    linked_consumers = [
+        _cross_tool_linked_consumer_payload(
+            claim,
+            consumer,
+            source_entries=source_entries,
+            root_dir=root_dir,
+        )
+        for consumer in claim.linked_consumers
+    ]
+    plan_carriers = _cross_tool_effective_lock_plan_carrier_payload(
+        claim,
+        source_entries=source_entries,
+        root_dir=root_dir,
+    )
 
     enter_view_identity_items: list[dict[str, str]] = []
     if claim.constant == "ProductionEnterViewUsesPostInstallEffectiveLock":
@@ -29630,6 +30919,15 @@ def _cross_tool_claim_payload(
         },
         "supplemental_verified_kernels": supplemental_kernel_payloads,
         "production_call_sites": call_site_payloads,
+        "linked_consumers": linked_consumers,
+        "plan_carriers": plan_carriers,
+        "checked_token": {
+            "source": _CHECKED_PRODUCTION_TOKEN_SOURCE,
+            "struct_item_token_sha256": _CHECKED_PRODUCTION_TOKEN_STRUCT_SHA256,
+            "consumer_item_token_sha256": (
+                _CHECKED_PRODUCTION_TOKEN_CONSUMER_SHA256
+            ),
+        },
         "enter_view_identity_production_items": enter_view_identity_items,
         "source_item_seals": source_item_seals,
         "production_sources": production_sources,
@@ -30947,6 +32245,37 @@ def _async_candidate_producer_continuation_contract_errors(
             '{"BeginDecision", "PersistDecision"} => record.node = target) '
             '/\\ record.identity.payload.causalOrigin = record.causalOrigin'
         ),
+        "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty": (
+            "specification => \\A node \\in AsyncVotersAt(initialContext), "
+            "identity, targetOrdinal \\in Nat \\ {0}, targetStage \\in "
+            "AsyncCandidateServiceStageClasses, status \\in "
+            '{"Reserved", "Materialized"}, budget \\in '
+            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
+            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
+            "identity, targetOrdinal, targetStage, status, budget) ~> "
+            "AsyncCandidateProducerContinuationPrefixDescentGoal( node, "
+            "identity, targetOrdinal, targetStage, status, budget)"
+        ),
+        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty": (
+            "specification => \\A node \\in AsyncVotersAt(initialContext), "
+            "identity, targetOrdinal \\in Nat \\ {0}, targetStage \\in "
+            "AsyncCandidateServiceStageClasses, status \\in "
+            '{"Reserved", "Materialized"}, budget \\in '
+            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
+            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( node, "
+            "identity, targetOrdinal, targetStage, status, budget) ~> "
+            "AsyncCandidateProducerContinuationTargetStatusExit( identity, "
+            "status)"
+        ),
+        "AsyncCandidateProducerContinuationDormantReservationClosureProperty": (
+            "specification => \\A node \\in AsyncVotersAt(initialContext), "
+            "record \\in AsyncCandidateProducerContinuationRecordSet: /\\ "
+            "gst /\\ record = "
+            "AsyncCandidateProducerContinuationSelectedResolutionRecord(node) "
+            '/\\ record.status = "Reserved" /\\ record \\in '
+            "AsyncCandidateProducerContinuationResolutionRecordsForNode(node) "
+            "~> AsyncCandidateProducerContinuationDormantReservationGoal(record)"
+        ),
     }
     exact_network_operators = {
         "AsyncCandidateProducerContinuationCapacity": (
@@ -30954,6 +32283,163 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationStatuses": (
             '{"Reserved", "Materialized", "Terminal"}'
+        ),
+        "AsyncCandidateProducerContinuationSourceClasses": (
+            '{"Local", "ConditionalTransport", "VolatileBody"}'
+        ),
+        "AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds": (
+            '{"DeliverProposal", "DeliverVote", "DeliverQC", '
+            '"DeliverTimeout", "DeliverTC"}'
+        ),
+        "AsyncCandidateProducerContinuationVolatileBodyReconstructionKinds": (
+            '{"FetchBody", "RebindRetainedBody", "FetchCertifiedBody"}'
+        ),
+        "AsyncCandidateProducerContinuationLocallyReconstructibleKinds": (
+            '{"AssembleBody", "TimeoutElapsed", "StoreBody", '
+            '"ValidateBody", "Apply"}'
+        ),
+        "AsyncCandidateProducerContinuationExternalResidualKinds": (
+            "AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds "
+            "\\cup "
+            "AsyncCandidateProducerContinuationVolatileBodyReconstructionKinds"
+        ),
+        "AsyncCandidateProducerContinuationSourceClass": (
+            "CASE candidate.kind \\in "
+            "AsyncCandidateProducerContinuationLocallyReconstructibleKinds -> "
+            '"Local" [] candidate.kind \\in '
+            "AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds "
+            '-> "ConditionalTransport" [] OTHER -> "VolatileBody"'
+        ),
+        "AsyncCandidateProducerContinuationItemCarrierIn": (
+            "\\/ item \\in retainedControl \\/ \\E packet \\in transport: "
+            "packet.item = item \\/ \\E recipient \\in ValidatorIds, source "
+            "\\in AsyncIngressSources: item \\in "
+            "SequenceSet(ingressLanes[recipient][source])"
+        ),
+        "AsyncCandidateProducerContinuationDeclaredHandoffOwned": (
+            "\\E successor \\in record.handoffCandidates: \\/ "
+            "CandidateScheduled(successor) \\/ "
+            "AsyncCandidateServiceCoalesced(successor) \\/ "
+            "AsyncCandidateProducerContinuationActiveForIdentity( "
+            "AsyncCandidateServiceIdentity(successor)) \\/ "
+            "successor.causalOrigin \\in "
+            "AsyncCandidateLifecycleDurableReplayOriginsForNode( "
+            "successor.node)"
+        ),
+        "AsyncCandidateProducerContinuationDeclaredHandoffRetired": (
+            "\\/ record.handoffCandidates = {} \\/ \\A successor \\in "
+            "record.handoffCandidates: \\/ "
+            "AsyncCandidateInternalBodyAvailableStageRetired(successor) \\/ "
+            "AsyncCandidateProducerContinuationTerminalForIdentity( "
+            "AsyncCandidateServiceIdentity(successor))"
+        ),
+        "AsyncCandidateConditionalTransportCarrier": (
+            '/\\ record.sourceClass = "ConditionalTransport" /\\ '
+            "record.candidate.item # NoAsyncItem /\\ "
+            "AsyncCandidateProducerContinuationItemCarrier( "
+            "record.candidate.item)"
+        ),
+        "AsyncCandidateConditionalTransportRetired": (
+            '/\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
+            "AsyncCandidateServiceCoalesced(record.candidate) \\/ "
+            "AsyncControlServiceIdentityServicedOrAdvancedIn( "
+            "asyncControlServiceState, record.candidate.item) \\/ /\\ "
+            "record.handoffCandidates = {} /\\ "
+            "~AsyncCandidateConditionalTransportCarrier(record) /\\ "
+            "AsyncControlServiceSlotOwnedIn( asyncControlServiceState, "
+            "record.candidate.item) /\\ "
+            "AsyncControlServiceIdentityMatches( record.candidate.item, "
+            "AsyncControlServiceRecordForItemIn( asyncControlServiceState, "
+            "record.candidate.item))"
+        ),
+        "AsyncCandidateVolatileBodyExactRequestCarrierIn": (
+            '\\E request \\in activeRequests: /\\ request.kind = '
+            '"CertifiedRequest" /\\ request.source = candidate.node /\\ '
+            "request.envelope.height = candidate.height /\\ "
+            "request.envelope.view = candidate.view /\\ "
+            "request.envelope.subject = candidate.subject /\\ "
+            "candidate.evidence \\in QcRecordSet /\\ "
+            "request.envelope.certificate = candidate.evidence"
+        ),
+        "AsyncCandidateVolatileBodyCarrier": (
+            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
+            "\\/ AsyncCandidateInternalBodyAvailableStageRetired("
+            "record.candidate) \\/ "
+            "AsyncCandidateVolatileBodyExactRequestCarrierIn( "
+            "asyncActiveRequests, record.candidate) \\/ /\\ "
+            "record.candidate.evidence \\in AsyncNetworkItems /\\ "
+            "AsyncCandidateProducerContinuationItemCarrier( "
+            "record.candidate.evidence)"
+        ),
+        "AsyncCandidateVolatileBodyRetired": (
+            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
+            "AsyncCandidateServiceCoalesced(record.candidate) \\/ /\\ "
+            "record.handoffCandidates = {} /\\ "
+            "AsyncCandidateInternalBodyAvailableStageRetired( "
+            "record.candidate) \\/ /\\ record.handoffCandidates # {} /\\ "
+            "AsyncCandidateProducerContinuationDeclaredHandoffRetired(record)"
+        ),
+        "AsyncCandidateConditionalTransportCarrierAfter": (
+            '/\\ record.sourceClass = "ConditionalTransport" /\\ '
+            "record.candidate.item # NoAsyncItem /\\ "
+            "AsyncCandidateProducerContinuationItemCarrierIn( "
+            "asyncRetainedControl', asyncTransport', asyncIngressLanes', "
+            "record.candidate.item)"
+        ),
+        "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn": (
+            "\\E successor \\in record.handoffCandidates: \\/ "
+            "CandidateScheduledAfter(successor) \\/ \\E serviced \\in "
+            "state.candidateServiceMarkers \\cup "
+            "state.candidateTerminalTombstones: serviced.identity = "
+            "AsyncCandidateServiceIdentity(successor) \\/ "
+            "AsyncCandidateProducerContinuationActiveForIdentityIn( state, "
+            "AsyncCandidateServiceIdentity(successor)) \\/ "
+            "successor.causalOrigin \\in "
+            "AsyncCandidateLifecycleDurableReplayOriginsForNodeAfter( "
+            "successor.node)"
+        ),
+        "AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn": (
+            "\\/ record.handoffCandidates = {} \\/ \\A successor \\in "
+            "record.handoffCandidates: \\/ "
+            "AsyncCandidateInternalBodyAvailableStageRetiredAfter(successor) "
+            "\\/ AsyncCandidateProducerContinuationTerminalForIdentityIn( "
+            "state, AsyncCandidateServiceIdentity(successor))"
+        ),
+        "AsyncCandidateConditionalTransportRetiredAfterIn": (
+            '/\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
+            "AsyncCandidateProducerContinuationServiceCoalescedIn( state, "
+            "record.candidate) \\/ "
+            "AsyncControlServiceIdentityServicedOrAdvancedIn( state, "
+            "record.candidate.item) \\/ /\\ record.handoffCandidates = {} "
+            "/\\ ~AsyncCandidateConditionalTransportCarrierAfter(record) "
+            "/\\ AsyncControlServiceSlotOwnedIn( state, "
+            "record.candidate.item) /\\ "
+            "AsyncControlServiceIdentityMatches( record.candidate.item, "
+            "AsyncControlServiceRecordForItemIn( state, "
+            "record.candidate.item))"
+        ),
+        "AsyncCandidateVolatileBodyCarrierAfterIn": (
+            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
+            "state, record) \\/ "
+            "AsyncCandidateInternalBodyAvailableStageRetiredAfter( "
+            "record.candidate) \\/ "
+            "AsyncCandidateVolatileBodyExactRequestCarrierIn( "
+            "asyncActiveRequests', record.candidate) \\/ /\\ "
+            "record.candidate.evidence \\in AsyncNetworkItems /\\ "
+            "AsyncCandidateProducerContinuationItemCarrierIn( "
+            "asyncRetainedControl', asyncTransport', asyncIngressLanes', "
+            "record.candidate.evidence)"
+        ),
+        "AsyncCandidateVolatileBodyRetiredAfterIn": (
+            '/\\ record.sourceClass = "VolatileBody" /\\ \\/ '
+            "AsyncCandidateProducerContinuationServiceCoalescedIn( state, "
+            "record.candidate) \\/ /\\ record.handoffCandidates = {} /\\ "
+            "AsyncCandidateInternalBodyAvailableStageRetiredAfter( "
+            "record.candidate) \\/ /\\ record.handoffCandidates # {} /\\ "
+            "AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn( "
+            "state, record)"
         ),
         "AsyncCandidateProducerContinuationStatusRank": (
             'CASE status = "Reserved" -> 2 [] status = "Materialized" -> 1 '
@@ -30967,8 +32453,10 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateServiceStageForKind(candidate.kind)], node |-> "
             "candidate.node, context |-> candidate.consumerContext, height "
             "|-> candidate.height, view |-> candidate.view, subject |-> "
-            "candidate.subject, phase |-> candidate.kind, causalOrigin |-> "
-            "candidate.causalOrigin, ordinal |-> ordinal, status |-> status]"
+            "candidate.subject, phase |-> candidate.kind, sourceClass |-> "
+            "AsyncCandidateProducerContinuationSourceClass(candidate), "
+            "causalOrigin |-> candidate.causalOrigin, ordinal |-> ordinal, "
+            "status |-> status]"
         ),
         "AsyncCandidateProducerContinuationActiveForIdentityIn": (
             "\\E record \\in "
@@ -31008,7 +32496,8 @@ def _async_candidate_producer_continuation_contract_errors(
         "AsyncCandidateProducerContinuationInitialStatusAfter": '"Reserved"',
         "AsyncCandidateProducerContinuationSourceAfter": (
             "/\\ AsyncCandidateProducerContinuationDeparture(candidate) /\\ "
-            "~AsyncCandidateProducerContinuationGoalAfter(candidate)"
+            "~AsyncCandidateProducerContinuationGoalAfter(candidate) /\\ "
+            "candidate.kind \\in AsyncCandidateServiceTrackedKinds"
         ),
         "AsyncCandidateProducerContinuationAddressCanAdvanceIn": (
             "LET address == "
@@ -31022,21 +32511,21 @@ def _async_candidate_producer_continuation_contract_errors(
             "/\\ record.view < candidate.view /\\ record.ordinal < ordinal"
         ),
         "AsyncCandidateProducerContinuationHandoffOwned": (
-            "\\E successor \\in record.handoffCandidates: \\/ "
-            "CandidateScheduled(successor) \\/ "
-            "AsyncCandidateServiceCoalesced(successor) \\/ "
-            "AsyncCandidateProducerContinuationActiveForIdentity( "
-            "AsyncCandidateServiceIdentity(successor)) \\/ "
-            "successor.causalOrigin \\in "
-            "AsyncCandidateLifecycleDurableReplayOriginsForNode( "
-            "successor.node)"
+            '\\/ /\\ record.sourceClass = "Local" /\\ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
+            '\\/ /\\ record.sourceClass = "ConditionalTransport" /\\ \\/ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) "
+            "\\/ AsyncCandidateConditionalTransportCarrier(record) \\/ "
+            "AsyncCandidateVolatileBodyCarrier(record)"
         ),
         "AsyncCandidateProducerContinuationHandoffRetired": (
-            "\\/ record.handoffCandidates = {} \\/ \\A successor \\in "
-            "record.handoffCandidates: \\/ "
-            "AsyncCandidateInternalBodyAvailableStageRetired(successor) \\/ "
-            "AsyncCandidateProducerContinuationTerminalForIdentity( "
-            "AsyncCandidateServiceIdentity(successor))"
+            '\\/ /\\ record.sourceClass = "Local" /\\ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffRetired(record) "
+            "\\/ AsyncCandidateConditionalTransportRetired(record) \\/ "
+            "AsyncCandidateVolatileBodyRetired(record)"
+        ),
+        "AsyncCandidateProducerContinuationConcreteSuccessorOwned": (
+            "AsyncCandidateProducerContinuationHandoffOwned(record)"
         ),
         "AsyncCandidateProducerContinuationResolutionPredecessorsFor": (
             "{other \\in "
@@ -31056,13 +32545,21 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationResolutionRecordsForNode(node) "
             "# {}"
         ),
+        "AsyncCandidateProducerContinuationSelectedSourceClass": (
+            "/\\ AsyncCandidateProducerContinuationResolutionRequired(node) "
+            "/\\ sourceClass \\in "
+            "AsyncCandidateProducerContinuationSourceClasses /\\ "
+            "(AsyncCandidateProducerContinuationSelectedResolutionRecord(node)) "
+            ".sourceClass = sourceClass"
+        ),
         "AsyncCandidateProducerContinuationResolutionReady": (
             "LET record == "
             "AsyncCandidateProducerContinuationSelectedResolutionRecord(node) "
             "IN /\\ "
             "AsyncCandidateProducerContinuationResolutionRequired(node) /\\ "
             '\\/ record.status = "Materialized" \\/ '
-            "AsyncCandidateProducerContinuationHandoffOwned(record) \\/ "
+            "AsyncCandidateProducerContinuationConcreteSuccessorOwned(record) "
+            "\\/ "
             "AsyncCandidateProducerContinuationHandoffRetired(record)"
         ),
         "ResolveCandidateProducerContinuation": (
@@ -31071,42 +32568,88 @@ def _async_candidate_producer_continuation_contract_errors(
             "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
             "AsyncSchedulerExceptCausalAndControlService"
         ),
+        "ResolveLocalCandidateProducerContinuation": (
+            "/\\ AsyncCandidateProducerContinuationSelectedSourceClass(node, "
+            '"Local") /\\ ResolveCandidateProducerContinuation(node)'
+        ),
+        "ServiceConditionalTransportProducerContinuation": (
+            "/\\ AsyncCandidateProducerContinuationSelectedSourceClass( node, "
+            '"ConditionalTransport") /\\ '
+            "ResolveCandidateProducerContinuation(node)"
+        ),
+        "ServiceVolatileBodyProducerContinuation": (
+            "/\\ AsyncCandidateProducerContinuationSelectedSourceClass( node, "
+            '"VolatileBody") /\\ ResolveCandidateProducerContinuation(node)'
+        ),
+        "PostGstResolveLocalCandidateProducerContinuation": (
+            "/\\ gst /\\ ResolveLocalCandidateProducerContinuation(node) /\\ "
+            "AsyncNonRunnerOuterFrame"
+        ),
+        "PostGstServiceConditionalTransportProducerContinuation": (
+            "/\\ gst /\\ "
+            "ServiceConditionalTransportProducerContinuation(node) /\\ "
+            "AsyncNonRunnerOuterFrame"
+        ),
+        "PostGstServiceVolatileBodyProducerContinuation": (
+            "/\\ gst /\\ ServiceVolatileBodyProducerContinuation(node) /\\ "
+            "AsyncNonRunnerOuterFrame"
+        ),
+        "ResolveHistoricalRecoveryCandidateProducerContinuation": (
+            "/\\ HistoricalRecoveryTarget(node) /\\ node \\in "
+            "AsyncActiveServiceNodes /\\ node \\in up /\\ "
+            "~NodeHasApplication(node) /\\ "
+            "AsyncCandidateProducerContinuationResolutionRequired(node) /\\ "
+            "UNCHANGED vars /\\ UNCHANGED asyncCausalQueues /\\ UNCHANGED "
+            "AsyncSchedulerExceptCausalControlAndNodeService /\\ "
+            "asyncNodeServiceDeadlines' = [asyncNodeServiceDeadlines EXCEPT "
+            "![node] = asyncNow + AsyncDeliveryBound]"
+        ),
         "AsyncCandidateProducerContinuationSelectedForResolution": (
             "/\\ ResolveCandidateProducerContinuation(record.node) /\\ "
             "AsyncCandidateProducerContinuationSelectedResolutionRecord( "
             "record.node) = record"
         ),
         "AsyncCandidateProducerContinuationHandoffOwnedAfterIn": (
-            "\\E successor \\in record.handoffCandidates: \\/ "
-            "CandidateScheduledAfter(successor) \\/ \\E serviced \\in "
-            "state.candidateServiceMarkers \\cup "
-            "state.candidateTerminalTombstones: serviced.identity = "
-            "AsyncCandidateServiceIdentity(successor) \\/ "
-            "AsyncCandidateProducerContinuationActiveForIdentityIn( state, "
-            "AsyncCandidateServiceIdentity(successor)) \\/ "
-            "successor.causalOrigin \\in "
-            "AsyncCandidateLifecycleDurableReplayOriginsForNodeAfter( "
-            "successor.node)"
+            '\\/ /\\ record.sourceClass = "Local" /\\ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
+            'state, record) \\/ /\\ record.sourceClass = '
+            '"ConditionalTransport" /\\ \\/ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn( "
+            "state, record) \\/ "
+            "AsyncCandidateConditionalTransportCarrierAfter(record) \\/ "
+            "AsyncCandidateVolatileBodyCarrierAfterIn(state, record)"
+        ),
+        "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn": (
+            "AsyncCandidateProducerContinuationHandoffOwnedAfterIn(state, "
+            "record)"
         ),
         "AsyncCandidateProducerContinuationHandoffRetiredAfterIn": (
-            "\\/ record.handoffCandidates = {} \\/ \\A successor \\in "
-            "record.handoffCandidates: \\/ "
-            "AsyncCandidateInternalBodyAvailableStageRetiredAfter(successor) "
-            "\\/ AsyncCandidateProducerContinuationTerminalForIdentityIn( "
-            "state, AsyncCandidateServiceIdentity(successor))"
+            '\\/ /\\ record.sourceClass = "Local" /\\ '
+            "AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn( "
+            "state, record) \\/ "
+            "AsyncCandidateConditionalTransportRetiredAfterIn(state, record) "
+            "\\/ AsyncCandidateVolatileBodyRetiredAfterIn(state, record)"
+        ),
+        "AsyncCandidateProducerContinuationSelectedForHistoricalRecovery": (
+            "/\\ ResolveHistoricalRecoveryCandidateProducerContinuation("
+            "record.node) /\\ "
+            "AsyncCandidateProducerContinuationSelectedResolutionRecord( "
+            "record.node) = record"
         ),
         "AsyncCandidateProducerContinuationRecordAfterStep": (
             'IF record.status = "Terminal" THEN record ELSE IF \\/ '
             "AsyncCandidateProducerContinuationTerminalAfter(record) \\/ "
+            "AsyncCandidateProducerContinuationSelectedForHistoricalRecovery( "
+            "record) \\/ "
             "/\\ AsyncCandidateProducerContinuationSelectedForResolution( "
-            'record) /\\ record.status = "Materialized" \\/ /\\ '
-            "AsyncCandidateProducerContinuationSelectedForResolution( "
-            'record) /\\ record.status = "Reserved" /\\ '
+            'record) /\\ \\/ record.status = "Materialized" \\/ /\\ '
+            'record.status = "Reserved" /\\ '
             "AsyncCandidateProducerContinuationHandoffRetiredAfterIn( state, "
             'record) THEN [record EXCEPT !.status = "Terminal"] ELSE IF /\\ '
             "AsyncCandidateProducerContinuationSelectedForResolution( "
             'record) /\\ record.status = "Reserved" /\\ '
-            "AsyncCandidateProducerContinuationHandoffOwnedAfterIn( state, "
+            "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn( "
+            "state, "
             'record) THEN [record EXCEPT !.status = "Materialized"] ELSE record'
         ),
     }
@@ -31135,6 +32678,59 @@ def _async_candidate_producer_continuation_contract_errors(
                     "finite producer-continuation contract; "
                     f"expected {expected!r}; found {observed!r}"
                 )
+
+    proof_code = strip_tla_comments(source, preserve_string_contents=True)
+    for symbol in (
+        "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty",
+        "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty",
+        "AsyncCandidateProducerContinuationDormantReservationClosureProperty",
+    ):
+        declaration = re.search(
+            rf"(?m)^[ \t]*{re.escape(symbol)}[ \t]*"
+            r"\([ \t\r\n]*specification[ \t\r\n]*,"
+            r"[ \t\r\n]*initialContext[ \t\r\n]*\)[ \t]*==",
+            proof_code,
+        )
+        if declaration is None:
+            errors.append(
+                f"{path}: {symbol} must retain exactly the reviewed "
+                "two-argument (specification, initialContext) contract"
+            )
+
+    source_class_split = _top_level_theorem_body(
+        network_source,
+        "CandidateProducerContinuationResolutionSplitsReviewedSourceClass",
+        preserve_string_contents=True,
+    )
+    expected_source_class_split = (
+        "\\A node \\in ValidatorIds: /\\ "
+        "AsyncControlServiceStateTypeInvariant /\\ "
+        "ResolveCandidateProducerContinuation(node) => \\/ "
+        "ResolveLocalCandidateProducerContinuation(node) \\/ "
+        "ServiceConditionalTransportProducerContinuation(node) \\/ "
+        "ServiceVolatileBodyProducerContinuation(node)"
+    )
+    if source_class_split is None:
+        errors.append(
+            f"{network_path}: missing reviewed producer-continuation "
+            "source-class split theorem"
+        )
+    else:
+        body, line = source_class_split
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        observed_statement = " ".join(statement.split())
+        if observed_statement != expected_source_class_split:
+            errors.append(
+                f"{network_path}:{line}: "
+                "CandidateProducerContinuationResolutionSplitsReviewedSourceClass "
+                "must retain the exact Local/ConditionalTransport/VolatileBody "
+                f"action partition; expected {expected_source_class_split!r}; "
+                f"found {observed_statement!r}"
+            )
 
     dormant_goal = _top_level_operator_body(
         source,
@@ -31180,6 +32776,10 @@ def _async_candidate_producer_continuation_contract_errors(
         "AsyncCandidateProducerContinuationHandoffRetainsExactLifecycle",
         "AsyncCandidateIgnoredDepartureDeclaresNoReplayHandoff",
         "AsyncCandidateProducerContinuationDepartureSplitsSourceOrGoal",
+        "AsyncCandidateProducerContinuationDepartureSplitsSourceResidualOrGoal",
+        "AsyncCandidateProducerContinuationLocalSourceExcludesTransportResidual",
+        "AsyncCandidateProducerTransportResidualIsContinuationSource",
+        "AsyncCandidateProducerTransportResidualSplitsPhysicalClass",
         "AsyncCandidateLifecycleDeparturesThisStepIsSingleton",
         "AsyncCandidateIgnoredExactProtocolDepartureIsContinuationSourceOrGoal",
         "AsyncCandidateSuccessfulExactProtocolServiceIsContinuationSourceOrGoal",
@@ -31194,16 +32794,35 @@ def _async_candidate_producer_continuation_contract_errors(
         "ResolveCandidateProducerContinuationNeverReplaysDrainedParent",
         "CandidateProducerContinuationBlocksRunnerUntilHandoffResolution",
         "CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner",
+        "AsyncCandidateProducerContinuationGstExcludesResetReplay",
+        "ConditionalTransportContinuationReadyEnablesFairService",
+        "VolatileBodyContinuationReadyEnablesFairService",
+        "LocalContinuationReadyEnablesFairResolution",
+        "ExternalContinuationFairServiceStrictlyDropsStatusRank",
+        "LocalContinuationFairResolutionStrictlyDropsStatusRank",
+        "ExternalContinuationPersistsOrDescendsOrReplayExits",
+        "LocalContinuationPersistsOrDescendsOrReplayExits",
+        "CandidateProducerContinuationSuccessorBatchConsumesFrozenWeight",
+        "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
+        "CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive",
+        "CandidateProducerContinuationFrozenOriginsCannotReplenish",
+        "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+        "CandidateProducerContinuationFairResolutionStrictlyDescendsFrozenPrefix",
+        "CandidateProducerContinuationDormantGoalIsReadyOrExited",
         "AsyncCandidateProducerContinuationReclamationPreservesIdentity",
         "AsyncCandidateProducerContinuationPreservedOrTerminal",
         "AsyncCandidateProducerContinuationSameHeightRestartPreserved",
+        "AsyncCandidateProducerContinuationResetPreservesActiveReservation",
+        "AsyncCandidateProducerContinuationResetReopensOnlyUnstableTerminal",
+        "AsyncCandidateProducerContinuationResetCannotResurrectDifferentOwner",
         "AsyncCandidateProducerContinuationReplacementRetiresOnlyTerminal",
         "AsyncCandidateProducerContinuationExactRetryCoalesces",
         "AsyncCandidateProducerContinuationHighWatermarkBlocksOldStage",
         "AsyncCandidateProducerContinuationRolloverOnlyStartsEmpty",
-        "CandidateProducerContinuationResolutionUsesReviewedFairAction",
+        "LocalCandidateProducerContinuationResolutionUsesReviewedFairAction",
+        "ConditionalTransportProducerContinuationServiceUsesReviewedFairAction",
+        "VolatileBodyProducerContinuationServiceUsesReviewedFairAction",
     )
-    proof_code = strip_tla_comments(source, preserve_string_contents=True)
     observed_theorems = tuple(
         re.findall(
             r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
@@ -31222,7 +32841,7 @@ def _async_candidate_producer_continuation_contract_errors(
     required_theorem_dependencies = {
         "AsyncCandidateProducerContinuationResolvedReservedRankStrictlyDrops": (
             "AsyncCandidateProducerContinuationSelectedForResolution",
-            "AsyncCandidateProducerContinuationHandoffOwnedAfterIn",
+            "AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn",
             "AsyncCandidateProducerContinuationHandoffRetiredAfterIn",
             "AsyncCandidateProducerContinuationStatusRank",
         ),
@@ -31233,6 +32852,7 @@ def _async_candidate_producer_continuation_contract_errors(
         "AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed": (
             "AsyncCandidateProducerContinuationTerminalAfter",
             "AsyncCandidateProducerContinuationSelectedForResolution",
+            "AsyncCandidateProducerContinuationSelectedForHistoricalRecovery",
             "AsyncCandidateProducerContinuationRecordAfterStep",
         ),
         "ResolveCandidateProducerContinuationNeverReplaysDrainedParent": (
@@ -31263,8 +32883,16 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationRecorded",
             "CandidateAdmissionCoalesced",
         ),
-        "CandidateProducerContinuationResolutionUsesReviewedFairAction": (
-            "PostGstResolveCandidateProducerContinuation",
+        "LocalCandidateProducerContinuationResolutionUsesReviewedFairAction": (
+            "PostGstResolveLocalCandidateProducerContinuation",
+            "AsyncFairActionAt",
+        ),
+        "ConditionalTransportProducerContinuationServiceUsesReviewedFairAction": (
+            "PostGstServiceConditionalTransportProducerContinuation",
+            "AsyncFairActionAt",
+        ),
+        "VolatileBodyProducerContinuationServiceUsesReviewedFairAction": (
+            "PostGstServiceVolatileBodyProducerContinuation",
             "AsyncFairActionAt",
         ),
     }
@@ -31293,10 +32921,13 @@ def _async_candidate_producer_continuation_contract_errors(
             "AsyncCandidateProducerContinuationScheduledExclusionInvariant",
         ),
         "RunNodeWork": (
-            "~AsyncCandidateProducerContinuationResolutionRequired(node)",
+            "IF AsyncCandidateProducerContinuationResolutionRequired(node) "
+            "THEN "
+            "ResolveHistoricalRecoveryCandidateProducerContinuation(node)",
         ),
         "AsyncControlServiceStateAfterReset": (
-            "producerContinuations |-> state.producerContinuations",
+            "producerContinuations |-> "
+            "AsyncCandidateProducerContinuationsAfterReset(state, resetNodes)",
         ),
         "AsyncTransportInit": (
             "producerContinuations |-> {}",
@@ -32506,9 +34137,287 @@ def _adequate_leader_selected_owner_continuation_contract_errors(
                     f"progress; found {forbidden!r}"
                 )
 
+    reviewed_frozen_voter_entry_statements = {
+        "AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix": (
+            "\\A initialContext, target, leaderContext, leader, leaderView, "
+            "subject, sourceOccurrenceRank, known, owner, sourceCandidates: "
+            "/\\ AsyncFrozenContextAt(initialContext) /\\ "
+            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant /\\ "
+            "AsyncCandidateServiceLifecycleInvariant /\\ "
+            "AdequateLeaderTargetSelectedOwnerReservedContinuationResidual( "
+            "target, leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, owner, sourceCandidates) => \\E "
+            "candidate \\in sourceCandidates, record \\in "
+            "AsyncCandidateProducerContinuationRecordsForIdentity( "
+            "AsyncCandidateServiceIdentity(candidate)), budget \\in "
+            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: /\\ "
+            'record.status = "Reserved" /\\ '
+            "AdequateLeaderFrozenTargetCandidateIdentity( candidate, "
+            "sourceOccurrenceRank[1], target, leaderContext, leader, "
+            "leaderView, subject) /\\ owner = "
+            "AdequateLeaderFrozenCandidateOwnerIdentity( candidate, "
+            "sourceOccurrenceRank[1], target, leaderContext, leader, "
+            "leaderView, subject) /\\ record.node \\in "
+            "AsyncVotersAt(initialContext) /\\ "
+            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( "
+            "record.node, record.identity, record.ordinal, "
+            'record.address.stage, "Reserved", budget)'
+        ),
+        "AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix": (
+            "\\A initialContext, target, leaderContext, leader, leaderView, "
+            "subject, sourceOccurrenceRank, known, owner, sourceCandidates: "
+            "/\\ AsyncFrozenContextAt(initialContext) /\\ "
+            "AsyncStrongTypeInvariant /\\ AsyncProgressOwnershipInvariant /\\ "
+            "AsyncCandidateServiceLifecycleInvariant /\\ "
+            "AdequateLeaderTargetSelectedOwnerMaterializedContinuationResidual( "
+            "target, leaderContext, leader, leaderView, subject, "
+            "sourceOccurrenceRank, known, owner, sourceCandidates) => \\E "
+            "candidate \\in sourceCandidates, record \\in "
+            "AsyncCandidateProducerContinuationRecordsForIdentity( "
+            "AsyncCandidateServiceIdentity(candidate)), budget \\in "
+            "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: /\\ "
+            'record.status = "Materialized" /\\ '
+            "AdequateLeaderFrozenTargetCandidateIdentity( candidate, "
+            "sourceOccurrenceRank[1], target, leaderContext, leader, "
+            "leaderView, subject) /\\ owner = "
+            "AdequateLeaderFrozenCandidateOwnerIdentity( candidate, "
+            "sourceOccurrenceRank[1], target, leaderContext, leader, "
+            "leaderView, subject) /\\ record.node \\in "
+            "AsyncVotersAt(initialContext) /\\ "
+            "AsyncCandidateProducerContinuationFrozenPrefixAtBudget( "
+            "record.node, record.identity, record.ordinal, "
+            'record.address.stage, "Materialized", budget)'
+        ),
+    }
+    reviewed_frozen_voter_entry_dependencies = {
+        "AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix": (
+            "CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive",
+            "FrozenContextFixesResponsiveVoters",
+            "ExactLeaderFrozenSemanticIdentity",
+            "AsyncCandidateServiceIdentity",
+        ),
+        "AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix": (
+            "CandidateProducerContinuationFrozenPrefixRankIsFiniteAndPositive",
+            "FrozenContextFixesResponsiveVoters",
+            "ExactLeaderFrozenSemanticIdentity",
+            "AsyncCandidateServiceIdentity",
+        ),
+    }
+    for symbol, expected_statement in (
+        reviewed_frozen_voter_entry_statements.items()
+    ):
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed selected-owner frozen-voter "
+                f"entry theorem {symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        observed_statement = " ".join(statement.split())
+        if observed_statement != expected_statement:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the reviewed exact "
+                "frozen-context selected-owner voter entry; "
+                f"expected {expected_statement!r}; found "
+                f"{observed_statement!r}"
+            )
+        missing = [
+            dependency
+            for dependency in reviewed_frozen_voter_entry_dependencies[symbol]
+            if not _tla_dependency_present(body, dependency)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} must derive frozen-voter entry "
+                f"through the reviewed identity/context cone {missing!r}"
+            )
+
+    reviewed_live_supplier_statements = {
+        "AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure": (
+            "\\A initialContext: "
+            "AsyncCandidateProducerContinuationDormantReservationClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext)"
+        ),
+        "CandidateProducerDormantClosureProvidesFrozenPrefixDescent": (
+            "\\A initialContext: "
+            "AsyncCandidateProducerContinuationDormantReservationClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext) => "
+            "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext)"
+        ),
+        "CandidateProducerDormantClosureClosesFrozenPrefix": (
+            "\\A initialContext: "
+            "AsyncCandidateProducerContinuationDormantReservationClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext) => "
+            "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext)"
+        ),
+        "AsyncLiveProvidesCandidateProducerContinuationFrozenPrefixClosure": (
+            "\\A initialContext: "
+            "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext)"
+        ),
+        "CandidateProducerDormantClosureProvidesReservedContinuationStep": (
+            "\\A initialContext: "
+            "AsyncCandidateProducerContinuationDormantReservationClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext) => "
+            "AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty( "
+            "AsyncLiveSpecAt(initialContext))"
+        ),
+        "CandidateProducerDormantClosureProvidesMaterializedContinuationStep": (
+            "\\A initialContext: "
+            "AsyncCandidateProducerContinuationDormantReservationClosureProperty( "
+            "AsyncLiveSpecAt(initialContext), initialContext) => "
+            "AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty( "
+            "AsyncLiveSpecAt(initialContext))"
+        ),
+        "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerReservedContinuationStep": (
+            "\\A initialContext: "
+            "AdequateLeaderTargetSelectedOwnerReservedContinuationStepProperty( "
+            "AsyncLiveSpecAt(initialContext))"
+        ),
+        "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerMaterializedContinuationStep": (
+            "\\A initialContext: "
+            "AdequateLeaderTargetSelectedOwnerMaterializedContinuationStepProperty( "
+            "AsyncLiveSpecAt(initialContext))"
+        ),
+    }
+    reviewed_live_supplier_dependencies = {
+        "AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure": (
+            "AsyncLiveProvidesDirectTimeoutViewClosureResidual",
+            "DirectTimeoutViewDecompositionClosesTimeoutViewProgress",
+            "AsyncSpecAlwaysUsesFixedResponsiveVoters",
+            "AsyncLiveSpecProjectsAsyncSpec",
+            "TimeoutViewProgressProperty",
+            "AsyncCandidateProducerContinuationDurableTerminal",
+        ),
+        "CandidateProducerDormantClosureProvidesFrozenPrefixDescent": (
+            "AsyncSpecAlwaysUsesFixedResponsiveVoters",
+            "CandidateProducerContinuationResolutionSplitsReviewedSourceClass",
+            "ConditionalTransportContinuationReadyEnablesFairService",
+            "VolatileBodyContinuationReadyEnablesFairService",
+            "LocalContinuationReadyEnablesFairResolution",
+            "CandidateProducerContinuationDormantGoalIsReadyOrExited",
+            "CandidateProducerContinuationFrozenPrefixStepCannotReplenish",
+            "CandidateProducerContinuationFairResolutionStrictlyDescendsFrozenPrefix",
+        ),
+        "CandidateProducerDormantClosureClosesFrozenPrefix": (
+            "CandidateProducerDormantClosureProvidesFrozenPrefixDescent",
+            "CandidateProducerContinuationFrozenPrefixRankOrderingIsWellFounded",
+            "WellFoundedLeadsTo",
+        ),
+        "AsyncLiveProvidesCandidateProducerContinuationFrozenPrefixClosure": (
+            "AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure",
+            "CandidateProducerDormantClosureClosesFrozenPrefix",
+        ),
+        "CandidateProducerDormantClosureProvidesReservedContinuationStep": (
+            "AsyncSpecAlwaysKeepsFrozenContext",
+            "CandidateProducerDormantClosureClosesFrozenPrefix",
+            "AdequateLeaderReservedContinuationStartsFiniteFrozenPrefix",
+            "AdequateLeaderSelectedOwnerSemanticDebtPersistsUnlessUniversalGoal",
+            "AdequateLeaderReservedTargetStatusExitProjectsStepGoal",
+        ),
+        "CandidateProducerDormantClosureProvidesMaterializedContinuationStep": (
+            "AsyncSpecAlwaysKeepsFrozenContext",
+            "CandidateProducerDormantClosureClosesFrozenPrefix",
+            "AdequateLeaderMaterializedContinuationStartsFiniteFrozenPrefix",
+            "AdequateLeaderSelectedOwnerSemanticDebtPersistsUnlessUniversalGoal",
+            "AdequateLeaderMaterializedTargetStatusExitProjectsTerminalOrGoal",
+        ),
+        "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerReservedContinuationStep": (
+            "AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure",
+            "CandidateProducerDormantClosureProvidesReservedContinuationStep",
+        ),
+        "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerMaterializedContinuationStep": (
+            "AsyncLiveProvidesCandidateProducerContinuationDormantReservationClosure",
+            "CandidateProducerDormantClosureProvidesMaterializedContinuationStep",
+        ),
+    }
+    forbidden_higher_live_dependencies = (
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+        "AsyncTemporalClosureRotatingLeaderProgressObligation",
+        "AsyncLiveProvidesAdequateLeaderTimeoutRotationConvergence",
+        "AsyncLiveProvidesAdequateLeaderOpenPhysicalResidualConvergence",
+        "AsyncLiveProvidesAdequateLeaderExactResidualKernel",
+        "AsyncLiveProvidesAdequateLeaderTargetOccurrenceRankService",
+    )
+    for symbol, expected_statement in reviewed_live_supplier_statements.items():
+        extracted = _top_level_theorem_body(
+            source,
+            symbol,
+            preserve_string_contents=True,
+        )
+        if extracted is None:
+            errors.append(
+                f"{path}: missing reviewed selected-owner live supplier "
+                f"{symbol}"
+            )
+            continue
+        body, line = extracted
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+            body,
+            maxsplit=1,
+        )[0]
+        observed_statement = " ".join(statement.split())
+        if observed_statement != expected_statement:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the reviewed exact "
+                "initial-context live-supplier statement; "
+                f"expected {expected_statement!r}; found "
+                f"{observed_statement!r}"
+            )
+        missing = [
+            dependency
+            for dependency in reviewed_live_supplier_dependencies[symbol]
+            if not _tla_dependency_present(body, dependency)
+        ]
+        if missing:
+            errors.append(
+                f"{path}:{line}: {symbol} must retain the reviewed direct "
+                f"timeout/frozen-prefix supplier cone {missing!r}"
+            )
+        forbidden = [
+            dependency
+            for dependency in forbidden_higher_live_dependencies
+            if _tla_dependency_present(body, dependency)
+        ]
+        higher_provider_code = strip_tla_comments(
+            body,
+            preserve_string_contents=True,
+        )
+        forbidden.extend(
+            sorted(
+                set(
+                    re.findall(
+                        r"\b(?:AsyncTemporalClosure[A-Za-z0-9_]*|"
+                        r"[A-Za-z0-9_]*RotatingLeader[A-Za-z0-9_]*|"
+                        r"AsyncLiveProvidesAdequateLeader[A-Za-z0-9_]*)\b",
+                        higher_provider_code,
+                    )
+                )
+                - set(forbidden)
+            )
+        )
+        if forbidden:
+            errors.append(
+                f"{path}:{line}: {symbol} may not import aggregate temporal "
+                "or rotating-leader providers into the lower continuation "
+                f"supplier cone; found {forbidden!r}"
+            )
+
     for forbidden_provider in (
         "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerContinuationOriginExposure",
-        "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerReservedContinuationStep",
         "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerMaterializedContinuationClosure",
         "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerTerminalContinuationProjection",
         "AsyncLiveProvidesAdequateLeaderTargetSelectedOwnerActiveContinuationClosure",
@@ -32523,10 +34432,9 @@ def _adequate_leader_selected_owner_continuation_contract_errors(
         ):
             errors.append(
                 f"{path}: {forbidden_provider} must remain explicitly "
-                "unproved until tracked-subject full-departure membership, "
-                "pre-state lifecycle ownership, prior-record preservation, "
-                "all off-subject/untracked terminal projections, and fair "
-                "continuation materialization are available"
+                "unproved until the remaining tracked-subject origin "
+                "boundary, terminal projection, and semantic composition "
+                "obligations are available"
             )
     return errors
 
@@ -36724,13 +38632,32 @@ def _proof_obligation_architecture_errors(
             ),
         )
         require_operator(
+            "AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget",
+            required=(
+                "AdequateLeaderFixedSelectedOccurrenceLifecycleActive",
+                "AdequateLeaderTargetEpisodeKnownOwnerSet",
+                "AdequateLeaderTargetLiveOwnerIdentitySet",
+                "AdequateLeaderTargetNonDescentEpisodeBudget",
+            ),
+            forbidden=(
+                "AdequateLeaderTargetNonDescentEpisodeAtBudget",
+                "AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProvider",
+                "AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty",
+            ),
+        )
+        require_operator(
             "AdequateLeaderFixedPipelineOriginEpisodeFrontier",
             required=(
-                "AdequateLeaderTargetNonDescentEpisodeBudgetFrontier",
+                "AdequateLeaderFixedPipelineOriginEpisodeDebtAtBudget",
                 "AdequateLeaderFixedPipelineEpisodeCurrentRankAdmissible",
                 "sourceOccurrenceRank",
                 "sourceOccurrenceOwner",
+                "sourceCutoffOrdinal",
+                "sourceDormantPotential",
+                "knownDormantPotential",
+                "known",
                 "sourceRank",
+                "budget",
                 "token",
                 "episodeTarget",
             ),
@@ -36768,9 +38695,6 @@ def _proof_obligation_architecture_errors(
                 "\\A specification: "
                 "/\\ (specification => []AsyncStrongTypeInvariant) "
                 "/\\ "
-                "AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty( "
-                "specification) "
-                "/\\ "
                 "AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty( "
                 "specification) "
                 "=> AdequateLeaderFixedSelectedOwnerServiceProperty(specification)"
@@ -36778,6 +38702,9 @@ def _proof_obligation_architecture_errors(
             required=(
                 "AdequateLeaderFixedSelectedFrontierStartsPinnedEpisodeOrStrictRank",
                 "AdequateLeaderFixedPipelineOriginNonDescentEpisodeClosureProperty",
+            ),
+            forbidden=(
+                "AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProvider",
                 "AdequateLeaderFixedSemanticStrictDescentCarriesPhysicalRankProviderProperty",
             ),
         )
@@ -56173,16 +58100,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     fixed_count = sum(name.endswith("_fixed.cfg") for name in expected_formal)
     mutation_count = sum(name.endswith("_bug.cfg") for name in expected_formal)
     if (
-        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 107
-        or model_count != 25
-        or config_count != 82
-        or fixed_count != 25
-        or mutation_count != 57
+        len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS) != 115
+        or model_count != 27
+        or config_count != 88
+        or fixed_count != 27
+        or mutation_count != 61
     ):
         errors.append(
             "liveness-ownership mutation source seal must name exactly "
-            "twenty-five models, twenty-five repaired configurations, and "
-            "fifty-seven failing configurations; found "
+            "twenty-seven models, twenty-seven repaired configurations, and "
+            "sixty-one failing configurations; found "
             f"models={model_count}, repaired={fixed_count}, "
             f"failing={mutation_count}, configurations={config_count}, "
             f"total={len(LIVENESS_OWNERSHIP_MUTATION_FORMAL_ARTIFACTS)}"
@@ -56190,7 +58117,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     if digest_names != expected_all:
         errors.append(
             "liveness-ownership mutation digest inventory must equal the "
-            f"exact 105-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"exact 116-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -56619,6 +58546,209 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
                 f"{observed_config!r}"
             )
 
+    adequate_deadline_path = (
+        formal_dir / "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla"
+    )
+    if (
+        adequate_deadline_path.is_file()
+        and not adequate_deadline_path.is_symlink()
+    ):
+        adequate_deadline_source = adequate_deadline_path.read_text(
+            encoding="utf-8"
+        )
+        exact_adequate_deadline_operators = {
+            "RosterDeadline": "3",
+            "RealReceiptDeadline": "3",
+            "FabricatedReceiptDeadline": "7",
+            "ReceiptDeadlines": (
+                "{RealReceiptDeadline, FabricatedReceiptDeadline}"
+            ),
+            "ReceiptOwnsFrozenRosterWindow": (
+                "IF EnforceRosterDeadlineAuthority "
+                "THEN deadline <= RosterDeadline ELSE TRUE"
+            ),
+            "NoPrematureExit": (
+                "\\A deadline \\in ReceiptDeadlines: "
+                "/\\ ReceiptOwnsFrozenRosterWindow(deadline) "
+                "/\\ now < deadline /\\ ~decided => corridor"
+            ),
+            "TickWithinWindow": (
+                "/\\ corridor /\\ now < RosterDeadline "
+                "/\\ now' = now + 1 "
+                "/\\ corridor' = (now' < RosterDeadline) "
+                "/\\ UNCHANGED decided"
+            ),
+        }
+        for symbol, expected_body in (
+            exact_adequate_deadline_operators.items()
+        ):
+            extracted = _top_level_operator_body(
+                adequate_deadline_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{adequate_deadline_path}: missing reviewed "
+                    f"adequate-leader deadline-authority mutation operator "
+                    f"{symbol}"
+                )
+                continue
+            body, line = extracted
+            observed_body = " ".join(body.split())
+            # The generic extractor stops at the next operator definition.
+            # ReceiptDeadlines is followed by a TLA+ variable declaration, so
+            # exclude that declaration from the operator's semantic body.
+            if symbol == "ReceiptDeadlines":
+                observed_body = observed_body.removesuffix(
+                    " VARIABLES now, corridor, decided"
+                )
+            if observed_body != expected_body:
+                errors.append(
+                    f"{adequate_deadline_path}:{line}: adequate-leader "
+                    f"deadline-authority mutation operator {symbol} must "
+                    f"equal only {expected_body!r}; found "
+                    f"{observed_body!r}"
+                )
+
+    exact_adequate_deadline_configs = {
+        "adequate_leader_deadline_authority_fixed.cfg": (
+            "CONSTANT EnforceRosterDeadlineAuthority = TRUE "
+            "SPECIFICATION Spec INVARIANT TypeInvariant "
+            "INVARIANT NoPrematureExit CHECK_DEADLOCK FALSE"
+        ),
+        "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg": (
+            "CONSTANT EnforceRosterDeadlineAuthority = FALSE "
+            "SPECIFICATION Spec INVARIANT TypeInvariant "
+            "INVARIANT NoPrematureExit CHECK_DEADLOCK FALSE"
+        ),
+    }
+    for name, expected_config in exact_adequate_deadline_configs.items():
+        config_path = formal_dir / name
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        config_source = strip_tla_comments(
+            config_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        observed_config = " ".join(config_source.split())
+        if observed_config != expected_config:
+            errors.append(
+                f"{config_path}: adequate-leader deadline-authority "
+                f"mutation config must equal only {expected_config!r}; "
+                f"found {observed_config!r}"
+            )
+
+    selected_lifecycle_path = (
+        formal_dir
+        / "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla"
+    )
+    if (
+        selected_lifecycle_path.is_file()
+        and not selected_lifecycle_path.is_symlink()
+    ):
+        selected_lifecycle_source = selected_lifecycle_path.read_text(
+            encoding="utf-8"
+        )
+        exact_selected_lifecycle_operators = {
+            "LowerOccurrenceCoexists": (
+                "/\\ LowerOccurrenceRank < SourceOccurrenceRank "
+                "/\\ LowerPhysicalRank >= SourcePhysicalRank"
+            ),
+            "PhysicalRank": (
+                'IF stage = "Done" THEN SourcePhysicalRank - 1 '
+                "ELSE SourcePhysicalRank"
+            ),
+            "PhysicalStrictRankGoal": (
+                "PhysicalRank < SourcePhysicalRank"
+            ),
+            "SelectedLifecycleCarrier": (
+                '\\/ stage = "Selected" '
+                '\\/ /\\ stage = "Route" '
+                "/\\ routeToken = SelectedToken "
+                "/\\ routeOrdinal = SourceOrdinal"
+            ),
+            "SelectedLifecycleEpisodeActive": (
+                "/\\ SelectedLifecycleCarrier "
+                "/\\ IF PreserveSelectedLifecycleEpisode "
+                "THEN TRUE ELSE ~LowerOccurrenceCoexists"
+            ),
+            "SelectedLifecycleEpisodeOrPhysicalDescent": (
+                "\\/ PhysicalStrictRankGoal "
+                "\\/ SelectedLifecycleEpisodeActive"
+            ),
+            "ExactSelectedTokenCutCarry": (
+                'stage = "Route" => /\\ routeToken = SelectedToken '
+                "/\\ routeOrdinal = SourceOrdinal"
+            ),
+            "DrainSelectedToExactRoute": (
+                '/\\ stage = "Selected" /\\ stage\' = "Route" '
+                "/\\ routeToken' = SelectedToken "
+                "/\\ routeOrdinal' = SourceOrdinal"
+            ),
+            "ServiceExactRoute": (
+                '/\\ stage = "Route" /\\ stage\' = "Done" '
+                "/\\ UNCHANGED <<routeToken, routeOrdinal>>"
+            ),
+        }
+        for symbol, expected_body in (
+            exact_selected_lifecycle_operators.items()
+        ):
+            extracted = _top_level_operator_body(
+                selected_lifecycle_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{selected_lifecycle_path}: missing reviewed "
+                    "adequate-leader selected-lifecycle mutation operator "
+                    f"{symbol}"
+                )
+                continue
+            body, line = extracted
+            observed_body = " ".join(body.split())
+            if observed_body != expected_body:
+                errors.append(
+                    f"{selected_lifecycle_path}:{line}: adequate-leader "
+                    f"selected-lifecycle mutation operator {symbol} must "
+                    f"equal only {expected_body!r}; found "
+                    f"{observed_body!r}"
+                )
+
+    exact_selected_lifecycle_configs = {
+        "adequate_leader_selected_lifecycle_episode_fixed.cfg": (
+            "CONSTANT PreserveSelectedLifecycleEpisode = TRUE "
+            "SPECIFICATION Spec INVARIANT TypeInvariant "
+            "INVARIANT SelectedLifecycleEpisodeOrPhysicalDescent "
+            "INVARIANT ExactSelectedTokenCutCarry CHECK_DEADLOCK FALSE"
+        ),
+        (
+            "adequate_leader_selected_lifecycle_episode_"
+            "semantic_shortcut_bug.cfg"
+        ): (
+            "CONSTANT PreserveSelectedLifecycleEpisode = FALSE "
+            "SPECIFICATION Spec INVARIANT TypeInvariant "
+            "INVARIANT SelectedLifecycleEpisodeOrPhysicalDescent "
+            "INVARIANT ExactSelectedTokenCutCarry CHECK_DEADLOCK FALSE"
+        ),
+    }
+    for name, expected_config in exact_selected_lifecycle_configs.items():
+        config_path = formal_dir / name
+        if not config_path.is_file() or config_path.is_symlink():
+            continue
+        config_source = strip_tla_comments(
+            config_path.read_text(encoding="utf-8"),
+            preserve_string_contents=True,
+        )
+        observed_config = " ".join(config_source.split())
+        if observed_config != expected_config:
+            errors.append(
+                f"{config_path}: adequate-leader selected-lifecycle "
+                f"mutation config must equal only {expected_config!r}; "
+                f"found {observed_config!r}"
+            )
+
     receipt_acquisition_path = (
         formal_dir / "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla"
     )
@@ -56843,6 +58973,16 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "authority-deadline-carry",
             "SumeragiV2AuthorityDeadlineCarryMutation.tla",
             "authority_deadline_carry_fixed.cfg",
+        ),
+        (
+            "adequate-leader-deadline-authority",
+            "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
+            "adequate_leader_deadline_authority_fixed.cfg",
+        ),
+        (
+            "adequate-leader-selected-lifecycle-episode",
+            "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
+            "adequate_leader_selected_lifecycle_episode_fixed.cfg",
         ),
         (
             "fixed-corridor-receipt-acquisition",
@@ -57194,6 +59334,21 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "ImmutableReceiptCannotExpireBeforeDecision",
         ),
         (
+            "adequate-leader-deadline-omitted-roster-bound",
+            "SumeragiV2AdequateLeaderDeadlineAuthorityMutation.tla",
+            "adequate_leader_deadline_authority_omitted_roster_bound_bug.cfg",
+            "NoPrematureExit",
+        ),
+        (
+            "adequate-leader-selected-lifecycle-semantic-shortcut",
+            "SumeragiV2AdequateLeaderSelectedLifecycleEpisodeMutation.tla",
+            (
+                "adequate_leader_selected_lifecycle_episode_"
+                "semantic_shortcut_bug.cfg"
+            ),
+            "SelectedLifecycleEpisodeOrPhysicalDescent",
+        ),
+        (
             "fixed-corridor-receipt-prestate-gap",
             "SumeragiV2FixedCorridorReceiptAcquisitionMutation.tla",
             "fixed_corridor_receipt_acquisition_prestate_only_bug.cfg",
@@ -57220,13 +59375,13 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
     if observed_fixed_cases != expected_fixed_cases:
         errors.append(
             f"{runner_path}: repaired case matrix must equal the exact reviewed "
-            f"twenty-five cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
+            f"twenty-seven cases; missing={sorted(expected_fixed_cases - observed_fixed_cases)}, "
             f"extra={sorted(observed_fixed_cases - expected_fixed_cases)}"
         )
     if observed_mutation_cases != expected_mutation_cases:
         errors.append(
             f"{runner_path}: failing case matrix must equal the exact reviewed "
-            "fifty-four config/invariant pairs; "
+            "sixty-one config/invariant pairs; "
             f"missing={sorted(expected_mutation_cases - observed_mutation_cases)}, "
             f"extra={sorted(observed_mutation_cases - expected_mutation_cases)}"
         )
@@ -57264,7 +59419,7 @@ THEOREM ImportedCertificateTailCannotRetireOnLocalIncarnationChange ==
             "exact named invariant marker",
         ),
         (
-            "all 54 liveness-ownership mutations produced their exact named "
+            "all 61 liveness-ownership mutations produced their exact named "
             "counterexamples; repaired models passed",
             "exact mutation completion marker",
         ),

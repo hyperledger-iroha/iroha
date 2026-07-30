@@ -819,6 +819,10 @@ PROOF
                  RunNodeWork(node) => [Next]_vars
     <2>1. ASSUME NEW node \in ValidatorIds, RunNodeWork(node)
            PROVE [Next]_vars
+      <3>0. CASE
+              ResolveRunNodeCandidateProducerContinuation(node)
+        BY <3>0, CoreStutterRefinesBracketNext, Isa
+           DEF ResolveRunNodeCandidateProducerContinuation, vars
       <3>1. CASE LocalAdmissionStep(node)
         BY <3>1, LocalAdmissionStepRefinesCoreBracketNext
       <3>2. CASE IngressDrainStep(node)
@@ -833,7 +837,7 @@ PROOF
         <4> QED BY <4>1, CoreStutterRefinesBracketNext
       <3>5. CASE SerializedLocalPrecedesServeIngressStep(node)
         BY <3>5, SerializedLocalPredecessorRefinesCoreBracketNext
-      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5
+      <3> QED BY <2>1, <3>0, <3>1, <3>2, <3>3, <3>4, <3>5
            DEF RunNodeWork
     <2> QED BY <2>1
   <1> QED BY <1>1
