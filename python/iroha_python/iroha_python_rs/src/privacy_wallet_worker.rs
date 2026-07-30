@@ -3,8 +3,8 @@
 //! This module deliberately exposes no operation that returns witness bytes.
 //! A caller may import a credential file, inspect or cancel its opaque handle,
 //! or consume it exactly once inside a native Rust closure. The pipe protocol
-//! mirrors that boundary: proof execution remains unavailable until a native
-//! prover callback is attached.
+//! deliberately exposes only custody operations; it does not advertise an
+//! execution command until a typed native prover can be attached end to end.
 
 use std::{
     collections::HashMap,
@@ -437,7 +437,6 @@ pub enum CommandKind {
     Import = 2,
     Inspect = 3,
     Cancel = 4,
-    Execute = 5,
 }
 
 impl TryFrom<u8> for CommandKind {
@@ -449,7 +448,6 @@ impl TryFrom<u8> for CommandKind {
             2 => Ok(Self::Import),
             3 => Ok(Self::Inspect),
             4 => Ok(Self::Cancel),
-            5 => Ok(Self::Execute),
             _ => Err(WorkerError::UnknownCommand),
         }
     }
@@ -640,16 +638,6 @@ fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> Comm
                 .cancel(handle, &binding)
                 .map(|()| CommandResponse::Cancelled)
         }),
-        // Deliberately do not consume the handle here. The only valid future
-        // implementation is a direct native prover callback passed to
-        // `consume_with`; returning witness bytes would violate the boundary.
-        CommandKind::Execute => decode_execute_request(payload).and_then(
-            |(handle, binding, canonical_public_intent)| {
-                validate_canonical_public_intent(&canonical_public_intent, &binding)?;
-                vault.inspect(handle, &binding)?;
-                Err(WorkerError::NativeProverUnavailable)
-            },
-        ),
     };
     result.unwrap_or_else(CommandResponse::Error)
 }
@@ -679,26 +667,6 @@ pub fn encode_handle_payload(
     Ok(payload)
 }
 
-pub fn encode_execute_payload(
-    handle: WitnessHandle,
-    binding: &WitnessBinding,
-    canonical_public_intent: &[u8],
-) -> Result<Vec<u8>, WorkerError> {
-    binding.validate()?;
-    validate_canonical_public_intent(canonical_public_intent, binding)?;
-    let public_intent_length = u32::try_from(canonical_public_intent.len())
-        .map_err(|_| WorkerError::InvalidPublicIntent)?;
-    let mut payload = Vec::with_capacity(516 + canonical_public_intent.len());
-    payload.extend_from_slice(handle.as_bytes());
-    encode_binding(&mut payload, binding);
-    payload.extend_from_slice(&public_intent_length.to_be_bytes());
-    payload.extend_from_slice(canonical_public_intent);
-    if payload.len() > MAX_FRAME_BYTES {
-        return Err(WorkerError::FrameTooLarge);
-    }
-    Ok(payload)
-}
-
 fn decode_import(payload: &[u8]) -> Result<ImportRequest, WorkerError> {
     let mut cursor = Cursor::new(payload);
     let path = cursor.text(MAX_PATH_BYTES)?;
@@ -719,22 +687,6 @@ fn decode_handle_request(payload: &[u8]) -> Result<(WitnessHandle, WitnessBindin
     let binding = decode_binding(&mut cursor)?;
     cursor.finish()?;
     Ok((handle, binding))
-}
-
-fn decode_execute_request(
-    payload: &[u8],
-) -> Result<(WitnessHandle, WitnessBinding, Vec<u8>), WorkerError> {
-    let mut cursor = Cursor::new(payload);
-    let handle = WitnessHandle(cursor.array()?);
-    let binding = decode_binding(&mut cursor)?;
-    let public_intent_length =
-        usize::try_from(cursor.u32()?).map_err(|_| WorkerError::InvalidPublicIntent)?;
-    if public_intent_length == 0 || public_intent_length > MAX_CANONICAL_PUBLIC_INTENT_BYTES {
-        return Err(WorkerError::InvalidPublicIntent);
-    }
-    let canonical_public_intent = cursor.take(public_intent_length)?.to_vec();
-    cursor.finish()?;
-    Ok((handle, binding, canonical_public_intent))
 }
 
 fn encode_binding(output: &mut Vec<u8>, binding: &WitnessBinding) {
@@ -816,10 +768,6 @@ impl<'a> Cursor<'a> {
         Ok(u16::from_be_bytes(self.array()?))
     }
 
-    fn u32(&mut self) -> Result<u32, WorkerError> {
-        Ok(u32::from_be_bytes(self.array()?))
-    }
-
     fn u64(&mut self) -> Result<u64, WorkerError> {
         Ok(u64::from_be_bytes(self.array()?))
     }
@@ -864,7 +812,6 @@ pub enum WorkerError {
     InvalidPublicIntent,
     InvalidTtl,
     Io(io::ErrorKind),
-    NativeProverUnavailable,
     PublicIntentDigestMismatch,
     ReplayOrOutOfOrder,
     UnknownCommand,
@@ -879,7 +826,7 @@ impl WorkerError {
         match self {
             Self::AuthenticationFailed => 1,
             Self::CapacityExceeded => 2,
-            Self::ClockUnavailable => 25,
+            Self::ClockUnavailable => 24,
             Self::CredentialChangedDuringImport => 3,
             Self::CredentialFileEmpty => 4,
             Self::CredentialFileInsecure => 5,
@@ -895,8 +842,7 @@ impl WorkerError {
             Self::InvalidPublicIntent => 23,
             Self::InvalidTtl => 15,
             Self::Io(_) => 16,
-            Self::NativeProverUnavailable => 17,
-            Self::PublicIntentDigestMismatch => 24,
+            Self::PublicIntentDigestMismatch => 17,
             Self::ReplayOrOutOfOrder => 18,
             Self::UnknownCommand => 19,
             Self::UnknownHandle => 20,
@@ -926,9 +872,6 @@ impl WorkerError {
             Self::InvalidPublicIntent => "public intent bytes are not canonical typed JSON",
             Self::InvalidTtl => "witness handle TTL is invalid",
             Self::Io(_) => "local IPC or credential file I/O failed",
-            Self::NativeProverUnavailable => {
-                "native worker prover attachment is unavailable; witness was not released"
-            }
             Self::PublicIntentDigestMismatch => {
                 "public intent bytes do not match the witness binding digest"
             }
@@ -1677,7 +1620,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_ipc_fails_closed_without_consuming_or_exporting_secret() {
+    fn opcode_five_is_not_advertised_and_cannot_consume_or_export_a_secret() {
         let directory = TempDir::new().expect("temp dir");
         let path = credential_file(&directory, "credential", b"never export this");
         let mut vault = WitnessVault::default();
@@ -1692,21 +1635,36 @@ mod tests {
                 now,
             )
             .expect("import");
-        let payload =
-            encode_execute_payload(lease.handle, &binding(), CANONICAL_JINDO_PUBLIC_INTENT)
-                .expect("payload");
-        let response = encode_response(dispatch(&mut vault, CommandKind::Execute, &payload));
-        assert_eq!(response[0], 255);
+        assert!(matches!(
+            CommandKind::try_from(5),
+            Err(WorkerError::UnknownCommand)
+        ));
+
+        let mut authenticated_opcode_five = encode_frame(
+            &AuthenticatedFrame {
+                kind: CommandKind::Ping,
+                sequence: 1,
+                payload: Vec::new(),
+            },
+            &KEY,
+        )
+        .expect("canonical authenticated frame");
+        authenticated_opcode_five[9] = 5;
+        let tag_offset = authenticated_opcode_five.len() - AUTH_TAG_BYTES;
+        let tag = hmac_sha256(&KEY, &authenticated_opcode_five[4..tag_offset]);
+        authenticated_opcode_five[tag_offset..].copy_from_slice(&tag);
         assert!(
-            !response
-                .windows(b"never export this".len())
-                .any(|window| window == b"never export this")
+            matches!(
+                decode_frame(&authenticated_opcode_five, &KEY),
+                Err(WorkerError::UnknownCommand)
+            ),
+            "an authenticated unassigned opcode must fail closed"
         );
         assert!(vault.inspect_at(lease.handle, &binding(), now + 2).is_ok());
     }
 
     #[test]
-    fn forged_ipc_time_and_tampered_intent_never_release_or_consume() {
+    fn forged_ipc_time_never_releases_or_consumes() {
         let directory = TempDir::new().expect("temp dir");
         let path = credential_file(&directory, "credential", b"secret");
         let mut vault = WitnessVault::default();
@@ -1728,23 +1686,10 @@ mod tests {
         let response = encode_response(dispatch(&mut vault, CommandKind::Inspect, &forged_time));
         assert_eq!(response[0], 255);
         assert!(vault.inspect_at(lease.handle, &binding(), now + 1).is_ok());
-
-        let altered = std::str::from_utf8(CANONICAL_JINDO_PUBLIC_INTENT)
-            .expect("utf8")
-            .replace(
-                "0000000000000000000000000000000000000000000000000000000000000000",
-                "0100000000000000000000000000000000000000000000000000000000000000",
-            );
-        let mut tampered = encode_handle_payload(lease.handle, &binding()).expect("handle payload");
-        tampered.extend_from_slice(&(altered.len() as u32).to_be_bytes());
-        tampered.extend_from_slice(altered.as_bytes());
-        let response = encode_response(dispatch(&mut vault, CommandKind::Execute, &tampered));
-        assert_eq!(response[0], 255);
-        assert!(vault.inspect_at(lease.handle, &binding(), now + 2).is_ok());
     }
 
     #[test]
-    fn execute_recomputes_canonical_public_intent_before_native_attachment() {
+    fn canonical_public_intent_validation_remains_available_without_a_wire_execute_command() {
         assert_eq!(
             hex::encode(canonical_public_intent_digest(
                 CANONICAL_JINDO_PUBLIC_INTENT,

@@ -35,8 +35,8 @@ use crate::zk;
 /// Information supplied with a privacy-mode join/leave request.
 #[derive(Debug)]
 pub struct PrivacyArtifacts<'a> {
-    /// Account performing the instruction (host or participant).
-    pub authority: &'a AccountId,
+    /// Roster subject represented by the proof or signed instruction.
+    pub subject: &'a AccountId,
     /// Host account responsible for the Kaigi session.
     pub host: &'a AccountId,
     /// Optional commitment provided in the instruction.
@@ -93,7 +93,7 @@ fn verify_roster_stub(artifacts: &PrivacyArtifacts<'_>, expected_root: &Hash) ->
         return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
     }
 
-    if artifacts.host == artifacts.authority {
+    if artifacts.host == artifacts.subject {
         return Err(privacy_error("host must not re-enter privacy roster"));
     }
 
@@ -288,7 +288,7 @@ fn validate_roster_artifacts<'a>(
         return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
     }
 
-    if artifacts.host == artifacts.authority {
+    if artifacts.host == artifacts.subject {
         return Err(privacy_error("host must not re-enter privacy roster"));
     }
 

@@ -7,7 +7,10 @@
 //! word-memory schedules once and emits canonical affine, repeated, and sparse
 //! atoms for all four physical log19 SHA segments.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
 
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
@@ -44,7 +47,8 @@ use super::{
         SHA_WORD_CAPACITY_MESSAGE_ALLOWED_V1,
     },
     sha256_word_air::{
-        SigmaThirdV1, WordOperationV1, ZkX509Sha256WordCircuitV1, build_sha256_word_circuit_v1,
+        SigmaThirdV1, WordMemoryAccessV1, WordOperationV1, ZkX509Sha256WordCircuitV1,
+        build_sha256_word_circuit_v1,
     },
 };
 use crate::privacy_engines::transparent_stark::{
@@ -53,7 +57,7 @@ use crate::privacy_engines::transparent_stark::{
 
 /// Exact first-release algebraic SHA compiler description.
 pub(crate) const ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-sha-fixed-algebraic-compiler-v1-incompatible:public-shapes=disclosed-attributes0through4:four-physical-log19-segments:full-fixed-width118-per-segment:combined-width472:segment-major-column-order:typed-zero-capacity-sha-word-circuit-topology:word-operation-and-execution-sorted-memory-walk:compute+execution+sorted-memory-call-axis-transpose-on-exact-maximal-contiguous-same-segment-same-geometry-runs-iff-calls-strictly-greater-than-blocks:block-row-axis-on-ties:call-axis-key=combined-column+family+block(initial-or-sha-index)+word-position+occurrence:sorted-memory-nontransposed-series-maximal-across-ordered-calls:no-native-row-matrix:no-lde-matrix:no-artifact:no-merkle-root:no-proof-supplied-fixed-values:affine+repeated+sparse-atoms:generator-coset-log19-to-log25:call-role-slot-boundaries+compact-ca-selectors+field-native-rfc-events+physical-padding:exact-shape-derived-rfc-channel-offsets:all-six-formerly-reconstructed-word-columns-native:first-release";
+    b"zk-x509-sha-fixed-algebraic-compiler-v1-incompatible:public-shapes=disclosed-attributes0through4:four-physical-log19-segments:full-fixed-width118-per-segment:combined-width472:segment-major-column-order:typed-zero-capacity-sha-word-circuit-topology:word-operation-and-execution-sorted-memory-walk:compute+execution+sorted-memory-call-axis-transpose-on-exact-maximal-contiguous-same-segment-same-geometry-runs-iff-calls-strictly-greater-than-blocks:block-row-axis-on-ties:boolean-topology-three-way-exact-atom-planner(block-or-call=2048*min(calls,blocks)|round=32*blocks*calls|block-gap=416*calls):strict-lower-only:old-then-round-wins-ties:block-gap-axis-one-stride14-hull+12-negative-stride1064-gap-residues-per-lane:operation-read-typed-block+phase(expansion6|round18|final2)+read-slot-axis-with-exact-per-call-cost44*blocks-2:operation-read-axis-transpose-iff-exact-cost-strictly-less-than-existing-block-or-call-axis:sorted-memory-typed-initial-or-block+word-phase(initial|input|expansion3|round8|final)+access-occurrence-axis-with-exact-per-call-cost298*blocks:sorted-memory-phase-axis-only-on-call-axis-runs-iff-exact-cost-strictly-less-than4952*blocks+32:old-axis-wins-ties:call-axis-key=combined-column+family+block(initial-or-sha-index)+word-position+occurrence:sorted-memory-nontransposed-series-maximal-across-ordered-calls:no-native-row-matrix:no-lde-matrix:no-artifact:no-merkle-root:no-proof-supplied-fixed-values:affine+repeated+sparse-atoms:generator-coset-log19-to-log25:call-role-slot-boundaries+compact-ca-selectors+field-native-rfc-events+physical-padding:exact-shape-derived-rfc-channel-offsets:all-six-formerly-reconstructed-word-columns-native:first-release";
 
 const SHA_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:sha-fixed-algebraic-compiler:v1";
@@ -130,6 +134,34 @@ const REPEAT_FAMILY_COMPUTE_V1: u8 = 0;
 const REPEAT_FAMILY_EXECUTION_READ_V1: u8 = 1;
 const REPEAT_FAMILY_SORTED_MEMORY_V1: u8 = 2;
 const CALL_AXIS_UNKEYED_OCCURRENCE_V1: u32 = 0;
+const SHA_ROUNDS_PER_BLOCK_V1: usize = 64;
+const SHA_ROUND_ROWS_V1: usize = 14;
+const SHA_ROUND_REGION_OFFSET_V1: usize = 160;
+const SHA_CHOOSE_ROUND_OFFSET_V1: usize = 1;
+const SHA_MAJORITY_ROUND_OFFSET_V1: usize = 7;
+const SHA_BOOLEAN_BLOCK_OR_CALL_AXIS_ATOMS_V1: usize = 2_048;
+const SHA_BOOLEAN_ROUND_AXIS_ATOMS_PER_BLOCK_V1: usize = 32;
+const SHA_BOOLEAN_LANES_V1: usize = 32;
+const SHA_BOOLEAN_BLOCK_LATTICE_STEPS_V1: usize = 76;
+const SHA_BOOLEAN_BLOCK_GAP_RESIDUES_V1: usize = 12;
+const SHA_BOOLEAN_BLOCK_GAP_ATOMS_PER_CALL_V1: usize = 416;
+const SHA_OPERATION_READS_PER_BLOCK_V1: usize = 1_456;
+const SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1: usize = 288;
+const SHA_OPERATION_ROUND_READS_PER_BLOCK_V1: usize = 1_152;
+const SHA_OPERATION_FINAL_READS_PER_BLOCK_V1: usize = 16;
+const SHA_OPERATION_EXPANSION_READ_SLOTS_V1: usize = 6;
+const SHA_OPERATION_ROUND_READ_SLOTS_V1: usize = 18;
+const SHA_OPERATION_FINAL_READ_SLOTS_V1: usize = 2;
+const SHA_OPERATION_FIRST_BLOCK_NONZERO_READS_V1: usize = 1_450;
+const SHA_OPERATION_AXIS_FIRST_BLOCK_ATOMS_V1: usize = 42;
+const SHA_OPERATION_AXIS_LATER_BLOCK_ATOMS_V1: usize = 44;
+const SHA_WORDS_PER_BLOCK_V1: usize = 680;
+const SHA_SORTED_PHASE_AXIS_ATOMS_PER_BLOCK_V1: usize = 298;
+const SHA_SORTED_CALL_AXIS_ATOMS_PER_BLOCK_V1: usize = 4_952;
+const SHA_SORTED_CALL_AXIS_FIXED_ATOMS_V1: usize = 32;
+
+static ZK_X509_SHA_FIXED_ALGEBRAIC_SCHEDULES_V1: [OnceLock<ZkX509FixedAlgebraicScheduleV1>; 5] =
+    [const { OnceLock::new() }; 5];
 
 const _: () = {
     assert!(ZK_X509_SHA_CALL_COUNT_V1 == 29);
@@ -150,6 +182,38 @@ const _: () = {
     assert!(
         SHA_FIXED_RFC_STREAMS_V1 + 4 * SHA_FIXED_RFC_STREAM_STRIDE_V1
             == ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
+    );
+    assert!(
+        SHA_ROUND_REGION_OFFSET_V1 + SHA_ROUNDS_PER_BLOCK_V1 * SHA_ROUND_ROWS_V1 + 8
+            == SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1
+    );
+    assert!(
+        SHA_BOOLEAN_BLOCK_LATTICE_STEPS_V1 * SHA_ROUND_ROWS_V1
+            == SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1
+    );
+    assert!(
+        SHA_ROUNDS_PER_BLOCK_V1 + SHA_BOOLEAN_BLOCK_GAP_RESIDUES_V1
+            == SHA_BOOLEAN_BLOCK_LATTICE_STEPS_V1
+    );
+    assert!(
+        SHA_BOOLEAN_LANES_V1 * (1 + SHA_BOOLEAN_BLOCK_GAP_RESIDUES_V1)
+            == SHA_BOOLEAN_BLOCK_GAP_ATOMS_PER_CALL_V1
+    );
+    assert!(SHA_MAJORITY_ROUND_OFFSET_V1 + 4 <= SHA_ROUND_ROWS_V1);
+    assert!(
+        SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1
+            + SHA_OPERATION_ROUND_READS_PER_BLOCK_V1
+            + SHA_OPERATION_FINAL_READS_PER_BLOCK_V1
+            == SHA_OPERATION_READS_PER_BLOCK_V1
+    );
+    assert!(
+        SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1 % SHA_OPERATION_EXPANSION_READ_SLOTS_V1 == 0
+    );
+    assert!(SHA_OPERATION_ROUND_READS_PER_BLOCK_V1 % SHA_OPERATION_ROUND_READ_SLOTS_V1 == 0);
+    assert!(SHA_OPERATION_FINAL_READS_PER_BLOCK_V1 % SHA_OPERATION_FINAL_READ_SLOTS_V1 == 0);
+    assert!(
+        SHA_WORDS_PER_BLOCK_V1 + SHA_OPERATION_READS_PER_BLOCK_V1
+            == SHA_WORD_CAPACITY_MEMORY_ROWS_PER_BLOCK_V1
     );
 };
 
@@ -411,6 +475,29 @@ enum CallAxisBlockV1 {
     Initial,
     /// One zero-based SHA block in the repeated word topology.
     Sha(u32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum OperationReadPhaseV1 {
+    Expansion,
+    Round,
+    Final,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BooleanTopologyAxisV1 {
+    BlockOrCall,
+    Round,
+    BlockGap,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SortedWordPhaseV1 {
+    Initial,
+    Input,
+    Expansion,
+    Round,
+    Final,
 }
 
 struct RepeatZoneV1 {
@@ -1189,6 +1276,7 @@ fn emit_operation_v1(
     segment: usize,
     row: &mut usize,
     operation: &WordOperationV1,
+    boolean_axis: BooleanTopologyAxisV1,
 ) -> Result<usize, ZkX509ShaFixedAlgebraicErrorV1> {
     let output_address = match operation {
         WordOperationV1::Sigma {
@@ -1236,16 +1324,24 @@ fn emit_operation_v1(
             z,
             output: operation_output,
         } => {
-            let selector = if matches!(operation, WordOperationV1::Choose { .. }) {
-                FIX_CHOOSE
-            } else {
-                FIX_MAJORITY
-            };
             let addresses = [x.0, y.0, z.0, operation_output.0];
             for chunk in 0..4 {
-                output.observe_v1(segment, selector, *row, F::ONE)?;
+                if boolean_axis == BooleanTopologyAxisV1::BlockOrCall {
+                    output.observe_v1(
+                        segment,
+                        if matches!(operation, WordOperationV1::Choose { .. }) {
+                            FIX_CHOOSE
+                        } else {
+                            FIX_MAJORITY
+                        },
+                        *row,
+                        F::ONE,
+                    )?;
+                }
                 if chunk == 0 {
-                    output.observe_v1(segment, FIX_BOOLEAN_FIRST, *row, F::ONE)?;
+                    if boolean_axis == BooleanTopologyAxisV1::BlockOrCall {
+                        output.observe_v1(segment, FIX_BOOLEAN_FIRST, *row, F::ONE)?;
+                    }
                     for (slot, address) in addresses.iter().copied().enumerate() {
                         output.observe_v1(
                             segment,
@@ -1256,19 +1352,21 @@ fn emit_operation_v1(
                         )?;
                     }
                 }
-                if chunk == 3 {
-                    output.observe_v1(segment, FIX_BOOLEAN_LAST, *row, F::ONE)?;
-                } else {
-                    output.observe_v1(segment, FIX_BOOLEAN_CONTINUE, *row, F::ONE)?;
-                }
-                output.observe_v1(segment, FIX_BOOLEAN_SCALE, *row, F(1_u64 << (chunk * 8)))?;
-                if chunk < 3 {
-                    output.observe_v1(
-                        segment,
-                        FIX_BOOLEAN_NEXT_SCALE,
-                        *row,
-                        F(1_u64 << ((chunk + 1) * 8)),
-                    )?;
+                if boolean_axis == BooleanTopologyAxisV1::BlockOrCall {
+                    if chunk == 3 {
+                        output.observe_v1(segment, FIX_BOOLEAN_LAST, *row, F::ONE)?;
+                    } else {
+                        output.observe_v1(segment, FIX_BOOLEAN_CONTINUE, *row, F::ONE)?;
+                    }
+                    output.observe_v1(segment, FIX_BOOLEAN_SCALE, *row, F(1_u64 << (chunk * 8)))?;
+                    if chunk < 3 {
+                        output.observe_v1(
+                            segment,
+                            FIX_BOOLEAN_NEXT_SCALE,
+                            *row,
+                            F(1_u64 << ((chunk + 1) * 8)),
+                        )?;
+                    }
                 }
                 *row = row
                     .checked_add(1)
@@ -1314,6 +1412,459 @@ fn emit_operation_v1(
         }
     };
     Ok(output_address)
+}
+
+fn emit_boolean_round_axis_atoms_v1(
+    output: &mut StructuralBuilderV1,
+    segment: usize,
+    compute_start: usize,
+    block_count: usize,
+) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+    if block_count == 0 {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    for block in 0..block_count {
+        let block_start = block
+            .checked_mul(SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1)
+            .and_then(|offset| compute_start.checked_add(offset))
+            .and_then(|start| start.checked_add(SHA_ROUND_REGION_OFFSET_V1))
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        for (selector, operation_offset) in [
+            (FIX_CHOOSE, SHA_CHOOSE_ROUND_OFFSET_V1),
+            (FIX_MAJORITY, SHA_MAJORITY_ROUND_OFFSET_V1),
+        ] {
+            for chunk in 0..4 {
+                let first = block_start
+                    .checked_add(operation_offset)
+                    .and_then(|row| row.checked_add(chunk))
+                    .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+                output.push_repeated_v1(
+                    segment,
+                    selector,
+                    first,
+                    SHA_ROUNDS_PER_BLOCK_V1,
+                    SHA_ROUND_ROWS_V1,
+                    F::ONE,
+                )?;
+                output.push_repeated_v1(
+                    segment,
+                    FIX_BOOLEAN_SCALE,
+                    first,
+                    SHA_ROUNDS_PER_BLOCK_V1,
+                    SHA_ROUND_ROWS_V1,
+                    F(1_u64 << (chunk * 8)),
+                )?;
+                if chunk == 0 {
+                    output.push_repeated_v1(
+                        segment,
+                        FIX_BOOLEAN_FIRST,
+                        first,
+                        SHA_ROUNDS_PER_BLOCK_V1,
+                        SHA_ROUND_ROWS_V1,
+                        F::ONE,
+                    )?;
+                }
+                if chunk == 3 {
+                    output.push_repeated_v1(
+                        segment,
+                        FIX_BOOLEAN_LAST,
+                        first,
+                        SHA_ROUNDS_PER_BLOCK_V1,
+                        SHA_ROUND_ROWS_V1,
+                        F::ONE,
+                    )?;
+                } else {
+                    output.push_repeated_v1(
+                        segment,
+                        FIX_BOOLEAN_CONTINUE,
+                        first,
+                        SHA_ROUNDS_PER_BLOCK_V1,
+                        SHA_ROUND_ROWS_V1,
+                        F::ONE,
+                    )?;
+                    output.push_repeated_v1(
+                        segment,
+                        FIX_BOOLEAN_NEXT_SCALE,
+                        first,
+                        SHA_ROUNDS_PER_BLOCK_V1,
+                        SHA_ROUND_ROWS_V1,
+                        F(1_u64 << ((chunk + 1) * 8)),
+                    )?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn emit_boolean_block_gap_axis_atoms_v1(
+    output: &mut StructuralBuilderV1,
+    segment: usize,
+    compute_start: usize,
+    block_count: usize,
+) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+    if block_count < 14 {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    let atom_count_before = output.atom_count;
+    let hull_count = block_count
+        .checked_sub(1)
+        .and_then(|blocks| blocks.checked_mul(SHA_BOOLEAN_BLOCK_LATTICE_STEPS_V1))
+        .and_then(|steps| steps.checked_add(SHA_ROUNDS_PER_BLOCK_V1))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let gap_count = block_count - 1;
+    let round_start = compute_start
+        .checked_add(SHA_ROUND_REGION_OFFSET_V1)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let emit_lane = |output: &mut StructuralBuilderV1,
+                     local_column: usize,
+                     first: usize,
+                     value: F|
+     -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+        output.push_repeated_v1(
+            segment,
+            local_column,
+            first,
+            hull_count,
+            SHA_ROUND_ROWS_V1,
+            value,
+        )?;
+        let cancellation = F::ZERO.sub(value);
+        for residue in 0..SHA_BOOLEAN_BLOCK_GAP_RESIDUES_V1 {
+            let gap_first = first
+                .checked_add(
+                    SHA_ROUNDS_PER_BLOCK_V1
+                        .checked_add(residue)
+                        .and_then(|step| step.checked_mul(SHA_ROUND_ROWS_V1))
+                        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
+                )
+                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+            output.push_repeated_v1(
+                segment,
+                local_column,
+                gap_first,
+                gap_count,
+                SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1,
+                cancellation,
+            )?;
+        }
+        Ok(())
+    };
+    for (selector, operation_offset) in [
+        (FIX_CHOOSE, SHA_CHOOSE_ROUND_OFFSET_V1),
+        (FIX_MAJORITY, SHA_MAJORITY_ROUND_OFFSET_V1),
+    ] {
+        for chunk in 0..4 {
+            let first = round_start
+                .checked_add(operation_offset)
+                .and_then(|row| row.checked_add(chunk))
+                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+            emit_lane(output, selector, first, F::ONE)?;
+            emit_lane(output, FIX_BOOLEAN_SCALE, first, F(1_u64 << (chunk * 8)))?;
+            if chunk == 0 {
+                emit_lane(output, FIX_BOOLEAN_FIRST, first, F::ONE)?;
+            }
+            if chunk == 3 {
+                emit_lane(output, FIX_BOOLEAN_LAST, first, F::ONE)?;
+            } else {
+                emit_lane(output, FIX_BOOLEAN_CONTINUE, first, F::ONE)?;
+                emit_lane(
+                    output,
+                    FIX_BOOLEAN_NEXT_SCALE,
+                    first,
+                    F(1_u64 << ((chunk + 1) * 8)),
+                )?;
+            }
+        }
+    }
+    let emitted_atoms = output
+        .atom_count
+        .checked_sub(atom_count_before)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+    if emitted_atoms != SHA_BOOLEAN_BLOCK_GAP_ATOMS_PER_CALL_V1 {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    Ok(())
+}
+
+fn operation_read_axis_atoms_per_call_v1(
+    block_count: usize,
+) -> Result<usize, ZkX509ShaFixedAlgebraicErrorV1> {
+    let later_blocks = block_count
+        .checked_sub(1)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+    SHA_OPERATION_AXIS_LATER_BLOCK_ATOMS_V1
+        .checked_mul(later_blocks)
+        .and_then(|atoms| atoms.checked_add(SHA_OPERATION_AXIS_FIRST_BLOCK_ATOMS_V1))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)
+}
+
+fn emit_operation_read_axis_atoms_v1(
+    output: &mut StructuralBuilderV1,
+    segment: usize,
+    operation_read_start: usize,
+    block_count: usize,
+    operation_reads: &[WordMemoryAccessV1],
+) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+    let expected_reads = SHA_OPERATION_READS_PER_BLOCK_V1
+        .checked_mul(block_count)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    if operation_reads.len() != expected_reads
+        || operation_reads
+            .iter()
+            .any(|access| access.is_write != F::ZERO)
+    {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    let atom_count_before = output.atom_count;
+    let column = StructuralBuilderV1::combined_column_v1(segment, FIX_MEMORY_EXECUTION_ADDRESS)?;
+    let column_u16 = u16::try_from(column).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let mut series = BTreeMap::<(usize, OperationReadPhaseV1, usize), NonzeroSeriesV1>::new();
+    for (relative, access) in operation_reads.iter().copied().enumerate() {
+        if access.address == F::ZERO {
+            continue;
+        }
+        let block = relative / SHA_OPERATION_READS_PER_BLOCK_V1;
+        let within_block = relative % SHA_OPERATION_READS_PER_BLOCK_V1;
+        let (phase, slot) = if within_block < SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1 {
+            (
+                OperationReadPhaseV1::Expansion,
+                within_block % SHA_OPERATION_EXPANSION_READ_SLOTS_V1,
+            )
+        } else if within_block
+            < SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1 + SHA_OPERATION_ROUND_READS_PER_BLOCK_V1
+        {
+            (
+                OperationReadPhaseV1::Round,
+                (within_block - SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1)
+                    % SHA_OPERATION_ROUND_READ_SLOTS_V1,
+            )
+        } else {
+            (
+                OperationReadPhaseV1::Final,
+                (within_block
+                    - SHA_OPERATION_EXPANSION_READS_PER_BLOCK_V1
+                    - SHA_OPERATION_ROUND_READS_PER_BLOCK_V1)
+                    % SHA_OPERATION_FINAL_READ_SLOTS_V1,
+            )
+        };
+        let row = operation_read_start
+            .checked_add(relative)
+            .and_then(|row| u64::try_from(row).ok())
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        series
+            .entry((block, phase, slot))
+            .or_insert_with(NonzeroSeriesV1::empty_v1)
+            .observe_v1(
+                column_u16,
+                NonzeroPointV1 {
+                    row,
+                    value: access.address,
+                },
+                &mut output.inner,
+                &mut output.atom_count,
+            )?;
+    }
+    for (_, mut series) in series {
+        series.flush_v1(column_u16, &mut output.inner, &mut output.atom_count)?;
+    }
+    let emitted_atoms = output
+        .atom_count
+        .checked_sub(atom_count_before)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+    if emitted_atoms != operation_read_axis_atoms_per_call_v1(block_count)? {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    Ok(())
+}
+
+fn sorted_memory_phase_key_v1(
+    address: usize,
+    block_count: usize,
+) -> Result<(CallAxisBlockV1, SortedWordPhaseV1, usize), ZkX509ShaFixedAlgebraicErrorV1> {
+    if address < INITIAL_LOCAL_ROWS_PER_CALL_V1 {
+        return Ok((CallAxisBlockV1::Initial, SortedWordPhaseV1::Initial, 0));
+    }
+    let relative = address
+        .checked_sub(INITIAL_LOCAL_ROWS_PER_CALL_V1)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+    let block = relative / SHA_WORDS_PER_BLOCK_V1;
+    let position = relative % SHA_WORDS_PER_BLOCK_V1;
+    if block >= block_count {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    let (phase, slot) = if position < 16 {
+        (SortedWordPhaseV1::Input, 0)
+    } else if position < 160 {
+        (SortedWordPhaseV1::Expansion, (position - 16) % 3)
+    } else if position < 672 {
+        (SortedWordPhaseV1::Round, (position - 160) % 8)
+    } else {
+        (SortedWordPhaseV1::Final, 0)
+    };
+    Ok((
+        CallAxisBlockV1::Sha(
+            u32::try_from(block).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
+        ),
+        phase,
+        slot,
+    ))
+}
+
+fn emit_sorted_memory_phase_axis_atoms_v1(
+    output: &mut StructuralBuilderV1,
+    segment: usize,
+    memory_start: usize,
+    block_count: usize,
+    execution: &[WordMemoryAccessV1],
+    sorted: &[WordMemoryAccessV1],
+) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+    let expected_words = SHA_WORDS_PER_BLOCK_V1
+        .checked_mul(block_count)
+        .and_then(|words| words.checked_add(INITIAL_LOCAL_ROWS_PER_CALL_V1))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let expected_rows = SHA_WORD_CAPACITY_MEMORY_ROWS_PER_BLOCK_V1
+        .checked_mul(block_count)
+        .and_then(|rows| rows.checked_add(FIXED_MEMORY_ROWS_PER_CALL_V1))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    if block_count == 0 || execution.len() != expected_rows || sorted.len() != expected_rows {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    let mut execution_counts = Vec::new();
+    execution_counts
+        .try_reserve_exact(expected_words)
+        .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    execution_counts.resize(expected_words, [0_usize; 2]);
+    for access in execution.iter().copied() {
+        let address = usize::try_from(access.address.0)
+            .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        let write = match access.is_write {
+            F::ZERO => 0,
+            F::ONE => 1,
+            _ => return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology),
+        };
+        let count = execution_counts
+            .get_mut(address)
+            .and_then(|counts| counts.get_mut(write))
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+        *count = count
+            .checked_add(1)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    }
+    if execution_counts.iter().any(|counts| counts[1] != 1) {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+
+    let combined_column = |local_column| {
+        StructuralBuilderV1::combined_column_v1(segment, local_column).and_then(|column| {
+            u16::try_from(column).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)
+        })
+    };
+    let sorted_address_column = combined_column(FIX_MEMORY_SORTED_ADDRESS)?;
+    let sorted_write_column = combined_column(FIX_MEMORY_SORTED_WRITE)?;
+    let same_next_column = combined_column(FIX_MEMORY_SAME_NEXT)?;
+    let new_next_column = combined_column(FIX_MEMORY_NEW_NEXT)?;
+    let atom_count_before = output.atom_count;
+    let mut series =
+        BTreeMap::<(u16, CallAxisBlockV1, SortedWordPhaseV1, usize, usize), NonzeroSeriesV1>::new();
+    let mut prior_address = None;
+    let mut occurrence = 0_usize;
+    let mut address_zero_rows = 0_usize;
+    let mut consumed_rows = 0_usize;
+    for (index, access) in sorted.iter().copied().enumerate() {
+        let address = usize::try_from(access.address.0)
+            .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        if address >= expected_words || F::canonical(access.address.0).is_none() {
+            return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+        }
+        let write = match access.is_write {
+            F::ZERO => 0,
+            F::ONE => 1,
+            _ => return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology),
+        };
+        let remaining = execution_counts
+            .get_mut(address)
+            .and_then(|counts| counts.get_mut(write))
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+        *remaining = remaining
+            .checked_sub(1)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+        if prior_address == Some(address) {
+            occurrence = occurrence
+                .checked_add(1)
+                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+            if access.is_write != F::ZERO {
+                return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+            }
+        } else {
+            if prior_address.map_or(address != 0, |prior| address != prior + 1)
+                || access.is_write != F::ONE
+            {
+                return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+            }
+            prior_address = Some(address);
+            occurrence = 0;
+        }
+        if address == 0 {
+            address_zero_rows = address_zero_rows
+                .checked_add(1)
+                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        }
+        let same_next = sorted
+            .get(index + 1)
+            .is_some_and(|next| next.address == access.address);
+        let new_next = index + 1 < sorted.len() && !same_next;
+        let (block, phase, slot) = sorted_memory_phase_key_v1(address, block_count)?;
+        let row = memory_start
+            .checked_add(index)
+            .and_then(|row| u64::try_from(row).ok())
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        for (column, value) in [
+            (sorted_address_column, access.address),
+            (sorted_write_column, access.is_write),
+            (same_next_column, F(u64::from(same_next))),
+            (new_next_column, F(u64::from(new_next))),
+        ] {
+            if value == F::ZERO {
+                continue;
+            }
+            series
+                .entry((column, block, phase, slot, occurrence))
+                .or_insert_with(NonzeroSeriesV1::empty_v1)
+                .observe_v1(
+                    column,
+                    NonzeroPointV1 { row, value },
+                    &mut output.inner,
+                    &mut output.atom_count,
+                )?;
+        }
+        consumed_rows = consumed_rows
+            .checked_add(1)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    }
+    if consumed_rows != expected_rows
+        || prior_address != Some(expected_words - 1)
+        || address_zero_rows != 7
+        || execution_counts
+            .iter()
+            .any(|counts| counts.iter().any(|count| *count != 0))
+    {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    for ((column, _, _, _, _), mut series) in series {
+        series.flush_v1(column, &mut output.inner, &mut output.atom_count)?;
+    }
+    let emitted_atoms = output
+        .atom_count
+        .checked_sub(atom_count_before)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+    let expected_atoms = SHA_SORTED_PHASE_AXIS_ATOMS_PER_BLOCK_V1
+        .checked_mul(block_count)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    if emitted_atoms != expected_atoms {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    Ok(())
 }
 
 fn emit_rfc_length_events_v1(
@@ -1380,6 +1931,9 @@ fn emit_call_topology_v1(
     manifest: ZkX509ShaCallManifestV1,
     shape: ZkX509ShaCallPublicShapeV1,
     repeat_across_calls: bool,
+    boolean_axis: BooleanTopologyAxisV1,
+    operation_read_phase_axis: bool,
+    sorted_memory_phase_axis: bool,
 ) -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
     let global_start = manifest.first_logical_row;
     let segment = global_start / ZK_X509_SHA_SEGMENT_ROWS_V1;
@@ -1467,6 +2021,25 @@ fn emit_call_topology_v1(
             RepeatZoneAxisV1::Blocks
         },
     )?;
+    match boolean_axis {
+        BooleanTopologyAxisV1::BlockOrCall => {}
+        BooleanTopologyAxisV1::Round => {
+            emit_boolean_round_axis_atoms_v1(
+                output,
+                segment,
+                compute_start,
+                manifest.maximum_blocks,
+            )?;
+        }
+        BooleanTopologyAxisV1::BlockGap => {
+            emit_boolean_block_gap_axis_atoms_v1(
+                output,
+                segment,
+                compute_start,
+                manifest.maximum_blocks,
+            )?;
+        }
+    }
 
     let mut row = start;
     let mut word_cursor = 0_usize;
@@ -1499,7 +2072,9 @@ fn emit_call_topology_v1(
                 .checked_add(1)
                 .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
         }
-        if emit_operation_v1(output, segment, &mut row, operation)? != operation_output {
+        if emit_operation_v1(output, segment, &mut row, operation, boolean_axis)?
+            != operation_output
+        {
             return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
         }
         word_cursor = operation_output
@@ -1582,23 +2157,51 @@ fn emit_call_topology_v1(
     let operation_read_end = operation_read_start
         .checked_add(operation_reads)
         .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-    let mut execution_columns = [false; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1];
-    execution_columns[FIX_MEMORY_EXECUTION_ADDRESS] = true;
-    execution_columns[FIX_MEMORY_EXECUTION_WRITE] = true;
-    output.begin_repeat_zone_v1(
-        segment,
-        operation_read_start,
-        operation_read_end,
-        operation_reads_per_block,
-        execution_columns,
-        if repeat_across_calls {
-            RepeatZoneAxisV1::Calls {
-                family: REPEAT_FAMILY_EXECUTION_READ_V1,
-            }
-        } else {
-            RepeatZoneAxisV1::Blocks
-        },
-    )?;
+    let operation_read_end_index = word_count
+        .checked_add(operation_reads)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    if operation_read_phase_axis {
+        let execution_reads = circuit
+            .stark_memory_v1()
+            .execution
+            .get(word_count..operation_read_end_index)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+        emit_operation_read_axis_atoms_v1(
+            output,
+            segment,
+            operation_read_start,
+            manifest.maximum_blocks,
+            execution_reads,
+        )?;
+    } else {
+        let mut execution_columns = [false; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1];
+        execution_columns[FIX_MEMORY_EXECUTION_ADDRESS] = true;
+        execution_columns[FIX_MEMORY_EXECUTION_WRITE] = true;
+        output.begin_repeat_zone_v1(
+            segment,
+            operation_read_start,
+            operation_read_end,
+            operation_reads_per_block,
+            execution_columns,
+            if repeat_across_calls {
+                RepeatZoneAxisV1::Calls {
+                    family: REPEAT_FAMILY_EXECUTION_READ_V1,
+                }
+            } else {
+                RepeatZoneAxisV1::Blocks
+            },
+        )?;
+    }
+    if sorted_memory_phase_axis {
+        emit_sorted_memory_phase_axis_atoms_v1(
+            output,
+            segment,
+            memory_start,
+            manifest.maximum_blocks,
+            &circuit.stark_memory_v1().execution,
+            &circuit.stark_memory_v1().sorted,
+        )?;
+    }
 
     let mut prior_sorted_address = None;
     let mut sorted_occurrence = 0_usize;
@@ -1609,118 +2212,128 @@ fn emit_call_topology_v1(
         .zip(&circuit.stark_memory_v1().sorted)
         .enumerate()
     {
-        output.observe_v1(
-            segment,
-            FIX_MEMORY_EXECUTION_ADDRESS,
-            row,
-            execution.address,
-        )?;
-        output.observe_v1(segment, FIX_MEMORY_EXECUTION_WRITE, row, execution.is_write)?;
-        let sorted_address = usize::try_from(sorted.address.0)
-            .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-        if prior_sorted_address == Some(sorted_address) {
-            sorted_occurrence = sorted_occurrence
-                .checked_add(1)
-                .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-        } else {
-            prior_sorted_address = Some(sorted_address);
-            sorted_occurrence = 0;
+        if !operation_read_phase_axis
+            || !(word_count..operation_read_end_index).contains(&memory_index)
+        {
+            output.observe_v1(
+                segment,
+                FIX_MEMORY_EXECUTION_ADDRESS,
+                row,
+                execution.address,
+            )?;
         }
-        let same_next = circuit
-            .stark_memory_v1()
-            .sorted
-            .get(memory_index + 1)
-            .is_some_and(|next| next.address == sorted.address);
-        if let Some(relative_address) = sorted_address.checked_sub(INITIAL_LOCAL_ROWS_PER_CALL_V1) {
-            let block = relative_address / words_per_block;
-            let position = relative_address % words_per_block;
-            if block >= manifest.maximum_blocks {
-                return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
-            }
-            let word_position =
-                u32::try_from(position).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-            let block = CallAxisBlockV1::Sha(
-                u32::try_from(block).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
-            );
-            let occurrence = u32::try_from(sorted_occurrence)
+        output.observe_v1(segment, FIX_MEMORY_EXECUTION_WRITE, row, execution.is_write)?;
+        if !sorted_memory_phase_axis {
+            let sorted_address = usize::try_from(sorted.address.0)
                 .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-            output.observe_keyed_v1(
-                segment,
-                FIX_MEMORY_SORTED_ADDRESS,
-                row,
-                block,
-                word_position,
-                occurrence,
-                sorted.address,
-            )?;
-            output.observe_keyed_v1(
-                segment,
-                FIX_MEMORY_SORTED_WRITE,
-                row,
-                block,
-                word_position,
-                occurrence,
-                sorted.is_write,
-            )?;
-            if memory_index + 1 < memory_rows {
+            if prior_sorted_address == Some(sorted_address) {
+                sorted_occurrence = sorted_occurrence
+                    .checked_add(1)
+                    .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+            } else {
+                prior_sorted_address = Some(sorted_address);
+                sorted_occurrence = 0;
+            }
+            let same_next = circuit
+                .stark_memory_v1()
+                .sorted
+                .get(memory_index + 1)
+                .is_some_and(|next| next.address == sorted.address);
+            if let Some(relative_address) =
+                sorted_address.checked_sub(INITIAL_LOCAL_ROWS_PER_CALL_V1)
+            {
+                let block = relative_address / words_per_block;
+                let position = relative_address % words_per_block;
+                if block >= manifest.maximum_blocks {
+                    return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+                }
+                let word_position = u32::try_from(position)
+                    .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+                let block = CallAxisBlockV1::Sha(
+                    u32::try_from(block).map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?,
+                );
+                let occurrence = u32::try_from(sorted_occurrence)
+                    .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
                 output.observe_keyed_v1(
                     segment,
-                    if same_next {
-                        FIX_MEMORY_SAME_NEXT
-                    } else {
-                        FIX_MEMORY_NEW_NEXT
-                    },
+                    FIX_MEMORY_SORTED_ADDRESS,
                     row,
                     block,
                     word_position,
-                    if same_next { occurrence } else { u32::MAX },
-                    F::ONE,
+                    occurrence,
+                    sorted.address,
                 )?;
-            }
-        } else {
-            let word_position = u32::try_from(sorted_address)
-                .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-            let occurrence = u32::try_from(sorted_occurrence)
-                .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
-            output.observe_keyed_v1(
-                segment,
-                FIX_MEMORY_SORTED_ADDRESS,
-                row,
-                CallAxisBlockV1::Initial,
-                word_position,
-                occurrence,
-                sorted.address,
-            )?;
-            output.observe_keyed_v1(
-                segment,
-                FIX_MEMORY_SORTED_WRITE,
-                row,
-                CallAxisBlockV1::Initial,
-                word_position,
-                occurrence,
-                sorted.is_write,
-            )?;
-            if memory_index + 1 < memory_rows {
                 output.observe_keyed_v1(
                     segment,
-                    if same_next {
-                        FIX_MEMORY_SAME_NEXT
-                    } else {
-                        FIX_MEMORY_NEW_NEXT
-                    },
+                    FIX_MEMORY_SORTED_WRITE,
+                    row,
+                    block,
+                    word_position,
+                    occurrence,
+                    sorted.is_write,
+                )?;
+                if memory_index + 1 < memory_rows {
+                    output.observe_keyed_v1(
+                        segment,
+                        if same_next {
+                            FIX_MEMORY_SAME_NEXT
+                        } else {
+                            FIX_MEMORY_NEW_NEXT
+                        },
+                        row,
+                        block,
+                        word_position,
+                        if same_next { occurrence } else { u32::MAX },
+                        F::ONE,
+                    )?;
+                }
+            } else {
+                let word_position = u32::try_from(sorted_address)
+                    .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+                let occurrence = u32::try_from(sorted_occurrence)
+                    .map_err(|_| ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+                output.observe_keyed_v1(
+                    segment,
+                    FIX_MEMORY_SORTED_ADDRESS,
                     row,
                     CallAxisBlockV1::Initial,
                     word_position,
-                    if same_next { occurrence } else { u32::MAX },
-                    F::ONE,
+                    occurrence,
+                    sorted.address,
                 )?;
+                output.observe_keyed_v1(
+                    segment,
+                    FIX_MEMORY_SORTED_WRITE,
+                    row,
+                    CallAxisBlockV1::Initial,
+                    word_position,
+                    occurrence,
+                    sorted.is_write,
+                )?;
+                if memory_index + 1 < memory_rows {
+                    output.observe_keyed_v1(
+                        segment,
+                        if same_next {
+                            FIX_MEMORY_SAME_NEXT
+                        } else {
+                            FIX_MEMORY_NEW_NEXT
+                        },
+                        row,
+                        CallAxisBlockV1::Initial,
+                        word_position,
+                        if same_next { occurrence } else { u32::MAX },
+                        F::ONE,
+                    )?;
+                }
             }
         }
         row = row
             .checked_add(1)
             .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
     }
-    output.finish_repeat_zone_v1()?;
+    if !operation_read_phase_axis {
+        output.finish_repeat_zone_v1()?;
+    }
     let end = start + manifest.maximum_logical_rows();
     if row != end {
         return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
@@ -1762,6 +2375,101 @@ fn transpose_run_to_call_axis_v1(
     // block. Strict comparison makes the lower atom bound canonical, with
     // the established row/block axis winning ties.
     Ok(call_count > block_count)
+}
+
+fn plan_boolean_topology_axis_v1(
+    call_count: usize,
+    block_count: usize,
+) -> Result<BooleanTopologyAxisV1, ZkX509ShaFixedAlgebraicErrorV1> {
+    if call_count == 0 || block_count == 0 {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    let mut best_atoms = SHA_BOOLEAN_BLOCK_OR_CALL_AXIS_ATOMS_V1
+        .checked_mul(call_count.min(block_count))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let mut best_axis = BooleanTopologyAxisV1::BlockOrCall;
+    let round_atoms = SHA_BOOLEAN_ROUND_AXIS_ATOMS_PER_BLOCK_V1
+        .checked_mul(call_count)
+        .and_then(|atoms| atoms.checked_mul(block_count))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    if round_atoms < best_atoms {
+        best_atoms = round_atoms;
+        best_axis = BooleanTopologyAxisV1::Round;
+    }
+    if block_count > 1 {
+        let block_gap_atoms = SHA_BOOLEAN_BLOCK_GAP_ATOMS_PER_CALL_V1
+            .checked_mul(call_count)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        if block_gap_atoms < best_atoms {
+            best_axis = BooleanTopologyAxisV1::BlockGap;
+        }
+    }
+    // Strict comparisons make the exact lower atom count canonical. The
+    // established block/call axis wins its ties; the round axis wins the
+    // 13-block tie with the additive block-gap axis.
+    Ok(best_axis)
+}
+
+fn transpose_operation_reads_to_phase_axis_v1(
+    call_count: usize,
+    block_count: usize,
+    repeat_across_calls: bool,
+) -> Result<bool, ZkX509ShaFixedAlgebraicErrorV1> {
+    if call_count == 0 || block_count == 0 || repeat_across_calls != (call_count > block_count) {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    let phase_axis_atoms = operation_read_axis_atoms_per_call_v1(block_count)?
+        .checked_mul(call_count)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let existing_axis_atoms = if repeat_across_calls {
+        SHA_OPERATION_READS_PER_BLOCK_V1
+            .checked_mul(block_count)
+            .and_then(|atoms| {
+                atoms.checked_sub(
+                    SHA_OPERATION_READS_PER_BLOCK_V1 - SHA_OPERATION_FIRST_BLOCK_NONZERO_READS_V1,
+                )
+            })
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?
+    } else {
+        let per_call = if block_count == 1 {
+            SHA_OPERATION_FIRST_BLOCK_NONZERO_READS_V1
+        } else {
+            SHA_OPERATION_READS_PER_BLOCK_V1
+        };
+        per_call
+            .checked_mul(call_count)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?
+    };
+    // The exact lower atom count is canonical. Preserve the established
+    // block/call-axis representation on a tie.
+    Ok(phase_axis_atoms < existing_axis_atoms)
+}
+
+fn transpose_sorted_memory_to_phase_axis_v1(
+    call_count: usize,
+    block_count: usize,
+    repeat_across_calls: bool,
+) -> Result<bool, ZkX509ShaFixedAlgebraicErrorV1> {
+    if call_count == 0 || block_count == 0 || repeat_across_calls != (call_count > block_count) {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    if !repeat_across_calls {
+        // The non-transposed keyed series intentionally remain open across
+        // all physically ordered calls, so their cost is global rather than
+        // run-local. Preserve that canonical representation.
+        return Ok(false);
+    }
+    let phase_axis_atoms = SHA_SORTED_PHASE_AXIS_ATOMS_PER_BLOCK_V1
+        .checked_mul(block_count)
+        .and_then(|atoms| atoms.checked_mul(call_count))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    let existing_call_axis_atoms = SHA_SORTED_CALL_AXIS_ATOMS_PER_BLOCK_V1
+        .checked_mul(block_count)
+        .and_then(|atoms| atoms.checked_add(SHA_SORTED_CALL_AXIS_FIXED_ATOMS_V1))
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+    // The exact lower atom count is canonical. Preserve the established
+    // call-axis representation on a tie.
+    Ok(phase_axis_atoms < existing_call_axis_atoms)
 }
 
 /// Digest of the stable compiler algorithm descriptor.
@@ -1843,11 +2551,27 @@ pub(crate) fn compile_zk_x509_sha_fixed_algebraic_schedule_v1(
             .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?
             .maximum_blocks;
         let repeat_across_calls = transpose_run_to_call_axis_v1(run.len(), block_count)?;
+        let boolean_axis = plan_boolean_topology_axis_v1(run.len(), block_count)?;
+        let operation_read_phase_axis = transpose_operation_reads_to_phase_axis_v1(
+            run.len(),
+            block_count,
+            repeat_across_calls,
+        )?;
+        let sorted_memory_phase_axis =
+            transpose_sorted_memory_to_phase_axis_v1(run.len(), block_count, repeat_across_calls)?;
         if repeat_across_calls {
             output.begin_call_axis_group_v1()?;
         }
         for manifest in run.iter().copied() {
-            emit_call_topology_v1(&mut output, manifest, shape, repeat_across_calls)?;
+            emit_call_topology_v1(
+                &mut output,
+                manifest,
+                shape,
+                repeat_across_calls,
+                boolean_axis,
+                operation_read_phase_axis,
+                sorted_memory_phase_axis,
+            )?;
         }
         if repeat_across_calls {
             output.finish_call_axis_group_v1()?;
@@ -1880,6 +2604,27 @@ pub(crate) fn compile_zk_x509_sha_fixed_algebraic_schedule_v1(
         )?;
     }
     output.finish_v1()
+}
+
+/// Return the success-only cached verifier-owned schedule for one admitted
+/// disclosure shape.
+///
+/// Compilation failures are never cached, so a transient allocation failure
+/// cannot poison the process-wide verifier schedule.
+pub(crate) fn zk_x509_sha_fixed_algebraic_schedule_v1(
+    shape: ZkX509ShaCallPublicShapeV1,
+) -> Result<&'static ZkX509FixedAlgebraicScheduleV1, ZkX509ShaFixedAlgebraicErrorV1> {
+    let cache = ZK_X509_SHA_FIXED_ALGEBRAIC_SCHEDULES_V1
+        .get(shape.disclosed_attributes)
+        .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+    if let Some(schedule) = cache.get() {
+        return Ok(schedule);
+    }
+    let schedule = compile_zk_x509_sha_fixed_algebraic_schedule_v1(shape)?;
+    match cache.set(schedule) {
+        Ok(()) => cache.get().ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology),
+        Err(_racing_schedule) => cache.get().ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology),
+    }
 }
 
 /// Compile the exact ordered per-shape schedule digest set for disclosures
@@ -2117,6 +2862,32 @@ mod tests {
     }
 
     #[test]
+    fn success_only_shape_cache_is_stable_and_invalid_shapes_do_not_poison_it() {
+        let shape = ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes: 0,
+        };
+        let first = zk_x509_sha_fixed_algebraic_schedule_v1(shape).expect("first cached schedule");
+        let second =
+            zk_x509_sha_fixed_algebraic_schedule_v1(shape).expect("second cached schedule");
+        assert!(core::ptr::eq(first, second));
+        assert_eq!(
+            first,
+            &compile_zk_x509_sha_fixed_algebraic_schedule_v1(shape)
+                .expect("independently reproduced schedule")
+        );
+        assert!(matches!(
+            zk_x509_sha_fixed_algebraic_schedule_v1(ZkX509ShaCallPublicShapeV1 {
+                disclosed_attributes: 5,
+            }),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        ));
+        assert!(core::ptr::eq(
+            first,
+            zk_x509_sha_fixed_algebraic_schedule_v1(shape).expect("valid cache remains available")
+        ));
+    }
+
+    #[test]
     fn native_query_coset_and_output_shape_negatives_fail_closed() {
         let schedule = schedule(2);
         let mut short = vec![F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1 - 1];
@@ -2261,6 +3032,351 @@ mod tests {
     }
 
     #[test]
+    fn boolean_round_axis_is_exact_and_uses_32_atoms_per_block() {
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
+            .expect("release SHA domain");
+        let mut builder = StructuralBuilderV1::new_v1(domain).expect("structural builder");
+        let compute_start = 101;
+        let block_count = 2;
+        emit_boolean_round_axis_atoms_v1(&mut builder, 0, compute_start, block_count)
+            .expect("round-axis atoms");
+        let schedule = builder.finish_v1().expect("closed round-axis schedule");
+        assert_eq!(
+            schedule.atoms_v1().len(),
+            SHA_BOOLEAN_ROUND_AXIS_ATOMS_PER_BLOCK_V1 * block_count
+        );
+
+        for relative_row in 0..block_count * SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1 {
+            let mut actual = [F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1];
+            schedule
+                .native_row_v1((compute_start + relative_row) as u64, &mut actual)
+                .expect("round-axis native row");
+            let within_block = relative_row % SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1;
+            let boolean = within_block
+                .checked_sub(SHA_ROUND_REGION_OFFSET_V1)
+                .filter(|round_row| *round_row < SHA_ROUNDS_PER_BLOCK_V1 * SHA_ROUND_ROWS_V1)
+                .and_then(|round_row| {
+                    let within_round = round_row % SHA_ROUND_ROWS_V1;
+                    [
+                        (FIX_CHOOSE, SHA_CHOOSE_ROUND_OFFSET_V1),
+                        (FIX_MAJORITY, SHA_MAJORITY_ROUND_OFFSET_V1),
+                    ]
+                    .into_iter()
+                    .find_map(|(selector, operation_offset)| {
+                        within_round
+                            .checked_sub(operation_offset)
+                            .filter(|chunk| *chunk < 4)
+                            .map(|chunk| (selector, chunk))
+                    })
+                });
+            for column in [
+                FIX_CHOOSE,
+                FIX_MAJORITY,
+                FIX_BOOLEAN_FIRST,
+                FIX_BOOLEAN_CONTINUE,
+                FIX_BOOLEAN_LAST,
+                FIX_BOOLEAN_SCALE,
+                FIX_BOOLEAN_NEXT_SCALE,
+            ] {
+                let expected = boolean.map_or(F::ZERO, |(selector, chunk)| match column {
+                    FIX_CHOOSE | FIX_MAJORITY => F(u64::from(column == selector)),
+                    FIX_BOOLEAN_FIRST => F(u64::from(chunk == 0)),
+                    FIX_BOOLEAN_CONTINUE => F(u64::from(chunk < 3)),
+                    FIX_BOOLEAN_LAST => F(u64::from(chunk == 3)),
+                    FIX_BOOLEAN_SCALE => F(1_u64 << (chunk * 8)),
+                    FIX_BOOLEAN_NEXT_SCALE if chunk < 3 => F(1_u64 << ((chunk + 1) * 8)),
+                    FIX_BOOLEAN_NEXT_SCALE => F::ZERO,
+                    _ => unreachable!("covered boolean topology column"),
+                });
+                assert_eq!(
+                    actual[column], expected,
+                    "relative row {relative_row}, column {column}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn boolean_block_gap_axis_is_exact_and_cancels_every_gap_row() {
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
+            .expect("release SHA domain");
+        let mut builder = StructuralBuilderV1::new_v1(domain).expect("structural builder");
+        let compute_start = 101;
+        let block_count = 14;
+        emit_boolean_block_gap_axis_atoms_v1(&mut builder, 0, compute_start, block_count)
+            .expect("block-gap atoms");
+        let schedule = builder.finish_v1().expect("closed block-gap schedule");
+        assert_eq!(
+            schedule.atoms_v1().len(),
+            SHA_BOOLEAN_BLOCK_GAP_ATOMS_PER_CALL_V1
+        );
+
+        for relative_row in 0..block_count * SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1 {
+            let mut actual = [F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1];
+            schedule
+                .native_row_v1((compute_start + relative_row) as u64, &mut actual)
+                .expect("block-gap native row");
+            let within_block = relative_row % SHA_WORD_CAPACITY_LOCAL_ROWS_PER_BLOCK_V1;
+            let boolean = within_block
+                .checked_sub(SHA_ROUND_REGION_OFFSET_V1)
+                .filter(|round_row| *round_row < SHA_ROUNDS_PER_BLOCK_V1 * SHA_ROUND_ROWS_V1)
+                .and_then(|round_row| {
+                    let within_round = round_row % SHA_ROUND_ROWS_V1;
+                    [
+                        (FIX_CHOOSE, SHA_CHOOSE_ROUND_OFFSET_V1),
+                        (FIX_MAJORITY, SHA_MAJORITY_ROUND_OFFSET_V1),
+                    ]
+                    .into_iter()
+                    .find_map(|(selector, operation_offset)| {
+                        within_round
+                            .checked_sub(operation_offset)
+                            .filter(|chunk| *chunk < 4)
+                            .map(|chunk| (selector, chunk))
+                    })
+                });
+            for column in [
+                FIX_CHOOSE,
+                FIX_MAJORITY,
+                FIX_BOOLEAN_FIRST,
+                FIX_BOOLEAN_CONTINUE,
+                FIX_BOOLEAN_LAST,
+                FIX_BOOLEAN_SCALE,
+                FIX_BOOLEAN_NEXT_SCALE,
+            ] {
+                let expected = boolean.map_or(F::ZERO, |(selector, chunk)| match column {
+                    FIX_CHOOSE | FIX_MAJORITY => F(u64::from(column == selector)),
+                    FIX_BOOLEAN_FIRST => F(u64::from(chunk == 0)),
+                    FIX_BOOLEAN_CONTINUE => F(u64::from(chunk < 3)),
+                    FIX_BOOLEAN_LAST => F(u64::from(chunk == 3)),
+                    FIX_BOOLEAN_SCALE => F(1_u64 << (chunk * 8)),
+                    FIX_BOOLEAN_NEXT_SCALE if chunk < 3 => F(1_u64 << ((chunk + 1) * 8)),
+                    FIX_BOOLEAN_NEXT_SCALE => F::ZERO,
+                    _ => unreachable!("covered boolean topology column"),
+                });
+                assert_eq!(
+                    actual[column], expected,
+                    "relative row {relative_row}, column {column}"
+                );
+            }
+        }
+
+        let mut negative = StructuralBuilderV1::new_v1(domain).expect("negative builder");
+        assert_eq!(
+            emit_boolean_block_gap_axis_atoms_v1(&mut negative, 0, compute_start, 1),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            emit_boolean_block_gap_axis_atoms_v1(&mut negative, 0, compute_start, 13),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        let mut gap_row = [F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1];
+        schedule
+            .native_row_v1(
+                (compute_start
+                    + SHA_ROUND_REGION_OFFSET_V1
+                    + SHA_CHOOSE_ROUND_OFFSET_V1
+                    + SHA_ROUNDS_PER_BLOCK_V1 * SHA_ROUND_ROWS_V1) as u64,
+                &mut gap_row,
+            )
+            .expect("first cancellation row");
+        assert_eq!(gap_row[FIX_BOOLEAN_NEXT_SCALE], F::ZERO);
+    }
+
+    #[test]
+    fn operation_read_phase_axis_is_exact_and_matches_its_atom_cost() {
+        let block_count = 3;
+        let message = vec![0_u8; 164];
+        let circuit = build_sha256_word_circuit_v1(&message).expect("three-block word circuit");
+        let word_count = circuit.stark_words_v1().len();
+        let operation_read_count = SHA_OPERATION_READS_PER_BLOCK_V1 * block_count;
+        let operation_reads = circuit
+            .stark_memory_v1()
+            .execution
+            .get(word_count..word_count + operation_read_count)
+            .expect("exact operation-read region");
+
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
+            .expect("release SHA domain");
+        let operation_read_start = 1_234;
+        let mut builder = StructuralBuilderV1::new_v1(domain).expect("structural builder");
+        emit_operation_read_axis_atoms_v1(
+            &mut builder,
+            0,
+            operation_read_start,
+            block_count,
+            operation_reads,
+        )
+        .expect("operation-read phase-axis atoms");
+        let schedule = builder.finish_v1().expect("closed phase-axis schedule");
+        assert_eq!(
+            schedule.atoms_v1().len(),
+            operation_read_axis_atoms_per_call_v1(block_count).expect("exact atom cost")
+        );
+        for (relative, access) in operation_reads.iter().copied().enumerate() {
+            let mut actual = [F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1];
+            schedule
+                .native_row_v1((operation_read_start + relative) as u64, &mut actual)
+                .expect("phase-axis native row");
+            assert_eq!(
+                actual[FIX_MEMORY_EXECUTION_ADDRESS], access.address,
+                "operation-read row {relative}"
+            );
+        }
+
+        let mut malformed = operation_reads.to_vec();
+        malformed[0].is_write = F::ONE;
+        let mut negative = StructuralBuilderV1::new_v1(domain).expect("negative builder");
+        assert_eq!(
+            emit_operation_read_axis_atoms_v1(
+                &mut negative,
+                0,
+                operation_read_start,
+                block_count,
+                &malformed,
+            ),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            emit_operation_read_axis_atoms_v1(
+                &mut negative,
+                0,
+                operation_read_start,
+                block_count,
+                &[],
+            ),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+    }
+
+    #[test]
+    fn sorted_memory_phase_axis_is_exact_and_rejects_malformed_topology() {
+        let block_count = 3;
+        let message = vec![0_u8; 164];
+        let circuit = build_sha256_word_circuit_v1(&message).expect("three-block word circuit");
+        let execution = &circuit.stark_memory_v1().execution;
+        let sorted = &circuit.stark_memory_v1().sorted;
+        assert!(sorted[..7].iter().all(|access| access.address == F::ZERO));
+        assert_eq!(sorted[7].address, F::ONE);
+
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(19, 25, F(GOLDILOCKS_GENERATOR_V1))
+            .expect("release SHA domain");
+        let memory_start = 4_321;
+        let mut builder = StructuralBuilderV1::new_v1(domain).expect("structural builder");
+        emit_sorted_memory_phase_axis_atoms_v1(
+            &mut builder,
+            0,
+            memory_start,
+            block_count,
+            execution,
+            sorted,
+        )
+        .expect("sorted-memory phase-axis atoms");
+        let schedule = builder.finish_v1().expect("closed phase-axis schedule");
+        assert_eq!(
+            schedule.atoms_v1().len(),
+            SHA_SORTED_PHASE_AXIS_ATOMS_PER_BLOCK_V1 * block_count
+        );
+        for (index, access) in sorted.iter().copied().enumerate() {
+            let mut actual = [F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1];
+            schedule
+                .native_row_v1((memory_start + index) as u64, &mut actual)
+                .expect("phase-axis native row");
+            let same_next = sorted
+                .get(index + 1)
+                .is_some_and(|next| next.address == access.address);
+            let new_next = index + 1 < sorted.len() && !same_next;
+            assert_eq!(
+                actual[FIX_MEMORY_SORTED_ADDRESS], access.address,
+                "sorted address row {index}"
+            );
+            assert_eq!(
+                actual[FIX_MEMORY_SORTED_WRITE], access.is_write,
+                "sorted write row {index}"
+            );
+            assert_eq!(
+                actual[FIX_MEMORY_SAME_NEXT],
+                F(u64::from(same_next)),
+                "SAME_NEXT row {index}"
+            );
+            assert_eq!(
+                actual[FIX_MEMORY_NEW_NEXT],
+                F(u64::from(new_next)),
+                "NEW_NEXT row {index}"
+            );
+        }
+        assert_eq!(
+            schedule
+                .native_row_v1(
+                    (memory_start + sorted.len() - 1) as u64,
+                    &mut [F::ZERO; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1],
+                )
+                .map(|_| ()),
+            Ok(())
+        );
+
+        let assert_rejected = |malformed: &[WordMemoryAccessV1]| {
+            let mut negative = StructuralBuilderV1::new_v1(domain).expect("negative builder");
+            assert_eq!(
+                emit_sorted_memory_phase_axis_atoms_v1(
+                    &mut negative,
+                    0,
+                    memory_start,
+                    block_count,
+                    execution,
+                    malformed,
+                ),
+                Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+            );
+        };
+
+        let mut malformed_order = sorted.to_vec();
+        malformed_order.swap(0, 7);
+        assert_rejected(&malformed_order);
+
+        let mut malformed_write = sorted.to_vec();
+        malformed_write[0].is_write = F::ZERO;
+        assert_rejected(&malformed_write);
+
+        let mut malformed_address = sorted.to_vec();
+        malformed_address
+            .last_mut()
+            .expect("last sorted row")
+            .address = F(u64::try_from(
+            INITIAL_LOCAL_ROWS_PER_CALL_V1 + block_count * SHA_WORDS_PER_BLOCK_V1,
+        )
+        .expect("word bound"));
+        assert_rejected(&malformed_address);
+
+        let mut malformed_occurrence = sorted.to_vec();
+        let first_address_two = malformed_occurrence
+            .iter()
+            .position(|access| access.address == F(2))
+            .expect("address two group");
+        malformed_occurrence[first_address_two - 1].address = F(2);
+        malformed_occurrence[first_address_two - 1].is_write = F::ONE;
+        malformed_occurrence[first_address_two].is_write = F::ZERO;
+        assert_rejected(&malformed_occurrence);
+
+        assert_rejected(&sorted[..sorted.len() - 1]);
+    }
+
+    #[test]
+    fn release_shape_atom_counts_and_digests_are_reported_and_bounded() {
+        let compiler_digest = zk_x509_sha_fixed_algebraic_compiler_descriptor_digest_v1()
+            .expect("compiler descriptor digest");
+        eprintln!("zk-X509 SHA compiler descriptor digest: {compiler_digest:02x?}");
+        for disclosed_attributes in 0..=4 {
+            let schedule = schedule(disclosed_attributes);
+            let atom_count = schedule.atoms_v1().len();
+            eprintln!(
+                "zk-X509 SHA shape {disclosed_attributes}: atoms={atom_count}, digest={:02x?}",
+                schedule.descriptor_digest_v1()
+            );
+            assert!(atom_count <= ZK_X509_SHA_FIXED_ALGEBRAIC_MAX_ATOMS_V1);
+        }
+    }
+
+    #[test]
     fn call_axis_lifecycle_topology_and_cap_fail_closed() {
         assert_eq!(
             transpose_run_to_call_axis_v1(0, 3),
@@ -2272,6 +3388,98 @@ mod tests {
         );
         assert!(!transpose_run_to_call_axis_v1(3, 3).expect("row axis wins a tie"));
         assert!(transpose_run_to_call_axis_v1(4, 3).expect("strictly smaller call axis"));
+        assert_eq!(
+            plan_boolean_topology_axis_v1(0, 3),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(3, 0),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(1, 12).expect("round axis is smaller"),
+            BooleanTopologyAxisV1::Round
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(1, 13).expect("round axis wins the gap tie"),
+            BooleanTopologyAxisV1::Round
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(1, 14).expect("block-gap axis is smaller"),
+            BooleanTopologyAxisV1::BlockGap
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(1, 64).expect("block-gap beats the old-axis tie"),
+            BooleanTopologyAxisV1::BlockGap
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(4, 3).expect("round axis beats the transposed call axis"),
+            BooleanTopologyAxisV1::Round
+        );
+        assert_eq!(
+            plan_boolean_topology_axis_v1(usize::MAX, 2),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Resource)
+        );
+        assert_eq!(
+            operation_read_axis_atoms_per_call_v1(0),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            operation_read_axis_atoms_per_call_v1(1).expect("first block cost"),
+            SHA_OPERATION_AXIS_FIRST_BLOCK_ATOMS_V1
+        );
+        assert_eq!(
+            operation_read_axis_atoms_per_call_v1(3).expect("three-block cost"),
+            130
+        );
+        assert_eq!(
+            operation_read_axis_atoms_per_call_v1(usize::MAX),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Resource)
+        );
+        assert_eq!(
+            transpose_operation_reads_to_phase_axis_v1(0, 3, false),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            transpose_operation_reads_to_phase_axis_v1(1, 3, true),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert!(
+            transpose_operation_reads_to_phase_axis_v1(1, 33, false)
+                .expect("phase axis is exactly smaller at 33 blocks")
+        );
+        assert!(
+            !transpose_operation_reads_to_phase_axis_v1(1, 34, false)
+                .expect("old block axis is smaller at 34 blocks")
+        );
+        assert!(
+            transpose_operation_reads_to_phase_axis_v1(4, 3, true)
+                .expect("phase axis beats the transposed call axis")
+        );
+        assert_eq!(
+            transpose_sorted_memory_to_phase_axis_v1(0, 3, false),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            transpose_sorted_memory_to_phase_axis_v1(1, 3, true),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+        );
+        assert!(
+            !transpose_sorted_memory_to_phase_axis_v1(1, 3, false)
+                .expect("non-call global series is retained")
+        );
+        assert!(
+            transpose_sorted_memory_to_phase_axis_v1(16, 3, true)
+                .expect("phase axis is strictly smaller")
+        );
+        assert!(
+            !transpose_sorted_memory_to_phase_axis_v1(17, 3, true)
+                .expect("old call axis is strictly smaller")
+        );
+        assert_eq!(
+            transpose_sorted_memory_to_phase_axis_v1(usize::MAX, 1, true),
+            Err(ZkX509ShaFixedAlgebraicErrorV1::Resource)
+        );
 
         let domain = ZkX509FixedAlgebraicDomainV1::new_v1(6, 7, F(GOLDILOCKS_GENERATOR_V1))
             .expect("test domain");

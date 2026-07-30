@@ -466,7 +466,10 @@ mod tests {
     #[test]
     fn checked_account_id_preserves_default_algorithm() {
         let account_id = checked_account_id();
-        assert_eq!(account_id.signatory().algorithm(), Algorithm::default());
+        assert_eq!(
+            account_id.expect_single_signatory().algorithm(),
+            Algorithm::default()
+        );
     }
 
     #[test]

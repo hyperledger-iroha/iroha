@@ -3593,16 +3593,6 @@ pub mod pipeline {
     pub const AMX_PER_MEMORY_ACCESS_NS: u64 = 80;
     /// Estimated nanoseconds per syscall used for AMX budgeting.
     pub const AMX_PER_SYSCALL_NS: u64 = 120;
-
-    /// Settings for admitting `Executable::IvmProved` (proof-carrying IVM overlays).
-    pub mod ivm_proved {
-        /// Whether `Executable::IvmProved` is accepted by the execution pipeline.
-        ///
-        /// Default is `false` until a full end-to-end IVM execution proof system is shipped.
-        pub const ENABLED: bool = false;
-        /// Skip deterministic replay for circuits that are known to prove full IVM execution semantics.
-        pub const SKIP_REPLAY: bool = false;
-    }
 }
 
 /// Tiered state backend defaults.
@@ -3786,7 +3776,7 @@ pub mod zk {
         /// Feature toggle for Halo2 verification in hosts.
         pub const ENABLED: bool = false;
         /// Default curve identifier used for Halo2 verification.
-        pub const CURVE: &str = "toy_p61_additive";
+        pub const CURVE: &str = "pallas";
         /// Backend implementation identifier (e.g., IPA).
         pub const BACKEND: &str = "ipa";
         /// Maximum circuit size expressed as `k` (2^k rows).
@@ -4703,15 +4693,8 @@ pub mod soranet {
     }
 }
 
-/// Settlement (repo and related) defaults.
+/// Settlement defaults.
 pub mod settlement {
-    /// Repo-specific defaults.
-    pub mod repo {
-        /// Default haircut applied to collateral (basis points).
-        pub const DEFAULT_HAIRCUT_BPS: u16 = 1_500;
-        /// Default cadence between mandatory margin checks (seconds).
-        pub const DEFAULT_MARGIN_FREQUENCY_SECS: u64 = 86_400;
-    }
     /// Offline settlement defaults.
     pub mod offline {
         use std::path::PathBuf;

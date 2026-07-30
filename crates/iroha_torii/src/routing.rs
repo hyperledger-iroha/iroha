@@ -21362,6 +21362,7 @@ fn execute_contract_view(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
+    host.set_output_limits_from_parameters(query_view.world.parameters().smart_contract());
     host.bind_authorized_deployed_contract_view_runtime_context(
         &query_view,
         contract_address,
@@ -21399,7 +21400,7 @@ fn execute_contract_view(
         })?;
     // Views are not allowed to retain any instruction, durable-state write,
     // FastPQ entry, or completed AXT artifact. Reject before those containers grow.
-    host.set_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
+    host.restrict_output_limits(iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(0, 0));
     host.set_crypto_config(Arc::clone(&query_view.crypto));
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
@@ -21557,6 +21558,7 @@ fn execute_contract_call_simulation(
         authority.clone(),
         query_view.accounts_snapshot(),
     );
+    host.set_output_limits_from_parameters(query_view.world.parameters().smart_contract());
     host.bind_authorized_deployed_contract_runtime_context(
         &query_view,
         contract_address,
@@ -21601,19 +21603,10 @@ fn execute_contract_call_simulation(
             gas_used: 0,
             queued_instructions: Vec::new(),
         })?;
-    let max_items = usize::try_from(
-        query_view
-            .world
-            .parameters()
-            .transaction()
-            .max_instructions()
-            .get(),
-    )
-    .unwrap_or(usize::MAX);
-    host.set_output_limits(
+    host.restrict_output_limits(
         iroha_core::smartcontracts::ivm::host::HostOutputLimits::new(
-            max_items,
-            CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES,
+            u64::MAX,
+            u64::try_from(CONTRACT_CALL_SIMULATION_JSON_MAX_BYTES).unwrap_or(u64::MAX),
         ),
     );
     host.set_crypto_config(Arc::clone(&query_view.crypto));
@@ -28068,7 +28061,7 @@ seiyaku BytesPayloadNormalizeTest {
         assert!(expect_conversion(err).contains("public_key_hex does not match signer_account_id"));
 
         let (_, signer_public_key) = signer_two_id
-            .signatory()
+            .expect_single_signatory()
             .try_to_bytes()
             .expect("fixture signer public key must be well-formed");
         let signer_public_key_hex = hex::encode(signer_public_key);
@@ -28271,7 +28264,7 @@ seiyaku BytesPayloadNormalizeTest {
         let signer_keypair =
             checked_multisig_selector_keypair(0x60, "derive quorum-two proposal signer key");
         assert_eq!(
-            signer_one_id.signatory(),
+            signer_one_id.expect_single_signatory(),
             signer_keypair.public_key(),
             "fixture signer identity must match its deterministic key",
         );
@@ -46205,7 +46198,6 @@ mod governance_stream_tests {
             epoch: 7,
             members_count: 5,
             alternates_count: 2,
-            verified: 5,
             candidates_count: 9,
             derived_by: CouncilDerivationKind::Manual,
         });
@@ -49837,7 +49829,6 @@ mod validation_fee_torii_ingress_tests {
                     epoch: 1,
                     members: vec![member.clone()],
                     alternates: Vec::new(),
-                    verified: 1,
                     candidate_count: 1,
                     derived_by: Default::default(),
                 },
@@ -51429,12 +51420,16 @@ struct RepoAgreementDto {
     counterparty: String,
     custodian: Option<String>,
     cash_leg: RepoLegDto,
+    cash_source: String,
     collateral_leg: RepoLegDto,
+    collateral_custody_asset: String,
     rate_bps: u16,
     maturity_timestamp_ms: u64,
     initiated_timestamp_ms: u64,
     last_margin_check_timestamp_ms: u64,
     governance: RepoGovernanceDto,
+    settlement_timestamp_ms: Option<u64>,
+    status: String,
 }
 
 #[cfg(feature = "app_api")]
@@ -51481,12 +51476,20 @@ impl RepoAgreementProjection {
                 .as_ref()
                 .map(|id| crate::account_literal::display_literal(id)),
             cash_leg,
+            cash_source: agreement.cash_source().to_string(),
             collateral_leg,
+            collateral_custody_asset: agreement.collateral_custody_asset().to_string(),
             rate_bps: *agreement.rate_bps(),
             maturity_timestamp_ms: *agreement.maturity_timestamp_ms(),
             initiated_timestamp_ms: *agreement.initiated_timestamp_ms(),
             last_margin_check_timestamp_ms: *agreement.last_margin_check_timestamp_ms(),
             governance,
+            settlement_timestamp_ms: *agreement.settlement_timestamp_ms(),
+            status: if agreement.is_active() {
+                "active".to_owned()
+            } else {
+                "settled".to_owned()
+            },
         };
 
         RepoAgreementProjection {
@@ -51669,6 +51672,10 @@ fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> nor
         Value::from(proj.dto.cash_leg.quantity.clone()),
     );
     row.insert("cash_leg".into(), Value::Object(cash_leg));
+    row.insert(
+        "cash_source".into(),
+        Value::from(proj.dto.cash_source.clone()),
+    );
 
     let mut collateral_leg = Map::new();
     collateral_leg.insert(
@@ -51680,6 +51687,10 @@ fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> nor
         Value::from(proj.dto.collateral_leg.quantity.clone()),
     );
     row.insert("collateral_leg".into(), Value::Object(collateral_leg));
+    row.insert(
+        "collateral_custody_asset".into(),
+        Value::from(proj.dto.collateral_custody_asset.clone()),
+    );
 
     row.insert("rate_bps".into(), Value::from(u64::from(proj.rate_bps)));
     row.insert(
@@ -51705,6 +51716,13 @@ fn repo_agreement_projection_to_query_row(proj: &RepoAgreementProjection) -> nor
         Value::from(proj.dto.governance.margin_frequency_secs),
     );
     row.insert("governance".into(), Value::Object(governance));
+    row.insert(
+        "settlement_timestamp_ms".into(),
+        proj.dto
+            .settlement_timestamp_ms
+            .map_or(Value::Null, Value::from),
+    );
+    row.insert("status".into(), Value::from(proj.dto.status.clone()));
     row
 }
 
@@ -56276,7 +56294,7 @@ pub async fn handle_v1_account_assets_with_policy(
 
 // ---------------------- Repo agreement listing ----------------------
 
-/// GET /v1/repo/agreements — List active repo agreements with optional filtering.
+/// GET /v1/repo/agreements — List active and settled repo agreements with optional filtering.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_repo_agreements(
@@ -56452,6 +56470,7 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
         state::{State, World},
     };
     use iroha_data_model::prelude::*;
+    use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
     use nonzero_ext::nonzero;
 
     let state = Arc::new(State::new_for_testing(
@@ -56542,6 +56561,22 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
             *maturity,
             RepoGovernance::with_defaults(1_500, 86_400),
         );
+        for consent in [
+            Permission::from(CanExecuteSettlement {
+                debited_asset: AssetId::new(cash_def_id.clone(), counterparty_id.clone()),
+                settlement_id: instruction.settlement_id(),
+                intent_hash: instruction.initiation_intent_hash(),
+            }),
+            Permission::from(CanExecuteSettlement {
+                debited_asset: AssetId::new(collateral_def_id.clone(), counterparty_id.clone()),
+                settlement_id: instruction.settlement_id(),
+                intent_hash: instruction.maturity_intent_hash(),
+            }),
+        ] {
+            Grant::account_permission(consent, initiator_id.clone())
+                .execute(&counterparty_id, &mut stx)
+                .unwrap();
+        }
         instruction.execute(&authority_id, &mut stx).unwrap();
     }
 
@@ -56605,6 +56640,10 @@ async fn repo_agreements_list_filters_by_id() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["id"].as_str().unwrap(), fixture.agreements[0].0);
     assert!(items[0]["cash_leg"]["quantity"].as_str().is_some());
+    assert!(items[0]["cash_source"].as_str().is_some());
+    assert!(items[0]["collateral_custody_asset"].as_str().is_some());
+    assert_eq!(items[0]["status"].as_str(), Some("active"));
+    assert!(items[0]["settlement_timestamp_ms"].is_null());
 }
 
 #[cfg(all(test, feature = "app_api"))]

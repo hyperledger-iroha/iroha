@@ -107,7 +107,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 - `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`. `max_time_to_live_ms` defaults to one day and bounds every signature-bound transaction lifetime.
-  - `SmartContractParameters { fuel, memory, execution_depth }`.
+  - `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`. The output limits bound the aggregate queued instructions, durable writes, FastPQ entries, completed AXT states, and access artifacts retained by one IVM execution.
 - `Parameters` groups all families and a `custom: BTreeMap<CustomParameterId, CustomParameter>`.
 - Single-parameter enums: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` for diff-like updates and iteration.
 - Custom parameters: executor-defined, carried as `Json`, identified by `CustomParameterId` (a `Name`).

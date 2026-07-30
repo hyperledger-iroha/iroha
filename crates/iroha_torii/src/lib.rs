@@ -41172,16 +41172,9 @@ fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
         MsgError::UnknownMessageType => {
             ValidationFail::NotPermitted("unsupported ISO 20022 message type".into())
         }
-        MsgError::UnsupportedChannel => {
-            ValidationFail::NotPermitted("unsupported ISO 20022 delivery channel".into())
-        }
-        MsgError::HttpStatus(code) => {
-            ValidationFail::NotPermitted(format!("ISO 20022 transport returned HTTP status {code}"))
-        }
         MsgError::NoActiveMessage => {
             ValidationFail::InternalError("ISO 20022 parser stack underflow".into())
         }
-        MsgError::Io(err) => ValidationFail::InternalError(err.to_string()),
     }
 }
 

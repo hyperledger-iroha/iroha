@@ -773,31 +773,37 @@ pub fn kaigi_metadata_key(call_name: &Name) -> Result<Name, crate::error::ParseE
     Name::from_str(&composite)
 }
 
+fn relay_account_key_fragment(relay_id: &AccountId) -> String {
+    let digest = HashOf::new(relay_id);
+    hex::encode(digest.as_ref())
+}
+
 /// Helper used for storing Kaigi relay registrations inside domain metadata.
+///
+/// The suffix is a digest of the complete canonical account identity, so both
+/// single-key and multisignature relay accounts have bounded, collision-resistant keys.
 ///
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
 pub fn kaigi_relay_metadata_key(relay_id: &AccountId) -> Result<Name, crate::error::ParseError> {
-    let sanitized = relay_id
-        .signatory()
-        .to_string()
-        .replace(['@', '#', '$'], "_");
-    let key = format!("kaigi_relay__{sanitized}");
+    let key = format!("kaigi_relay__{}", relay_account_key_fragment(relay_id));
     Name::from_str(&key)
 }
 
 /// Helper used for storing Kaigi relay health feedback in domain metadata.
 ///
+/// The suffix is a digest of the complete canonical account identity, so both
+/// single-key and multisignature relay accounts have bounded, collision-resistant keys.
+///
 /// # Errors
 ///
 /// Returns [`ParseError`](crate::error::ParseError) if the composed key violates [`Name`] rules.
 pub fn kaigi_relay_feedback_key(relay_id: &AccountId) -> Result<Name, crate::error::ParseError> {
-    let sanitized = relay_id
-        .signatory()
-        .to_string()
-        .replace(['@', '#', '$'], "_");
-    let key = format!("kaigi_relay_feedback__{sanitized}");
+    let key = format!(
+        "kaigi_relay_feedback__{}",
+        relay_account_key_fragment(relay_id)
+    );
     Name::from_str(&key)
 }
 
@@ -1065,14 +1071,28 @@ mod tests {
     }
 
     #[test]
-    fn relay_feedback_key_uses_sanitized_signatory() {
+    fn relay_feedback_key_uses_canonical_account_digest() {
         let relay = checked_account_id();
         let key = kaigi_relay_feedback_key(&relay).expect("feedback key");
-        let sanitized_fragment = relay.signatory().to_string();
-        assert_eq!(
-            key.as_ref(),
-            format!("kaigi_relay_feedback__{sanitized_fragment}")
-        );
+        let digest = relay_account_key_fragment(&relay);
+        assert_eq!(key.as_ref(), format!("kaigi_relay_feedback__{digest}"));
+    }
+
+    #[test]
+    fn relay_keys_support_multisig_account_identity() {
+        let member = crate::account::MultisigMember::new(
+            checked_account_id().expect_single_signatory().clone(),
+            1,
+        )
+        .expect("valid multisig member");
+        let policy =
+            crate::account::MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
+        let relay = AccountId::new_multisig(policy);
+
+        let registration = kaigi_relay_metadata_key(&relay).expect("multisig registration key");
+        let feedback = kaigi_relay_feedback_key(&relay).expect("multisig feedback key");
+        assert!(registration.as_ref().starts_with("kaigi_relay__"));
+        assert!(feedback.as_ref().starts_with("kaigi_relay_feedback__"));
     }
 
     #[test]

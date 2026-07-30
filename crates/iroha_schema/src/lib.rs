@@ -223,8 +223,8 @@ pub struct EnumMeta {
 pub struct EnumVariant {
     /// Enum variant name
     pub tag: String,
-    /// Its discriminant (or identifier)
-    pub discriminant: u8,
+    /// Its canonical Norito `u32` discriminant (or identifier).
+    pub discriminant: u32,
     /// Its type
     pub ty: Option<core::any::TypeId>,
 }

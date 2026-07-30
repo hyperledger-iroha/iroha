@@ -313,9 +313,7 @@ pub(crate) const ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1: u32 = 984_216;
 /// Exact X5C1 claim-envelope bytes around the compact-CA aggregate proof.
 pub(crate) const ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1: u32 = 1_310;
 /// Exact X5M1 fixed framing plus DER, RFC, SHA, and P-256 terminal frames.
-pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 11_956;
-/// Exact maximum canonical two-oracle SHA plus P-256 log19 X5F1 sidecar.
-pub(crate) const ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1: u32 = 825_776;
+pub(crate) const ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1: u32 = 11_952;
 /// Exact main plus compact-CA current/next Fp4 DEEP openings and composition claims.
 pub(crate) const ZK_X509_DEEP_OPENING_BYTES_V1: u32 = 402_336;
 /// Fiat-Shamir proof-of-work grinding bits.
@@ -329,13 +327,13 @@ pub(crate) const ZK_X509_TARGET_SOUNDNESS_BITS_V1: u16 = 128;
 /// Consensus proof-byte ceiling inherited by this engine.
 pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
 /// Exact maximum encoded canonical aggregate proof under the frozen layout.
-pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_038_318;
+pub(crate) const ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 8_212_538;
 /// Provisional first-release transparent-proof envelope descriptor.
 ///
 /// Its algebraic and wire bounds are fixed for implementation, but it is not
 /// activatable until the full credential constructor/verifier, combined CA
 /// envelope, KATs, and measured resource run exist.
-pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-oracle-independent-width=340-reconstruct-full472|p256-log19-fixed-oracle-independent-width=404-six-role-schedules-alias-fifteen-registrations|max-two-oracle-fixed-sidecar=825776|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=9038318|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|resource-measurement=pending|full-credential-verifier=pending|activation=false";
+pub(crate) const ZK_X509_STARK_PROFILE_DESCRIPTOR_V1: &[u8] = b"field=goldilocks-fp4:w4=7:base=0xffffffff00000001|wire=X5S1-containing-exactly-one-X5M1-and-one-X5C1-v1|x5m1=claims-plus-length-delimited-aggregate-only-no-fixed-sidecar|main-logical-registrations=49|main-same-log-trace-groups=6-logs5,8,15,16,18,19|main-physical-commitment-chunks=80|physical-chunk-columns=64|max-native-trace-log2=19|compact-ca-dedicated-log7-subproof-depth12|sha-fixed-calls=29-across-four-log19-slices|sha-fixed-algebraic-width=472-verifier-derived-no-proof-bytes|p256-log19-fixed-algebraic-width=404-six-role-schedules-alias-fifteen-registrations-verifier-derived-no-proof-bytes|fixed-openings=canonical-sorted-unique-current-next-union-after-grinding-max116|shared-x5b1-challenges=all-six-main-base-roots+ca-base-root+main-and-ca-public-profile+exact272-fields-ordered-sha-call,rfc,projection,io,der,sha-word-memory,sha-word-base-fold,p256-value,p256-cross,p256-scalar,p256-arithmetic-copy+one-opaque-main-post-base-token|main-io=statement-only-exact40+5d-declarations+logical55922+4736d-active-rows+fixed-capacity262144|main-trace-hiding-coefficients=802|ca-trace-hiding-coefficients=306|fri-mask-oracles=1-fp4-per-subproof-roots-before-batching|lde-column-batch=8|max-constraint-degree=7|fri-rate=1over32|main-fri-blowup=64|ca-lde-log2=14|fri-queries=58-distinct-without-replacement|composition-fp4-lanes=1|fri-batching-m=3|affine-arities=2,2,2|fri-folding=2|main-fri-terminal-length=1024-degree31|ca-fri-terminal-length=512-degree15|deep-points=1-per-subproof-current+next-openings|grinding-bits=20|target-soundness-bits=128|rbr-budget-bits=129|random-oracle-kappa=256|max-ro-queries-log2=64|max-encoded-combined-bound=8212538|max-proof-bytes=9437184|peak-memory-ceiling-bytes=12884901888|resource-measurement=pending|full-credential-verifier=pending|activation=false";
 /// Whether the implementation-derived full credential soundness analysis is fixed.
 pub(crate) const ZK_X509_SOUNDNESS_PROFILE_FINALIZED_V1: bool = false;
 /// Whether release-machine row, time, and peak-memory measurements are fixed.
@@ -635,7 +633,6 @@ pub(crate) fn validate_profile_v1() -> Result<(), ZkX509ProfileErrorV1> {
             .and_then(|bytes| bytes.checked_add(ZK_X509_DEEP_OPENING_BYTES_V1))
             .and_then(|bytes| bytes.checked_add(ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1))
             .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1))
-            .and_then(|bytes| bytes.checked_add(ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1))
             .and_then(|bytes| {
                 bytes.checked_add(
                     super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1 as u32,
@@ -678,12 +675,11 @@ mod tests {
         assert_eq!(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, 19);
         assert_eq!(ZK_X509_MAIN_COMMON_LDE_LOG2_V1, 25);
         assert_eq!(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, 6_812_632);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_038_318);
-        assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 11_956);
-        assert_eq!(ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1, 825_776);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 8_212_538);
+        assert_eq!(ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1, 11_952);
         assert_eq!(
             ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            398_866
+            1_224_646
         );
         assert_eq!(ZK_X509_FRI_QUERY_COUNT_V1, 58);
         assert_eq!(ZK_X509_MAX_CONSTRAINT_DEGREE_V1, 7);

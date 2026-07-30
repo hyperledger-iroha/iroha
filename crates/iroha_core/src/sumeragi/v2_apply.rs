@@ -2621,7 +2621,10 @@ mod tests {
                 self.body_root.path(),
                 self.context.clone(),
                 BlockSignaturePolicy::GenesisAuthority(
-                    self.service.genesis_account.signatory().clone(),
+                    self.service
+                        .genesis_account
+                        .expect_single_signatory()
+                        .clone(),
                 ),
             )
             .expect("reopen body store after crash")

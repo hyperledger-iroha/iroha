@@ -2318,7 +2318,7 @@
             NotPermitted(_)
         ));
         assert!(matches!(
-            super::map_iso_error(MsgError::Io(std::io::Error::from_raw_os_error(1))),
+            super::map_iso_error(MsgError::NoActiveMessage),
             InternalError(_)
         ));
     }

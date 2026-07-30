@@ -473,7 +473,7 @@ mod slice_tests {
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::codec::Decode;
-    use norito::core::DecodeFromSlice;
+    use norito::core::{DecodeFlagsGuard, DecodeFromSlice, header_flags, read_len_dyn_slice};
 
     use super::*;
     use crate::block::consensus::{EvidenceKind, EvidencePayload};
@@ -684,6 +684,78 @@ mod slice_tests {
             BondPublicLaneStake::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as bonded stake"
         );
+    }
+
+    #[test]
+    fn forged_bond_lane_id_packed_layout_is_rejected_without_unwind() {
+        let bond = BondPublicLaneStake {
+            lane_id: LaneId::SINGLE,
+            validator: account(0x41),
+            staker: account(0x42),
+            amount: Quantity::from(10_u64),
+            metadata: Metadata::default(),
+        };
+        let flags =
+            header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
+        let (mut payload, encoded_flags) = {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            norito::codec::encode_with_header_flags(&bond)
+        };
+        assert_eq!(encoded_flags & flags, flags);
+        assert_ne!(
+            payload[0] & 1,
+            0,
+            "LaneId must have an explicit packed-field size"
+        );
+
+        let mut size_offset = 1_usize;
+        let mut lane_header = None;
+        let mut lane_len = None;
+        {
+            let _guard = DecodeFlagsGuard::enter(flags);
+            for field in 0..5 {
+                if payload[0] & (1 << field) == 0 {
+                    continue;
+                }
+                let (len, header_len) =
+                    read_len_dyn_slice(&payload[size_offset..]).expect("packed field size");
+                if field == 0 {
+                    lane_header = Some((size_offset, header_len));
+                    lane_len = Some(len);
+                }
+                size_offset += header_len;
+            }
+        }
+
+        let (lane_header_offset, lane_header_len) = lane_header.expect("LaneId packed size header");
+        let lane_len = lane_len.expect("LaneId packed payload length");
+        assert_eq!(lane_header_len, 1, "small LaneId size must be one varint");
+        assert!(
+            lane_len > 2,
+            "canonical LaneId payload must exceed the forgery"
+        );
+        payload[lane_header_offset] = 2;
+        payload.splice(size_offset..size_offset + lane_len, [0b1, 0x00]);
+
+        let framed = norito::core::frame_bare_with_header_flags::<BondPublicLaneStake>(
+            &payload,
+            encoded_flags,
+        )
+        .expect("frame forged bond");
+        let registry = crate::isi::InstructionRegistry::new().register::<BondPublicLaneStake>();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry
+                .decode(std::any::type_name::<BondPublicLaneStake>(), &framed)
+                .expect("registered BondPublicLaneStake")
+        }));
+        let decoded = outcome.expect("forged LaneId must not unwind");
+        match decoded {
+            Err(norito::Error::LengthMismatch | norito::Error::NonCanonicalEncoding) => {}
+            Err(error) => panic!("unexpected forged LaneId decode error: {error:?}"),
+            Ok(_) => {
+                panic!("a forged LaneId field bitset must not decode through BondPublicLaneStake")
+            }
+        }
     }
 }
 

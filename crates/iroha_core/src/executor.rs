@@ -5591,6 +5591,9 @@ impl Executor {
             Arc::clone(&accounts),
             contract_call_context.argument_record,
         );
+        host.set_output_limits_from_parameters(
+            state_transaction.world.parameters.get().smart_contract(),
+        );
         host.set_prepared_contract_cache(summary.prepared_contract_cache());
         host.hydrate_axt_state(state_transaction).map_err(|error| {
             ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
@@ -6452,6 +6455,9 @@ impl Executor {
                         let accounts = state_transaction.accounts_snapshot();
                         let mut host =
                             CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                        host.set_output_limits_from_parameters(
+                            state_transaction.world.parameters.get().smart_contract(),
+                        );
                         host.set_generic_execution();
                         host.set_prepared_contract_cache(prepared_contract_cache);
                         host.set_amx_analysis(amx_analysis);
@@ -6644,6 +6650,9 @@ impl Executor {
                 } else {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
+                host.set_output_limits_from_parameters(
+                    state_transaction.world.parameters.get().smart_contract(),
+                );
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 host.hydrate_axt_state(state_transaction).map_err(|error| {
                     ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))

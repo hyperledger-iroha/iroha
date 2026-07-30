@@ -796,7 +796,7 @@ mod contract_address_tests {
                 .expect("pinned contract address");
 
         assert_eq!(
-            hex::encode(address.subject_id().signatory().to_bytes().1),
+            hex::encode(address.subject_id().expect_single_signatory().to_bytes().1),
             "927d662b25886a1bc1f24e4fb974fb4b1e0bcba63728f807885ab757092611d3"
         );
     }

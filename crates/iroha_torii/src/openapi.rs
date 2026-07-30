@@ -9456,11 +9456,11 @@ fn repo_agreements_get_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("List active repo agreements".to_owned()),
+        Value::String("List repo agreements and settled tombstones".to_owned()),
     );
     operation.insert(
         "description".into(),
-        Value::String("Returns the active repo agreements recorded on-chain with optional pagination and filtering.".to_owned()),
+        Value::String("Returns active repo agreements and immutable settled tombstones recorded on-chain, with optional pagination and filtering.".to_owned()),
     );
     operation.insert(
         "parameters".into(),
@@ -26834,12 +26834,16 @@ fn openapi_schemas() -> Map {
                 "initiator",
                 "counterparty",
                 "cash_leg",
+                "cash_source",
                 "collateral_leg",
+                "collateral_custody_asset",
                 "rate_bps",
                 "maturity_timestamp_ms",
                 "initiated_timestamp_ms",
                 "last_margin_check_timestamp_ms",
-                "governance"
+                "governance",
+                "settlement_timestamp_ms",
+                "status"
             ],
             "additionalProperties": false,
             "properties": {
@@ -26851,7 +26855,15 @@ fn openapi_schemas() -> Map {
                     "nullable": true
                 },
                 "cash_leg": { "$ref": "#/components/schemas/RepoLeg" },
+                "cash_source": {
+                    "type": "string",
+                    "description": "Exact counterparty cash balance, including scope, selected by owner-issued consent."
+                },
                 "collateral_leg": { "$ref": "#/components/schemas/RepoLeg" },
+                "collateral_custody_asset": {
+                    "type": "string",
+                    "description": "Exact collateral-holder balance, including scope, committed for maturity release."
+                },
                 "rate_bps": {
                     "type": "integer",
                     "format": "uint16"
@@ -26868,7 +26880,17 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64"
                 },
-                "governance": { "$ref": "#/components/schemas/RepoGovernance" }
+                "governance": { "$ref": "#/components/schemas/RepoGovernance" },
+                "settlement_timestamp_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Recorded fixed maturity once settled; null while active."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "settled"]
+                }
             }
         }),
     );
@@ -40711,6 +40733,36 @@ mod tests {
             assert!(
                 properties.contains_key(field),
                 "metadata properties should include {field}"
+            );
+        }
+
+        let repo_agreement = schemas
+            .get("RepoAgreement")
+            .and_then(Value::as_object)
+            .expect("repo agreement schema");
+        let repo_required = repo_agreement
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("repo agreement required fields");
+        let repo_properties = repo_agreement
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("repo agreement properties");
+        for field in [
+            "cash_source",
+            "collateral_custody_asset",
+            "settlement_timestamp_ms",
+            "status",
+        ] {
+            assert!(
+                repo_required
+                    .iter()
+                    .any(|value| value.as_str() == Some(field)),
+                "repo agreement should require {field}"
+            );
+            assert!(
+                repo_properties.contains_key(field),
+                "repo agreement should document {field}"
             );
         }
 

@@ -219,11 +219,6 @@ fn presigned_block_with_creation_after_txs(
 #[cfg(feature = "bls")]
 fn enable_bls_batching(state: &mut iroha_core::state::State) {
     let cfg = iroha_config::parameters::actual::Pipeline {
-        ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-            enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-            skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-            allowed_circuits: Vec::new(),
-        },
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
         access_set_cache_enabled:
             iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,

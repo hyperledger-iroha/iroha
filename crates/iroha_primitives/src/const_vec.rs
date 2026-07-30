@@ -941,10 +941,8 @@ where
                     core::any::type_name::<T>()
                 );
             }
-            let archived_vec = ncore::archived_from_slice_unchecked::<Vec<T>>(decode_bytes);
-            let bytes = archived_vec.bytes();
-            let _payload_guard = ncore::PayloadCtxGuard::enter(bytes);
-            let vec = Vec::<T>::try_deserialize(archived_vec.as_ref())?;
+            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            let vec = ncore::decode_archived_field::<Vec<T>>(decode_bytes)?;
             #[cfg(debug_assertions)]
             if norito::debug_trace_enabled() {
                 eprintln!(
@@ -1282,7 +1280,7 @@ mod tests {
     use super::{
         ConstVec, RealignedSlice, ToConstVec, align_payload_for, decode_const_vec_from_slice,
         decode_const_vec_manual, decode_const_vec_manual_elem, decode_const_vec_manual_unpacked,
-        decode_const_vec_realigned, decode_const_vec_recover, ncore,
+        decode_const_vec_realigned, decode_const_vec_recover, decode_streaming_fallback, ncore,
         payload_matches_ignoring_vec_lengths, reencode_and_verify,
     };
 
@@ -1331,6 +1329,14 @@ mod tests {
         let mut cursor = raw.as_slice();
         let decoded = ConstVec::<u8>::decode(&mut cursor).unwrap();
         assert_eq!(bytes, decoded.into_vec());
+    }
+
+    #[test]
+    fn archived_recovery_rejects_truncated_payload_without_panicking() {
+        let error = decode_streaming_fallback::<u16>(&[0], 0)
+            .expect_err("truncated archived vector payload must be rejected");
+
+        assert!(matches!(error, ncore::Error::LengthMismatch));
     }
 
     #[test]

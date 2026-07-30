@@ -1929,7 +1929,7 @@ fn reserved_roles() {
         let role = format!(
             "MULTISIG_SIGNATORY/{}/{}",
             other_domain,
-            account_in_another_domain.signatory()
+            account_in_another_domain.expect_single_signatory()
         )
         .parse()
         .unwrap();

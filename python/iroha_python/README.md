@@ -1083,15 +1083,17 @@ draft.repo_initiate(
     maturity_timestamp_ms=1_704_000_000_000,
     governance=governance,
 )
-draft.repo_unwind(
-    agreement_id="daily_repo",
-    initiator="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    counterparty="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-    cash_leg=cash,
-    collateral_leg=collateral,
-    settlement_timestamp_ms=1_704_086_400_000,
-)
+draft.repo_unwind(agreement_id="daily_repo")
 ```
+
+Before the initiation transaction is submitted, the counterparty must grant the
+initiator an exact `CanExecuteSettlement` permission for its cash balance and
+the collateral holder must grant the phase-separated maturity permission for
+its collateral balance. Both permissions bind the complete initiation terms,
+including the agreement identifier, parties, asset definitions, quantities,
+rate, maturity, governance, and custodian. The unwind is accepted only at the
+recorded maturity; every economic term and exact balance scope is loaded from
+the immutable on-chain agreement.
 
 Load repo agreements from a Torii response and compute the next margin checkpoint:
 
@@ -1403,11 +1405,6 @@ print("Lock owners:", list(locks.locks))
 print("Expired locks:", unlock_stats_typed.expired_locks_now)
 print("Governed contract:", governed_contract.contract_address, governed_contract.code_hash_hex)
 print("Protected namespaces:", protected)
-
-# VRF helpers (Torii must be built with `gov_vrf`)
-client.derive_governance_council_vrf(
-    {"committee_size": 21, "candidates": [{"account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF", "variant": "Normal"}]}
-)
 ```
 
 ## Runtime upgrades and ABI helpers
@@ -2061,9 +2058,9 @@ no environment variables need to be exported.
 - Extend the Torii client with governance helpers (proposal deployment, ballot
   submission, referendum status) so clients can orchestrate governance flows
   without hand-crafted HTTP requests.
-- Include configuration helpers (`get_confidential_gas_schedule`,
-  `set_confidential_gas_schedule`) so operators can inspect or update the
-  confidential verification gas schedule without manually building DTO payloads.
+- Include `get_confidential_gas_schedule` so operators can inspect the
+  confidential verification gas schedule. The schedule is startup configuration
+  committed into the ZK policy hash and is not mutable through the runtime API.
 - Expose administrative helpers for configuration updates, peer discovery
   (typed `PeerInfo` via `list_peers_typed`), network time introspection
   (`NetworkTimeSnapshot`/`NetworkTimeStatus`), and runtime metadata

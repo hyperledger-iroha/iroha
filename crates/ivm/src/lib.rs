@@ -161,8 +161,8 @@ pub use crate::{
         ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
     },
     error::{
-        Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
-        VmSourceLocation, VmTrapKind,
+        HostOutputResource, Perm, VMError, VmBudgetSnapshot, VmExecutionContext,
+        VmExecutionDiagnostic, VmSourceLocation, VmTrapKind,
     },
     execution_proof::{EXECUTION_PROOF_VERSION_V1, ExecutionProof},
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},

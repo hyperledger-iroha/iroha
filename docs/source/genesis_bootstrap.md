@@ -16,21 +16,26 @@ using the Norito-encoded bootstrap protocol.
   size cap (`genesis.bootstrap_max_bytes`). Requests outside the allowlist receive `NotAllowed`, and
   payloads signed by the wrong key receive `MismatchedPubkey`.
 - **Requester flow:** when storage is empty and `genesis.file` is unset (and
-  `genesis.bootstrap_enabled=true`), the node preflights trusted peers with the optional
-  `genesis.expected_hash`, then fetches the payload, validates signatures via `validate_genesis_block`,
-  and persists `genesis.bootstrap.nrt` alongside Kura before applying the block. Bootstrap retries
+  `genesis.bootstrap_enabled=true`), `genesis.expected_hash` must pin the exact signed genesis
+  block. The node sends that pin in every preflight and payload request, validates the returned
+  hash and signatures via `validate_genesis_block`, and persists `genesis.bootstrap.nrt` alongside
+  Kura before applying the block. Bootstrap retries
   honor `genesis.bootstrap_request_timeout` and `genesis.bootstrap_retry_interval`. Payload fetches
   try preflight responders first but retain every configured peer as a recovery source, because a
   responder may fail after advertising metadata while another peer becomes responsive after GST.
   `genesis.bootstrap_max_attempts` bounds one diagnostic/backoff cycle: after that many unanswered
   windows the node logs, resets the bounded backoff, and continues. It does not turn a pre-GST
   partition into a permanent startup failure while bootstrap remains enabled.
-- **Failure modes:** requests are rejected for allowlist misses, chain/pubkey/hash mismatches, size
-  cap violations, rate limits, or missing local genesis. Conflicting hashes and permanent
-  validation errors abort the fetch. A missing responsive peer/quorum remains pending and is
+- **Failure modes:** enabling remote bootstrap with neither a local `genesis.file` nor
+  `genesis.expected_hash` is a startup configuration error, before any request is sent. Requests
+  are rejected for allowlist misses, chain/pubkey/hash mismatches, size cap violations, rate
+  limits, or missing local genesis. A hash outside the configured pin and every other permanent
+  validation error abort the fetch. A missing responsive peer/quorum remains pending and is
   surfaced through periodic warnings; this is intentional under the partial-synchrony liveness
   contract.
 - **Operator steps:** ensure at least one trusted peer is reachable with a valid genesis, configure
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` and the retry knobs, and
-  optionally pin `expected_hash` to avoid accepting mismatched payloads. Persisted payloads can be
-  reused on subsequent boots by pointing `genesis.file` to `genesis.bootstrap.nrt`.
+  pin the exact block in `expected_hash` before enabling remote bootstrap. A local signed
+  `genesis.file` is already an explicit artifact and does not require an additional hash pin.
+  Persisted payloads can be reused on subsequent boots by pointing `genesis.file` to
+  `genesis.bootstrap.nrt`.

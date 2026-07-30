@@ -19,8 +19,8 @@ governance council can replay the bytes referenced in the proposal.
 |-------|-------|
 | Agreement/change identifier | `<repo-yyMMdd-XX>` |
 | Prepared by / date | `<desk lead> – 2026-03-15T10:00Z` |
-| Reviewed by | `<dual-control reviewer(s)>` |
-| Change type | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
+| Reviewed by | `<cash owner / collateral holder / desk reviewer>` |
+| Packet type | `New immutable agreement / Margin evidence / Maturity settlement` |
 | Custodian(s) | `<custodian id(s)>` |
 | Linked proposal / referendum | `<governance ticket id or GAR link>` |
 | Evidence directory | ``artifacts/finance/repo/<slug>/`` |
@@ -34,9 +34,9 @@ passes.
 
 | Action | File | SHA-256 | Notes |
 |--------|------|---------|-------|
-| Initiate | `instructions/initiate.json` | `<sha256>` | Contains the cash/collateral legs approved by desk + counterparty. |
+| Initiate | `instructions/initiate.json` | `<sha256>` | Exact proposal used to derive both owner-issued consent hashes. |
 | Margin call | `instructions/margin_call.json` | `<sha256>` | Captures cadence + participant id that triggered the call. |
-| Unwind | `instructions/unwind.json` | `<sha256>` | Proof of the reverse-leg once conditions are met. |
+| Maturity settlement | `instructions/unwind.json` | `<sha256>` | Contains only the agreement id; every economic term comes from stored state. |
 
 ```bash
 # Example hash helper (repeat per instruction file)
@@ -47,60 +47,44 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
 ## 2.1 Custodian Acknowledgements (tri-party only)
 
 Complete this section whenever a repo uses `--custodian`. The governance packet
-must include a signed acknowledgement from each custodian plus the hash of the
-file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
+must include the custodian's owner-signed maturity
+`CanExecuteSettlement` Grant. An operational acknowledgement may be retained
+as supplementary evidence, but it does not authorize a ledger debit.
 
 | Custodian | File | SHA-256 | Notes |
 |-----------|------|---------|-------|
-| `<i105...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| `<i105...>` | `grants/custodian_maturity_grant.norito` | `<sha256>` | Owner-signed exact collateral release permission for the canonical proposal. |
 
 > Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
 > so `scripts/repo_evidence_manifest.py` records the file in the same tree as
-> the staged instructions and config snippets. See
+> the staged instructions and consent records. See
 > `docs/examples/finance/repo_custodian_ack_template.md` for a ready-to-fill
 > template that matches the governance evidence contract.
 
-## 3. Configuration Snippet
+## 3. Exact On-Chain Consent
 
-Paste the `[settlement.repo]` TOML block that will land on the cluster (including
-`collateral_substitution_matrix`). Store the hash next to the snippet so
-auditors can confirm the runtime policy that was active when the repo booking
-was approved.
+Record both permissions derived from the byte-identical proposal. Repo
+admission does not replace agreement terms with node-local configuration and
+does not support collateral substitution.
 
-```toml
-[settlement.repo]
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
-default_margin_percent = "0.025"
+| Phase | Permission owner | Exact debited `AssetId` | Intent hash | Grant transaction / finality receipt |
+|-------|------------------|--------------------------|-------------|--------------------------------------|
+| Cash at open | `<counterparty>` | `<cash definition + account + scope>` | `<RepoIsi::initiation_intent_hash()>` | `<paths + hashes>` |
+| Collateral at maturity | `<counterparty or custodian>` | `<collateral definition + account + scope>` | `<RepoIsi::maturity_intent_hash()>` | `<paths + hashes>` |
 
-[settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["bill#wonderland"]
-```
+Both permissions must target the initiator and use
+`settlement_id = RepoIsi::settlement_id()`. Only
+`debited_asset.account()` may issue the corresponding Grant.
 
-`SHA-256 (config snippet): <sha256>`
+### 3.1 Agreement and Balance Snapshots
 
-### 3.1 Post-Approval Configuration Snapshots
+After open, archive the accepted `RepoAgreement` and exact scoped balances:
 
-After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
-auditors can prove the approved policy is live across the cluster (see
-`docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
-
-```bash
-mkdir -p artifacts/finance/repo/<slug>/config/peers
-curl -fsSL https://peer01.example/v1/configuration \
-  | jq '.' \
-  > artifacts/finance/repo/<slug>/config/peers/peer01.json
-```
-
-| Peer / source | File | SHA-256 | Block height | Notes |
-|---------------|------|---------|--------------|-------|
-| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot captured immediately after the config rollout. |
-| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | Confirms `[settlement.repo]` matches the staged TOML. |
-
-Record the digests alongside the peer ids in `hashes.txt` (or the equivalent
-summary) so reviewers can trace which nodes ingested the change. The snapshots
-live under `config/peers/` next to the TOML snippet and will be picked up
-automatically by `scripts/repo_evidence_manifest.py`.
+| Snapshot | File | SHA-256 | Block height | Notes |
+|----------|------|---------|--------------|-------|
+| Accepted agreement | `state/agreement_open.json` | `<sha256>` | `<block-height>` | Includes `cash_source`, `collateral_custody_asset`, and active status. |
+| Exact source balances | `state/balances_open.json` | `<sha256>` | `<block-height>` | Records only the consent-selected scopes. |
+| Settled tombstone | `state/agreement_settled.json` | `<sha256>` | `<block-height>` | `settlement_timestamp_ms` equals recorded maturity. |
 
 ## 4. Deterministic Test Artefacts
 
@@ -115,7 +99,7 @@ system.
 | Artefact | File | SHA-256 | Notes |
 |----------|------|---------|-------|
 | Lifecycle proof log | `tests/repo_lifecycle.log` | `<sha256>` | Captured with `--nocapture` output. |
-| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes substitution + margin cadence coverage. |
+| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes owner-issued Grants, maturity gating, replay rejection, and margin cadence. |
 
 ## 5. Lifecycle Proof Snapshot
 
@@ -123,7 +107,7 @@ Every packet must include the deterministic lifecycle snapshot exported from
 `repo_deterministic_lifecycle_proof_matches_fixture`. Run the harness with the
 export knobs enabled so reviewers can diff the JSON frame and digest against
 the fixture tracked in `crates/iroha_core/tests/fixtures/` (see
-`docs/source/finance/repo_ops.md` §2.7).
+the lifecycle-proof evidence checklist in `docs/source/finance/repo_ops.md`).
 
 ```bash
 REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<slug>/repo_proof_snapshot.json \
@@ -149,7 +133,7 @@ scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
 
 Generate the manifest for the entire evidence directory so auditors can verify
 hashes without unpacking the archive. The helper mirrors the workflow described
-in `docs/source/finance/repo_ops.md` §3.2.
+in the evidence-manifest checklist in `docs/source/finance/repo_ops.md`.
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -184,7 +168,8 @@ hashes here so reviewers can jump straight to the evidence.
 Mark each item once complete.
 
 - [ ] Instruction payloads staged, hashed, and attached.
-- [ ] Configuration snippet hash recorded.
+- [ ] Both owner-issued Grant transactions and finality receipts attached.
+- [ ] Exact scoped balance and agreement snapshots attached.
 - [ ] Deterministic test logs captured + hashed.
 - [ ] Lifecycle snapshot + digest exported.
 - [ ] Evidence manifest generated and hash recorded.

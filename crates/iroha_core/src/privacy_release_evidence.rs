@@ -135,8 +135,10 @@ use crate::privacy_engines::{
         prove_pq_masp_v1_with_rng, verify_pq_masp_v1,
     },
     vega::{
-        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VegaMdlConsensusBindingV1, VegaMdlWitnessV1,
-        derive_device_authentication_digest_v1, prove_mdl_figure9_v1, verify_mdl_figure9_v1,
+        VEGA_MDL_PUBLIC_INPUT_COUNT_V1, VEGA_PRIVACY_ACTION_INDEX_V1, VegaMdlConsensusBindingV1,
+        VegaMdlWitnessV1, VegaPrivacyActionPublicInputV1, VegaPrivacyActionTransactionContextV1,
+        VegaPrivacyActionWitnessMaterialV1, derive_device_authentication_digest_v1,
+        prepare_vega_privacy_action_with_rng_v1, prove_mdl_figure9_v1, verify_mdl_figure9_v1,
     },
     verange::{
         MAX_VERANGE_TYPE1_BATCH_COMMITMENTS_V1, MAX_VERANGE_TYPE1_BATCH_PROOF_BYTES_V1,
@@ -151,11 +153,14 @@ use crate::privacy_engines::{
     zk_ams::{
         MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1, MAX_ZK_AMS_LSAG_PROOF_BYTES_V1,
         ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1, ZK_AMS_MAX_RING_SIZE_V1, ZK_AMS_MIN_RING_SIZE_V1,
-        ZkAmsBatchCredentialWitnessV1, ZkAmsSeedSecretV1, prove_zk_ams_batch_admission_v1,
-        sign_zk_ams_provision_statement_v1, verify_zk_ams_batch_admission_v1,
-        verify_zk_ams_provision_statement_v1, zk_ams_batch_admission_adversarial_wires_v1,
-        zk_ams_generator_digest_v1, zk_ams_key_image_v1, zk_ams_registry_transition_root_v1,
-        zk_ams_seed_public_key_v1,
+        ZK_AMS_PRIVACY_ACTION_INDEX_V1, ZkAmsBatchCredentialWitnessV1,
+        ZkAmsPrivacyActionGovernanceV1, ZkAmsPrivacyActionTransactionContextV1, ZkAmsSeedSecretV1,
+        prepare_zk_ams_batch_admission_transaction_intent_v1,
+        prepare_zk_ams_provision_account_transaction_intent_v1, prove_zk_ams_batch_admission_v1,
+        sign_zk_ams_provision_statement_v1, validate_zk_ams_privacy_action_transaction_intent_v1,
+        verify_zk_ams_batch_admission_v1, verify_zk_ams_provision_statement_v1,
+        zk_ams_batch_admission_adversarial_wires_v1, zk_ams_generator_digest_v1,
+        zk_ams_key_image_v1, zk_ams_registry_transition_root_v1, zk_ams_seed_public_key_v1,
     },
     zk_x509::profile::{
         ZK_X509_MAX_PROOF_BYTES_V1, ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
@@ -2699,10 +2704,12 @@ fn run_bootle_lantern_stage_v1(
 const ZK_AMS_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-v1";
 const ZK_AMS_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x11; 32];
 const ZK_AMS_RELEASE_BLOCK_TIMESTAMP_MS_V1: u64 = 1_785_024_000_000;
-const ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1: u32 = 0;
-const ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1: u32 = 0;
-const ZK_AMS_RELEASE_ADMISSION_INTENT_DIGEST_V1: [u8; 32] = [0x21; 32];
-const ZK_AMS_RELEASE_PROVISION_INTENT_DIGEST_V1: [u8; 32] = [0x22; 32];
+const ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1: u32 = ZK_AMS_PRIVACY_ACTION_INDEX_V1;
+const ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1: u32 = ZK_AMS_PRIVACY_ACTION_INDEX_V1;
+const ZK_AMS_RELEASE_ADMISSION_CREATION_TIME_MS_V1: u64 = ZK_AMS_RELEASE_BLOCK_TIMESTAMP_MS_V1 - 2;
+const ZK_AMS_RELEASE_PROVISION_CREATION_TIME_MS_V1: u64 = ZK_AMS_RELEASE_BLOCK_TIMESTAMP_MS_V1 - 1;
+const ZK_AMS_RELEASE_ADMISSION_NONCE_V1: u32 = 21;
+const ZK_AMS_RELEASE_PROVISION_NONCE_V1: u32 = 22;
 
 fn run_zk_ams_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
@@ -2730,6 +2737,19 @@ fn run_zk_ams_stage_v1(
         admission.next_epoch,
         admission.next_registry_record_digest,
     )?;
+    let admission_intent = validate_zk_ams_privacy_action_transaction_intent_v1(
+        &zk_ams_admission_transaction_context_v1()?,
+        &admission.statement,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    let provision_intent = validate_zk_ams_privacy_action_transaction_intent_v1(
+        &zk_ams_provision_transaction_context_v1()?,
+        &statement,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+    if admission_intent == provision_intent {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
     let binding = zk_ams_binding_v1(&statement)?;
     let mut rng = EvidenceRng06::new(stage_seed_v1(PrivacyProtocolIdV1::IrohaZkAmsV1, case_kind));
     let provision_proof_bytes = sign_zk_ams_provision_statement_v1(
@@ -3307,8 +3327,7 @@ fn zk_ams_admission_lineage_material_v1(
                     anchor,
                 )
             });
-    let statement = IrohaZkAmsStatementV1 {
-        context: zk_ams_admission_statement_context_v1()?,
+    let governance = ZkAmsPrivacyActionGovernanceV1 {
         issuer_id,
         issuer_public_key,
         issuer_policy_record_digest,
@@ -3316,14 +3335,20 @@ fn zk_ams_admission_lineage_material_v1(
         registry_record_digest,
         policy_id,
         policy_digest,
-        action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
-            account_registry_root: current_root,
-            account_registry_root_epoch: current_epoch,
-            next_account_registry_root: next_root,
-            next_account_registry_root_epoch: next_epoch,
-            anchors: anchors.to_vec(),
-        }),
     };
+    let action = PrivacyZkAmsBatchAdmissionV1 {
+        account_registry_root: current_root,
+        account_registry_root_epoch: current_epoch,
+        next_account_registry_root: next_root,
+        next_account_registry_root_epoch: next_epoch,
+        anchors: anchors.to_vec(),
+    };
+    let statement = prepare_zk_ams_batch_admission_transaction_intent_v1(
+        &zk_ams_admission_transaction_context_v1()?,
+        governance,
+        action,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let binding = zk_ams_binding_v1(&statement)?;
     let witnesses = credentials[batch_start..]
         .iter()
@@ -3449,31 +3474,35 @@ fn privacy_release_account_v1(seed: u8) -> Result<AccountId, PrivacyReleaseEvide
     Ok(AccountId::new(key_pair.public_key().clone()))
 }
 
-fn zk_ams_statement_context_v1(
-    transaction_intent_digest: [u8; 32],
-) -> Result<PrivacyStatementContextV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    Ok(PrivacyStatementContextV1 {
+fn zk_ams_release_transaction_context_v1(
+    creation_time_ms: u64,
+    nonce: u32,
+) -> Result<ZkAmsPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
+    Ok(ZkAmsPrivacyActionTransactionContextV1 {
         chain_id: ChainId::from(ZK_AMS_RELEASE_CHAIN_ID_V1),
-        action_index: 0,
-        transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(transaction_intent_digest),
-        parameter_id: compiled.parameter_id,
-        parameter_digest: compiled.parameter_digest,
-        verifier_digest: compiled.verifier_digest,
-        statement_schema_digest: compiled.statement_schema_digest,
-        engine_manifest_digest: compiled.engine_manifest_digest,
+        authority: privacy_release_account_v1(39)?,
+        creation_time: Duration::from_millis(creation_time_ms),
+        time_to_live: Some(Duration::from_secs(60)),
+        nonce: NonZeroU32::new(nonce),
+        fee_payment: FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
+        metadata: Metadata::default(),
     })
 }
 
-fn zk_ams_admission_statement_context_v1()
--> Result<PrivacyStatementContextV1, PrivacyReleaseEvidenceErrorClassV1> {
-    zk_ams_statement_context_v1(ZK_AMS_RELEASE_ADMISSION_INTENT_DIGEST_V1)
+fn zk_ams_admission_transaction_context_v1()
+-> Result<ZkAmsPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
+    zk_ams_release_transaction_context_v1(
+        ZK_AMS_RELEASE_ADMISSION_CREATION_TIME_MS_V1,
+        ZK_AMS_RELEASE_ADMISSION_NONCE_V1,
+    )
 }
 
-fn zk_ams_provision_statement_context_v1()
--> Result<PrivacyStatementContextV1, PrivacyReleaseEvidenceErrorClassV1> {
-    zk_ams_statement_context_v1(ZK_AMS_RELEASE_PROVISION_INTENT_DIGEST_V1)
+fn zk_ams_provision_transaction_context_v1()
+-> Result<ZkAmsPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
+    zk_ams_release_transaction_context_v1(
+        ZK_AMS_RELEASE_PROVISION_CREATION_TIME_MS_V1,
+        ZK_AMS_RELEASE_PROVISION_NONCE_V1,
+    )
 }
 
 fn zk_ams_issuer_key_v1() -> Result<PrivacyP256PointV1, PrivacyReleaseEvidenceErrorClassV1> {
@@ -3498,8 +3527,7 @@ fn zk_ams_provision_statement_v1(
     let policy_id = PrivacyPolicyIdV1::new([0x35; 32]);
     let issuer_public_key = zk_ams_issuer_key_v1()?;
     let policy_digest = PrivacyPolicyDigestV1::new([0x36; 32]);
-    Ok(IrohaZkAmsStatementV1 {
-        context: zk_ams_provision_statement_context_v1()?,
+    let governance = ZkAmsPrivacyActionGovernanceV1 {
         issuer_id,
         issuer_public_key,
         issuer_policy_record_digest: zk_ams_issuer_policy_record_digest_v1(
@@ -3512,17 +3540,23 @@ fn zk_ams_provision_statement_v1(
         registry_record_digest,
         policy_id,
         policy_digest,
-        action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
-            account_registry_root: registry_root,
-            account_registry_root_epoch: registry_epoch,
-            admitted_seed_key_ring: ring
-                .iter()
-                .map(|(public, _)| PrivacyZkAmsSeedPublicKeyV1::new(*public))
-                .collect(),
-            account_id: privacy_release_account_v1(40)?,
-            key_image: PrivacyZkAmsKeyImageV1::new(key_image),
-        }),
-    })
+    };
+    let action = PrivacyZkAmsProvisionAccountV1 {
+        account_registry_root: registry_root,
+        account_registry_root_epoch: registry_epoch,
+        admitted_seed_key_ring: ring
+            .iter()
+            .map(|(public, _)| PrivacyZkAmsSeedPublicKeyV1::new(*public))
+            .collect(),
+        account_id: privacy_release_account_v1(40)?,
+        key_image: PrivacyZkAmsKeyImageV1::new(key_image),
+    };
+    prepare_zk_ams_provision_account_transaction_intent_v1(
+        &zk_ams_provision_transaction_context_v1()?,
+        governance,
+        action,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)
 }
 
 fn zk_ams_binding_v1(
@@ -5005,19 +5039,37 @@ fn run_pq_masp_stage_v1(
 const VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1: u64 = 1_785_024_000_000;
 const VEGA_RELEASE_CHAIN_ID_V1: &str = "taira-privacy-release-evidence-vega-v1";
 const VEGA_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0xa7; 32];
-const VEGA_RELEASE_ACTION_INDEX_V1: u32 = 3;
+const VEGA_RELEASE_ACTION_INDEX_V1: u32 = VEGA_PRIVACY_ACTION_INDEX_V1;
+const VEGA_RELEASE_CREATION_TIME_MS_V1: u64 = VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1 - 1;
+const VEGA_RELEASE_NONCE_V1: u32 = 26;
 const VEGA_RELEASE_VARIABLE_COUNT_V1: u64 = 524_288;
 const VEGA_RELEASE_CONSTRAINT_COUNT_V1: u64 = 1_048_576;
 const VEGA_RELEASE_COMBINED_SUMCHECK_ROUNDS_V1: u64 = 40;
 const VEGA_RELEASE_PUBLIC_INPUT_COUNT_V1: usize = 14;
 
 struct VegaReleaseFixtureV1 {
-    statement: VegaExistingCredentialStatementV1,
+    public_input: VegaPrivacyActionPublicInputV1,
     issuer_record: PrivacyVegaIssuerRecordV1,
-    witness: VegaMdlWitnessV1,
-    issuer_high_s_witness: VegaMdlWitnessV1,
-    device_high_s_witness: VegaMdlWitnessV1,
+    issuer_authentication_sig_structure: Vec<u8>,
+    mobile_security_object_payload: Vec<u8>,
+    birth_date_issuer_signed_item: Vec<u8>,
+    issuer_signature: P256Signature,
+    issuer_high_s_signature: P256Signature,
+    device_signing_key: P256SigningKey,
     genesis_hash: [u8; 32],
+}
+
+fn vega_release_transaction_context_v1()
+-> Result<VegaPrivacyActionTransactionContextV1, PrivacyReleaseEvidenceErrorClassV1> {
+    Ok(VegaPrivacyActionTransactionContextV1 {
+        chain_id: ChainId::from(VEGA_RELEASE_CHAIN_ID_V1),
+        authority: privacy_release_account_v1(0x56)?,
+        creation_time: Duration::from_millis(VEGA_RELEASE_CREATION_TIME_MS_V1),
+        time_to_live: Some(Duration::from_secs(60)),
+        nonce: NonZeroU32::new(VEGA_RELEASE_NONCE_V1),
+        fee_payment: FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
+        metadata: Metadata::default(),
+    })
 }
 
 fn run_vega_stage_v1(
@@ -5025,21 +5077,106 @@ fn run_vega_stage_v1(
 ) -> Result<StageMaterialV1, PrivacyReleaseEvidenceErrorClassV1> {
     let fixture = vega_release_fixture_v1()?;
     let VegaReleaseFixtureV1 {
-        statement,
+        public_input,
         issuer_record,
-        witness,
-        issuer_high_s_witness,
-        device_high_s_witness,
+        issuer_authentication_sig_structure,
+        mobile_security_object_payload,
+        birth_date_issuer_signed_item,
+        issuer_signature,
+        issuer_high_s_signature,
+        device_signing_key,
         genesis_hash,
     } = fixture;
+    let witness_material = VegaPrivacyActionWitnessMaterialV1::new(
+        issuer_authentication_sig_structure.clone(),
+        mobile_security_object_payload.clone(),
+        birth_date_issuer_signed_item.clone(),
+        &issuer_signature.to_bytes(),
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let proof_seed = stage_purpose_seed_v1(
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+        case_kind,
+        b"figure9-proof-randomness",
+    )?;
+    let mut proof_rng = EvidenceRng06::new(proof_seed);
+    let prepared = prepare_vega_privacy_action_with_rng_v1(
+        vega_release_transaction_context_v1()?,
+        public_input,
+        witness_material,
+        &device_signing_key,
+        genesis_hash,
+        VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+        &mut proof_rng,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
+    let (statement, proof) = {
+        let (intent, submission) = prepared
+            .release_evidence_payload_v1()
+            .privacy_transaction_intent_binding_if_present_v1()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+            .ok_or(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+        if intent.as_bytes() != &prepared.transaction_intent_digest()
+            || submission.envelope.statement_digest.as_bytes() != &prepared.statement_digest()
+        {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        }
+        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+            &submission.envelope.statement
+        else {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        };
+        let PrivacyProofV1::VegaExistingCredentialZkV0(proof) = &submission.envelope.proof else {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        };
+        if proof.as_bytes().len()
+            != usize::try_from(prepared.proof_bytes())
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?
+        {
+            return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+        }
+        (statement.clone(), proof.as_bytes().to_vec())
+    };
     validate_vega_authoritative_issuer_binding_v1(&statement, &issuer_record)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let binding = VegaMdlConsensusBindingV1::from_context(&statement.context, genesis_hash);
-    let prover_config = VegaMdlProverConfigV1::new(1)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
+
+    let device_signature: P256Signature = device_signing_key
+        .sign_prehash(statement.device_authentication_digest.as_bytes())
+        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let device_signature = device_signature.normalize_s().unwrap_or(device_signature);
+    let (device_r, device_s) = device_signature.split_scalars();
+    let device_high_s_signature =
+        P256Signature::from_scalars(device_r.to_repr(), (-*device_s).to_repr())
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    if issuer_high_s_signature.normalize_s().is_none()
+        || device_high_s_signature.normalize_s().is_none()
+    {
+        return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
+    }
     let noncanonical_witnesses: [(&[u8], VegaMdlWitnessV1); 2] = [
-        (b"figure9-issuer-high-s-rejection", issuer_high_s_witness),
-        (b"figure9-device-high-s-rejection", device_high_s_witness),
+        (
+            b"figure9-issuer-high-s-rejection",
+            VegaMdlWitnessV1::new(
+                issuer_authentication_sig_structure.clone(),
+                mobile_security_object_payload.clone(),
+                birth_date_issuer_signed_item.clone(),
+                &issuer_high_s_signature.to_bytes(),
+                &device_signature.to_bytes(),
+            )
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        ),
+        (
+            b"figure9-device-high-s-rejection",
+            VegaMdlWitnessV1::new(
+                issuer_authentication_sig_structure,
+                mobile_security_object_payload,
+                birth_date_issuer_signed_item,
+                &issuer_signature.to_bytes(),
+                &device_high_s_signature.to_bytes(),
+            )
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
+        ),
     ];
     for (purpose, noncanonical_witness) in noncanonical_witnesses {
         let mut noncanonical_rng = EvidenceRng06::new(stage_purpose_seed_v1(
@@ -5062,21 +5199,6 @@ fn run_vega_stage_v1(
             return Err(PrivacyReleaseEvidenceErrorClassV1::NonCanonicalWitnessAccepted);
         }
     }
-    let proof_seed = stage_purpose_seed_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-        case_kind,
-        b"figure9-proof-randomness",
-    )?;
-    let mut proof_rng = EvidenceRng06::new(proof_seed);
-    let proof = prove_mdl_figure9_v1(
-        &statement,
-        &binding,
-        VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
-        witness,
-        prover_config,
-        &mut proof_rng,
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
     verify_mdl_figure9_v1(
         &statement,
         &binding,
@@ -5444,7 +5566,12 @@ fn verify_vega_release_production_envelope_v1(
             vega_issuer_record: issuer_record,
         },
     )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected)?;
+    .map_err(|source| match source {
+        PrivacyVerificationErrorV1::NativeVega(_) => {
+            PrivacyReleaseEvidenceErrorClassV1::NativeVerifierRejected
+        }
+        _ => PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected,
+    })?;
     if effects.protocol_id() != PrivacyProtocolIdV1::VegaExistingCredentialZkV0
         || effects.statement_digest() != statement_digest
         || effects.action_index() != authoritative_action_index
@@ -5467,8 +5594,6 @@ fn refresh_vega_device_authentication_digest_v1(
 }
 
 fn vega_release_fixture_v1() -> Result<VegaReleaseFixtureV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let issuer_signing_key = P256SigningKey::from_bytes((&[1_u8; 32]).into())
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let device_signing_key = P256SigningKey::from_bytes((&[2_u8; 32]).into())
@@ -5562,27 +5687,8 @@ fn vega_release_fixture_v1() -> Result<VegaReleaseFixtureV1, PrivacyReleaseEvide
     ]);
 
     let genesis_hash = VEGA_RELEASE_GENESIS_HASH_V1;
-    let mut statement = VegaExistingCredentialStatementV1 {
-        context: PrivacyStatementContextV1 {
-            chain_id: ChainId::from(VEGA_RELEASE_CHAIN_ID_V1),
-            action_index: VEGA_RELEASE_ACTION_INDEX_V1,
-            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x26; 32]),
-            parameter_id: profile.parameter_id,
-            parameter_digest: profile.parameter_digest,
-            verifier_digest: profile.verifier_digest,
-            statement_schema_digest: profile.statement_schema_digest,
-            engine_manifest_digest: profile.engine_manifest_digest,
-        },
-        issuer_id: issuer_record.issuer_id,
-        issuer_record_epoch: issuer_record.record_epoch,
-        issuer_record_digest: issuer_record.record_digest,
-        document_type: issuer_record.document_type,
-        namespace: issuer_record.namespace,
-        digest_algorithm: issuer_record.digest_algorithm,
-        issuer_authentication_algorithm: issuer_record.issuer_authentication_algorithm,
-        device_authentication_algorithm: issuer_record.device_authentication_algorithm,
-        issuer_public_key: issuer_record.issuer_public_key,
-        device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new([0x11; 32]),
+    let public_input = VegaPrivacyActionPublicInputV1 {
+        issuer_record,
         presentation_date: PrivacyVegaMdlDateV1 {
             year: 2026,
             month: 7,
@@ -5592,55 +5698,27 @@ fn vega_release_fixture_v1() -> Result<VegaReleaseFixtureV1, PrivacyReleaseEvide
         reader_challenge: PrivacyChallengeV1::new([0x31; 32]),
         session_transcript_digest: PrivacySessionTranscriptDigestV1::new([0x32; 32]),
     };
-    refresh_vega_device_authentication_digest_v1(&mut statement, genesis_hash)?;
     let issuer_digest: [u8; 32] = Sha256::digest(&sig_structure).into();
     let issuer_signature: P256Signature = issuer_signing_key
         .sign_prehash(&issuer_digest)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let issuer_signature = issuer_signature.normalize_s().unwrap_or(issuer_signature);
-    let device_signature: P256Signature = device_signing_key
-        .sign_prehash(statement.device_authentication_digest.as_bytes())
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let device_signature = device_signature.normalize_s().unwrap_or(device_signature);
     let (issuer_r, issuer_s) = issuer_signature.split_scalars();
-    let issuer_high_s = P256Signature::from_scalars(issuer_r.to_repr(), (-*issuer_s).to_repr())
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let (device_r, device_s) = device_signature.split_scalars();
-    let device_high_s = P256Signature::from_scalars(device_r.to_repr(), (-*device_s).to_repr())
-        .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    if issuer_high_s.normalize_s().is_none() || device_high_s.normalize_s().is_none() {
+    let issuer_high_s_signature =
+        P256Signature::from_scalars(issuer_r.to_repr(), (-*issuer_s).to_repr())
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    if issuer_high_s_signature.normalize_s().is_none() {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let issuer_high_s_witness = VegaMdlWitnessV1::new(
-        sig_structure.clone(),
-        mso_payload.clone(),
-        birth_item.clone(),
-        &issuer_high_s.to_bytes(),
-        &device_signature.to_bytes(),
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let device_high_s_witness = VegaMdlWitnessV1::new(
-        sig_structure.clone(),
-        mso_payload.clone(),
-        birth_item.clone(),
-        &issuer_signature.to_bytes(),
-        &device_high_s.to_bytes(),
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let witness = VegaMdlWitnessV1::new(
-        sig_structure,
-        mso_payload,
-        birth_item,
-        &issuer_signature.to_bytes(),
-        &device_signature.to_bytes(),
-    )
-    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     Ok(VegaReleaseFixtureV1 {
-        statement,
+        public_input,
         issuer_record,
-        witness,
-        issuer_high_s_witness,
-        device_high_s_witness,
+        issuer_authentication_sig_structure: sig_structure,
+        mobile_security_object_payload: mso_payload,
+        birth_date_issuer_signed_item: birth_item,
+        issuer_signature,
+        issuer_high_s_signature,
+        device_signing_key,
         genesis_hash,
     })
 }
@@ -5922,44 +6000,37 @@ impl rand::TryCryptoRng for EvidenceRng09 {}
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::json::Json;
+
     use super::*;
+    use crate::privacy_engines::vega::{
+        build_signed_vega_privacy_action_with_rng_v1, sign_prepared_vega_privacy_action_v1,
+    };
 
     const RAYON_POOL_CHILD_MARKER_V1: &str = "IROHA_PRIVACY_RELEASE_RAYON_POOL_CHILD_V1";
 
     #[test]
     fn zk_ams_release_lineage_uses_distinct_single_action_transactions() {
-        let limits = PrivacyConsensusLimitsV1::taira_default();
         let admission =
-            zk_ams_admission_statement_context_v1().expect("admission transaction context");
+            zk_ams_admission_transaction_context_v1().expect("admission transaction context");
         let provision =
-            zk_ams_provision_statement_context_v1().expect("provision transaction context");
+            zk_ams_provision_transaction_context_v1().expect("provision transaction context");
 
-        admission
-            .validate(&limits)
-            .expect("admission is the sole privacy action in its transaction");
-        provision
-            .validate(&limits)
-            .expect("provisioning is the sole privacy action in its transaction");
         assert_eq!(ZK_AMS_RELEASE_ADMISSION_ACTION_INDEX_V1, 0);
         assert_eq!(ZK_AMS_RELEASE_PROVISION_ACTION_INDEX_V1, 0);
-        assert_eq!(admission.action_index, 0);
-        assert_eq!(provision.action_index, 0);
-        assert_ne!(
-            admission.transaction_intent_digest, provision.transaction_intent_digest,
-            "state-dependent admission and provisioning cannot share one transaction intent"
+        assert_eq!(admission.chain_id, provision.chain_id);
+        assert_eq!(admission.authority, provision.authority);
+        assert_eq!(admission.time_to_live, provision.time_to_live);
+        assert_eq!(admission.fee_payment, provision.fee_payment);
+        assert_eq!(admission.metadata, provision.metadata);
+        assert!(
+            admission.creation_time < provision.creation_time,
+            "admission must precede provisioning"
         );
-
-        let mut impossible_second_action = provision;
-        impossible_second_action.action_index = 1;
-        assert!(matches!(
-            impossible_second_action.validate(&limits),
-            Err(
-                iroha_data_model::privacy::PrivacyStatementValidationError::ActionIndexOutOfBounds {
-                    index: 1,
-                    max_actions: 1,
-                }
-            )
-        ));
+        assert!(
+            admission.nonce.expect("admission nonce") < provision.nonce.expect("provision nonce"),
+            "sequential transactions require ordered nonces"
+        );
     }
 
     #[test]
@@ -6001,6 +6072,339 @@ mod tests {
             Err(PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected),
             "Taira's one-action transaction limit must reject before native verification"
         );
+    }
+
+    #[test]
+    fn vega_release_fixture_uses_the_canonical_single_taira_action() {
+        let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
+        let transaction =
+            vega_release_transaction_context_v1().expect("canonical Vega transaction context");
+        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+            .expect("compiled Vega profile");
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let context = PrivacyStatementContextV1 {
+            chain_id: transaction.chain_id.clone(),
+            action_index: VEGA_RELEASE_ACTION_INDEX_V1,
+            transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x27; 32]),
+            parameter_id: profile.parameter_id,
+            parameter_digest: profile.parameter_digest,
+            verifier_digest: profile.verifier_digest,
+            statement_schema_digest: profile.statement_schema_digest,
+            engine_manifest_digest: profile.engine_manifest_digest,
+        };
+
+        fixture
+            .public_input
+            .issuer_record
+            .validate()
+            .expect("canonical active Vega issuer record");
+        context
+            .validate(&limits)
+            .expect("Vega is the sole privacy action in its transaction");
+        assert_eq!(VEGA_RELEASE_ACTION_INDEX_V1, 0);
+        assert_eq!(
+            transaction.chain_id,
+            ChainId::from(VEGA_RELEASE_CHAIN_ID_V1)
+        );
+        assert_eq!(
+            transaction.creation_time,
+            Duration::from_millis(VEGA_RELEASE_CREATION_TIME_MS_V1)
+        );
+        assert_eq!(transaction.nonce, NonZeroU32::new(VEGA_RELEASE_NONCE_V1));
+
+        let mut impossible_second_action = context;
+        impossible_second_action.action_index = 1;
+        assert!(matches!(
+            impossible_second_action.validate(&limits),
+            Err(
+                iroha_data_model::privacy::PrivacyStatementValidationError::ActionIndexOutOfBounds {
+                    index: 1,
+                    max_actions: 1,
+                }
+            )
+        ));
+    }
+
+    #[test]
+    #[ignore = "release gate: proves the full native Vega Figure 9 action once"]
+    fn vega_action_api_binds_signs_and_rejects_transaction_proof_and_statement_drift() {
+        let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
+        let witness_material = VegaPrivacyActionWitnessMaterialV1::new(
+            fixture.issuer_authentication_sig_structure.clone(),
+            fixture.mobile_security_object_payload.clone(),
+            fixture.birth_date_issuer_signed_item.clone(),
+            &fixture.issuer_signature.to_bytes(),
+        )
+        .expect("canonical Vega action witness material");
+        let mut rng = EvidenceRng06::new([0x91; 32]);
+        let prepared = prepare_vega_privacy_action_with_rng_v1(
+            vega_release_transaction_context_v1().expect("canonical transaction context"),
+            fixture.public_input,
+            witness_material,
+            &fixture.device_signing_key,
+            fixture.genesis_hash,
+            VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+            &mut rng,
+        )
+        .expect("canonical two-pass Vega action");
+        assert_ne!(prepared.transaction_intent_digest(), [0; 32]);
+        assert_ne!(prepared.statement_digest(), [0; 32]);
+        assert_ne!(prepared.proof_envelope_hash(), [0; 32]);
+        assert_eq!(
+            prepared.effect(),
+            crate::privacy_engines::vega::VegaPrivacyActionEffectV1::
+                ActionVerificationAndFinalityOnly
+        );
+        let prepared_debug = format!("{prepared:?}");
+        assert!(!prepared_debug.contains("TransactionPayload"));
+        assert!(!prepared_debug.contains("PrivacyProofBytes"));
+        assert!(!prepared_debug.contains("issuer_authentication_sig_structure"));
+
+        let payload = prepared.release_evidence_payload_v1().clone();
+        match payload.instructions() {
+            iroha_data_model::transaction::Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 1, "exactly one direct Vega action");
+                assert!(
+                    instructions[0]
+                        .as_any()
+                        .downcast_ref::<SubmitPrivacyProofV1>()
+                        .is_some(),
+                    "the sole action must be the typed Vega submission"
+                );
+            }
+            other => panic!("unexpected Vega executable form: {other:?}"),
+        }
+        assert!(
+            payload.attachments.is_none(),
+            "canonical Vega actions cannot carry proof attachments"
+        );
+        let (intent, submission) = payload
+            .privacy_transaction_intent_binding_if_present_v1()
+            .expect("canonical direct privacy scan")
+            .expect("exactly one Vega submission");
+        assert_eq!(intent.as_bytes(), &prepared.transaction_intent_digest());
+        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) =
+            &submission.envelope.statement
+        else {
+            panic!("prepared Vega statement changed variant")
+        };
+        let PrivacyProofV1::VegaExistingCredentialZkV0(proof) = &submission.envelope.proof else {
+            panic!("prepared Vega proof changed variant")
+        };
+        assert_eq!(statement.context.action_index, VEGA_PRIVACY_ACTION_INDEX_V1);
+        assert!(!proof.as_bytes().is_empty());
+        assert_eq!(
+            prepared.statement_bytes(),
+            u32::try_from(
+                norito::to_bytes(&submission.envelope.statement)
+                    .expect("typed Vega statement encodes")
+                    .len()
+            )
+            .expect("bounded Vega statement")
+        );
+        assert_eq!(
+            prepared.proof_bytes(),
+            u32::try_from(proof.as_bytes().len()).expect("bounded Vega proof")
+        );
+        let encoded_envelope =
+            norito::to_bytes(&submission.envelope).expect("typed Vega envelope encodes");
+        assert_eq!(
+            prepared.encoded_proof_envelope_bytes(),
+            u32::try_from(encoded_envelope.len()).expect("bounded Vega envelope")
+        );
+        assert_eq!(
+            prepared.proof_envelope_hash(),
+            *iroha_crypto::Hash::new(&encoded_envelope).as_ref()
+        );
+        submission
+            .envelope
+            .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+            .expect("prepared envelope is intrinsically valid");
+        let mut proof_empty_escape = submission.envelope.clone();
+        proof_empty_escape.proof =
+            PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(Vec::new()));
+        assert!(
+            proof_empty_escape
+                .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
+                .is_err(),
+            "the internal proof-empty projection must never be submittable"
+        );
+
+        let mut changed_chain = payload.clone();
+        changed_chain.chain = ChainId::from("vega-signed-action-wrong-chain-v1");
+        assert!(
+            changed_chain
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "chain mutation must invalidate the signed intent"
+        );
+        let mut changed_authority = payload.clone();
+        changed_authority.authority =
+            privacy_release_account_v1(0x57).expect("fixed alternate authority");
+        assert!(
+            changed_authority
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "authority mutation must invalidate the signed intent"
+        );
+        let mut changed_creation_time = payload.clone();
+        changed_creation_time.creation_time_ms += 1;
+        assert!(
+            changed_creation_time
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "creation-time mutation must invalidate the signed intent"
+        );
+        let mut changed_fee = payload.clone();
+        changed_fee.fee_payment =
+            FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(6_000_000));
+        assert!(
+            changed_fee
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "fee mutation must invalidate the signed intent"
+        );
+        let mut changed_ttl = payload.clone();
+        changed_ttl.time_to_live_ms = NonZeroU64::new(61_000);
+        assert!(
+            changed_ttl
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "TTL mutation must invalidate the signed intent"
+        );
+        let mut changed_nonce = payload.clone();
+        changed_nonce.nonce = NonZeroU32::new(VEGA_RELEASE_NONCE_V1 + 1);
+        assert!(
+            changed_nonce
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "nonce mutation must invalidate the signed intent"
+        );
+        let mut changed_metadata = payload.clone();
+        changed_metadata.metadata.insert(
+            "vega_intent_mutation"
+                .parse()
+                .expect("canonical metadata key"),
+            Json::new(1_u32),
+        );
+        assert!(
+            changed_metadata
+                .validate_privacy_transaction_intent_binding_v1()
+                .is_err(),
+            "metadata mutation must invalidate the signed intent"
+        );
+
+        let binding =
+            VegaMdlConsensusBindingV1::from_context(&statement.context, fixture.genesis_hash);
+        let mut changed_proof = proof.as_bytes().to_vec();
+        let changed_proof_index = changed_proof.len() / 2;
+        changed_proof[changed_proof_index] ^= 1;
+        assert!(
+            verify_mdl_figure9_v1(
+                statement,
+                &binding,
+                VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+                &changed_proof,
+            )
+            .is_err(),
+            "proof drift must fail native verification"
+        );
+        let mut changed_statement = statement.clone();
+        changed_statement.minimum_age_years += 1;
+        refresh_vega_device_authentication_digest_v1(&mut changed_statement, fixture.genesis_hash)
+            .expect("mutated statement has canonical H_dev");
+        let changed_binding = VegaMdlConsensusBindingV1::from_context(
+            &changed_statement.context,
+            fixture.genesis_hash,
+        );
+        assert!(
+            verify_mdl_figure9_v1(
+                &changed_statement,
+                &changed_binding,
+                VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+                proof.as_bytes(),
+            )
+            .is_err(),
+            "statement drift must fail native verification"
+        );
+        let mut impossible_second_action = statement.clone();
+        impossible_second_action.context.action_index = 1;
+        assert!(matches!(
+            PrivacyStatementV1::VegaExistingCredentialZkV0(impossible_second_action)
+                .validate(&PrivacyConsensusLimitsV1::taira_default()),
+            Err(
+                iroha_data_model::privacy::PrivacyStatementValidationError::ActionIndexOutOfBounds {
+                    index: 1,
+                    max_actions: 1,
+                }
+            )
+        ));
+
+        let transaction_key_pair = KeyPair::try_from_seed(vec![0x56; 32], Algorithm::Ed25519)
+            .expect("fixed Vega transaction key");
+        let expected_intent = prepared.transaction_intent_digest();
+        let signed =
+            sign_prepared_vega_privacy_action_v1(prepared, transaction_key_pair.private_key())
+                .expect("sign sealed Vega action");
+        signed
+            .signed_transaction()
+            .verify_signature()
+            .expect("signed Vega transaction verifies");
+        assert_eq!(signed.transaction_intent_digest(), expected_intent);
+        assert_eq!(
+            signed.transaction_hash(),
+            *signed.signed_transaction().hash().as_ref()
+        );
+        assert!(
+            signed.signed_transaction().attachments().is_none(),
+            "signed canonical Vega actions cannot carry attachments"
+        );
+        let signed_debug = format!("{signed:?}");
+        assert!(!signed_debug.contains("SignedTransaction {"));
+        assert!(!signed_debug.contains("PrivacyProofBytes"));
+        let mut signed_intent_drift = signed.signed_transaction().payload().clone();
+        signed_intent_drift.nonce = NonZeroU32::new(VEGA_RELEASE_NONCE_V1 + 2);
+        let independently_resigned_drift = TransactionBuilder::from_payload(signed_intent_drift)
+            .expect("otherwise canonical drifted payload")
+            .try_sign(transaction_key_pair.private_key())
+            .expect("transaction signature covers the drifted payload");
+        independently_resigned_drift
+            .verify_signature()
+            .expect("drifted payload has an independently valid transaction signature");
+        assert!(
+            independently_resigned_drift
+                .privacy_transaction_intent_binding_if_present_v1()
+                .is_err(),
+            "a valid transaction signature cannot redeem a stale Vega intent"
+        );
+
+        let wrong_key_fixture =
+            vega_release_fixture_v1().expect("second canonical Vega release fixture");
+        let wrong_key_material = VegaPrivacyActionWitnessMaterialV1::new(
+            wrong_key_fixture
+                .issuer_authentication_sig_structure
+                .clone(),
+            wrong_key_fixture.mobile_security_object_payload.clone(),
+            wrong_key_fixture.birth_date_issuer_signed_item.clone(),
+            &wrong_key_fixture.issuer_signature.to_bytes(),
+        )
+        .expect("canonical wrong-key witness material");
+        let foreign_key_pair = KeyPair::try_from_seed(vec![0x57; 32], Algorithm::Ed25519)
+            .expect("fixed foreign transaction key");
+        let wrong_key = build_signed_vega_privacy_action_with_rng_v1(
+            vega_release_transaction_context_v1().expect("canonical transaction context"),
+            wrong_key_fixture.public_input,
+            wrong_key_material,
+            &wrong_key_fixture.device_signing_key,
+            wrong_key_fixture.genesis_hash,
+            VEGA_RELEASE_TRUSTED_TIMESTAMP_MS_V1,
+            foreign_key_pair.private_key(),
+            &mut EvidenceRng06::new([0x92; 32]),
+        );
+        assert!(matches!(
+            wrong_key,
+            Err(crate::privacy_engines::vega::VegaPrivacyActionBuildErrorV1::AuthorityKeyMismatch)
+        ));
     }
 
     #[test]

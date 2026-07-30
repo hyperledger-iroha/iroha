@@ -1655,12 +1655,16 @@ export interface ToriiRepoAgreement {
   counterparty: string;
   custodian: string | null;
   cashLeg: RepoLegDto;
+  cashSource: string;
   collateralLeg: RepoLegDto;
+  collateralCustodyAsset: string;
   rateBps: number;
   maturityTimestampMs: number;
   initiatedTimestampMs: number;
   lastMarginCheckTimestampMs: number;
   governance: RepoGovernanceDto;
+  settlementTimestampMs: number | null;
+  status: "active" | "settled";
 }
 
 export interface RepoAgreementListResponse {

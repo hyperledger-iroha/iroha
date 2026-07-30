@@ -3647,27 +3647,7 @@ fn repo_unwind_emits_instruction_payload() {
         .arg("--config")
         .arg(&config_path)
         .arg("--output")
-        .args([
-            "app",
-            "repo",
-            "unwind",
-            "--agreement-id",
-            "daily_repo",
-            "--initiator",
-            alice_account_literal(),
-            "--counterparty",
-            bob_account_literal(),
-            "--cash-asset",
-            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            "--cash-quantity",
-            "1005",
-            "--collateral-asset",
-            "4fEiy2n5VMFVfi6BzDJge519zAzg",
-            "--collateral-quantity",
-            "1055",
-            "--settlement-timestamp-ms",
-            "1704086400000",
-        ])
+        .args(["app", "repo", "unwind", "--agreement-id", "daily_repo"])
         .output()
         .expect("failed to execute iroha repo unwind");
 
@@ -3682,11 +3662,7 @@ fn repo_unwind_emits_instruction_payload() {
     let repo = repo_instruction(&instructions[0]);
     match repo {
         RepoInstructionBox::Reverse(isi) => {
-            let expected_initiator = parse_account_literal(alice_account_literal());
-            let expected_counterparty = parse_account_literal(bob_account_literal());
             assert_eq!(isi.agreement_id().to_string(), "daily_repo");
-            assert_eq!(isi.initiator(), &expected_initiator);
-            assert_eq!(isi.counterparty(), &expected_counterparty);
         }
         other => panic!("unexpected instruction variant: {other:?}"),
     }

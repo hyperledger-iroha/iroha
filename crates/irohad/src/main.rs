@@ -73,7 +73,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::genesis_bootstrap::GenesisBootstrapper;
+use crate::genesis_bootstrap::{GenesisBootstrapper, GenesisFetchPin};
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
@@ -466,6 +466,7 @@ mod shared_sorafs_provider_cache_tests {
 
             [genesis]
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+            bootstrap_enabled = false
 
             [streaming]
             identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -9839,6 +9840,11 @@ impl Iroha {
         // from trusted peers before failing fast.
         if genesis.is_none() && block_count.0 == 0 {
             if config.genesis.bootstrap_enabled {
+                let fetch_pin = GenesisFetchPin::from_config(&config.genesis).map_err(|error| {
+                    Report::new(StartError::InitKura).attach(format!(
+                        "invalid remote genesis bootstrap configuration: {error}"
+                    ))
+                })?;
                 let candidates: Vec<PeerId> = bootstrap_allowlist
                     .iter()
                     .filter(|peer| *peer != config.common.peer.id())
@@ -9849,10 +9855,9 @@ impl Iroha {
                         "genesis bootstrap skipped: no trusted peers available to request genesis"
                     );
                 } else {
-                    let expected_hash = config.genesis.expected_hash;
                     let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                     match bootstrapper
-                        .fetch_genesis(&candidates, &genesis_account, expected_hash)
+                        .fetch_genesis(&candidates, &genesis_account, fetch_pin)
                         .await
                     {
                         Ok(fetched) => {
@@ -11459,8 +11464,11 @@ impl Iroha {
         // handle loss. Any pre-shutdown return means the supervised configuration
         // authority failed; restarting only this relay would preserve stale ACL or
         // handshake policy and is therefore deliberately not recoverable.
+        let confidential_gas = config.confidential.gas;
         supervisor.monitor(tokio::task::spawn(async move {
-            if let Err(err) = config_updates_relay(kiso, logger, net_for_relay).await {
+            if let Err(err) =
+                config_updates_relay(kiso, logger, net_for_relay, confidential_gas).await
+            {
                 iroha_logger::error!(?err, "Config updates relay exited");
             }
         }));
@@ -11693,23 +11701,19 @@ async fn config_updates_relay(
     kiso: KisoHandle,
     logger: LoggerHandle,
     network: iroha_core::IrohaNetwork,
+    confidential_gas: iroha_config::parameters::actual::ConfidentialGas,
 ) -> EyreResult<()> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = confidential_gas;
+
     let mut log_level_update = kiso.subscribe_on_logger_updates().await?;
     let mut acl_update = kiso.subscribe_on_network_acl_updates().await?;
     let mut handshake_update = kiso.subscribe_on_soranet_handshake_updates().await?;
     #[cfg(feature = "telemetry")]
-    let mut confidential_gas_update = kiso.subscribe_on_confidential_gas_updates().await?;
-    #[cfg(feature = "telemetry")]
     let confidential_metrics_handle = iroha_telemetry::metrics::global().cloned();
     #[cfg(feature = "telemetry")]
-    if let (Some(metrics), gas) = (
-        confidential_metrics_handle.as_ref(),
-        *confidential_gas_update.borrow(),
-    ) {
-        metrics.set_confidential_gas_schedule(&gas);
-    }
-    #[cfg(feature = "telemetry")]
     if let Some(metrics) = confidential_metrics_handle.as_ref() {
+        metrics.set_confidential_gas_schedule(&confidential_gas);
         let digest = ivm::gas::schedule_hash();
         metrics.set_ivm_gas_schedule_hash(digest.as_ref());
     }
@@ -11758,17 +11762,6 @@ async fn config_updates_relay(
                     break;
                 }
             },
-            result = confidential_gas_update.changed() => {
-                if let Ok(()) = result {
-                    if let Some(metrics) = confidential_metrics_handle.as_ref() {
-                        let gas = *confidential_gas_update.borrow_and_update();
-                        metrics.set_confidential_gas_schedule(&gas);
-                    }
-                } else {
-                    iroha_logger::debug!("Exiting config updates relay (confidential gas channel closed)");
-                    break;
-                }
-            }
         };
     }
 
@@ -11906,6 +11899,8 @@ pub enum ConfigError {
     ReadGenesis,
     /// Genesis roster contained only a single peer.
     LonePeer,
+    /// Remote genesis bootstrap was enabled without an operator-pinned block hash.
+    UnpinnedGenesisBootstrap,
     #[cfg(feature = "dev-telemetry")]
     /// Telemetry output path resolved to root or empty.
     TelemetryOutFileIsRootOrEmpty,
@@ -11969,6 +11964,10 @@ impl core::fmt::Display for ConfigError {
             }
             Self::ReadGenesis => write!(f, "Error occurred while reading genesis block"),
             Self::LonePeer => write!(f, "The network consists from this one peer only"),
+            Self::UnpinnedGenesisBootstrap => write!(
+                f,
+                "remote genesis bootstrap requires `genesis.expected_hash` when `genesis.file` is unset"
+            ),
             #[cfg(feature = "dev-telemetry")]
             Self::TelemetryOutFileIsRootOrEmpty => {
                 write!(f, "Telemetry output file path is root or empty")
@@ -13165,6 +13164,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13193,6 +13193,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13235,6 +13236,7 @@ address = "addr:127.0.0.1:8080#8942"
 
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+bootstrap_enabled = false
 
 [streaming]
 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
@@ -13255,7 +13257,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "698ec377bba2c2ad875323794b5cbb76879dfcec472a7574e86d8f8b7fb1ee87";
+        "b3c8f4f51a4ca789162763da59ac1a81c1d5fb864370a043a372ac13340d4315";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -14058,6 +14060,12 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
     // maybe validate only if snapshot mode is enabled
     validate_directory_path(emitter, &config.snapshot.store_dir);
 
+    if remote_genesis_bootstrap_is_unpinned(config) {
+        emitter.emit(Report::new(ConfigError::UnpinnedGenesisBootstrap).attach(
+            "`genesis.bootstrap_enabled = true` without a local `genesis.file` must configure the exact signed genesis consensus-header hash in `genesis.expected_hash`",
+        ));
+    }
+
     if config.genesis.file.is_none()
         && !config
             .common
@@ -14080,6 +14088,12 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
                 .attach(config.torii.address.clone().into_attachment()),
         );
     }
+}
+
+fn remote_genesis_bootstrap_is_unpinned(config: &Config) -> bool {
+    config.genesis.file.is_none()
+        && config.genesis.bootstrap_enabled
+        && config.genesis.expected_hash.is_none()
 }
 
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
@@ -16510,6 +16524,44 @@ mod tests {
         "sealed:governance-dag:producer-checkpoint";
     const GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0xA6; 32];
 
+    #[test]
+    fn remote_genesis_bootstrap_requires_a_pin_only_without_a_local_artifact() {
+        let mut config = Config::from_toml_source(TomlSource::inline(minimal_config_table()))
+            .expect("minimal config");
+
+        assert!(
+            !remote_genesis_bootstrap_is_unpinned(&config),
+            "disabled remote bootstrap needs no pin"
+        );
+
+        config.genesis.bootstrap_enabled = true;
+        assert!(remote_genesis_bootstrap_is_unpinned(&config));
+        let mut emitter = Emitter::new();
+        validate_config_static_io(&mut emitter, &config);
+        let report = emitter
+            .into_result()
+            .expect_err("unpinned remote bootstrap must be a configuration error");
+        assert!(report.frames().any(|frame| matches!(
+            frame.downcast_ref::<ConfigError>(),
+            Some(ConfigError::UnpinnedGenesisBootstrap)
+        )));
+
+        config.genesis.expected_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
+            iroha_crypto::Hash::prehashed([0x51; 32]),
+        ));
+        assert!(
+            !remote_genesis_bootstrap_is_unpinned(&config),
+            "an exact hash pin makes the remote trust root explicit"
+        );
+
+        config.genesis.expected_hash = None;
+        config.genesis.file = Some(WithOrigin::inline(PathBuf::from("genesis.nrt")));
+        assert!(
+            !remote_genesis_bootstrap_is_unpinned(&config),
+            "a local signed genesis is already an explicit artifact"
+        );
+    }
+
     #[derive(Debug)]
     struct GovernanceDagPublisherBindingSigner {
         key_pair: iroha_crypto::KeyPair,
@@ -17779,6 +17831,7 @@ mod tests {
 
                 [genesis]
                 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                bootstrap_enabled = false
 
                 [streaming]
                 identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"

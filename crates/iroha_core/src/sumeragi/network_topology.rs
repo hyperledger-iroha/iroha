@@ -304,12 +304,15 @@ impl Topology {
 }
 
 /// Compute the commit quorum size for a topology of the given length.
+///
+/// The result is `floor(2 * len / 3) + 1` for a non-empty topology, expressed
+/// as `len - floor((len - 1) / 3)` so the arithmetic cannot overflow.
 #[must_use]
 pub fn commit_quorum_from_len(len: usize) -> usize {
-    if len <= 3 {
-        return len;
+    if len == 0 {
+        return 0;
     }
-    len.saturating_mul(2) / 3 + 1
+    len - (len - 1) / 3
 }
 
 #[cfg(test)]
@@ -1291,10 +1294,34 @@ mod tests {
     }
 
     #[test]
-    fn commit_quorum_len6_is_five() {
-        let topology = test_topology(6);
-        assert_eq!(commit_quorum_from_len(6), 5);
-        assert_eq!(topology.min_votes_for_commit(), 5);
+    fn commit_quorum_helper_covers_boundaries_and_all_residue_classes() {
+        let expected = [0_usize, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9];
+        for (len, expected) in expected.into_iter().enumerate() {
+            assert_eq!(
+                commit_quorum_from_len(len),
+                expected,
+                "quorum mismatch for len={len}"
+            );
+        }
+
+        for len in 0_usize..=4_096 {
+            let quorum = commit_quorum_from_len(len);
+            let max_faults = len.saturating_sub(1) / 3;
+            assert_eq!(quorum, len - max_faults, "quorum mismatch for len={len}");
+            assert!(quorum <= len);
+            if len != 0 {
+                assert!(
+                    3 * quorum > 2 * len,
+                    "quorum must strictly exceed two thirds for len={len}"
+                );
+            }
+        }
+
+        assert_eq!(
+            commit_quorum_from_len(usize::MAX),
+            usize::MAX - (usize::MAX - 1) / 3,
+            "the helper must remain exact without saturating at usize::MAX"
+        );
     }
 
     #[test]

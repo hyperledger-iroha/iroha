@@ -1090,6 +1090,10 @@ fn validate_lane_payload_availability_body_shape(
         || validator_count > MAX_LANE_BLOCK_VALIDATORS
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
+        || usize::try_from(body.min_quorum).ok()
+            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_count,
+            ))
         || body.qc_mode_tag.trim().is_empty()
         || body.qc_mode_tag.len() > MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES
     {
@@ -1213,6 +1217,7 @@ impl LanePayloadAvailabilityVoteV1 {
             self.body.validator_set_hash_version,
             self.body.validator_set_hash,
             self.body.validator_count,
+            self.body.min_quorum,
             validator_set,
         )
         .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
@@ -1241,6 +1246,7 @@ fn aggregate_lane_payload_availability_votes(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         &validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
@@ -1323,6 +1329,7 @@ pub(crate) fn validate_lane_payload_availability_qc(
         qc.validator_set_hash_version,
         qc.validator_set_hash,
         qc.body.validator_count,
+        qc.body.min_quorum,
         &qc.validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
@@ -1698,6 +1705,8 @@ fn validate_lane_block_new_view_body(
     if body.version != 1 {
         return Err(LaneAutonomousArtifactError::UnsupportedVersion);
     }
+    let validator_count = usize::try_from(body.validator_count)
+        .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
     if body.proposal_height == 0
         || body.lane_block_height == 0
         || protocol_hash_bytes_are_zero(body.lane_incarnation.as_ref())
@@ -1706,10 +1715,13 @@ fn validate_lane_block_new_view_body(
         || body.from_view.checked_add(1) != Some(body.target_view)
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || body.validator_count == 0
-        || usize::try_from(body.validator_count)
-            .map_or(true, |count| count > MAX_LANE_BLOCK_VALIDATORS)
+        || validator_count > MAX_LANE_BLOCK_VALIDATORS
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
+        || usize::try_from(body.min_quorum).ok()
+            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_count,
+            ))
     {
         return Err(LaneAutonomousArtifactError::InvalidNewViewBody);
     }
@@ -1961,6 +1973,7 @@ pub(crate) fn aggregate_lane_drain_votes(
         body.intent.validator_set_hash_version,
         body.intent.validator_set_hash,
         body.intent.validator_count,
+        body.intent.min_quorum,
         &validator_set,
     )
     .map_err(|_| LaneDrainCertificateError::InvalidValidatorSet)?;
@@ -2037,6 +2050,7 @@ pub(crate) fn validate_lane_drain_certificate(
         body.intent.validator_set_hash_version,
         body.intent.validator_set_hash,
         body.intent.validator_count,
+        body.intent.min_quorum,
         &certificate.validator_set,
     )
     .map_err(|_| LaneDrainCertificateError::InvalidValidatorSet)?;
@@ -2127,6 +2141,7 @@ pub(crate) fn aggregate_lane_block_new_view_votes(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         &validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
@@ -2183,6 +2198,7 @@ pub(crate) fn validate_lane_block_new_view_certificate(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         &certificate.validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
@@ -2440,6 +2456,7 @@ impl LaneBlockNewViewVoteCache {
             vote.body.validator_set_hash_version,
             vote.body.validator_set_hash,
             vote.body.validator_count,
+            vote.body.min_quorum,
             validator_set,
         )
         .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
@@ -5013,6 +5030,7 @@ pub fn validate_lane_block_proposal(
         descriptor.validator_set_hash_version,
         descriptor.validator_set_hash,
         descriptor.validator_count,
+        descriptor.min_quorum,
         &descriptor.validator_set,
     )
     .map_err(|err| match err {
@@ -5186,9 +5204,10 @@ pub fn validate_lane_block_qc_aggregate(
 ///
 /// # Errors
 ///
-/// Returns an error when the body or validator set is malformed, votes do not
-/// match `body`, include duplicate or unknown signers, fail to meet
-/// `body.min_quorum`, or cannot be aggregated as BLS-normal signatures.
+/// Returns an error when the body, validator set, or canonical commit threshold
+/// is malformed, votes do not match `body`, include duplicate or unknown
+/// signers, fail to meet `body.min_quorum`, or cannot be aggregated as
+/// BLS-normal signatures.
 pub fn aggregate_lane_block_votes_to_qc(
     body: LaneBlockVoteBodyV1,
     validator_set: Vec<PeerId>,
@@ -5303,6 +5322,8 @@ pub fn aggregate_lane_block_votes_to_qc(
 fn validate_lane_block_vote_body_shape(
     body: &LaneBlockVoteBodyV1,
 ) -> Result<(), LaneBlockVoteIngressError> {
+    let validator_count = usize::try_from(body.validator_count)
+        .map_err(|_| LaneBlockVoteIngressError::InvalidBody)?;
     if body.phase == CertPhase::NewView
         || body.proposal_height == 0
         || body.lane_block_height == 0
@@ -5312,9 +5333,14 @@ fn validate_lane_block_vote_body_shape(
         || body.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
         || body.accepted_candidate_indices.len() != body.accepted_transaction_hashes.len()
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
-        || body.validator_count == 0
+        || validator_count == 0
+        || validator_count > MAX_LANE_BLOCK_VALIDATORS
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
+        || usize::try_from(body.min_quorum).ok()
+            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_count,
+            ))
     {
         return Err(LaneBlockVoteIngressError::InvalidBody);
     }
@@ -5329,6 +5355,7 @@ fn validate_lane_block_validator_set(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         validator_set,
     )
 }
@@ -5337,6 +5364,7 @@ fn validate_lane_block_validator_set_fields(
     validator_set_hash_version: u16,
     validator_set_hash: HashOf<Vec<PeerId>>,
     validator_count: u32,
+    min_quorum: u32,
     validator_set: &[PeerId],
 ) -> Result<(), LaneBlockQcBuildError> {
     if validator_set.is_empty() {
@@ -5349,6 +5377,13 @@ fn validate_lane_block_validator_set_fields(
         .map_err(|_| LaneBlockQcBuildError::ValidatorCountMismatch)?;
     if actual_validator_count != validator_count {
         return Err(LaneBlockQcBuildError::ValidatorCountMismatch);
+    }
+    let expected_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+        validator_set.len(),
+    ))
+    .map_err(|_| LaneBlockQcBuildError::InvalidBody)?;
+    if min_quorum != expected_quorum {
+        return Err(LaneBlockQcBuildError::InvalidBody);
     }
     let mut canonical = validator_set.to_vec();
     canonical.sort();
@@ -6023,7 +6058,10 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_count: u32::try_from(validator_set.len()).expect("validator count fits"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_set.len(),
+            ))
+            .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
         }
     }
@@ -6050,7 +6088,10 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_set: validator_set.to_vec(),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_set.len(),
+            ))
+            .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
             descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
         };
@@ -6093,7 +6134,10 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
             validator_count: u32::try_from(validator_set.len()).expect("validator count"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_set.len(),
+            ))
+            .expect("fixture quorum"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -6402,7 +6446,6 @@ mod tests {
         .expect("NewView body");
         let votes = keypairs
             .iter()
-            .take(2)
             .map(|keypair| {
                 LaneBlockNewViewVoteV1::new_signed(
                     body.clone(),
@@ -6420,7 +6463,7 @@ mod tests {
         .expect("NewView certificate");
         DurableLaneBlockNewViewCertificateV1 {
             certificate,
-            signer_pops: signer_pops(&keypairs[..2]),
+            signer_pops: signer_pops(keypairs),
         }
     }
 
@@ -6448,6 +6491,14 @@ mod tests {
                 chain_id_hash,
                 epoch,
                 &keypairs[1],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[2],
                 &keypairs,
             ),
         ];
@@ -6525,6 +6576,14 @@ mod tests {
                 chain_id_hash,
                 epoch,
                 &keypairs[1],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[2],
                 &keypairs,
             ),
         ];
@@ -6669,6 +6728,14 @@ mod tests {
                 chain_id_hash,
                 epoch,
                 &keypairs[1],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &target,
+                chain_id_hash,
+                epoch,
+                &keypairs[2],
                 &keypairs,
             ),
         ];
@@ -6821,7 +6888,7 @@ mod tests {
             Some(&availability_body)
         );
 
-        for keypair in keypairs.iter().take(2) {
+        for keypair in &keypairs {
             cache
                 .insert_vote(
                     signed_autonomous_prepare_vote(
@@ -7139,7 +7206,10 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_set: validator_set.to_vec(),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+                validator_set.len(),
+            ))
+            .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
             descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
         };
@@ -7372,11 +7442,22 @@ mod tests {
             Err(LaneBlockProposalIngressError::ValidatorSetNotCanonical)
         );
 
+        let mut lowered_quorum = proposal.clone();
+        lowered_quorum.descriptor.min_quorum -= 1;
+        lowered_quorum.descriptor.descriptor_hash =
+            lowered_quorum.descriptor.computed_descriptor_hash();
+        lowered_quorum.proposal_hash = lowered_quorum.computed_proposal_hash();
+        assert_eq!(
+            validate_lane_block_proposal(&lowered_quorum),
+            Err(LaneBlockProposalIngressError::InvalidBody),
+            "a self-consistent proposal must not lower the canonical committee threshold"
+        );
+
         let mut duplicate = proposal.clone();
         duplicate.descriptor.validator_set =
             vec![validator_set[0].clone(), validator_set[0].clone()];
         duplicate.descriptor.validator_count = 2;
-        duplicate.descriptor.min_quorum = 1;
+        duplicate.descriptor.min_quorum = 2;
         duplicate.descriptor.validator_set_hash = HashOf::new(&duplicate.descriptor.validator_set);
         assert_eq!(
             validate_lane_block_proposal(&duplicate),
@@ -7615,21 +7696,23 @@ mod tests {
             checked_bls_keypair(1),
             checked_bls_keypair(2),
             checked_bls_keypair(3),
+            checked_bls_keypair(4),
         ];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
         let vote_c = signed_vote(&body, &keys[2]);
+        let vote_d = signed_vote(&body, &keys[3]);
 
         let qc = aggregate_lane_block_votes_to_qc(
             body.clone(),
             validator_set.clone(),
-            &[vote_c.clone(), vote_a.clone()],
+            &[vote_c.clone(), vote_a.clone(), vote_d.clone()],
         )
         .expect("lane block QC");
 
-        let expected_signer_indices = [vote_a.signer, vote_c.signer]
+        let expected_signer_indices = [vote_a.signer, vote_c.signer, vote_d.signer]
             .into_iter()
             .map(|signer| {
                 validator_set
@@ -7649,6 +7732,32 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_qc_preserves_sparse_high_index_signer_order() {
+        let mut keys = (1_u8..=10).map(checked_bls_keypair).collect::<Vec<_>>();
+        keys.sort_by_key(peer);
+        let validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        let body = vote_body(&validator_set);
+        let signer_indices = [0_usize, 1, 2, 3, 4, 8, 9];
+        let votes = signer_indices
+            .into_iter()
+            .map(|index| signed_vote(&body, &keys[index]))
+            .collect::<Vec<_>>();
+
+        let qc = aggregate_lane_block_votes_to_qc(body, validator_set, &votes)
+            .expect("exact-threshold sparse lane block QC");
+        assert_eq!(qc.signers_bitmap, vec![0b0001_1111, 0b0000_0011]);
+        validate_lane_block_qc_aggregate(&qc, &signer_pops(&keys))
+            .expect("bitmap order must select the matching key and PoP at every index");
+
+        let mut high_padding_bit = qc;
+        high_padding_bit.signers_bitmap[1] |= 0b1000_0000;
+        assert_eq!(
+            validate_lane_block_qc(&high_padding_bit),
+            Err(LaneBlockQcIngressError::SignerBitmapOutOfRange)
+        );
+    }
+
+    #[test]
     fn lane_block_qc_ingress_accepts_aggregate_shape() {
         let keys = [
             checked_bls_keypair(1),
@@ -7659,8 +7768,9 @@ mod tests {
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
-        let qc = aggregate_lane_block_votes_to_qc(body, validator_set, &[vote_a, vote_c])
+        let qc = aggregate_lane_block_votes_to_qc(body, validator_set, &[vote_a, vote_b, vote_c])
             .expect("lane block QC");
 
         validate_lane_block_qc(&qc).expect("QC ingress shape is valid");
@@ -7677,11 +7787,12 @@ mod tests {
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
         let qc = aggregate_lane_block_votes_to_qc(
             body,
             validator_set.clone(),
-            &[vote_a.clone(), vote_c],
+            &[vote_a.clone(), vote_b, vote_c],
         )
         .expect("lane block QC");
         let pops = signer_pops(&keys);
@@ -7722,11 +7833,12 @@ mod tests {
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
         let qc = aggregate_lane_block_votes_to_qc(
             body.clone(),
             validator_set.clone(),
-            &[vote_a, vote_c],
+            &[vote_a, vote_b, vote_c],
         )
         .expect("lane block QC");
 
@@ -7779,11 +7891,12 @@ mod tests {
         let proposal = lane_block_proposal(&validator_set);
         let body = proposal.vote_body(CertPhase::Prepare);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
         let qc = aggregate_lane_block_votes_to_qc(
             body,
             validator_set.clone(),
-            &[vote_a.clone(), vote_c],
+            &[vote_a.clone(), vote_b, vote_c],
         )
         .expect("lane block QC");
         let key = LaneBlockSessionKey::from_proposal(&proposal);
@@ -7812,11 +7925,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_seals_qc_when_vote_quorum_arrives() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -7898,11 +8007,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_drains_committed_session_once_from_sealed_qcs() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -8068,6 +8173,7 @@ mod tests {
             checked_bls_keypair(1),
             checked_bls_keypair(2),
             checked_bls_keypair(3),
+            checked_bls_keypair(4),
         ];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
@@ -8077,6 +8183,7 @@ mod tests {
         let prepare_votes_a = [
             signed_vote(&prepare_body_a, &keys[0]),
             signed_vote(&prepare_body_a, &keys[1]),
+            signed_vote(&prepare_body_a, &keys[2]),
         ];
         let prepare_qc_a = aggregate_lane_block_votes_to_qc(
             prepare_body_a,
@@ -8088,6 +8195,7 @@ mod tests {
         let prepare_votes_b = [
             signed_vote(&prepare_body_b, &keys[1]),
             signed_vote(&prepare_body_b, &keys[2]),
+            signed_vote(&prepare_body_b, &keys[3]),
         ];
         let prepare_qc_b = aggregate_lane_block_votes_to_qc(
             prepare_body_b,
@@ -8099,6 +8207,7 @@ mod tests {
         let commit_votes_a = [
             signed_vote(&commit_body_a, &keys[0]),
             signed_vote(&commit_body_a, &keys[1]),
+            signed_vote(&commit_body_a, &keys[2]),
         ];
         let commit_qc_a =
             aggregate_lane_block_votes_to_qc(commit_body_a, validator_set.clone(), &commit_votes_a)
@@ -8107,6 +8216,7 @@ mod tests {
         let commit_votes_b = [
             signed_vote(&commit_body_b, &keys[1]),
             signed_vote(&commit_body_b, &keys[2]),
+            signed_vote(&commit_body_b, &keys[3]),
         ];
         let commit_qc_b =
             aggregate_lane_block_votes_to_qc(commit_body_b, validator_set, &commit_votes_b)
@@ -8156,11 +8266,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_drains_committed_session_from_inbound_qcs() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -8224,10 +8330,11 @@ mod tests {
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
         let prepare_vote_b = signed_vote(&prepare_body, &keys[1]);
+        let prepare_vote_c = signed_vote(&prepare_body, &keys[2]);
         let prepare_qc = aggregate_lane_block_votes_to_qc(
             prepare_body,
             validator_set.clone(),
-            &[prepare_vote_a, prepare_vote_b],
+            &[prepare_vote_a, prepare_vote_b, prepare_vote_c],
         )
         .expect("prepare QC");
         let signer = peer(&keys[2]);
@@ -8317,10 +8424,11 @@ mod tests {
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
         let prepare_vote_b = signed_vote(&prepare_body, &keys[1]);
+        let prepare_vote_c = signed_vote(&prepare_body, &keys[2]);
         let prepare_qc = aggregate_lane_block_votes_to_qc(
             prepare_body,
             validator_set,
-            &[prepare_vote_a, prepare_vote_b],
+            &[prepare_vote_a, prepare_vote_b, prepare_vote_c],
         )
         .expect("prepare QC");
         let signer = peer(&keys[2]);
@@ -8358,11 +8466,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_lists_proposals_without_commit_qc_for_rebroadcast() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -8577,10 +8681,11 @@ mod tests {
         let prepare_body = proposal.vote_body(CertPhase::Prepare);
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
         let prepare_vote_b = signed_vote(&prepare_body, &keys[1]);
+        let prepare_vote_c = signed_vote(&prepare_body, &keys[2]);
         let prepare_qc = aggregate_lane_block_votes_to_qc(
             prepare_body,
             validator_set,
-            &[prepare_vote_a, prepare_vote_b],
+            &[prepare_vote_a, prepare_vote_b, prepare_vote_c],
         )
         .expect("prepare QC");
         let pops = signer_pops(&keys);
@@ -8635,11 +8740,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_does_not_drain_until_proposal_and_both_qcs() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -8703,6 +8804,7 @@ mod tests {
             checked_bls_keypair(1),
             checked_bls_keypair(2),
             checked_bls_keypair(3),
+            checked_bls_keypair(4),
         ];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
@@ -8712,16 +8814,21 @@ mod tests {
         let prepare_vote_a = signed_vote(&prepare_body, &keys[0]);
         let prepare_vote_b = signed_vote(&prepare_body, &keys[1]);
         let prepare_vote_c = signed_vote(&prepare_body, &keys[2]);
+        let prepare_vote_d = signed_vote(&prepare_body, &keys[3]);
         let prepare_qc_ab = aggregate_lane_block_votes_to_qc(
             prepare_body.clone(),
             validator_set.clone(),
-            &[prepare_vote_a, prepare_vote_b.clone()],
+            &[
+                prepare_vote_a,
+                prepare_vote_b.clone(),
+                prepare_vote_c.clone(),
+            ],
         )
         .expect("prepare QC from first quorum");
         let prepare_qc_bc = aggregate_lane_block_votes_to_qc(
             prepare_body,
             validator_set,
-            &[prepare_vote_b, prepare_vote_c],
+            &[prepare_vote_b, prepare_vote_c, prepare_vote_d],
         )
         .expect("prepare QC from alternate quorum");
         assert_ne!(
@@ -8756,11 +8863,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_reconciles_orphan_qc_drift_before_commit_drain() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -8828,11 +8931,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_seals_reconciled_orphan_vote_quorum() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -9062,11 +9161,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_refreshes_commit_drain_after_payload_hint_merge() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -9133,11 +9228,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_does_not_drain_inbound_qc() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal = lane_block_proposal(&validator_set);
@@ -9477,11 +9568,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_recovered_proposal_preserves_prepared_conflicting_slot() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let recovered = lane_block_proposal(&validator_set);
@@ -9576,11 +9663,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_recovered_proposal_preserves_committed_conflicting_slot() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let recovered = lane_block_proposal(&validator_set);
@@ -9636,17 +9719,13 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_rejects_forged_aggregate_qc() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
-        let vote_c = signed_vote(&body, &keys[2]);
-        let mut qc = aggregate_lane_block_votes_to_qc(body, validator_set, &[vote_a, vote_c])
+        let vote_b = signed_vote(&body, &keys[1]);
+        let mut qc = aggregate_lane_block_votes_to_qc(body, validator_set, &[vote_a, vote_b])
             .expect("lane block QC");
         qc.bls_aggregate_signature[0] ^= 0x01;
         let pops = signer_pops(&keys);
@@ -9765,7 +9844,7 @@ mod tests {
         cache
             .insert_proposal(protected.clone())
             .expect("insert commit-protected losing carrier");
-        for key in keys.iter().take(2) {
+        for key in &keys {
             let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), key);
             cache
                 .insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer))
@@ -9828,7 +9907,7 @@ mod tests {
         cache
             .insert_proposal(prepared.clone())
             .expect("insert prepared canonical proposal");
-        for key in &keys[..2] {
+        for key in &keys {
             let vote = signed_vote(&prepared.vote_body(CertPhase::Prepare), key);
             cache
                 .insert_vote(vote.clone(), Some(&vote.signer))
@@ -9896,7 +9975,7 @@ mod tests {
                 .expect("insert rollover pruning fixture");
         }
         for proposal in [&inactive, &finalized] {
-            for key in &keys[..2] {
+            for key in &keys {
                 let vote = signed_vote(&proposal.vote_body(CertPhase::Prepare), key);
                 cache
                     .insert_vote(vote.clone(), Some(&vote.signer))
@@ -9945,7 +10024,7 @@ mod tests {
         cache
             .insert_proposal(conflicting.clone())
             .expect("insert conflicting proposal");
-        for key in &keys[..2] {
+        for key in &keys {
             let vote = signed_vote(&conflicting.vote_body(CertPhase::Prepare), key);
             cache
                 .insert_vote(vote.clone(), Some(&vote.signer))
@@ -9981,14 +10060,14 @@ mod tests {
             .insert_proposal(conflicting.clone())
             .expect("insert conflicting proposal");
         for phase in [CertPhase::Prepare, CertPhase::Commit] {
-            for key in &keys[..2] {
+            for key in &keys {
                 let vote = signed_vote(&conflicting.vote_body(phase), key);
                 cache
                     .insert_vote(vote.clone(), Some(&vote.signer))
                     .expect("seal conflicting lane certificate");
             }
         }
-        assert_eq!(cache.commit_vote_lock_len(), 2);
+        assert_eq!(cache.commit_vote_lock_len(), 3);
         assert_eq!(
             cache.retain_sessions_for_admissible_lanes(|_, _, _, _, _| false),
             1
@@ -10104,7 +10183,7 @@ mod tests {
                 cache.insert_proposal(proposal.clone()),
                 Ok(LaneBlockSessionInsertOutcome::Inserted)
             );
-            for signer in &keys[..2] {
+            for signer in &keys {
                 let vote = signed_vote(&proposal.vote_body(CertPhase::Prepare), signer);
                 assert_eq!(
                     cache.insert_vote(vote.clone(), Some(&vote.signer)),
@@ -10156,7 +10235,7 @@ mod tests {
             cache.insert_proposal(protected.clone()),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
-        for signer in &keys[..2] {
+        for signer in &keys {
             let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), signer);
             assert_eq!(
                 cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
@@ -10182,6 +10261,7 @@ mod tests {
             checked_bls_keypair(1),
             checked_bls_keypair(2),
             checked_bls_keypair(3),
+            checked_bls_keypair(4),
         ];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
@@ -10202,7 +10282,7 @@ mod tests {
         }
 
         for proposal in [&siblings[0], &siblings[1]] {
-            for signer in &keys[..2] {
+            for signer in &keys[..3] {
                 let prepare_vote = signed_vote(&proposal.vote_body(CertPhase::Prepare), signer);
                 assert_eq!(
                     cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
@@ -10219,6 +10299,7 @@ mod tests {
         let commit_votes = [
             signed_vote(&commit_body, &keys[1]),
             signed_vote(&commit_body, &keys[2]),
+            signed_vote(&commit_body, &keys[3]),
         ];
         let commit_qc =
             aggregate_lane_block_votes_to_qc(commit_body, validator_set.clone(), &commit_votes)
@@ -10316,7 +10397,7 @@ mod tests {
             cache.insert_proposal(protected.clone()),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
-        for signer in &keys[..2] {
+        for signer in &keys {
             let prepare_vote = signed_vote(&protected.vote_body(CertPhase::Prepare), signer);
             assert_eq!(
                 cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
@@ -10356,7 +10437,7 @@ mod tests {
             cache.insert_proposal(conflicting.clone()),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
-        for signer in &keys[..2] {
+        for signer in &keys {
             let prepare_vote = signed_vote(&conflicting.vote_body(CertPhase::Prepare), signer);
             assert_eq!(
                 cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
@@ -10373,11 +10454,7 @@ mod tests {
 
     #[test]
     fn drained_committed_sessions_retire_under_capacity_but_keep_signer_lock() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let pops = signer_pops(&keys);
@@ -10468,7 +10545,7 @@ mod tests {
                 cache.insert_proposal(proposal.clone()),
                 Ok(LaneBlockSessionInsertOutcome::Inserted)
             );
-            for signer in &keys[..2] {
+            for signer in &keys {
                 let prepare_vote = signed_vote(&proposal.vote_body(CertPhase::Prepare), signer);
                 assert_eq!(
                     cache.insert_vote(prepare_vote.clone(), Some(&prepare_vote.signer)),
@@ -10525,7 +10602,7 @@ mod tests {
             cache.insert_proposal(original.clone()),
             Ok(LaneBlockSessionInsertOutcome::Inserted)
         );
-        for signer in &keys[..2] {
+        for signer in &keys {
             let prepare = signed_vote(&original.vote_body(CertPhase::Prepare), signer);
             assert_eq!(
                 cache.insert_vote(prepare.clone(), Some(&prepare.signer)),
@@ -10548,7 +10625,7 @@ mod tests {
             Ok(LaneBlockSessionInsertOutcome::Inserted),
             "a recreated lane must own a distinct local-height namespace"
         );
-        for signer in &keys[..2] {
+        for signer in &keys {
             let prepare = signed_vote(&recreated.vote_body(CertPhase::Prepare), signer);
             assert_eq!(
                 cache.insert_vote(prepare.clone(), Some(&prepare.signer)),
@@ -10583,11 +10660,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_reports_undrained_committed_admissible_lanes() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let pending_lane = LaneId::new(7);
@@ -10753,11 +10826,7 @@ mod tests {
 
     #[test]
     fn lane_block_session_cache_preserves_undrained_committed_session_under_backpressure() {
-        let keys = [
-            checked_bls_keypair(1),
-            checked_bls_keypair(2),
-            checked_bls_keypair(3),
-        ];
+        let keys = [checked_bls_keypair(1), checked_bls_keypair(2)];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let proposal_a = lane_block_proposal_at_height(&validator_set, 13);
@@ -10861,9 +10930,10 @@ mod tests {
             aggregate_lane_block_votes_to_qc(
                 body.clone(),
                 validator_set.clone(),
-                &[vote_a.clone()]
+                &[vote_a.clone(), vote_b.clone()]
             ),
-            Err(LaneBlockQcBuildError::QuorumNotMet)
+            Err(LaneBlockQcBuildError::QuorumNotMet),
+            "threshold minus one distinct signers must fail"
         );
         assert_eq!(
             aggregate_lane_block_votes_to_qc(
@@ -10900,8 +10970,31 @@ mod tests {
         hash_drift.validator_set_hash =
             HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
         assert_eq!(
-            aggregate_lane_block_votes_to_qc(hash_drift, validator_set, &[vote_a, vote_b]),
+            aggregate_lane_block_votes_to_qc(
+                hash_drift,
+                validator_set.clone(),
+                &[vote_a.clone(), vote_b.clone()]
+            ),
             Err(LaneBlockQcBuildError::ValidatorSetHashMismatch)
+        );
+
+        let mut lowered_quorum = body.clone();
+        lowered_quorum.min_quorum -= 1;
+        let lowered_votes = keys
+            .iter()
+            .map(|key| signed_vote(&lowered_quorum, key))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            aggregate_lane_block_votes_to_qc(lowered_quorum, validator_set.clone(), &lowered_votes,),
+            Err(LaneBlockQcBuildError::InvalidBody),
+            "signed vote bodies must not lower the canonical committee threshold"
+        );
+
+        let mut reversed = validator_set;
+        reversed.reverse();
+        assert_eq!(
+            aggregate_lane_block_votes_to_qc(body, reversed, &[vote_a, vote_b]),
+            Err(LaneBlockQcBuildError::ValidatorSetNotCanonical)
         );
     }
 }

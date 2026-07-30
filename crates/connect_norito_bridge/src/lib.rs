@@ -16154,7 +16154,7 @@ mod kagemusha_bridge_tests {
         let actual = [
             (
                 "authority_public_key",
-                hex::encode(android.authority.signatory().to_bytes().1),
+                hex::encode(android.authority.expect_single_signatory().to_bytes().1),
             ),
             ("registration_hash", hex::encode(android.registration_hash)),
             (

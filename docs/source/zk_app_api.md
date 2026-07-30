@@ -133,8 +133,9 @@ Execution semantics:
   selected backend (`halo2/ipa` or `stark/fri`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }`.
   The optional `proved` field is validated against the node-derived execution payload and rejected on mismatch.
-- Nodes may still deterministically replay bytecode during admission as an extra safety check.
-  Replay behavior is controlled by `pipeline.ivm_proved.skip_replay`.
+- Nodes always replay ABI V1 execution deterministically during admission. The active on-chain
+  `ivm-execution-v1` verifier-key record controls circuit admission and proof-size limits; local
+  pipeline configuration cannot enable, disable, or bypass proved execution.
 
 Metrics:
 - `torii_zk_ivm_prove_inflight` (gauge) — jobs currently proving.

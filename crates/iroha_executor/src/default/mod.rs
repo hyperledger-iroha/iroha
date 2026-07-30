@@ -4557,7 +4557,7 @@ pub mod asset {
             let instruction = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator.clone(),
-                PeerId::from(validator.signatory().clone()),
+                PeerId::from(validator.expect_single_signatory().clone()),
                 validator,
                 Quantity::from(1_u64),
                 Metadata::default(),
@@ -5912,7 +5912,7 @@ mod sorafs_permission_tests {
     fn authority_public_key_bytes() -> [u8; 32] {
         let authority = authority_account_id();
         let (_, bytes) = authority
-            .signatory()
+            .expect_single_signatory()
             .try_to_bytes()
             .expect("authority public key bytes");
         bytes.try_into().expect("Ed25519 public key length")

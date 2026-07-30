@@ -8746,6 +8746,7 @@ mod run {
     /// Serialization or arithmetic failure maps to `usize::MAX`; admission
     /// paths must use [`checked_data_message_wire_len`] so this diagnostic
     /// sentinel can never be mistaken for an exact configured maximum.
+    #[cfg(test)]
     pub fn data_message_wire_len<T: ncore::NoritoSerialize>(payload: &T) -> usize {
         checked_data_message_wire_len(payload).unwrap_or(usize::MAX)
     }
