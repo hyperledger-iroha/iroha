@@ -2992,7 +2992,7 @@ impl PorReputationJournalProducerV1 {
                         event.entry.predecessor_event_id,
                         &event.entry.payload,
                     )?;
-                    Ok((event.entry.event_id, digest))
+                    Ok::<_, ReputationRuntimeError>((event.entry.event_id, digest))
                 })
                 .transpose()?;
 
@@ -3361,7 +3361,9 @@ fn smallest_stream_token_admission_eviction_prefix(
         let middle = lower + (upper - lower) / 2;
         probe.move_to_prefix(plan, middle)?;
         #[cfg(test)]
-        probes += 1;
+        {
+            probes += 1;
+        }
         if checkpoint_frame_fits(probe.encoded_frame_len()?, checkpoint_max_bytes) {
             upper = middle;
         } else {
