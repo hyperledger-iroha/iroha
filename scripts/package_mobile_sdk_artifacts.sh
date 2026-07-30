@@ -1,5 +1,97 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+PATH=/usr/bin:/bin
+export PATH
+unset \
+  DYLD_INSERT_LIBRARIES \
+  DYLD_LIBRARY_PATH \
+  LD_LIBRARY_PATH \
+  LD_PRELOAD \
+  SDKROOT \
+  PYTHONHOME \
+  PYTHONPATH
+
+resolve_trusted_python312() {
+  local candidate canonical
+  local override="${MOBILE_SDK_PYTHON_BINARY:-}"
+  local candidates=()
+
+  if [[ -n "$override" ]]; then
+    if [[ "$override" != /* || ! -f "$override" || -L "$override" || ! -x "$override" ]]; then
+      echo "[mobile-sdk-package] ERROR: MOBILE_SDK_PYTHON_BINARY must be an absolute canonical regular executable" >&2
+      return 1
+    fi
+    candidates=("$override")
+  else
+    candidates=(
+      /opt/homebrew/opt/python@3.12/bin/python3.12
+      /opt/homebrew/bin/python3.12
+      /usr/local/opt/python@3.12/bin/python3.12
+      /usr/local/bin/python3.12
+      /usr/bin/python3.12
+      /usr/bin/python3
+    )
+  fi
+
+  for candidate in "${candidates[@]}"; do
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    if ! canonical="$(
+      env -i \
+        HOME=/tmp \
+        PATH=/usr/bin:/bin \
+        TMPDIR=/tmp \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        "$candidate" -I -S -c '
+import os
+import pathlib
+import stat
+import sys
+
+if sys.version_info[:2] != (3, 12) or not sys.flags.isolated:
+    raise SystemExit(1)
+if "SDKROOT" in os.environ:
+    raise SystemExit(1)
+resolved = pathlib.Path(sys.executable).resolve(strict=True)
+metadata = resolved.stat()
+if not stat.S_ISREG(metadata.st_mode) or not os.access(resolved, os.X_OK):
+    raise SystemExit(1)
+print(resolved)
+'
+    )"; then
+      continue
+    fi
+    if [[ "$canonical" != /* || ! -f "$canonical" || -L "$canonical" || ! -x "$canonical" ]]; then
+      continue
+    fi
+    if [[ -n "$override" && "$canonical" != "$override" ]]; then
+      echo "[mobile-sdk-package] ERROR: MOBILE_SDK_PYTHON_BINARY must already name its canonical executable" >&2
+      return 1
+    fi
+    printf '%s\n' "$canonical"
+    return 0
+  done
+
+  if [[ -n "$override" ]]; then
+    echo "[mobile-sdk-package] ERROR: MOBILE_SDK_PYTHON_BINARY must be an isolated Python 3.12 executable" >&2
+  else
+    echo "[mobile-sdk-package] ERROR: a trusted absolute Python 3.12 executable is required" >&2
+  fi
+  return 1
+}
+
+PYTHON_BINARY="$(resolve_trusted_python312)" || exit 1
+
+run_isolated_python() {
+  env -i \
+    HOME=/tmp \
+    PATH=/usr/bin:/bin \
+    TMPDIR=/tmp \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    "$PYTHON_BINARY" -I -S "$@"
+}
 
 usage() {
   cat <<'USAGE'
@@ -16,6 +108,8 @@ MOBILE_SDK_ANDROID_ARTIFACT_DIR is required for Android release packaging and
 must identify the canonical external Gradle/artifact root.
 MOBILE_SDK_PACKAGE_OUT_DIR may select a dedicated external package directory
 whose final path component contains "mobile-sdk".
+MOBILE_SDK_PYTHON_BINARY may select an absolute, already-canonical regular
+Python 3.12 executable when the fixed Homebrew/system locators are unavailable.
 
 When neither --apple nor --android is passed, both platforms are packaged.
 USAGE
@@ -183,7 +277,7 @@ hash_file() {
   elif command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$path" | awk '{print $1}'
   else
-    python3 - "$path" <<'PY'
+    run_isolated_python - "$path" <<'PY'
 import hashlib
 import sys
 
@@ -250,7 +344,7 @@ resolve_core_jar() {
 
 resolve_android_native_mode() {
   local aar="$1"
-  python3 - "$aar" <<'PY'
+  run_isolated_python - "$aar" <<'PY'
 import json
 import sys
 import zipfile

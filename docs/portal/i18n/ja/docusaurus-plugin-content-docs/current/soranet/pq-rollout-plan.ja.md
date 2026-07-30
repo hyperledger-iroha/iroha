@@ -105,11 +105,11 @@ rollout_phase = "default"
 
 | Surface | Canary (Stage A) | Ramp (Stage B) | Default (Stage C) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` fetch | `--anonymity-policy stage-a` または phase 依存 | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` fetch | `--anonymity-policy anon-guard-pq` または phase 依存 | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Orchestrator config JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust client config (`iroha.toml`) | `rollout_phase = "canary"` (default) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` signed commands | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optional `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, optional `.ANON_STRICT_PQ` |
+| `iroha_cli` signed commands | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optional `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, optional `.ANON_STRICT_PQ` |
 | JavaScript orchestrator helpers | `rolloutPhase: "canary"` または `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -132,7 +132,7 @@ rollout_phase = "default"
 
 3. **Client/SDK canary (T plus 1 week)**
 
-   - Client configs を `rollout_phase = "ramp"` に切り替えるか、指定 SDK cohorts に `stage-b` overrides を渡す。
+   - Client configs を `rollout_phase = "ramp"` に切り替えるか、指定 SDK cohorts に `anon-majority-pq` overrides を渡す。
    - Telemetry diffs (`sorafs_orchestrator_policy_events_total` を `client_id` と `region` で集計) を取得し、rollout incident log に添付する。
 
 4. **Default promotion (T plus 3 weeks)**
@@ -168,7 +168,7 @@ Alerting では、既存の rules が `stage` label を使うようにし、cana
 ### Ramp -> Canary (Stage B -> Stage A)
 
 1. Promotion 前に取得した guard-directory snapshot を `sorafs_cli guard-directory import --guard-directory guards.json` で取り込み、`sorafs_cli guard-directory verify` を再実行して demotion packet に hashes を含める。
-2. Orchestrator と client configs に `rollout_phase = "canary"`（または `anonymity_policy stage-a` override）を設定し、[PQ ratchet runbook](./pq-ratchet-runbook.md) の PQ ratchet drill を再実行して downgrade pipeline を証明する。
+2. Orchestrator と client configs に `rollout_phase = "canary"`（または `anonymity_policy anon-guard-pq` override）を設定し、[PQ ratchet runbook](./pq-ratchet-runbook.md) の PQ ratchet drill を再実行して downgrade pipeline を証明する。
 3. 更新された PQ Ratchet と SN16 telemetry screenshots と alert outcomes を incident log に添付してから governance に通知する。
 
 ### Guardrail reminders

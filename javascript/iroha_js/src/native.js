@@ -105,6 +105,15 @@ export function getNativeBinding() {
   if (!verification.ok) {
     throw formatForceNativeVerificationError(verification, paths);
   }
+  if (
+    verification.sourceTreeClean !== true ||
+    typeof verification.sourceGitRevision !== "string"
+  ) {
+    throw nativeBindingError(
+      `build provenance for ${paths.bindingPath} is missing or records a dirty source tree; rebuild from the exact clean SDK source.`,
+      "source_provenance_error",
+    );
+  }
 
   let snapshot;
   try {

@@ -262,12 +262,12 @@ function replaceTransferExecutable(payload, { wireId, numericArchive } = {}) {
 function replaceSignedPayload(versioned, payload) {
   const fields = [];
   let offset = 1;
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     const decoded = readField(versioned, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, versioned.length, "test transaction must contain exactly four fields");
+  assert.equal(offset, versioned.length, "test transaction must contain exactly three fields");
   fields[1] = payload;
   return Buffer.concat([Buffer.of(1), struct(fields)]);
 }
@@ -422,6 +422,25 @@ test("browser finalizer matches the native N-API bytes and entrypoint hash", () 
   assert.deepEqual(browser.hash, Buffer.from(native.hash));
   assert.equal(browser.hashHex, Buffer.from(native.hash).toString("hex"));
   assert.equal(browserSignedTransactionHashHex(browser.signedTransaction), browser.hashHex);
+
+  const differentlyAuthorized = Buffer.from(browser.signedTransaction);
+  const signatureField = readField(differentlyAuthorized.subarray(1), 0);
+  differentlyAuthorized[signatureField.next] ^= 1;
+  assert.notDeepEqual(differentlyAuthorized, browser.signedTransaction);
+  assert.equal(
+    browserSignedTransactionHashHex(differentlyAuthorized),
+    browser.hashHex,
+    "authorization proof bytes must not change transaction intent identity",
+  );
+
+  const legacyOuterAttachment = Buffer.concat([
+    browser.signedTransaction,
+    field(Buffer.of(0)),
+  ]);
+  expectCodecError(
+    () => browserSignedTransactionHashHex(legacyOuterAttachment),
+    "malformed_signed_transaction",
+  );
 });
 
 test("browser signed hash matches the shared compact Android and native Rust golden", () => {

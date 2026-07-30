@@ -32,6 +32,15 @@ struct LegacyCancelAssetLock {
     escrow_id: EscrowId,
 }
 
+#[derive(norito::derive::NoritoSerialize)]
+struct RetiredNestedEscrowId(Hash);
+
+#[derive(norito::derive::NoritoSerialize)]
+struct RetiredNestedCancelAssetLock {
+    escrow_id: RetiredNestedEscrowId,
+    expected_remaining_amount: Quantity,
+}
+
 /// Return the repository's checked-in appeal-finance fixture directory.
 #[must_use]
 pub fn default_output_dir() -> PathBuf {
@@ -43,6 +52,10 @@ pub fn default_output_dir() -> PathBuf {
 }
 
 /// Render every canonical positive and negative fixture without writing files.
+///
+/// # Errors
+///
+/// Returns an error if canonical Norito or JSON serialization fails.
 pub fn render_fixtures() -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
     let escrow_id = EscrowId::new(Hash::new(ESCROW_ID_PREIMAGE));
     let valid = CancelAssetLock::new(escrow_id, Quantity::from(20_u64));
@@ -67,8 +80,15 @@ pub fn render_fixtures() -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
     let (legacy_payload, flags) = encode_with_header_flags(&LegacyCancelAssetLock { escrow_id });
     let legacy_norito =
         norito::core::frame_bare_with_header_flags::<CancelAssetLock>(&legacy_payload, flags)?;
-    let mut trailing_norito = valid_norito.clone();
-    trailing_norito.push(0);
+    let (retired_nested_payload, retired_nested_flags) =
+        encode_with_header_flags(&RetiredNestedCancelAssetLock {
+            escrow_id: RetiredNestedEscrowId(*escrow_id.as_hash()),
+            expected_remaining_amount: Quantity::from(20_u64),
+        });
+    let retired_nested_norito = norito::core::frame_bare_with_header_flags::<CancelAssetLock>(
+        &retired_nested_payload,
+        retired_nested_flags,
+    )?;
 
     Ok(BTreeMap::from([
         (
@@ -89,8 +109,8 @@ pub fn render_fixtures() -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
             pretty_json_bytes(&noncanonical_quantity)?,
         ),
         (
-            PathBuf::from("negative/cancel_asset_lock_trailing_bytes_v1.to"),
-            trailing_norito,
+            PathBuf::from("negative/cancel_asset_lock_nested_escrow_id_v1.to"),
+            retired_nested_norito,
         ),
         (
             PathBuf::from("negative/cancel_asset_lock_zero_expected_v1.json"),
@@ -103,7 +123,12 @@ pub fn render_fixtures() -> Result<BTreeMap<PathBuf, Vec<u8>>, Box<dyn Error>> {
     ]))
 }
 
-/// Write the exact fixture map beneath `output_dir`.
+/// Write the exact payload fixture map beneath `output_dir`.
+///
+/// # Errors
+///
+/// Returns an error if the fixture map is invalid, the destination is unsafe,
+/// an I/O operation fails, or publication does not yield the exact path set.
 pub fn write_fixtures(
     output_dir: &Path,
     fixtures: &BTreeMap<PathBuf, Vec<u8>>,
@@ -132,7 +157,12 @@ pub fn write_fixtures(
     Ok(())
 }
 
-/// Verify exact paths and bytes beneath `output_dir`.
+/// Verify exact payload paths and bytes beneath `output_dir`.
+///
+/// # Errors
+///
+/// Returns an error if the fixture map or directory is unsafe, a file cannot
+/// be read, or any checked-in path or byte differs from canonical generation.
 pub fn check_fixtures(
     output_dir: &Path,
     fixtures: &BTreeMap<PathBuf, Vec<u8>>,
@@ -479,7 +509,7 @@ fn create_temporary_file(parent: &Path) -> Result<(File, PathBuf), Box<dyn Error
         ));
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => return Ok((file, path)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
     }
@@ -597,6 +627,47 @@ fn sync_directory(_path: &Path) -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hex_literal::hex;
+
+    #[test]
+    fn canonical_and_retired_nested_frames_are_byte_exact() {
+        let fixtures = render_fixtures().expect("render fixture bytes");
+        let canonical = fixtures
+            .get(Path::new("cancel_asset_lock_v1.to"))
+            .expect("canonical Norito fixture");
+        let retired_nested = fixtures
+            .get(Path::new(
+                "negative/cancel_asset_lock_nested_escrow_id_v1.to",
+            ))
+            .expect("retired nested Norito fixture");
+
+        assert_eq!(canonical.len(), 85);
+        assert_eq!(
+            canonical.as_slice(),
+            hex!(
+                "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002d00000000000000"
+                "d5f0a9bf0af707a1022073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11bdc"
+                "799dfdb7ea29851f0b0501000000140400000000"
+            )
+        );
+        assert_eq!(retired_nested.len(), 86);
+        assert_eq!(
+            retired_nested.as_slice(),
+            hex!(
+                "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002e00000000000000"
+                "0e55fb7ed463b87302212073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11b"
+                "dc799dfdb7ea29851f0b0501000000140400000000"
+            )
+        );
+        assert_eq!(canonical[40], 0x20);
+        assert_eq!(&retired_nested[40..42], &[0x21, 0x20]);
+        assert_eq!(&retired_nested[42..74], &canonical[41..73]);
+        assert_eq!(&retired_nested[74..], &canonical[73..]);
+        assert!(
+            norito::decode_from_bytes::<CancelAssetLock>(retired_nested).is_err(),
+            "the retired nested EscrowId representation must be rejected"
+        );
+    }
 
     #[test]
     fn checked_in_cancel_asset_lock_fixtures_match_generation() {

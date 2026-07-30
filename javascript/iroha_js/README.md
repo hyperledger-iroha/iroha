@@ -1893,6 +1893,52 @@ await torii.submitSumeragiEvidence({
 
 ## SoraFS Storage Helpers
 
+The hedging and billing helpers use a per-request canonical account signature,
+disable transparent retries and redirects, require exact non-zero lowercase
+32-byte checkpoint/cursor identifiers, and stream responses under the Torii
+caps (1 MiB for JSON and 22 MiB for a published statement). The acknowledgement
+proof is encoded with the shared
+`iroha.torii.v1.sorafs.billing.acknowledgement_proof` Norito schema; no nonce,
+proof, or field aliases are accepted.
+
+```js
+const canonicalAuth = {
+  accountId: process.env.IROHA_ACCOUNT_ID,
+  privateKey: Buffer.from(process.env.IROHA_PRIVATE_KEY_HEX, "hex"),
+};
+const checkpoint = process.env.SORAFS_BILLING_CHECKPOINT_HEX;
+
+const status = await torii.getSorafsBillingStatus({ canonicalAuth });
+const statements = await torii.listSorafsBillingStatements({
+  expectedCheckpointFingerprintHex: checkpoint,
+  limit: 25,
+  canonicalAuth,
+});
+const statement = await torii.getSorafsBillingStatement(
+  statements.items[0].statement_id_hex,
+  checkpoint,
+  { canonicalAuth },
+);
+await torii.acknowledgeSorafsBillingStatement(
+  statements.items[0].statement_id_hex,
+  checkpoint,
+  {
+    requestNonceHex: crypto.randomBytes(32).toString("hex"),
+    authenticationProof: externalOwnerProof,
+  },
+  { canonicalAuth },
+);
+const exposure = await torii.getSorafsHedgingExposure({
+  expectedCheckpointFingerprintHex: checkpoint,
+  limit: 100,
+  canonicalAuth,
+});
+```
+
+`getSorafsBillingReconciliation` requires the governed billing-manager role.
+The exposure and intent reads require a treasury- or hedging-observer role.
+These APIs expose projections only; automatic hedge execution remains absent.
+
 Pin registration accepts only a caller-signed, versioned transaction containing
 exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
 transaction locally; neither the raw private key nor any secret-bearing JSON
@@ -4141,6 +4187,30 @@ characters); the on-wire `EscrowId` remains 32 bytes. The precondition is
 mandatory, positive, and canonically spelled; the retired one-field
 cancellation and lossy JavaScript numbers are rejected before encoding.
 
+For the appeal-finance fixture boundary, use the strict bare archive codec with
+an already finalized canonical escrow hash:
+
+```js
+import {
+  decodeCancelAssetLockV1,
+  encodeCancelAssetLockV1,
+  validateAppealFinanceCancelAssetLock,
+} from "@iroha/iroha-js";
+
+const archive = encodeCancelAssetLockV1({
+  escrow_id:
+    "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B",
+  expected_remaining_amount: "20",
+});
+const fields = decodeCancelAssetLockV1(archive);
+const diagnostic = validateAppealFinanceCancelAssetLock(archive);
+```
+
+This codec accepts exactly the two snake-case string fields and exact archive
+bytes. Raw hex/base64, byte-array field aliases, nested identifiers, padding,
+substituted schemas or flags, and trailing bytes are rejected. The validation
+outcome is diagnostic and does not itself authorize settlement.
+
 ### SoraFS replication-order instructions
 
 The V1 helpers emit the exact native Rust/Norito variants. IDs must be non-zero
@@ -4165,6 +4235,20 @@ const complete = buildCompleteReplicationOrderInstruction({
   orderId,
   providerId,
   completionEpoch: 27,
+  expectedAuthority: {
+    providerOwner,
+    signerPolicy: {
+      policyId,
+      revision: 2,
+      predecessorDigest,
+      policyDigest,
+    },
+  },
+  expectedAssignmentRevision: 3,
+  finalizedAnchor: {
+    height: 41,
+    blockHash,
+  },
 });
 const expire = buildExpireReplicationOrderInstruction({
   orderId,
@@ -4172,9 +4256,11 @@ const expire = buildExpireReplicationOrderInstruction({
 });
 ```
 
-Completion is always provider-specific: the canonical shape is
-`order_id + provider_id + completion_epoch`. The retired two-field completion
-shape and unknown fields are rejected.
+Completion uses the exact six-field hard cut: `order_id`, `provider_id`,
+`completion_epoch`, `expected_authority`, `expected_assignment_revision`, and
+`finalized_anchor`. The authority retains the provider owner and four-part
+signer-policy chain. Missing, retired three-field, alias, and unknown shapes are
+rejected.
 
 ## Configuration
 

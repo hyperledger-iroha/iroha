@@ -37,7 +37,7 @@ en tareas de ingeniería trazables.
 | Atestado de punto final | Cada punto final anunciado debe estar respaldado por un informe de certificado mTLS o QUIC. | Definir payload Norito `EndpointAttestationV1` y almacenarlo por endpoint dentro del paquete de admisión. |
 
 ## Flujo de admisión1. **Creación de propuesta**
-   - CLI: añadir `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: añadir `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      produciendo `ProviderAdmissionProposalV1` + paquete de atestado.
    - Validación: asegurar campos requeridos, stack > 0, handle canónico de fragmentador en `profile_id`.
 2. **Endoso de gobernanza**
@@ -61,7 +61,7 @@ en tareas de ingeniería trazables.
 
 ### Referencia de CLI
 
-Ejecuta cada comando vía `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Ejecuta cada comando vía `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Banderas requeridas: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, y al menos un `--endpoint=<kind:host>`.
@@ -103,7 +103,7 @@ Ejecuta cada comando vía `cargo run -p sorafs_manifest --bin sorafs_manifest_bu
 1. Construye el par propuesta/advert sucesor con `provider-admission proposal` y `provider-admission sign`, incrementando `--retention-epoch` y actualizando stack/endpoints según sea necesario.
 2. Ejecutar
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -119,7 +119,7 @@ Ejecuta cada comando vía `cargo run -p sorafs_manifest --bin sorafs_manifest_bu
 5. Regenera y confirma los aparatos canónicos vía `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) valida que las salidas Norito permanezcan estables.#### Revocación de emergencia
 1. Identifica el sobre confirmado y emite una revocación:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

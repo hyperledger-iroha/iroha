@@ -60,8 +60,47 @@ def compact_length(value: int) -> bytes:
             return bytes(output)
 
 
+def decode_compact_length(data: bytes, offset: int) -> tuple[int, int]:
+    """Decode one canonical unsigned LEB128 field length."""
+    start = offset
+    value = 0
+    shift = 0
+    while offset < len(data) and shift <= 63:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 0x7F) << shift
+        if byte & 0x80 == 0:
+            if data[start:offset] != compact_length(value):
+                raise ValueError("non-canonical compact field length")
+            return value, offset
+        shift += 7
+    raise ValueError("truncated or overflowing compact field length")
+
+
+def read_norito_field(data: bytes, offset: int, context: str) -> tuple[bytes, int]:
+    """Read one length-delimited field from an adaptive-Norito struct."""
+    length, payload_offset = decode_compact_length(data, offset)
+    end = payload_offset + length
+    if end > len(data):
+        raise ValueError(f"truncated {context}")
+    return data[payload_offset:end], end
+
+
+def signed_transaction_payload(data: bytes) -> bytes:
+    """Extract the signed intent from the canonical first-release envelope."""
+    _, offset = read_norito_field(data, 0, "SignedTransaction.signature")
+    payload, offset = read_norito_field(data, offset, "SignedTransaction.payload")
+    _, offset = read_norito_field(
+        data, offset, "SignedTransaction.multisig_signatures"
+    )
+    if offset != len(data):
+        raise ValueError("SignedTransaction has trailing or legacy envelope fields")
+    return payload
+
+
 def signed_transaction_entrypoint_hash(data: bytes) -> str:
-    entrypoint = b"\x00\x00\x00\x00" + compact_length(len(data)) + data
+    payload = signed_transaction_payload(data)
+    entrypoint = b"\x00\x00\x00\x00" + compact_length(len(payload)) + payload
     return iroha_hash(entrypoint)
 
 def normalize_authority(value: str) -> str:

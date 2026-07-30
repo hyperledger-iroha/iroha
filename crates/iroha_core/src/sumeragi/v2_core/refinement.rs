@@ -1291,8 +1291,7 @@ macro_rules! tag_projection_strictly_advances_body {
     ($later:expr, $previous:expr) => {{
         $later.height == $previous.height
             && ($later.view > $previous.view
-                || ($later.view == $previous.view
-                    && $later.generation > $previous.generation))
+                || ($later.view == $previous.view && $later.generation > $previous.generation))
     }};
 }
 
@@ -1653,8 +1652,7 @@ macro_rules! pending_round_can_acknowledge_body {
                     $owner_before.generation < u64::MAX
                         && $owner_after.generation == $owner_before.generation + 1u64
                 } else {
-                    $pending.view >= $owner_before.view
-                        && $owner_after.generation == 0u64
+                    $pending.view >= $owner_before.view && $owner_after.generation == 0u64
                 })
         } else {
             tag_projection_equal_body!($owner_before, $owner_after)

@@ -33,6 +33,8 @@ assert CHECKER_SPEC and CHECKER_SPEC.loader  # pragma: no cover - defensive
 sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
+TOPOLOGY = sys.modules["sorafs_topology_qualification"]
+
 
 NOW_UNIX = 1_800_600_000
 GENERATED_AT = NOW_UNIX - 120
@@ -44,6 +46,35 @@ POLICY_DIGEST = "d" * 64
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
     return tmp_path / f"{kind}.json"
+
+
+def write_topology_qualification(root: Path) -> Path:
+    path = root / "topology-qualification.json"
+    payload = {
+        "schema": TOPOLOGY.SUMMARY_SCHEMA,
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": "11" * 32,
+        "canonical_manifest_sha256": "22" * 32,
+        "deployment": {
+            "deployment_id": "gateway-load-prod-20260701",
+            "environment": "production",
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(TOPOLOGY.CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(TOPOLOGY.CANONICAL_READINESS_LANES),
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
 
 
 def args_for(kind: str, tmp_path: Path) -> list[str]:
@@ -79,14 +110,24 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "iroha-gateway 1.0.0",
                 "--hardware-profile",
                 "gateway-load-hardware-c6i-2xlarge",
-                "--cache-state",
-                "cold-cache",
                 "--duration-seconds",
                 str(CHECKER.DEFAULT_MIN_STAGING_DURATION_SECS),
                 "--stream-count",
                 "1200",
+                "--peak-concurrent-range-streams",
+                "1000",
                 "--provider-count",
                 "4",
+                "--corruption-injection-bps",
+                "100",
+                "--cold-cache-exercised",
+                "--warm-cache-exercised",
+                "--mixed-cache-exercised",
+                "--revocation-exercised",
+                "--malformed-flood-exercised",
+                "--denylist-pressure-exercised",
+                "--rate-limit-pressure-exercised",
+                "--failover-exercised",
                 "--success-rate-bps",
                 "9950",
                 "--error-rate-bps",
@@ -150,6 +191,8 @@ def test_builds_payload_free_staging_load_canary(tmp_path: Path) -> None:
     assert payload["stream_count"] == 1200
     assert payload["streams"][0] == {"name": "gateway-load-stream-0000"}
     assert payload["streams"][-1] == {"name": "gateway-load-stream-1199"}
+    assert payload["duration_seconds"] == 86_400
+    assert payload["peak_concurrent_range_streams"] == 1_000
     assert payload["provider_count"] == 4
     assert payload["providers"] == [
         {"name": "gateway-load-provider-a"},
@@ -157,6 +200,19 @@ def test_builds_payload_free_staging_load_canary(tmp_path: Path) -> None:
         {"name": "gateway-load-provider-c"},
         {"name": "gateway-load-provider-d"},
     ]
+    assert payload["cache_coverage"] == {
+        "cold_cache_exercised": True,
+        "warm_cache_exercised": True,
+        "mixed_cache_exercised": True,
+    }
+    assert payload["load_conditions"] == {
+        "corruption_injection_bps": 100,
+        "revocation_exercised": True,
+        "malformed_flood_exercised": True,
+        "denylist_pressure_exercised": True,
+        "rate_limit_pressure_exercised": True,
+        "failover_exercised": True,
+    }
     assert payload["response_bodies_included"] is False
     assert payload["raw_payloads_included"] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
@@ -172,6 +228,12 @@ def test_generated_canaries_pass_full_gateway_load_gate(tmp_path: Path) -> None:
     summary = tmp_path / "summary.json"
 
     command = ["--now-unix", str(NOW_UNIX)]
+    command.extend(
+        [
+            "--topology-qualification-summary",
+            str(write_topology_qualification(tmp_path)),
+        ]
+    )
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
     command.extend(["--summary-out", str(summary)])
@@ -417,6 +479,21 @@ def test_gateway_version_rejects_placeholder_before_write(tmp_path: Path, capsys
     )
 
 
+def test_production_environment_aliases_fail_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for environment in ("prod", "staging", "Production"):
+        args = args_for("staging_load", tmp_path)
+        args[args.index("--environment") + 1] = environment
+
+        assert MODULE.main(args) == 2
+
+        captured = capsys.readouterr()
+        assert "--environment must be production" in captured.err
+        assert not canary_path(tmp_path, "staging_load").exists()
+
+
 def test_gateway_version_accepts_reviewed_rc_label(tmp_path: Path) -> None:
     args = args_for("staging_load", tmp_path)
     version_index = args.index("--gateway-version")
@@ -435,13 +512,16 @@ def test_staging_thresholds_fail_before_write(tmp_path: Path, capsys) -> None:
     args = args_for("staging_load", tmp_path)
     duration_index = args.index("--duration-seconds")
     args[duration_index + 1] = "600"
+    peak_index = args.index("--peak-concurrent-range-streams")
+    args[peak_index + 1] = "999"
     p95_index = args.index("--p95-latency-ms")
     args[p95_index + 1] = "2000"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--duration-seconds must be >=" in captured.err
+    assert "--duration-seconds must be >= 86400" in captured.err
+    assert "--peak-concurrent-range-streams must be >= 1000" in captured.err
     assert "--p95-latency-ms must be <=" in captured.err
     assert not canary_path(tmp_path, "staging_load").exists()
 
@@ -495,6 +575,23 @@ def test_staging_provider_inventory_must_not_duplicate(tmp_path: Path, capsys) -
     assert not canary_path(tmp_path, "staging_load").exists()
 
 
+def test_staging_provider_inventory_requires_two_distinct_providers(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("staging_load", tmp_path)
+    while args.count("--provider") > 1:
+        index = len(args) - 1 - args[::-1].index("--provider")
+        del args[index : index + 2]
+    args[args.index("--provider-count") + 1] = "1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider must include at least 2 distinct providers" in captured.err
+    assert not canary_path(tmp_path, "staging_load").exists()
+
+
 def test_staging_hardware_profile_rejects_placeholder_before_write(
     tmp_path: Path,
     capsys,
@@ -513,18 +610,67 @@ def test_staging_hardware_profile_rejects_placeholder_before_write(
     assert not canary_path(tmp_path, "staging_load").exists()
 
 
-def test_staging_cache_state_rejects_unknown_before_write(
+def test_staging_required_cache_and_pressure_flags_fail_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for _attribute, flag in MODULE.STAGING_REQUIRED_TRUE_FLAGS:
+        args = args_for("staging_load", tmp_path)
+        args.remove(flag)
+
+        assert MODULE.main(args) == 2
+
+        captured = capsys.readouterr()
+        assert f"{flag} is required for staging_load" in captured.err
+        assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_staging_corruption_injection_must_be_exactly_one_percent(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for value in ("99", "101"):
+        args = args_for("staging_load", tmp_path)
+        args[args.index("--corruption-injection-bps") + 1] = value
+
+        assert MODULE.main(args) == 2
+
+        captured = capsys.readouterr()
+        assert "--corruption-injection-bps must be exactly 100" in captured.err
+        assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_staging_required_scalar_facts_cannot_be_omitted(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for option in (
+        "--duration-seconds",
+        "--peak-concurrent-range-streams",
+        "--corruption-injection-bps",
+    ):
+        args = args_for("staging_load", tmp_path)
+        index = args.index(option)
+        del args[index : index + 2]
+
+        assert MODULE.main(args) == 2
+
+        captured = capsys.readouterr()
+        assert f"{option} is required for staging_load" in captured.err
+        assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_removed_cache_state_cli_alias_is_rejected(
     tmp_path: Path,
     capsys,
 ) -> None:
     args = args_for("staging_load", tmp_path)
-    index = args.index("--cache-state")
-    args[index + 1] = "debug-cache"
+    args.extend(["--cache-state", "cold-cache"])
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--cache-state must be a reviewed cache-state value" in captured.err
+    assert "unrecognized arguments: --cache-state" in captured.err
     assert not canary_path(tmp_path, "staging_load").exists()
 
 

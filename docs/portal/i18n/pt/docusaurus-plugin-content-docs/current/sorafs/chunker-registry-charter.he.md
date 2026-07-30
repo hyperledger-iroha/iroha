@@ -4,7 +4,7 @@ direction: rtl
 source: docs/portal/i18n/pt/docusaurus-plugin-content-docs/current/sorafs/chunker-registry-charter.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4a3c65672ab8f09af427dede41c396a9bea3098552714c7da372819cf5870d8f
+source_hash: e6f0f53398618fddc0b4e2818d6130e32cc4d462f9acc7845a046bb2f86f6186
 source_last_modified: "2026-01-04T10:50:53+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -70,7 +70,7 @@ SDKs). Ela impoe os invariantes de alias e handle verificados por
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envie um PR contendo fixtures, proposta, relatorio de determinismo e

@@ -14791,7 +14791,10 @@ mod tests {
             .drain_deferred()
             .expect("service the timeout before the later locked vote");
         assert!(adapter.current_tag().strictly_advances(tag_before_tc));
-        assert_eq!(adapter.current_tag().generation(), reducer::Generation::INITIAL);
+        assert_eq!(
+            adapter.current_tag().generation(),
+            reducer::Generation::INITIAL
+        );
         assert!(installed_effects.iter().any(|effect| matches!(
             effect,
             AdapterEffect::EnterView {
@@ -15264,7 +15267,10 @@ mod tests {
             })
             .expect("TC installation must reconstruct the exact local locked Commit vote");
         assert!(adapter.current_tag().strictly_advances(tag_before_tc));
-        assert_eq!(adapter.current_tag().generation(), reducer::Generation::INITIAL);
+        assert_eq!(
+            adapter.current_tag().generation(),
+            reducer::Generation::INITIAL
+        );
         assert_eq!(adapter.reducer.volatile_evidence_counts().0, 0);
         assert_eq!(
             adapter.active_subject,

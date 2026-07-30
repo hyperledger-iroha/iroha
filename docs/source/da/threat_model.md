@@ -99,10 +99,16 @@ blobs to exhaust resources or smuggle invalid metadata.
 - Rate limiting and authentication at the Torii ingest endpoint.
 - Chunk size bounds and deterministic encoding enforced by SoraFS chunker.
 - Admission pipeline only persists manifests after integrity checksum matches.
-- Deterministic replay cache (`ReplayCache`) tracks `(lane, epoch, sequence)` windows, persists high-water marks on disk, and rejects duplicates/stale replays; property and fuzz harnesses cover divergent fingerprints and out-of-order submissions.【crates/iroha_core/src/da/replay_cache.rs:1】【fuzz/da_replay_cache.rs:1】【crates/iroha_torii/src/da/ingest.rs:1】
+- Deterministic replay cache (`ReplayCache`) tracks `(lane, epoch, sequence)` windows, rejects
+  duplicates/stale replays, and fails closed at a configured global lane/epoch bound. High-water
+  marks use a bounded checksummed append journal plus periodic checkpoint, so one new epoch cannot
+  trigger a full-map rewrite. Recovery rejects corrupt or over-capacity state rather than starting
+  with an empty cache.【crates/iroha_core/src/da/replay_cache.rs:1】【fuzz/da_replay_cache.rs:1】【crates/iroha_torii/src/da/ingest.rs:1】
 
 **Residual gaps**
-- Torii ingest must thread the replay cache into admission and persist sequence cursors across restarts.
+- Operators must size `replay_cache_max_lane_epochs` for the configured lane catalog and expected
+  retained epoch horizon; exhaustion rejects new windows until obsolete replay state is explicitly
+  retired.
 - Norito DA schemas now have a dedicated fuzz harness (`fuzz/da_ingest_schema.rs`) to stress encode/decode invariants; coverage dashboards should alert if the target regresses.
 
 ### Replication Withholding
@@ -179,7 +185,8 @@ whitelists malicious providers, or suppresses alerts.
 
 | Risk | Likelihood | Impact | Owner | Mitigation Plan |
 | --- | --- | --- | --- | --- |
-| Replay of DA manifests before DA-2 sequence cache lands | Possible | Moderate | Core Protocol WG | Implement sequence cache + nonce validation in DA-2; add regression tests. |
+| Exhaustion of the configured DA lane/epoch window budget | Possible | Moderate | Core Protocol WG | Alert on capacity rejects, size the global bound for the lane/epoch horizon, and retire obsolete windows only through an explicit governed reset. |
+| Caller-selected DA manifest sampling seed | Possible if promoted beyond diagnostics | High | Core Protocol WG | Keep query-derived plans advisory; before rewards/slashing, bind challenges to a committed block or governed VRF source that providers cannot choose. |
 | PDP/PoTR collusion when >f nodes compromise | Unlikely | High | Storage Team | Derive new challenge schedule with cross-provider sampling; validate via simulation harness. |
 | Cold-tier eviction audit gap | Possible | High | SRE / Storage Team | Attach signed audit logs & on-chain receipts for evictions; monitor via dashboards. |
 | Sequencer omission detection latency | Possible | High | Core Protocol WG | Nightly `cargo xtask da-commitment-reconcile` compares receipts vs commitments (SignedBlockWire/`.norito`/JSON) and pages governance on missing or mismatched tickets. |

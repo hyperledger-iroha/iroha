@@ -186,6 +186,13 @@ pub enum VegaMdlError {
         /// Signature role.
         role: VegaSignatureRoleV1,
     },
+    /// An otherwise valid ES256 signature used the malleable high-s
+    /// representative instead of the sole admitted low-s representative.
+    #[error("Vega {role:?} ES256 signature is non-canonical high-s")]
+    NonCanonicalHighSSignature {
+        /// Signature role.
+        role: VegaSignatureRoleV1,
+    },
     /// Native ES256 verification failed during witness preflight.
     #[error("Vega {role:?} ES256 signature verification failed")]
     SignatureVerificationFailed {

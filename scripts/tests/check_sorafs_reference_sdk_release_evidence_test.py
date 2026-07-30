@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -20,9 +21,13 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+
 
 NOW_UNIX = 1_800_700_000
 GENERATED_AT = NOW_UNIX - 120
+DEPLOYMENT_ID = "reference-sdk-release-2026-06"
+ENVIRONMENT = "production"
 DIGEST = "12" * 32
 DIGEST_2 = "34" * 32
 
@@ -37,8 +42,8 @@ def base(schema: str) -> dict:
         "schema": schema,
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
-        "deployment_id": "reference-sdk-release-2026-06",
-        "environment": "release",
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
         "deployment_context_reviewed": True,
     }
 
@@ -82,6 +87,8 @@ def signed_manifest(
     *,
     private_key_absent: bool = True,
     signature_algorithm: str = "ed25519",
+    signing_provider: str = "external_ed25519_hsm",
+    signing_provider_revision: int = 1,
 ) -> dict:
     payload = base("sorafs.reference_sdk.signed_manifest_canary.v1")
     payload.update(
@@ -93,10 +100,53 @@ def signed_manifest(
             "public_key_fingerprint_recorded": True,
             "private_key_absent": private_key_absent,
             "signature_algorithm": signature_algorithm,
+            "signing_provider": signing_provider,
+            "signing_provider_revision": signing_provider_revision,
+            "hsm_signature_verified": True,
             "manifest_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
             "public_key_fingerprint_hex": DIGEST,
             "raw_manifest_included": False,
+        }
+    )
+    return payload
+
+
+def supply_chain(
+    *,
+    high_vulnerability_count: int = 0,
+    missing_target: bool = False,
+) -> dict:
+    targets = list(MODULE.REQUIRED_RELEASE_TARGETS)
+    if missing_target:
+        targets.pop()
+    payload = base("sorafs.reference_sdk.supply_chain_canary.v1")
+    payload.update(
+        {
+            "target_count": len(targets),
+            "target_results": [
+                {
+                    "target": target,
+                    "binary_smoke_passed": True,
+                    "deterministic_archive_replay_passed": True,
+                    "installation_verified": True,
+                    "rollback_verified": True,
+                    "yank_verified": True,
+                    "sbom_generated": True,
+                    "critical_vulnerability_count": 0,
+                    "high_vulnerability_count": high_vulnerability_count,
+                    "oidc_identity_verified": True,
+                    "cosign_provenance_verified": True,
+                }
+                for target in targets
+            ],
+            "release_manifest_digest_hex": DIGEST,
+            "sbom_index_digest_hex": DIGEST,
+            "vulnerability_report_digest_hex": DIGEST,
+            "provenance_bundle_digest_hex": DIGEST,
+            "raw_sboms_included": False,
+            "raw_vulnerability_reports_included": False,
+            "raw_provenance_included": False,
         }
     )
     return payload
@@ -189,6 +239,7 @@ def governance_approval(*, source: str = "governed_release") -> dict:
 def write_complete_evidence(root: Path) -> None:
     write_json(root / "release-archive.json", release_archive())
     write_json(root / "signed-manifest.json", signed_manifest())
+    write_json(root / "supply-chain.json", supply_chain())
     write_json(root / "downstream-bindings.json", downstream_bindings())
     write_json(root / "cookbook-smoke.json", cookbook_smoke())
     write_json(root / "ffi-header-contract.json", ffi_header_contract())
@@ -197,6 +248,7 @@ def write_complete_evidence(root: Path) -> None:
 
 RELEASE_MANIFEST_BOUND_FIXTURES = (
     ("release_archive", "release-archive.json", release_archive),
+    ("supply_chain", "supply-chain.json", supply_chain),
     ("downstream_bindings", "downstream-bindings.json", downstream_bindings),
     ("cookbook_smoke", "cookbook-smoke.json", cookbook_smoke),
     ("ffi_header_contract", "ffi-header-contract.json", ffi_header_contract),
@@ -212,8 +264,54 @@ RELEASE_KEY_BOUND_FIXTURES = (
 )
 
 
+def write_topology_qualification(
+    root: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> Path:
+    path = root / "l1-topology-qualification.summary"
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(b"release-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-release-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(CANONICAL_READINESS_LANES),
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
+    return MODULE.main(
+        [
+            "--evidence-dir",
+            str(root),
+            "--now-unix",
+            str(NOW_UNIX),
+            "--topology-qualification-summary",
+            str(write_topology_qualification(root)),
+            *extra,
+        ]
+    )
 
 
 def test_complete_release_evidence_passes(tmp_path: Path) -> None:
@@ -229,17 +327,52 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_ffi_contract_digests"] == [DIGEST]
     assert payload["valid_header_digests"] == [DIGEST]
     assert payload["valid_package_index_digests"] == [DIGEST]
+    assert payload["valid_provenance_bundle_digests"] == [DIGEST]
     assert payload["valid_release_manifest_digests"] == [DIGEST]
     assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
     assert payload["valid_release_key_fingerprints"] == [DIGEST]
+    assert payload["valid_sbom_index_digests"] == [DIGEST]
     assert payload["signature_algorithms"] == ["ed25519"]
     signed_manifest_artifact = payload["required"]["signed_manifest"]["artifacts"][0]
     assert signed_manifest_artifact["fingerprint"]["signature_algorithm"] == "ed25519"
     governance_artifact = payload["required"]["governance_approval"]["artifacts"][0]
     assert governance_artifact["fingerprint"]["public_key_fingerprint_hex"] == DIGEST
     assert payload["valid_smoke_output_digests"] == [DIGEST]
+    assert payload["valid_vulnerability_report_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["release_archive"]["valid"] is True
+
+
+def test_release_lane_rejects_mismatched_topology_context(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    topology = write_topology_qualification(
+        tmp_path,
+        deployment_id="different-production-deployment",
+    )
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+                "--topology-qualification-summary",
+                str(topology),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert (
+        "topology qualification deployment_id must match the reviewed lane context"
+        in payload["errors"]
+    )
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -405,9 +538,14 @@ def test_multiple_valid_release_key_anchors_fail_closed(tmp_path: Path) -> None:
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(tmp_path)
     args = tmp_path / "reference-sdk.args"
     args.write_text(
-        f"--evidence-dir {tmp_path}\n--now-unix {NOW_UNIX}\n",
+        (
+            f"--evidence-dir {tmp_path}\n"
+            f"--now-unix {NOW_UNIX}\n"
+            f"--topology-qualification-summary {topology}\n"
+        ),
         encoding="utf-8",
     )
 
@@ -503,6 +641,55 @@ def test_signed_manifest_rejects_private_key_presence(tmp_path: Path) -> None:
     write_json(tmp_path / "signed-manifest.json", signed_manifest(private_key_absent=False))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_signed_manifest_requires_external_hsm_provider(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signing_provider="local_file"),
+    )
+
+    assert run_gate(tmp_path) == 1
+
+
+def test_supply_chain_requires_all_five_targets(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "supply-chain.json", supply_chain(missing_target=True))
+
+    assert run_gate(tmp_path) == 1
+
+
+def test_supply_chain_rejects_high_vulnerabilities(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "supply-chain.json",
+        supply_chain(high_vulnerability_count=1),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["supply_chain"]["artifacts"][0]
+    assert "high_vulnerability_count must be zero" in artifact["errors"]
+
+
+def test_release_evidence_payloads_are_schema_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload["legacy_supply_chain_alias"] = True
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert (
+        "supply_chain evidence fields must match the schema-closed contract"
+        in artifact["errors"]
+    )
 
 
 def test_signed_manifest_requires_policy_digest(tmp_path: Path) -> None:
@@ -803,7 +990,19 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
         {"schema": "sorafs.reference_sdk.unknown.v1"},
     )
 
-    assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--topology-qualification-summary",
+                str(write_topology_qualification(tmp_path)),
+            ]
+        )
+        == 1
+    )
 
 
 def test_unknown_directory_artifact_is_ignored_for_subset(tmp_path: Path) -> None:
@@ -821,4 +1020,18 @@ def test_invalid_optional_artifact_fails_subset_gate(tmp_path: Path) -> None:
 
 
 def test_unknown_required_kind_returns_usage_error(tmp_path: Path) -> None:
-    assert MODULE.main(["--evidence-dir", str(tmp_path), "--require-kind", "unknown"]) == 2
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-kind",
+                "unknown",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--topology-qualification-summary",
+                str(write_topology_qualification(tmp_path)),
+            ]
+        )
+        == 2
+    )

@@ -67,10 +67,13 @@ appears as both the manifest and CAR root. The JSON report includes the computed
 CAR payload digest, full archive digest, size, raw CID, and root (splitting out
 the dag-cbor codec), along with the manifest's alias/metadata entries. Use
 `--root-cid`/`--dag-codec` to *verify* the computed root or codec during CI
-runs, `--car-digest` to enforce the payload hash, `--car-cid` to enforce a
-precomputed raw (CIDv1, `raw` codec, BLAKE3 multihash) CAR identifier, and
-`--json-out` to persist the printed JSON alongside the manifest/CAR artifacts
-for downstream automation.
+runs, `--car-digest` to enforce the BLAKE3-256 digest of the complete canonical
+CARv2 archive (pragma, header, embedded CARv1 payload, and index), `--car-cid`
+to enforce a precomputed raw (CIDv1, `raw` codec, BLAKE3 multihash) CAR
+identifier, and `--json-out` to persist the printed JSON alongside the
+manifest/CAR artifacts for downstream automation. The report's explicit
+top-level `payload_digest_hex` is the raw-payload commitment; consumers never
+substitute `manifest.car_digest_hex` for it.
 
 When `--manifest-signatures-out` is provided (alongside at least one
 `--council-signature*` flag) the tool also writes a

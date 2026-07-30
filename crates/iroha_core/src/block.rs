@@ -4193,6 +4193,8 @@ pub(crate) mod valid {
 
     use commit::CommittedBlock;
     #[cfg(test)]
+    use iroha_data_model::nexus::AxtPolicySnapshot;
+    #[cfg(test)]
     use iroha_data_model::soracloud::{
         SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
@@ -4200,7 +4202,7 @@ pub(crate) mod valid {
     use iroha_data_model::{
         ChainId,
         events::pipeline::PipelineEventBox,
-        nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
+        nexus::{GroupBinding, HandleBudget, HandleSubject},
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;

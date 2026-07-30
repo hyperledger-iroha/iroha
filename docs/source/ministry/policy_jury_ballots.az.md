@@ -27,8 +27,8 @@ bütün səsvermə prosesini əhatə edir:
 2. **`PolicyJuryBallotCommitV1`** – bülletenlərdən əvvəl yazılmış möhürlənmiş öhdəlik
    aşkar edilir.  O, tur/təklif/münsif identifikatorlarını saxlayır
    Blake2b‑256 münsif identifikatorunun həzmi + səs seçimi + qeyri-neft dəsti, tutma
-   vaxt möhürü və səsvermə rejimi (`plaintext` və ya `zk-envelope` olduqda
-   `zk-ballot` funksiyası aktivdir).  `PolicyJuryBallotCommitV1::verify_reveal`
+   vaxt möhürü və səsvermə rejimi (`plaintext` və ya `zk-envelope`).
+   `PolicyJuryBallotCommitV1::verify_reveal`
    saxlanılan həzmin aşkar yüklə uyğunluğunu təmin edir.
 3. **`PolicyJuryBallotRevealV1`** – ehtiva edən ictimai aşkar obyekti
    səs seçimi, icra zamanı istifadə olunmayanlar və isteğe bağlı ZK sübut URI-ləri.
@@ -56,7 +56,7 @@ aşkar etmək.
 - Açıqlama mərhələsində münsiflər `PolicyJuryBallotRevealV1` yayırlar.  Operatorlar
   əvvəl faydalı yükü `PolicyJuryBallotCommitV1::verify_reveal`-ə qidalandırın
   səsvermənin qəbul edilməsi, aşkarlığın dəyişdirilməməsi və ya dəyişdirilməməsi.
-- `zk-ballot` funksiyası aktiv olduqda, münsiflər determinist əlavə edə bilərlər
+- V1 `zk-envelope` bülletenlərində münsiflər determinist
   sübut URI-lər (məsələn, `sorafs://proofs/pj-2026-02/juror-5`) aşağı axın
   auditorlar tərəfindən istinad edilən sıfır bilikli şahid paketini əldə edə bilərlər
   öhdəlik.Hər üç struktur `Encode`, `Decode` və `IntoSchema` əmələ gətirir, yəni onlar

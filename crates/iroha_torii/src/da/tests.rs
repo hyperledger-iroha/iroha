@@ -1256,45 +1256,12 @@ fn taikai_envelope_fixture() -> taikai_ingest::EnvelopeArtifacts {
     .expect("envelope")
 }
 
-fn sampling_manifest(stripes: u32) -> DaManifestV1 {
-    let mut request = sample_request();
-    request.chunk_size = 512;
-    request.erasure_profile = ErasureProfile {
-        data_shards: 4,
-        parity_shards: 2,
-        row_parity_stripes: 0,
-        chunk_alignment: 2,
-        fec_scheme: FecScheme::Rs12_10,
-    };
-    request.total_size = u64::from(request.chunk_size)
-        .saturating_mul(u64::from(request.erasure_profile.data_shards))
-        .saturating_mul(u64::from(stripes));
-    request.payload = vec![0xA5; request.total_size as usize];
-
-    let canonical = normalize_payload(&request).expect("normalize payload");
-    let chunk_store = build_chunk_store(&request, canonical.as_slice());
-    let metadata =
-        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::default();
-    resolve_manifest(
-        &request,
-        &chunk_store,
-        canonical.as_slice(),
-        &metadata,
-        &request.retention_policy,
-        1_701_800_000,
-        &rent_policy,
-    )
-    .expect("resolve manifest for sampling")
-    .manifest
-}
-
 fn sample_request() -> DaIngestRequest {
     // Golden fixture tests must not depend on OS randomness.
     let keypair = checked_fixture_keypair(vec![0x42; 32], Algorithm::Ed25519);
     let payload = b"example".to_vec();
 
-    DaIngestRequest {
+    DaIngestRequestIntentV1 {
         client_blob_id: BlobDigest::from_hash(blake3::hash(b"blob-id")),
         lane_id: LaneId::new(1),
         epoch: 5,
@@ -1327,10 +1294,9 @@ fn sample_request() -> DaIngestRequest {
                 MetadataVisibility::Public,
             )],
         },
-        submitter: keypair.public_key().clone(),
-        signature: Signature::try_from_bytes(&[0x42u8; 64])
-            .expect("nonzero Torii DA request signature fixture"),
     }
+    .try_sign(&keypair)
+    .expect("sign canonical DA request fixture")
 }
 
 fn lane_catalog_with_lanes(lanes: Vec<ModelLaneConfig>) -> LaneCatalog {
@@ -1400,6 +1366,94 @@ fn validate_request_rejects_non_power_two_chunks() {
         Err(err) => err,
     };
     assert_eq!(err.0, StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn validate_request_rejects_unbounded_erasure_work_before_allocation() {
+    let canonical_len = sample_request().payload.len();
+
+    let mut request = sample_request();
+    request.erasure_profile.data_shards = MAX_DATA_SHARDS + 1;
+    assert_eq!(
+        validate_request(&request, canonical_len)
+            .expect_err("excess data shards must reject")
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut request = sample_request();
+    request.erasure_profile.parity_shards = MAX_PARITY_SHARDS + 1;
+    assert_eq!(
+        validate_request(&request, canonical_len)
+            .expect_err("excess parity shards must reject")
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut request = sample_request();
+    request.erasure_profile.row_parity_stripes = MAX_ROW_PARITY_STRIPES + 1;
+    assert_eq!(
+        validate_request(&request, canonical_len)
+            .expect_err("excess row parity must reject")
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let mut request = sample_request();
+    request.total_size = MAX_CANONICAL_PAYLOAD_BYTES;
+    request.chunk_size = MAX_CHUNK_SIZE_BYTES;
+    request.erasure_profile.data_shards = 1;
+    request.erasure_profile.parity_shards = MAX_PARITY_SHARDS;
+    request.erasure_profile.row_parity_stripes = 0;
+    let err = validate_request_shape(&request)
+        .expect_err("multiplicative parity output must be rejected before allocation");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("generated-parity budget"));
+
+    let mut request = sample_request();
+    request.total_size = MAX_CANONICAL_PAYLOAD_BYTES;
+    request.chunk_size = MAX_CHUNK_SIZE_BYTES;
+    request.erasure_profile.data_shards = 1;
+    request.erasure_profile.parity_shards = 3;
+    request.erasure_profile.row_parity_stripes = 1;
+    let err = validate_request_shape(&request)
+        .expect_err("retained row-parity matrix must fit the workspace budget");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("RS16 workspace budget"));
+}
+
+#[test]
+fn validate_request_rejects_excess_source_chunks_and_row_work() {
+    let mut request = sample_request();
+    request.total_size =
+        u64::try_from(MAX_DATA_CHUNKS + 1).unwrap() * u64::from(request.chunk_size);
+    let err = validate_request_shape(&request).expect_err("excess source chunks must be rejected");
+    assert_eq!(err.0, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(err.1.contains("source-chunk limit"));
+
+    let mut request = sample_request();
+    request.erasure_profile.data_shards = 1;
+    request.erasure_profile.row_parity_stripes = 1;
+    request.total_size =
+        u64::try_from(MAX_ROW_PARITY_SOURCE_STRIPES + 1).unwrap() * u64::from(request.chunk_size);
+    let err = validate_request_shape(&request)
+        .expect_err("cubic row-parity source count must be bounded");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("source-stripe computation limit"));
+}
+
+#[test]
+fn normalize_payload_rejects_claimed_decompression_bomb_before_decoding() {
+    let mut request = sample_request();
+    request.compression = Compression::Gzip;
+    request.payload = vec![0x00];
+    request.total_size = MAX_CANONICAL_PAYLOAD_BYTES + 1;
+
+    let err = normalize_payload(&request)
+        .expect_err("oversized decompressed length must reject before decoding");
+
+    assert_eq!(err.0, StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(err.1.contains("64 MiB"));
 }
 
 fn fingerprint_for_request(request: &DaIngestRequest) -> ReplayFingerprint {
@@ -4352,7 +4406,7 @@ fn ipa_params_len_for_commitment_count_rejects_power_of_two_overflow() {
 #[test]
 fn build_chunk_commitments_rejects_row_parity_base_offset_overflow() {
     let mut request = sample_request();
-    request.chunk_size = 2;
+    request.chunk_size = MIN_CHUNK_SIZE_BYTES;
     request.payload = vec![0xA5, 0x5A];
     request.total_size = u64::MAX - 1;
     request.erasure_profile = ErasureProfile {
@@ -4379,7 +4433,7 @@ fn build_chunk_commitments_rejects_row_parity_base_offset_overflow() {
 #[test]
 fn build_chunk_commitments_rejects_row_parity_chunk_offset_overflow() {
     let mut request = sample_request();
-    request.chunk_size = 2;
+    request.chunk_size = MIN_CHUNK_SIZE_BYTES;
     request.payload = vec![0xA5, 0x5A];
     request.total_size = u64::MAX - 1;
     request.erasure_profile = ErasureProfile {
@@ -6692,7 +6746,6 @@ fn da_receipt_log_rejects_filename_ticket_mismatch_on_open() {
 #[test]
 fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
     let receipt_dir = tempdir().expect("receipt dir");
-    let cursor_dir = tempdir().expect("cursor dir");
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 15);
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8B);
@@ -6700,11 +6753,13 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
         .expect("persist receipt")
         .expect("receipt path");
 
-    let cursor_store =
-        Arc::new(ReplayCursorStore::empty(cursor_dir.path().to_path_buf()).expect("cursor store"));
-    let main_path = replay_cursor_main_path(cursor_dir.path());
-    let tmp_path = persistence::replay_cursor_temp_path(&main_path);
-    fs::create_dir(&tmp_path).expect("block replay cursor temp file");
+    let cursor_store = Arc::new(ReplayCursorStore::in_memory_with_max_lane_epochs(
+        NonZeroUsize::new(1).unwrap(),
+    ));
+    let retained = LaneEpoch::new(LaneId::new(7), 15);
+    cursor_store
+        .record(retained, 9)
+        .expect("seed the sole bounded replay cursor");
 
     let err = match DaReceiptLog::open(
         receipt_dir.path().to_path_buf(),
@@ -6720,8 +6775,8 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
         "unexpected cursor seed error: {err:?}"
     );
     assert!(
-        cursor_store.highest_sequences().is_empty(),
-        "failed cursor seeding must roll back cursor memory"
+        cursor_store.highest_sequences() == vec![(retained, 9)],
+        "failed cursor seeding must not mutate bounded cursor memory"
     );
 }
 
@@ -6755,26 +6810,162 @@ fn replay_cursor_store_persists_first_zero_sequence() {
 }
 
 #[test]
-fn replay_cursor_store_retries_after_persist_failure() {
+fn replay_cursor_store_rejects_new_lane_epochs_at_global_capacity() {
+    let store = ReplayCursorStore::in_memory_with_max_lane_epochs(NonZeroUsize::new(2).unwrap());
+    let first = LaneEpoch::new(LaneId::new(2), 9);
+    let second = LaneEpoch::new(LaneId::new(2), 10);
+    let rejected = LaneEpoch::new(LaneId::new(2), 11);
+
+    store.record(first, 1).expect("first cursor");
+    store.record(second, 2).expect("second cursor");
+    let err = store
+        .record(rejected, 3)
+        .expect_err("third lane/epoch must exceed the global bound");
+
+    assert!(
+        format!("{err:?}").contains("capacity 2 is exhausted"),
+        "unexpected capacity error: {err:?}"
+    );
+    assert_replay_cursor_sequences(&store, &[(first, 1), (second, 2)]);
+    store
+        .record(first, 4)
+        .expect("existing lane/epoch may still advance at capacity");
+    assert_replay_cursor_sequences(&store, &[(first, 4), (second, 2)]);
+}
+
+#[test]
+fn replay_cursor_store_uses_journal_without_per_record_snapshot_rewrite() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let main_path = replay_cursor_main_path(temp.path());
+    let journal_path = replay_cursor_journal_path(temp.path());
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+
+    store.record(lane_epoch, 42).expect("append cursor journal");
+
+    assert!(
+        !main_path.exists(),
+        "a single cursor update must not rewrite the full snapshot"
+    );
+    assert!(
+        fs::metadata(&journal_path).expect("journal metadata").len() > 0,
+        "the constant-size journal entry must be durable"
+    );
+    drop(store);
+
+    let reopened = ReplayCursorStore::open(path).expect("recover journal");
+    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+}
+
+#[test]
+fn replay_cursor_store_checkpoints_at_bounded_journal_interval() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let main_path = replay_cursor_main_path(temp.path());
+    let journal_path = replay_cursor_journal_path(temp.path());
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let store =
+        ReplayCursorStore::open_with_max_lane_epochs(path.clone(), NonZeroUsize::new(2).unwrap())
+            .expect("open bounded store");
+
+    store.record(lane_epoch, 1).expect("first journal entry");
+    assert!(!main_path.exists());
+    store.record(lane_epoch, 2).expect("second journal entry");
+
+    assert!(main_path.exists(), "capacity-sized journal must checkpoint");
+    assert_eq!(
+        fs::metadata(&journal_path)
+            .expect("journal metadata after checkpoint")
+            .len(),
+        0,
+        "checkpoint must truncate the fully applied journal"
+    );
+    drop(store);
+
+    let reopened =
+        ReplayCursorStore::open_with_max_lane_epochs(path, NonZeroUsize::new(2).unwrap())
+            .expect("reopen checkpointed store");
+    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 2)]);
+}
+
+#[test]
+fn replay_cursor_store_recovers_torn_final_journal_frame() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let journal_path = replay_cursor_journal_path(temp.path());
+    let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    store.record(lane_epoch, 42).expect("append cursor journal");
+    drop(store);
+
+    let valid_len = fs::metadata(&journal_path).expect("journal metadata").len();
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&journal_path)
+        .expect("open journal for torn-tail fixture")
+        .write_all(&[0, 0])
+        .expect("append torn length prefix");
+
+    let reopened = ReplayCursorStore::open(path).expect("recover torn final frame");
+    assert_replay_cursor_sequences(&reopened, &[(lane_epoch, 42)]);
+    assert_eq!(
+        fs::metadata(&journal_path)
+            .expect("recovered journal metadata")
+            .len(),
+        valid_len,
+        "recovery must truncate only the torn tail"
+    );
+}
+
+#[test]
+fn replay_cursor_store_rejects_corrupt_complete_journal_frame() {
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().to_path_buf();
+    let journal_path = replay_cursor_journal_path(temp.path());
+    let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    store
+        .record(LaneEpoch::new(LaneId::new(2), 9), 42)
+        .expect("append cursor journal");
+    drop(store);
+
+    let mut bytes = fs::read(&journal_path).expect("read journal");
+    let checksum_byte = bytes.last_mut().expect("journal frame is non-empty");
+    *checksum_byte ^= 0x80;
+    fs::write(&journal_path, bytes).expect("write corrupt journal fixture");
+
+    let err = match ReplayCursorStore::open(path) {
+        Ok(_) => panic!("corrupt complete journal frame must fail closed"),
+        Err(err) => err,
+    };
+    assert!(
+        format!("{err:?}").contains("checksum mismatch"),
+        "unexpected corrupt journal error: {err:?}"
+    );
+}
+
+#[test]
+fn replay_cursor_store_retries_checkpoint_after_persist_failure() {
     let temp = tempdir().expect("tempdir");
     let path = temp.path().to_path_buf();
     let main_path = replay_cursor_main_path(temp.path());
     let tmp_path = persistence::replay_cursor_temp_path(&main_path);
     let store = ReplayCursorStore::open(path.clone()).expect("open store");
     let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    store.record(lane_epoch, 42).expect("append journal entry");
     fs::create_dir(&tmp_path).expect("block temp snapshot path");
 
     let err = store
-        .record(lane_epoch, 42)
+        .checkpoint()
         .expect_err("blocked temp path should fail snapshot persistence");
     assert!(
         format!("{err:?}").contains("failed to create DA replay snapshot temp file"),
         "unexpected error: {err:?}"
     );
-    assert_replay_cursor_sequences(&store, &[]);
+    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
 
     fs::remove_dir(&tmp_path).expect("unblock temp snapshot path");
-    store.record(lane_epoch, 42).expect("retry record");
+    store.checkpoint().expect("retry checkpoint");
     drop(store);
 
     let reopened = ReplayCursorStore::open(path).expect("reopen store");
@@ -6789,16 +6980,17 @@ fn replay_cursor_store_rejects_existing_temp_without_truncating() {
     let tmp_path = persistence::replay_cursor_temp_path(&main_path);
     let store = ReplayCursorStore::open(path.clone()).expect("open store");
     let lane_epoch = LaneEpoch::new(LaneId::new(2), 9);
+    store.record(lane_epoch, 42).expect("append journal entry");
     fs::write(&tmp_path, b"existing-temp-snapshot").expect("seed temp snapshot");
 
     let err = store
-        .record(lane_epoch, 42)
+        .checkpoint()
         .expect_err("existing temp snapshot should reject cursor persistence");
     assert!(
         format!("{err:?}").contains("failed to create DA replay snapshot temp file"),
         "unexpected error: {err:?}"
     );
-    assert_replay_cursor_sequences(&store, &[]);
+    assert_replay_cursor_sequences(&store, &[(lane_epoch, 42)]);
     assert_eq!(
         fs::read(&tmp_path).expect("read temp snapshot after failed record"),
         b"existing-temp-snapshot"
@@ -6882,6 +7074,7 @@ fn replay_cursor_store_record_rejects_dir_symlink_replacement() {
     let path = temp.path().join("cursor-root");
     fs::create_dir(&path).expect("create cursor root");
     let store = ReplayCursorStore::open(path.clone()).expect("open store");
+    fs::remove_file(replay_cursor_journal_path(&path)).expect("remove open cursor journal path");
     fs::remove_dir(&path).expect("remove cursor root");
     let target = temp.path().join("cursor-root-target");
     fs::create_dir(&target).expect("create cursor target directory");
@@ -6911,6 +7104,10 @@ fn replay_cursor_store_record_rejects_dir_symlink_replacement() {
     assert!(
         !persistence::replay_cursor_temp_path(&replay_cursor_main_path(&target)).exists(),
         "cursor root symlink target must not receive the temp snapshot"
+    );
+    assert!(
+        !replay_cursor_journal_path(&target).exists(),
+        "cursor root symlink target must not receive a journal entry"
     );
 }
 
@@ -6949,6 +7146,35 @@ fn replay_cursor_store_open_rejects_main_snapshot_symlink() {
     assert!(
         target_path.exists(),
         "cursor symlink target should remain for operator repair"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn replay_cursor_store_open_rejects_journal_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().expect("tempdir");
+    let journal_path = replay_cursor_journal_path(temp.path());
+    let target_path = temp.path().join("cursor-journal-symlink-target");
+    fs::write(&target_path, []).expect("write journal symlink target");
+    symlink(&target_path, &journal_path).expect("create cursor journal symlink");
+
+    let err = match ReplayCursorStore::open(temp.path().to_path_buf()) {
+        Ok(_) => panic!("symlinked replay cursor journal must reject open"),
+        Err(err) => err,
+    };
+
+    assert!(
+        format!("{err:?}").contains("not a regular file"),
+        "unexpected cursor journal symlink error: {err:?}"
+    );
+    assert!(
+        fs::symlink_metadata(&journal_path)
+            .expect("inspect cursor journal symlink")
+            .file_type()
+            .is_symlink(),
+        "failed open should leave cursor journal symlink visible"
     );
 }
 
@@ -6995,12 +7221,17 @@ fn replay_cursor_main_path(dir: &Path) -> PathBuf {
     dir.join("replay_cursors.norito.json")
 }
 
+fn replay_cursor_journal_path(dir: &Path) -> PathBuf {
+    dir.join("replay_cursors.journal")
+}
+
 fn replay_cursor_snapshot_bytes(entries: &[(LaneEpoch, u64)]) -> Vec<u8> {
     let temp = tempdir().expect("snapshot tempdir");
     let store = ReplayCursorStore::open(temp.path().to_path_buf()).expect("open snapshot store");
     for (lane_epoch, sequence) in entries {
         store.record(*lane_epoch, *sequence).expect("record cursor");
     }
+    store.checkpoint().expect("checkpoint cursor snapshot");
     fs::read(replay_cursor_main_path(temp.path())).expect("read cursor snapshot")
 }
 
@@ -7238,6 +7469,31 @@ fn replay_cursor_store_open_rejects_duplicate_main_snapshot() {
 }
 
 #[test]
+fn replay_cursor_store_open_rejects_snapshot_over_global_capacity() {
+    let temp = tempdir().expect("tempdir");
+    let main_path = replay_cursor_main_path(temp.path());
+    let first = LaneEpoch::new(LaneId::new(2), 9);
+    let second = LaneEpoch::new(LaneId::new(2), 10);
+    fs::write(
+        &main_path,
+        replay_cursor_snapshot_bytes(&[(first, 41), (second, 42)]),
+    )
+    .expect("write over-capacity snapshot");
+
+    let err = match ReplayCursorStore::open_with_max_lane_epochs(
+        temp.path().to_path_buf(),
+        NonZeroUsize::new(1).unwrap(),
+    ) {
+        Ok(_) => panic!("over-capacity replay cursor snapshot must fail closed"),
+        Err(err) => err,
+    };
+    assert!(
+        format!("{err:?}").contains("exceeding configured maximum 1"),
+        "unexpected over-capacity snapshot error: {err:?}"
+    );
+}
+
+#[test]
 fn replay_cursor_store_open_recovers_temp_when_main_version_unsupported() {
     let temp = tempdir().expect("tempdir");
     let main_path = replay_cursor_main_path(temp.path());
@@ -7470,49 +7726,6 @@ fn resolve_manifest_applies_enforced_retention_policy() {
     .expect("resolve manifest with enforced retention");
 
     assert_eq!(artifacts.manifest.retention_policy, enforced);
-}
-
-#[test]
-fn sampling_plan_clamps_to_sample_window_and_chunk_count() {
-    use std::collections::HashSet;
-
-    let manifest = sampling_manifest(20);
-    let block_hash = Hash::new(b"block-assign-clamp");
-    let plan = build_sampling_plan(&manifest, &block_hash);
-    let expected_window = compute_sample_window(manifest.total_size);
-    let expected_len = usize::min(manifest.chunks.len(), expected_window as usize);
-
-    assert_eq!(plan.sample_window, expected_window);
-    assert_eq!(plan.samples.len(), expected_len);
-    let mut seen = HashSet::new();
-    for sample in &plan.samples {
-        assert!(
-            seen.insert(sample.chunk_index),
-            "duplicate sample {} detected",
-            sample.chunk_index
-        );
-    }
-}
-
-#[test]
-fn sampling_plan_is_deterministic_for_seed() {
-    let manifest = sampling_manifest(6);
-    let block_hash = Hash::new(b"block-deterministic");
-    let first = build_sampling_plan(&manifest, &block_hash);
-    let second = build_sampling_plan(&manifest, &block_hash);
-
-    assert_eq!(first.assignment_hash, second.assignment_hash);
-    assert_eq!(first.samples, second.samples);
-}
-
-#[test]
-fn sampling_plan_changes_with_block_hash() {
-    let manifest = sampling_manifest(6);
-    let first = build_sampling_plan(&manifest, &Hash::new(b"block-a"));
-    let second = build_sampling_plan(&manifest, &Hash::new(b"block-b"));
-
-    assert_ne!(first.assignment_hash, second.assignment_hash);
-    assert_ne!(first.samples, second.samples);
 }
 
 #[test]

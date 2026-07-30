@@ -33,7 +33,7 @@ Le **SF-2b** est disponible en ligne: SoraFS en stock Il s'agit de charges utile
 ## قبولیت کا ورک فلو
 
 1. **پروپوزل تیار کرنا**
-   - CLI : `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI : `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      شامل کریں جو `ProviderAdmissionProposalV1` + توثیقی bundle بنائے۔
    - Type : Prise de participation > 0 pour `profile_id` avec poignée de chunker canonique pour le client
 2. **گورننس کی منظوری**
@@ -57,7 +57,7 @@ proposition canonique/octets d'enveloppe pour les signatures et les signatures `
 
 ### CLI حوالہ
 
-Il s'agit d'un modèle `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+Il s'agit d'un modèle `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Nom du produit : `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, et il s'agit d'un `--endpoint=<kind:host>`۔
@@ -96,7 +96,7 @@ Il s'agit d'un modèle `cargo run -p sorafs_manifest --bin sorafs_manifest_build
    `--retention-epoch` Mise en relation avec les enjeux/points finaux de mise en œuvre
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -116,7 +116,7 @@ Il s'agit d'un modèle `cargo run -p sorafs_manifest --bin sorafs_manifest_build
 #### ہنگامی منسوخی
 1. متاثرہ enveloppe کی شناخت کریں اور منسوخی جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

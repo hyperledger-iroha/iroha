@@ -7,6 +7,9 @@ import java.util.Map;
 import org.hyperledger.iroha.android.model.instructions.CompleteReplicationOrderInstruction;
 import org.hyperledger.iroha.android.model.instructions.ExpireReplicationOrderInstruction;
 import org.hyperledger.iroha.android.model.instructions.IssueReplicationOrderInstruction;
+import org.hyperledger.iroha.android.model.instructions.ProviderIngestCompletionAuthorityV1;
+import org.hyperledger.iroha.android.model.instructions.ProviderIngestCompletionSignerPolicyV1;
+import org.hyperledger.iroha.android.model.instructions.ProviderIngestFinalizedAnchorV1;
 
 /** Ensures the replication order builders emit the expected argument schema. */
 public final class SorafsReplicationInstructionBuilderTests {
@@ -16,6 +19,12 @@ public final class SorafsReplicationInstructionBuilderTests {
   private static final String ORDER_ID =
       "44b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c044b3b7c174c8e9c0";
   private static final String PROVIDER_ID = "11".repeat(32);
+  private static final String PROVIDER_OWNER =
+      "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+  private static final String POLICY_ID = "21".repeat(32);
+  private static final String PREDECESSOR_DIGEST = "32".repeat(32);
+  private static final String POLICY_DIGEST = "43".repeat(32);
+  private static final String BLOCK_HASH = "54".repeat(32);
 
   public static void main(final String[] args) {
     testIssueReplicationOrder();
@@ -145,30 +154,83 @@ public final class SorafsReplicationInstructionBuilderTests {
   private static void testCompleteReplicationOrder() {
     final CompleteReplicationOrderInstruction instruction =
         CompleteReplicationOrderInstruction.builder()
-            .setOrderIdHex(ORDER_ID)
-            .setProviderIdHex(PROVIDER_ID)
+            .setOrderId(ORDER_ID)
+            .setProviderId(PROVIDER_ID)
             .setCompletionEpoch(31)
+            .setExpectedAuthority(authority())
+            .setExpectedAssignmentRevision(3)
+            .setFinalizedAnchor(anchor())
             .build();
     final Map<String, String> args = instruction.toArguments();
     assert "CompleteReplicationOrder".equals(args.get("action"))
         : "action mismatch";
     assert "31".equals(args.get("completion_epoch")) : "completion epoch mismatch";
-    assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider id mismatch";
-    assert PROVIDER_ID.equals(instruction.providerIdHex()) : "provider id mismatch";
+    assert PROVIDER_ID.equals(args.get("provider_id")) : "provider id mismatch";
+    assert PROVIDER_ID.equals(instruction.providerId()) : "provider id mismatch";
+    assert args.keySet()
+        .equals(
+            new java.util.LinkedHashSet<>(
+                java.util.Arrays.asList(
+                    "action",
+                    "order_id",
+                    "provider_id",
+                    "completion_epoch",
+                    "expected_authority",
+                    "expected_assignment_revision",
+                    "finalized_anchor"))) : "completion hard-cut fields mismatch";
     assert instruction.completionEpoch() == 31 : "completion epoch mismatch";
+    assert instruction.equals(
+        CompleteReplicationOrderInstruction.fromArguments(instruction.toArguments()));
   }
 
   private static void testCompleteReplicationOrderRejectsNegativeEpoch() {
     boolean threw = false;
     try {
       CompleteReplicationOrderInstruction.builder()
-          .setOrderIdHex(ORDER_ID)
-          .setProviderIdHex(PROVIDER_ID)
+          .setOrderId(ORDER_ID)
+          .setProviderId(PROVIDER_ID)
           .setCompletionEpoch(-1);
     } catch (final IllegalArgumentException ex) {
       threw = true;
     }
     assert threw : "Expected negative completion epoch to throw";
+
+    threw = false;
+    try {
+      CompleteReplicationOrderInstruction.builder()
+          .setOrderId(ORDER_ID)
+          .setProviderId(PROVIDER_ID)
+          .setCompletionEpoch(31)
+          .setExpectedAuthority(authority())
+          .setExpectedAssignmentRevision(0);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected zero assignment revision to throw";
+
+    final Map<String, String> retiredThreeField = new LinkedHashMap<>();
+    retiredThreeField.put("action", "CompleteReplicationOrder");
+    retiredThreeField.put("order_id", ORDER_ID);
+    retiredThreeField.put("provider_id", PROVIDER_ID);
+    retiredThreeField.put("completion_epoch", "31");
+    threw = false;
+    try {
+      CompleteReplicationOrderInstruction.fromArguments(retiredThreeField);
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : "Expected retired three-field completion to throw";
+  }
+
+  private static ProviderIngestCompletionAuthorityV1 authority() {
+    return new ProviderIngestCompletionAuthorityV1(
+        PROVIDER_OWNER,
+        new ProviderIngestCompletionSignerPolicyV1(
+            POLICY_ID, 2, PREDECESSOR_DIGEST, POLICY_DIGEST));
+  }
+
+  private static ProviderIngestFinalizedAnchorV1 anchor() {
+    return new ProviderIngestFinalizedAnchorV1(41, BLOCK_HASH);
   }
 
   private static void testExpireReplicationOrder() {

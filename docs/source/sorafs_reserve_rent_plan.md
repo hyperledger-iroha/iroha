@@ -132,10 +132,15 @@ policy rotation produces new governed semantics. Concurrent submissions are
 resolved by the native provider revision; only one stale-revision competitor
 can commit.
 
-`[sorafs.storage.reserve_worker].enabled` controls generation only. Durable
-outbox drain and finalized reconciliation always start, including while
-generation or SoraFS storage is disabled. Scan cadence, page size, queue bounds,
-attempt bounds, and checkpoint bounds come from `iroha_config`.
+`[sorafs.storage.reserve_worker].enabled` controls generation. The worker starts
+when either SoraFS storage or reserve generation is enabled, so storage-enabled
+nodes continue durable outbox drain and finalized reconciliation with
+generation disabled. When both controls are disabled, the worker is paused
+before task creation and makes zero external signing, submission, or
+reconciliation progress. Opening the local `NodeHandle` may still durably
+normalize an interrupted signer-only `Signing` claim back to `Ready` without
+refunding its attempt. Scan cadence, page size, queue bounds, attempt bounds,
+and checkpoint bounds come from `iroha_config`.
 
 The former process-local reserve lifecycle scheduler, lifecycle/movement
 routes, local reserve checkpoint, and CLI adapters are removed from the V1

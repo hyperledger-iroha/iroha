@@ -12,3 +12,4 @@ source_entry,publication,privacy_aggregate,proof_token_issuance,explorer
 1800400000
 --max-evidence-age-secs
 604800
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

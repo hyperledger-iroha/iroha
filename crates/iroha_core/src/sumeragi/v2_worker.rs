@@ -3197,6 +3197,7 @@ impl V2IoCommandQueue {
         }
     }
 
+    #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         let state = self.lock();
         state.sender_open
@@ -4504,6 +4505,7 @@ enum V2IoCompletion {
         lifecycle_id: CertifiedServeLifecycleId,
         reason: String,
     },
+    #[cfg(test)]
     AuxiliaryNoop,
     CandidateLoaded(LockedCandidateLoad),
     CandidateLoadUnavailable {
@@ -4533,45 +4535,6 @@ impl V2IoCompletion {
         )
     }
 
-    fn work_id(&self) -> Option<EffectWorkId> {
-        match self {
-            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => Some(*work_id),
-            Self::Stored(completion) => Some(completion.work_id()),
-            Self::Validated(completion) => Some(completion.work_id()),
-            Self::Applied(completion) => Some(completion.work_id()),
-            Self::CertifiedResponse { .. }
-            | Self::CertifiedRequestFailed { .. }
-            | Self::AuxiliaryNoop
-            | Self::CandidateLoaded(_)
-            | Self::CandidateLoadUnavailable { .. }
-            | Self::CandidateLoadFailed { .. }
-            | Self::Retired
-            | Self::RetirementFailed(_)
-            | Self::RecoveryRequired(_)
-            | Self::Failed(_) => None,
-        }
-    }
-
-    const fn serve_lifecycle_id(&self) -> Option<CertifiedServeLifecycleId> {
-        match self {
-            Self::CertifiedResponse { lifecycle_id, .. }
-            | Self::CertifiedRequestFailed { lifecycle_id, .. } => Some(*lifecycle_id),
-            Self::Signature { .. }
-            | Self::Stored(_)
-            | Self::Validated(_)
-            | Self::Applied(_)
-            | Self::ApplyDeferred { .. }
-            | Self::AuxiliaryNoop
-            | Self::CandidateLoaded(_)
-            | Self::CandidateLoadUnavailable { .. }
-            | Self::CandidateLoadFailed { .. }
-            | Self::Retired
-            | Self::RetirementFailed(_)
-            | Self::RecoveryRequired(_)
-            | Self::Failed(_) => None,
-        }
-    }
-
     fn acknowledgement(&self) -> V2IoCompletionAcknowledgement {
         match self {
             Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => {
@@ -4596,8 +4559,9 @@ impl V2IoCompletion {
             | Self::Retired
             | Self::RetirementFailed(_)
             | Self::RecoveryRequired(_)
-            | Self::Failed(_)
-            | Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
+            | Self::Failed(_) => V2IoCompletionAcknowledgement::Untracked,
+            #[cfg(test)]
+            Self::AuxiliaryNoop => V2IoCompletionAcknowledgement::Untracked,
         }
     }
 }
@@ -5010,6 +4974,7 @@ impl V2IoHandle {
         self.command_tx.try_send_as(class, command)
     }
 
+    #[cfg(test)]
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         self.command_tx.queue.can_enqueue_as(class)
     }
@@ -11150,6 +11115,12 @@ impl ProductionV2Services {
         state: Arc<crate::state::State>,
         queue: Arc<crate::queue::Queue>,
         kura: Arc<crate::kura::Kura>,
+        provider_ingest_finalized_archive: Option<
+            Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>,
+        >,
+        reputation_finalized_archive: Option<
+            Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>,
+        >,
         block_cadence: Duration,
         genesis_account: iroha_data_model::account::AccountId,
         events_sender: EventsSender,
@@ -11224,6 +11195,8 @@ impl ProductionV2Services {
             state,
             queue,
             Arc::clone(&kura),
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             context.chain_id.clone(),
             block_cadence,
             genesis_account,
@@ -12525,16 +12498,20 @@ impl ProductionV2Services {
                     PendingServiceCompletion::Io {
                         completion:
                             V2IoCompletion::CertifiedRequestFailed {
-                                lifecycle_id: _,
+                                lifecycle_id,
                                 reason,
                             },
                         ..
                     } => {
                         return Err(executor.external_service_failed(
-                            format!("certified-body retention contract failed: {reason}"),
+                            format!(
+                                "certified-body retention contract failed for lifecycle \
+                                 {lifecycle_id:?}: {reason}"
+                            ),
                             self,
                         ));
                     }
+                    #[cfg(test)]
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::AuxiliaryNoop,
                         ..
@@ -13728,14 +13705,6 @@ impl ProductionV2Services {
             .filter(|entry| entry.validator != self.local_peer)
             .map(|entry| entry.validator.clone())
             .collect()
-    }
-
-    fn enqueue_io(&self, command: V2IoCommand) -> Result<(), String> {
-        let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard
-            .acquire()
-            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
-        self.io()?.enqueue(command)
     }
 
     fn enqueue_fail_stop_io(&self, command: V2IoCommand) -> Result<(), String> {
@@ -15632,13 +15601,26 @@ pub(super) mod tests {
             &mut self,
             owners: Vec<RuntimeLifecycleOwner>,
         ) -> Result<(), String> {
-            if self
-                .external_lifecycle_owner_capacity
-                .is_some_and(|capacity| owners.len() > capacity)
+            let capacity = self.external_lifecycle_owner_capacity.ok_or_else(|| {
+                "saturated test runtime external-owner capacity is not configured".to_owned()
+            })?;
+            if owners.len() > capacity || owners.iter().any(|owner| owner.lifecycle_ordinal() == 0)
             {
                 return Err(
-                    "saturated runtime external lifecycle-owner capacity exceeded".to_owned(),
+                    "saturated test runtime external lifecycle ownership is invalid".to_owned(),
                 );
+            }
+            let mut exact_by_ordinal = BTreeMap::new();
+            for owner in &owners {
+                if exact_by_ordinal
+                    .insert(owner.lifecycle_ordinal(), owner)
+                    .is_some()
+                {
+                    return Err(
+                        "saturated test runtime external lifecycle ownership is not unique"
+                            .to_owned(),
+                    );
+                }
             }
             self.external_lifecycle_owners = owners;
             Ok(())
@@ -15648,13 +15630,15 @@ pub(super) mod tests {
             &mut self,
             max_pending_work: usize,
         ) -> Result<(), String> {
-            self.external_lifecycle_owner_capacity = Some(
-                max_pending_work
-                    .checked_add(MAX_EFFECTS_PER_STEP)
-                    .ok_or_else(|| {
-                        "saturated runtime external lifecycle-owner capacity overflowed".to_owned()
-                    })?,
-            );
+            let capacity = max_pending_work
+                .checked_add(MAX_EFFECTS_PER_STEP)
+                .ok_or_else(|| {
+                    "saturated test runtime external-owner capacity overflowed".to_owned()
+                })?;
+            if max_pending_work == 0 || self.external_lifecycle_owners.len() > capacity {
+                return Err("saturated test runtime external-owner capacity is invalid".to_owned());
+            }
+            self.external_lifecycle_owner_capacity = Some(capacity);
             Ok(())
         }
 

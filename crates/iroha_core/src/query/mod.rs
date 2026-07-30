@@ -9,6 +9,8 @@ pub mod projection_checkpoint;
 pub mod projection_checkpoint_journal;
 pub mod projection_rowset;
 pub mod projection_shard;
+pub mod provider_ingest_finalized;
+pub mod reputation_finalized;
 pub mod snapshot;
 pub mod store;
 

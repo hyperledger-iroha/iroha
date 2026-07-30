@@ -96,10 +96,7 @@ impl<T> DebugUnwrapExt for Option<T> {
         return self.unwrap();
 
         #[cfg(feature = "debug")]
-        match self {
-            Some(res) => res,
-            None => panic!("unwrapped a None"),
-        }
+        self.unwrap_or_else(|| panic!("unwrapped a None"))
     }
 }
 
@@ -136,10 +133,7 @@ impl<T> DebugExpectExt for Option<T> {
         return self.expect(msg);
 
         #[cfg(feature = "debug")]
-        match self {
-            Some(res) => res,
-            None => panic!("{msg}"),
-        }
+        self.unwrap_or_else(|| panic!("{msg}"))
     }
 }
 

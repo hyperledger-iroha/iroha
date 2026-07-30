@@ -12,6 +12,14 @@ public sealed class ReplicationOrderInstructionTests
         "1010101010101010101010101010101010101010101010101010101010101010";
     private const string FixtureAccountId =
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private const string PolicyId =
+        "2121212121212121212121212121212121212121212121212121212121212121";
+    private const string PredecessorDigest =
+        "3232323232323232323232323232323232323232323232323232323232323232";
+    private const string PolicyDigest =
+        "4343434343434343434343434343434343434343434343434343434343434343";
+    private const string BlockHash =
+        "5454545454545454545454545454545454545454545454545454545454545454";
     private const string ReplicationOrderTypeName =
         "sorafs_manifest::capacity::ReplicationOrderV1";
 
@@ -36,7 +44,9 @@ public sealed class ReplicationOrderInstructionTests
         var context = new TransactionEncodingContext(FixtureAccountId);
         var encoded = instruction.EncodePayload(context);
         var fields = new FixedFieldReader(encoded);
-        Assert.Equal(Convert.FromHexString(OrderId), fields.ReadField().ToArray());
+        Assert.Equal(
+            Convert.FromHexString(OrderId),
+            ReadIdentifier(fields.ReadField()));
         var orderPayload = fields.ReadField();
         Assert.Equal(
             (ulong)fixture.Length,
@@ -53,31 +63,79 @@ public sealed class ReplicationOrderInstructionTests
     }
 
     [Fact]
-    public void CompleteRequiresProviderAndEncodesExactlyThreeFields()
+    public void CompleteEncodesTheExactSixFieldAuthorityHardCut()
     {
         var instruction = TransactionInstruction.CompleteReplicationOrder(
             OrderId,
             ProviderId,
-            completionEpoch: 27);
+            completionEpoch: 27,
+            expectedAuthority: ExpectedAuthority(),
+            expectedAssignmentRevision: 3,
+            finalizedAnchor: FinalizedAnchor());
         var context = new TransactionEncodingContext(FixtureAccountId);
         var fields = new FixedFieldReader(instruction.EncodePayload(context));
 
         Assert.Equal(
             "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
             instruction.WireId);
-        Assert.Equal(Convert.FromHexString(OrderId), fields.ReadField().ToArray());
-        Assert.Equal(Convert.FromHexString(ProviderId), fields.ReadField().ToArray());
+        Assert.Equal(Convert.FromHexString(OrderId), ReadIdentifier(fields.ReadField()));
+        Assert.Equal(Convert.FromHexString(ProviderId), ReadIdentifier(fields.ReadField()));
         Assert.Equal(27ul, BinaryPrimitives.ReadUInt64LittleEndian(fields.ReadField()));
+
+        var authority = new FixedFieldReader(fields.ReadField());
+        Assert.Equal(
+            context.EncodeAccountId(FixtureAccountId),
+            authority.ReadField().ToArray());
+        var signerPolicy = new FixedFieldReader(authority.ReadField());
+        Assert.Equal(Convert.FromHexString(PolicyId), signerPolicy.ReadField().ToArray());
+        Assert.Equal(2ul, BinaryPrimitives.ReadUInt64LittleEndian(signerPolicy.ReadField()));
+        Assert.Equal(
+            Convert.FromHexString(PredecessorDigest),
+            ReadOptionalFixedByteArray(signerPolicy.ReadField()));
+        Assert.Equal(
+            Convert.FromHexString(PolicyDigest),
+            signerPolicy.ReadField().ToArray());
+        signerPolicy.RequireEnd();
+        authority.RequireEnd();
+
+        Assert.Equal(3ul, BinaryPrimitives.ReadUInt64LittleEndian(fields.ReadField()));
+        var anchor = new FixedFieldReader(fields.ReadField());
+        Assert.Equal(41ul, BinaryPrimitives.ReadUInt64LittleEndian(anchor.ReadField()));
+        Assert.Equal(Convert.FromHexString(BlockHash), anchor.ReadField().ToArray());
+        anchor.RequireEnd();
         fields.RequireEnd();
 
         Assert.DoesNotContain(
             typeof(CompleteReplicationOrderInstruction).GetConstructors(),
-            constructor => constructor.GetParameters().Length == 2);
+            constructor => constructor.GetParameters().Length < 6);
         Assert.Throws<ArgumentException>(() =>
             TransactionInstruction.CompleteReplicationOrder(
                 OrderId,
                 new string('0', 64),
-                27));
+                27,
+                expectedAuthority: ExpectedAuthority(),
+                expectedAssignmentRevision: 3,
+                finalizedAnchor: FinalizedAnchor()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            TransactionInstruction.CompleteReplicationOrder(
+                OrderId,
+                ProviderId,
+                27,
+                expectedAuthority: ExpectedAuthority(),
+                expectedAssignmentRevision: 0,
+                finalizedAnchor: FinalizedAnchor()));
+        Assert.Throws<ArgumentException>(() =>
+            new ProviderIngestCompletionSignerPolicyV1(
+                PolicyId,
+                2,
+                predecessorDigest: null,
+                policyDigest: PolicyDigest));
+        Assert.Throws<ArgumentException>(() =>
+            new ProviderIngestCompletionAuthorityV1(
+                $" {FixtureAccountId}",
+                ExpectedAuthority().SignerPolicy));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new ProviderIngestFinalizedAnchorV1(0, BlockHash));
     }
 
     [Fact]
@@ -92,7 +150,7 @@ public sealed class ReplicationOrderInstructionTests
         Assert.Equal(
             "iroha_data_model::isi::sorafs::ExpireReplicationOrder",
             instruction.WireId);
-        Assert.Equal(Convert.FromHexString(OrderId), fields.ReadField().ToArray());
+        Assert.Equal(Convert.FromHexString(OrderId), ReadIdentifier(fields.ReadField()));
         Assert.Equal(29ul, BinaryPrimitives.ReadUInt64LittleEndian(fields.ReadField()));
         fields.RequireEnd();
     }
@@ -183,7 +241,13 @@ public sealed class ReplicationOrderInstructionTests
                 FixtureAccountId,
                 FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>()))
             .IssueReplicationOrder(OrderId, Fixture(), 20, 28)
-            .CompleteReplicationOrder(OrderId, ProviderId, 27)
+            .CompleteReplicationOrder(
+                OrderId,
+                ProviderId,
+                27,
+                ExpectedAuthority(),
+                3,
+                FinalizedAnchor())
             .ExpireReplicationOrder(OrderId, 29);
 
         Assert.Collection(
@@ -201,6 +265,48 @@ public sealed class ReplicationOrderInstructionTests
             "sorafs_manifest",
             "replication_order",
             "order_v1.to"));
+    }
+
+    private static ProviderIngestCompletionAuthorityV1 ExpectedAuthority()
+    {
+        return new ProviderIngestCompletionAuthorityV1(
+            FixtureAccountId,
+            new ProviderIngestCompletionSignerPolicyV1(
+                PolicyId,
+                2,
+                PredecessorDigest,
+                PolicyDigest));
+    }
+
+    private static ProviderIngestFinalizedAnchorV1 FinalizedAnchor()
+    {
+        return new ProviderIngestFinalizedAnchorV1(41, BlockHash);
+    }
+
+    private static byte[] ReadIdentifier(ReadOnlySpan<byte> payload)
+    {
+        var identifier = new FixedFieldReader(payload);
+        var bytes = identifier.ReadField().ToArray();
+        identifier.RequireEnd();
+        return bytes;
+    }
+
+    private static byte[] ReadOptionalFixedByteArray(ReadOnlySpan<byte> payload)
+    {
+        Assert.False(payload.IsEmpty);
+        Assert.Equal(1, payload[0]);
+        var some = new FixedFieldReader(payload[1..]);
+        var array = new FixedFieldReader(some.ReadField());
+        var bytes = new byte[32];
+        for (var index = 0; index < bytes.Length; index++)
+        {
+            var item = array.ReadField();
+            Assert.Single(item.ToArray());
+            bytes[index] = item[0];
+        }
+        array.RequireEnd();
+        some.RequireEnd();
+        return bytes;
     }
 
     private static byte[] Mutate(

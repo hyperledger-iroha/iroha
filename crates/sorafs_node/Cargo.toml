@@ -5,12 +5,12 @@ edition = "2024"
 license = "Apache-2.0"
 description = "SoraFS node integration primitives."
 
-[features]
-# Recognize norito derive macro cfg probes to avoid unexpected-cfg warnings.
-# No behavior change.
-schema-structural = []
-packed-struct = []
-compact-len = []
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio", "json"] }
@@ -36,6 +36,7 @@ iroha_crypto = { path = "../iroha_crypto" }
 ed25519-dalek = "2.2.0"
 reqwest = { workspace = true, features = ["multipart", "rustls-tls", "stream"] }
 url.workspace = true
+tempfile = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2.1.1"
@@ -44,7 +45,6 @@ blake3 = "1.8.2"
 # Keep that construction surface test-only; production users retain the
 # getter-only data-model API.
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api"] }
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tower = { version = "0.5.2", features = ["util"] }
 base64 = { workspace = true }

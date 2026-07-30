@@ -63,7 +63,7 @@ Sidebar_label: بطاقة التسجيل الخاصة بالقطعة
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - إرسال علاقة عامة تحتوي على التركيبات والعروض وتقرير الحتمية

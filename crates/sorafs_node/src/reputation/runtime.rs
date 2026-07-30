@@ -15,7 +15,7 @@
 //! treats submission success as finality.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt,
     path::Path,
     sync::{
@@ -24,13 +24,16 @@ use std::{
     },
 };
 
+use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
     isi::sorafs::{
         AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
     },
-    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
+    query::sorafs::prelude::{
+        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+    },
     sorafs::{
         capacity::ProviderId,
         moderation_ledger::{
@@ -49,9 +52,9 @@ use iroha_data_model::{
             ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
             ReputationJournalEntryV1, ReputationJournalEventIdV1,
             ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-            ReputationJournalFinalizedEventPageV1, ReputationJournalPayloadV1,
-            ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
-            StreamTokenValidationOutcomeV1,
+            ReputationJournalFinalizedEventPageV1, ReputationJournalFinalizedEventV1,
+            ReputationJournalPayloadV1, ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
+            StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
         },
         reserve::{
             RESERVE_QUERY_MAX_ITEMS_V1, ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1,
@@ -65,9 +68,10 @@ use norito::{
 };
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_LOG_VERSION_V1, GovernanceDagBlockV1,
-    GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
+    GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureV1,
     ReputationSnapshotEventV1, ReputationSnapshotV1,
     reputation::signed::{ReputationSnapshotTrustPolicyV1, SignedReputationSnapshotV1},
+    validate_governance_dag_chain_v1,
 };
 use thiserror::Error;
 
@@ -78,7 +82,12 @@ use super::{
     ReputationIngestPolicyV1, ReputationIngestService, ReputationUnsignedMaterialDeliveryStateV1,
     ReputationUnsignedMaterialDeliveryV1, ReputationUnsignedSigningMaterialV1,
 };
+
 use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
+#[cfg(test)]
+use iroha_data_model::sorafs::reputation::{
+    StreamTokenValidationRequestContextV1, StreamTokenValidationStatusV1,
+};
 
 /// Runtime finalized-query policy version.
 pub const REPUTATION_FINALIZED_QUERY_POLICY_VERSION_V1: u8 = 1;
@@ -90,10 +99,24 @@ pub const REPUTATION_JOURNAL_DELIVERY_POLICY_VERSION_V1: u8 = 1;
 pub const REPUTATION_PUBLICATION_CHECKPOINT_VERSION_V1: u8 = 1;
 /// Governance DAG acknowledgement version.
 pub const REPUTATION_GOVERNANCE_DAG_ACKNOWLEDGEMENT_VERSION_V1: u8 = 1;
+/// Governance DAG signed-head inclusion readback version.
+pub const REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1: u8 = 1;
+/// Maximum signed Governance DAG blocks accepted in one inclusion readback.
+pub const REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1: usize =
+    sorafs_manifest::GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1;
 /// Committed reputation read-projection version.
 pub const REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1: u8 = 1;
 /// Maximum authoritative snapshots and matching events retained by the read projection.
 pub const REPUTATION_COMMITTED_READ_MAX_EVENTS_V1: usize = 1_024;
+/// Maximum independently sequenced gateways retained by the token outbox.
+pub const REPUTATION_STREAM_TOKEN_GATEWAY_HEADS_MAX_V1: usize = 1_024;
+/// Maximum canonical counted-token admissions retained for bounded replay.
+///
+/// The dedicated 4,096-row cap is large enough to pin one authenticated head
+/// for every allowed gateway while bounding the complete canonical entries
+/// retained behind those heads. It is intentionally independent of the much
+/// larger generic completed-tombstone limit.
+pub const REPUTATION_STREAM_TOKEN_GATEWAY_ADMISSIONS_MAX_V1: usize = 4_096;
 /// Canonical durable journal-producer checkpoint file.
 pub const REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1: &str =
     "reputation-journal-producer-v1.to";
@@ -107,8 +130,8 @@ pub const REPUTATION_PUBLICATION_CHECKPOINT_FILE_NAME_V1: &str =
 pub const REPUTATION_PUBLICATION_LOCK_FILE_NAME_V1: &str =
     "reputation-publication-reconciler-v1.lock";
 
-/// Maximum bytes in a pinned external runtime handle.
-pub const REPUTATION_RUNTIME_MAX_HANDLE_BYTES_V1: usize = 256;
+/// Exact public provider-contract revision accepted by the V1 runtime.
+pub const REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1: u64 = 1;
 /// Maximum bytes in a pinned Governance DAG peer identity.
 pub const REPUTATION_RUNTIME_MAX_GOVERNANCE_PEER_ID_BYTES_V1: usize = 128;
 /// Default hard pending-operation ceiling for the journal producer.
@@ -127,6 +150,8 @@ pub const REPUTATION_JOURNAL_DELIVERY_MAX_SUBMISSIONS_PER_TICK_V1: u32 = 256;
 pub const REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1: usize = 1_024;
 /// Maximum canonical journal-producer checkpoint bytes.
 pub const REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 * 1024;
+/// Maximum fresh finalized source lookups after concurrent outbox mutation.
+const POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1: usize = 3;
 /// Maximum canonical publication-reconciler checkpoint bytes.
 pub const REPUTATION_PUBLICATION_MAX_CHECKPOINT_BYTES_V1: u64 = 32 * 1024 * 1024;
 /// Minimum accepted checkpoint ceiling for either runtime store.
@@ -167,6 +192,65 @@ impl ReputationExternalFailureV1 {
     }
 }
 
+/// Public, non-secret qualification for one reputation runtime provider.
+///
+/// The revision identifies the V1 provider contract. The digest is supplied
+/// by an independently constructed runtime policy rather than learned from the
+/// provider at first use. Runtime components require both values to match
+/// before and after every external operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReputationRuntimeProviderQualificationV1 {
+    revision: u64,
+    policy_digest: [u8; 32],
+}
+
+impl ReputationRuntimeProviderQualificationV1 {
+    /// Construct one provider qualification observation.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return the exact public provider-contract revision.
+    #[must_use]
+    pub const fn revision(self) -> u64 {
+        self.revision
+    }
+
+    /// Return the digest of the independently governed public policy.
+    #[must_use]
+    pub const fn policy_digest(self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+}
+
+/// Stable identity and qualification shared by every reputation provider.
+///
+/// Implementations retain credentials, key identifiers, and vendor
+/// diagnostics inside their protected boundary. Qualification must fail for
+/// unavailable, revoked, stale, or otherwise ineligible providers.
+pub trait ReputationRuntimeProviderV1: Send + Sync + fmt::Debug {
+    /// Opaque deployment handle, stable for the provider lifetime.
+    fn handle(&self) -> &str;
+
+    /// Observe the active public provider revision and policy digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a payload-free receipt when the provider is unavailable,
+    /// revoked, stale, or otherwise cannot prove the active qualification.
+    fn qualification(
+        &self,
+    ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1>;
+}
+
 /// One immutable finalized chain view selected for a runtime poll.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationFinalizedAnchorV1 {
@@ -193,6 +277,75 @@ impl ReputationFinalizedAnchorV1 {
     }
 }
 
+/// One source-indexed journal lookup resolved from an immutable finalized view.
+///
+/// `event = None` is authoritative only when the query provider can prove that
+/// the complete source index was available at `anchor`. Providers whose
+/// retained archive cannot distinguish absence from pruned history must fail
+/// externally instead of returning this view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReputationJournalSourceFinalizedViewV1 {
+    /// Exact chain, block identity, and block timestamp of the immutable view.
+    pub anchor: ReputationFinalizedAnchorV1,
+    /// Latest chain-authoritative event for the requested source, when present.
+    pub event: Option<ReputationJournalFinalizedEventV1>,
+}
+
+impl ReputationJournalSourceFinalizedViewV1 {
+    /// Validate this response against the exact source lookup request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an inert request, another chain or finalized cursor, an anchor
+    /// beyond the requested upper bound, or a malformed/substituted event.
+    pub fn validate_for_request(
+        &self,
+        chain_id: &ChainId,
+        maximum_height: u64,
+        query: FindSorafsReputationJournalEventBySourceId,
+    ) -> Result<(), ReputationRuntimeError> {
+        if chain_id.as_str().is_empty()
+            || maximum_height == 0
+            || query.source_id == ReputationJournalSourceIdV1::ZERO
+        {
+            return Err(ReputationRuntimeError::InvalidQueryPage);
+        }
+        self.anchor.validate()?;
+        if &self.anchor.chain_id != chain_id {
+            return Err(ReputationRuntimeError::ChainIdMismatch);
+        }
+        if self.anchor.identity.height > maximum_height {
+            return Err(ReputationRuntimeError::FinalizedAnchorPastTarget);
+        }
+        let finalized_cursor = ReputationJournalFinalizedCursorV1 {
+            height: self.anchor.identity.height,
+            block_hash: self.anchor.identity.block_hash,
+            finalized_at_unix_ms: self.anchor.finalized_at_unix_ms,
+        };
+        finalized_cursor
+            .validate()
+            .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
+        if let Some(expected) = query.expected_finalized_cursor {
+            expected
+                .validate()
+                .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
+            if expected != finalized_cursor {
+                return Err(ReputationRuntimeError::InvalidQueryPage);
+            }
+        }
+        let Some(event) = &self.event else {
+            return Ok(());
+        };
+        event
+            .validate(finalized_cursor)
+            .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
+        if event.entry.source_id != query.source_id {
+            return Err(ReputationRuntimeError::InvalidQueryPage);
+        }
+        Ok(())
+    }
+}
+
 /// Policy and journal page read from one immutable finalized state view.
 ///
 /// The query adapter must execute
@@ -204,6 +357,9 @@ impl ReputationFinalizedAnchorV1 {
 pub struct ReputationJournalDeliveryFinalizedViewV1 {
     /// Exact chain, block identity, and block timestamp of the immutable view.
     pub anchor: ReputationFinalizedAnchorV1,
+    /// Complete bounded recorder-policy predecessor chain from revision one
+    /// through `authority_policy`, read under the same immutable view guard.
+    pub authority_policy_history: Vec<ReputationJournalAuthorityPolicyRecordV1>,
     /// Result of the typed active-policy query at `anchor`.
     pub authority_policy: ReputationJournalAuthorityPolicyRecordV1,
     /// Result of the typed committed-event query at `anchor`.
@@ -211,13 +367,28 @@ pub struct ReputationJournalDeliveryFinalizedViewV1 {
 }
 
 impl ReputationJournalDeliveryFinalizedViewV1 {
-    fn validate(
+    /// Validate this response against the exact immutable query request.
+    ///
+    /// This checks the chain and upper-height selection, active authority
+    /// policy, finalized block time, journal continuation, requested row
+    /// bound, and the journal page's exact finalized cursor as one unit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fail-closed runtime error when any response field is
+    /// malformed or does not match the exact request.
+    pub fn validate_for_request(
         &self,
         chain_id: &ChainId,
         requested_after: Option<ReputationJournalFinalizedEventCursorV1>,
         requested_limit: u32,
         maximum_height: u64,
     ) -> Result<(), ReputationRuntimeError> {
+        let requested_limit = usize::try_from(requested_limit)
+            .map_err(|_| ReputationRuntimeError::QueryResourceExhausted)?;
+        if requested_limit == 0 || requested_limit > REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1 {
+            return Err(ReputationRuntimeError::QueryResourceExhausted);
+        }
         self.anchor.validate()?;
         if &self.anchor.chain_id != chain_id {
             return Err(ReputationRuntimeError::ChainIdMismatch);
@@ -231,12 +402,15 @@ impl ReputationJournalDeliveryFinalizedViewV1 {
         if self.authority_policy.activated_at_unix_ms > self.anchor.finalized_at_unix_ms {
             return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
         }
+        validate_authority_policy_history(
+            &self.authority_policy_history,
+            &self.authority_policy,
+            self.anchor.finalized_at_unix_ms,
+        )?;
         self.journal_page
             .validate_after(requested_after)
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
-        if self.journal_page.events.len()
-            > usize::try_from(requested_limit)
-                .map_err(|_| ReputationRuntimeError::QueryResourceExhausted)?
+        if self.journal_page.events.len() > requested_limit
             || self.journal_page.finalized_cursor.height != self.anchor.identity.height
             || self.journal_page.finalized_cursor.block_hash != self.anchor.identity.block_hash
             || self.journal_page.finalized_cursor.finalized_at_unix_ms
@@ -248,21 +422,50 @@ impl ReputationJournalDeliveryFinalizedViewV1 {
     }
 }
 
+fn validate_authority_policy_history(
+    history: &[ReputationJournalAuthorityPolicyRecordV1],
+    active: &ReputationJournalAuthorityPolicyRecordV1,
+    finalized_at_unix_ms: u64,
+) -> Result<(), ReputationRuntimeError> {
+    if history.is_empty()
+        || history.len() > REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1
+        || history.last() != Some(active)
+    {
+        return Err(ReputationRuntimeError::AuthorityPolicyLineage);
+    }
+    let mut previous: Option<&ReputationJournalAuthorityPolicyRecordV1> = None;
+    for record in history {
+        record
+            .validate()
+            .map_err(|_| ReputationRuntimeError::InvalidAuthorityPolicy)?;
+        if record.activated_at_unix_ms > finalized_at_unix_ms {
+            return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
+        }
+        match previous {
+            None => {
+                if record.policy.revision != 1 || record.policy.predecessor_policy_digest.is_some()
+                {
+                    return Err(ReputationRuntimeError::AuthorityPolicyLineage);
+                }
+            }
+            Some(predecessor)
+                if predecessor.policy.revision.checked_add(1) == Some(record.policy.revision)
+                    && record.policy.predecessor_policy_digest
+                        == Some(predecessor.policy_digest)
+                    && predecessor.activated_at_unix_ms <= record.activated_at_unix_ms => {}
+            Some(_) => return Err(ReputationRuntimeError::AuthorityPolicyLineage),
+        }
+        previous = Some(record);
+    }
+    Ok(())
+}
+
 /// Identity-pinned source for all native finalized reputation queries.
 ///
 /// Implementations must execute every page method against the exact `anchor`
 /// supplied by the caller. A node that cannot serve the requested immutable
 /// view must return a failure rather than silently selecting a newer view.
-pub trait ReputationFinalizedQueryV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the lifetime of the provider.
-    fn handle(&self) -> &str;
-
-    /// Verify that the exact-anchor query service is authenticated and ready.
-    ///
-    /// Implementations must not return success for a null, disconnected, or
-    /// identity-unverified backend.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
     /// Return the highest finalized anchor at or below `maximum_height`.
     ///
     /// Once the chain has finalized `maximum_height`, the implementation must
@@ -273,11 +476,13 @@ pub trait ReputationFinalizedQueryV1: Send + Sync + fmt::Debug {
         maximum_height: u64,
     ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1>;
 
-    /// Execute the typed active-policy and journal-page queries in one view.
+    /// Execute the typed active-policy, complete bounded policy-history, and
+    /// journal-page queries in one view.
     ///
-    /// Implementations must hold one immutable state-view guard while
-    /// executing both queries. They must not assemble this response from two
-    /// current-head reads, even when both reads report the same height.
+    /// Implementations must hold one immutable state-view/archive-generation
+    /// guard while resolving all three projections. They must not assemble
+    /// this response from separate current-head reads, even when those reads
+    /// report the same height.
     fn reputation_journal_delivery_view(
         &self,
         chain_id: &ChainId,
@@ -286,6 +491,19 @@ pub trait ReputationFinalizedQueryV1: Send + Sync + fmt::Debug {
         after: Option<ReputationJournalFinalizedEventCursorV1>,
         limit: u32,
     ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1>;
+
+    /// Resolve the latest event for one source together with its immutable
+    /// finalized anchor.
+    ///
+    /// The source lookup and anchor selection must occur under one immutable
+    /// state-view/archive-generation guard. A provider that cannot prove
+    /// authoritative absence because history was pruned must fail.
+    fn reputation_journal_event_by_source_id(
+        &self,
+        chain_id: &ChainId,
+        maximum_height: u64,
+        query: FindSorafsReputationJournalEventBySourceId,
+    ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1>;
 
     /// Fetch one proof-outcome page after the exclusive cursor.
     fn proof_outcome_page(
@@ -344,6 +562,7 @@ pub struct ReputationFinalizedQueryPolicyV1 {
     window_end_height: u64,
     ingest_policy_digest: [u8; 32],
     query_handle: String,
+    query_qualification: ReputationRuntimeProviderQualificationV1,
     page_items: u32,
     max_pages_per_batch: u32,
 }
@@ -390,12 +609,17 @@ impl ReputationFinalizedQueryPolicyV1 {
         {
             return Err(ReputationRuntimeError::InvalidRuntimePolicy);
         }
+        let ingest_policy_digest = ingest_policy.canonical_digest()?;
         Ok(Self {
             version: REPUTATION_FINALIZED_QUERY_POLICY_VERSION_V1,
             chain_id: ingest_policy.chain_id.clone(),
             window_end_height: ingest_policy.window_end_height,
-            ingest_policy_digest: ingest_policy.canonical_digest()?,
+            ingest_policy_digest,
             query_handle,
+            query_qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                ingest_policy_digest,
+            ),
             page_items,
             max_pages_per_batch,
         })
@@ -411,6 +635,25 @@ impl ReputationFinalizedQueryPolicyV1 {
     #[must_use]
     pub const fn window_end_height(&self) -> u64 {
         self.window_end_height
+    }
+
+    /// Return the independently derived finalized-query qualification.
+    #[must_use]
+    pub const fn query_qualification(&self) -> ReputationRuntimeProviderQualificationV1 {
+        self.query_qualification
+    }
+
+    /// Qualify or revalidate the exact finalized-query provider.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed, test-marked, substituted, stale, or policy-mismatched
+    /// providers without exposing provider diagnostics.
+    pub fn revalidate_provider(
+        &self,
+        query: &dyn ReputationFinalizedQueryV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(&self.query_handle, self.query_qualification, query)
     }
 }
 
@@ -481,10 +724,14 @@ impl ReputationCommittedProjectorRuntimeV1 {
             || policy.window_end_height != ingest_policy.window_end_height
             || policy.ingest_policy_digest != ingest_policy.canonical_digest()?
             || projector.status()?.policy_digest != policy.ingest_policy_digest
-            || query.handle() != policy.query_handle
         {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
+        qualify_runtime_provider(
+            &policy.query_handle,
+            policy.query_qualification,
+            query.as_ref(),
+        )?;
         Ok(Self {
             projector,
             policy,
@@ -556,16 +803,16 @@ impl ReputationCommittedProjectorRuntimeV1 {
         &self,
     ) -> Result<ReputationFinalizedPollOutcomeV1, ReputationRuntimeError> {
         self.ensure_query_binding()?;
-        self.query.check_readiness()?;
-        self.ensure_query_binding()?;
         if projector_ready_at(&self.projector, self.policy.window_end_height)? {
             return Ok(ReputationFinalizedPollOutcomeV1::Complete);
         }
 
-        let anchor = self
-            .query
-            .finalized_at_or_before(&self.policy.chain_id, self.policy.window_end_height)?;
         self.ensure_query_binding()?;
+        let anchor_result = self
+            .query
+            .finalized_at_or_before(&self.policy.chain_id, self.policy.window_end_height);
+        self.ensure_query_binding()?;
+        let anchor = anchor_result?;
         anchor.validate()?;
         if anchor.chain_id != self.policy.chain_id {
             return Err(ReputationRuntimeError::ChainIdMismatch);
@@ -635,10 +882,7 @@ impl ReputationCommittedProjectorRuntimeV1 {
     }
 
     fn ensure_query_binding(&self) -> Result<(), ReputationRuntimeError> {
-        if self.query.handle() != self.policy.query_handle {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
-        }
-        Ok(())
+        self.policy.revalidate_provider(self.query.as_ref())
     }
 
     fn validate_anchor_progress(
@@ -674,10 +918,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(proof_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .proof_outcome_page(anchor, after, self.policy.page_items)?;
+            .proof_outcome_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_proof_cursor),
@@ -703,10 +948,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(journal_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .reputation_journal_page(anchor, after, self.policy.page_items)?;
+            .reputation_journal_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         page.validate_after(after)
             .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
         if page.finalized_cursor
@@ -733,10 +979,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(repair_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .repair_page(anchor, after, self.policy.page_items)?;
+            .repair_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_repair_cursor),
@@ -762,10 +1009,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(orderbook_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .orderbook_page(anchor, after, self.policy.page_items)?;
+            .orderbook_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_orderbook_cursor),
@@ -791,10 +1039,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         let after = after.map(reserve_cursor);
         budget.take()?;
         self.ensure_query_binding()?;
-        let page = self
+        let page_result = self
             .query
-            .reserve_page(anchor, after, self.policy.page_items)?;
+            .reserve_page(anchor, after, self.policy.page_items);
         self.ensure_query_binding()?;
+        let page = page_result?;
         validate_event_page(
             anchor.identity,
             after.map(committed_from_reserve_cursor),
@@ -821,10 +1070,11 @@ impl ReputationCommittedProjectorRuntimeV1 {
         loop {
             budget.take()?;
             self.ensure_query_binding()?;
-            let page =
+            let page_result =
                 self.query
-                    .reserve_provider_page(anchor, after, RESERVE_QUERY_MAX_ITEMS_V1)?;
+                    .reserve_provider_page(anchor, after, RESERVE_QUERY_MAX_ITEMS_V1);
             self.ensure_query_binding()?;
+            let page = page_result?;
             if page.finalized_cursor.height != anchor.identity.height
                 || page.finalized_cursor.block_hash != anchor.identity.block_hash
                 || page.accounts.len()
@@ -1278,14 +1528,20 @@ pub enum ReputationJournalEnqueueOutcomeV1 {
     },
 }
 
-/// Counted stream-token adapter result.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CountedStreamTokenProducerOutcomeV1 {
-    /// A provider-attributable result entered the durable native outbox.
+enum CountedStreamTokenProducerOutcomeV1 {
     Enqueued(ReputationJournalEnqueueOutcomeV1),
-    /// An unauthenticated or undecodable token result was valid but not
-    /// provider-attributable and therefore did not enter the journal.
     NotCounted,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StreamTokenCountedValidationV1 {
+    token_body_digest: [u8; 32],
+    token_key_version: u32,
+    validated_at_unix_ms: u64,
+    status: StreamTokenValidationStatusV1,
 }
 
 /// Result of a durable journal-delivery transition.
@@ -1311,6 +1567,7 @@ pub enum ReputationJournalDeliveryOutcomeV1 {
 struct StoredReputationJournalDeliveryV1 {
     sequence: u64,
     entry_digest: [u8; 32],
+    source_material_digest: [u8; 32],
     entry: ReputationJournalEntryV1,
     state: ReputationJournalDeliveryStateV1,
     attempts: u32,
@@ -1353,6 +1610,7 @@ struct StoredReputationJournalCompletionV1 {
     event_id: ReputationJournalEventIdV1,
     source_id: ReputationJournalSourceIdV1,
     entry_digest: [u8; 32],
+    source_material_digest: [u8; 32],
     committed: ReputationCommittedEventIdentityV1,
 }
 
@@ -1361,6 +1619,7 @@ struct StoredReputationJournalObservationV1 {
     event_id: ReputationJournalEventIdV1,
     source_id: ReputationJournalSourceIdV1,
     entry_digest: [u8; 32],
+    source_material_digest: [u8; 32],
     committed: ReputationCommittedEventIdentityV1,
 }
 
@@ -1370,8 +1629,24 @@ struct StoredReputationJournalDeadLetterV1 {
     event_id: ReputationJournalEventIdV1,
     source_id: ReputationJournalSourceIdV1,
     entry_digest: [u8; 32],
+    source_material_digest: [u8; 32],
     attempts: u32,
     failure_receipts: Vec<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredStreamTokenGatewayHeadV1 {
+    binding: StreamTokenValidationBindingV1,
+    admission_digest: [u8; 32],
+    event_id: ReputationJournalEventIdV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredStreamTokenGatewayAdmissionV1 {
+    binding: StreamTokenValidationBindingV1,
+    admission_digest: [u8; 32],
+    event_id: ReputationJournalEventIdV1,
+    entry: ReputationJournalEntryV1,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1379,16 +1654,21 @@ struct ReputationJournalProducerCheckpointV1 {
     version: u8,
     policy_digest: [u8; 32],
     authority_policies: Vec<ReputationJournalAuthorityPolicyV1>,
+    authority_policy_records: Vec<ReputationJournalAuthorityPolicyRecordV1>,
     active_authority_policy_record: Option<ReputationJournalAuthorityPolicyRecordV1>,
     observed_journal_after: Option<ReputationJournalFinalizedEventCursorV1>,
     observed_finalized: Option<ReputationJournalFinalizedCursorV1>,
     journal_scan_caught_up: bool,
+    // Highest committing height among count-compacted source tombstones.
+    source_replay_finalized_height_floor: u64,
     last_assigned_sequence: u64,
     next_sequence: u64,
     pending: Vec<StoredReputationJournalDeliveryV1>,
     completed: Vec<StoredReputationJournalCompletionV1>,
     observed: Vec<StoredReputationJournalObservationV1>,
     dead_letters: Vec<StoredReputationJournalDeadLetterV1>,
+    stream_token_gateway_heads: Vec<StoredStreamTokenGatewayHeadV1>,
+    stream_token_gateway_admissions: Vec<StoredStreamTokenGatewayAdmissionV1>,
 }
 
 impl ReputationJournalProducerCheckpointV1 {
@@ -1400,16 +1680,20 @@ impl ReputationJournalProducerCheckpointV1 {
             version: REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_VERSION_V1,
             policy_digest,
             authority_policies: vec![authority_policy],
+            authority_policy_records: Vec::new(),
             active_authority_policy_record: None,
             observed_journal_after: None,
             observed_finalized: None,
             journal_scan_caught_up: false,
+            source_replay_finalized_height_floor: 0,
             last_assigned_sequence: 0,
             next_sequence: 1,
             pending: Vec::new(),
             completed: Vec::new(),
             observed: Vec::new(),
             dead_letters: Vec::new(),
+            stream_token_gateway_heads: Vec::new(),
+            stream_token_gateway_admissions: Vec::new(),
         }
     }
 }
@@ -1418,9 +1702,15 @@ impl ReputationJournalProducerCheckpointV1 {
 struct JournalProducerRuntimeState {
     checkpoint: ReputationJournalProducerCheckpointV1,
     fingerprint: Option<[u8; 32]>,
+    // Process-local fence; restart safety comes from the persisted height floor.
+    mutation_generation: u64,
 }
 
-/// Durable native PoR and counted stream-token journal outbox.
+/// Durable native PoR journal outbox with a non-deployed token replay foundation.
+///
+/// No production counted-token callback is exposed. The token admission state
+/// remains test-only scaffolding until its qualified gateway, sealed CAS,
+/// transactional quota, and efficient ordered-outbox dependencies exist.
 #[derive(Debug)]
 pub struct ReputationJournalProducerOutboxV1 {
     policy: ReputationJournalProducerPolicyV1,
@@ -1457,6 +1747,7 @@ impl ReputationJournalProducerOutboxV1 {
                 policy.authority_policy.clone(),
             ),
         };
+        validate_journal_checkpoint(&checkpoint, &policy, policy_digest)?;
         Ok(Self {
             policy,
             policy_digest,
@@ -1464,9 +1755,90 @@ impl ReputationJournalProducerOutboxV1 {
             state: Mutex::new(JournalProducerRuntimeState {
                 checkpoint,
                 fingerprint,
+                mutation_generation: 0,
             }),
             durability_poisoned: AtomicBool::new(false),
         })
+    }
+
+    /// Open a retained checkpoint and atomically apply an immutable finalized
+    /// authority-policy history before returning the outbox.
+    ///
+    /// Unlike [`Self::open`], this recovery entry point may decode a checkpoint
+    /// whose retained active revision predates the supplied producer policy.
+    /// It does not trust that difference: the bounded history must begin at
+    /// revision one, contain the retained checkpoint lineage byte-for-byte,
+    /// advance by direct revision and predecessor-digest links, and end at the
+    /// exact policy configured for this process. Every missing successor is
+    /// applied in one durable checkpoint commit before the caller can expose an
+    /// active runtime.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed or substituted history, a checkpoint that is not an
+    /// exact prefix of that history, unsafe paths, or persistence failure.
+    pub fn open_with_authority_policy_history(
+        root: &Path,
+        policy: ReputationJournalProducerPolicyV1,
+        authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
+        finalized: ReputationJournalFinalizedCursorV1,
+    ) -> Result<Self, ReputationRuntimeError> {
+        policy.validate()?;
+        finalized
+            .validate()
+            .map_err(|_| ReputationRuntimeError::InvalidFinalizedAnchor)?;
+        let active = authority_policy_history
+            .last()
+            .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
+        validate_authority_policy_history(
+            authority_policy_history,
+            active,
+            finalized.finalized_at_unix_ms,
+        )?;
+        if active.policy != policy.authority_policy {
+            return Err(ReputationRuntimeError::AuthorityPolicyLineage);
+        }
+        let policy_digest = policy.digest()?;
+        let store = AtomicCheckpointStore::new(
+            root,
+            REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1,
+            REPUTATION_JOURNAL_PRODUCER_LOCK_FILE_NAME_V1,
+            policy.checkpoint_max_bytes,
+        )?;
+        let (bytes, fingerprint) = store.load_bytes()?;
+        let checkpoint = match bytes {
+            Some(bytes) => {
+                decode_journal_checkpoint_for_policy_recovery(&bytes, &policy, policy_digest)?
+            }
+            None => ReputationJournalProducerCheckpointV1::empty(
+                policy_digest,
+                authority_policy_history
+                    .first()
+                    .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?
+                    .policy
+                    .clone(),
+            ),
+        };
+        let outbox = Self {
+            policy,
+            policy_digest,
+            store,
+            state: Mutex::new(JournalProducerRuntimeState {
+                checkpoint,
+                fingerprint,
+                mutation_generation: 0,
+            }),
+            durability_poisoned: AtomicBool::new(false),
+        };
+        outbox.synchronize_authority_policy_history(authority_policy_history, finalized)?;
+        {
+            let state = outbox
+                .state
+                .lock()
+                .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+            validate_journal_checkpoint(&state.checkpoint, &outbox.policy, outbox.policy_digest)?;
+        }
+        Ok(outbox)
     }
 
     /// Return payload-free pending statuses in stable local sequence order.
@@ -1582,8 +1954,9 @@ impl ReputationJournalProducerOutboxV1 {
     /// Only a byte-identical record or the direct predecessor-bound successor
     /// is accepted. Ambiguous and submitted rows are immutable because exact
     /// signed bytes may already have escaped; they continue to reconcile under
-    /// their captured authority and policy digest. Only never-exposed Ready
-    /// rows are reconstructed under the successor.
+    /// their captured authority and policy digest. Rotation fails closed if
+    /// such bytes fall in the successor's source-time interval. Only
+    /// never-exposed Ready rows are reconstructed under the successor.
     ///
     /// # Errors
     ///
@@ -1594,86 +1967,117 @@ impl ReputationJournalProducerOutboxV1 {
         record: ReputationJournalAuthorityPolicyRecordV1,
         finalized: ReputationJournalFinalizedCursorV1,
     ) -> Result<ReputationJournalPolicySyncOutcomeV1, ReputationRuntimeError> {
-        record
-            .validate()
-            .map_err(|_| ReputationRuntimeError::InvalidAuthorityPolicy)?;
         finalized
             .validate()
             .map_err(|_| ReputationRuntimeError::InvalidFinalizedAnchor)?;
-        if record.activated_at_unix_ms > finalized.finalized_at_unix_ms {
-            return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
-        }
         self.ensure_durable()?;
         let mut state = self
             .state
             .lock()
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
-        let active = state
-            .checkpoint
-            .authority_policies
-            .last()
-            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
-        let active_digest = active
-            .canonical_digest()
-            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
-        if record.policy_digest == active_digest {
-            if record.policy != *active {
-                return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
-            }
-            return match &state.checkpoint.active_authority_policy_record {
-                Some(existing) if existing == &record => {
-                    Ok(ReputationJournalPolicySyncOutcomeV1::ExactReplay)
-                }
-                Some(_) => Err(ReputationRuntimeError::AuthorityPolicyRecordConflict),
-                None => {
-                    let mut candidate = state.checkpoint.clone();
-                    candidate.active_authority_policy_record = Some(record);
-                    self.commit_journal_candidate(&mut state, candidate)?;
-                    Ok(ReputationJournalPolicySyncOutcomeV1::Initialized)
-                }
-            };
+        let mut candidate = state.checkpoint.clone();
+        let outcome =
+            apply_authority_policy_record(&mut candidate, record, finalized.finalized_at_unix_ms)?;
+        if outcome != ReputationJournalPolicySyncOutcomeV1::ExactReplay {
+            self.commit_journal_candidate(&mut state, candidate)?;
         }
-        let expected_revision = active
-            .revision
-            .checked_add(1)
+        Ok(outcome)
+    }
+
+    /// Atomically synchronize every missed recorder-policy revision from one
+    /// immutable finalized view.
+    ///
+    /// The complete bounded history must start at revision one and end at the
+    /// finalized active record. The retained checkpoint lineage must be an
+    /// exact contiguous subrange of that history. Missing successors are
+    /// applied to one candidate and persisted once, so startup never exposes a
+    /// partially recovered policy head.
+    ///
+    /// Returns the number of direct rotations applied. Initial binding of an
+    /// existing policy record is not counted as a rotation.
+    ///
+    /// # Errors
+    ///
+    /// Rejects missing, duplicated, skipped, substituted, rolled-back, or
+    /// time-invalid history and every persistence failure.
+    pub fn synchronize_authority_policy_history(
+        &self,
+        history: &[ReputationJournalAuthorityPolicyRecordV1],
+        finalized: ReputationJournalFinalizedCursorV1,
+    ) -> Result<u32, ReputationRuntimeError> {
+        finalized
+            .validate()
+            .map_err(|_| ReputationRuntimeError::InvalidFinalizedAnchor)?;
+        let terminal = history
+            .last()
             .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
-        if record.policy.revision != expected_revision
-            || record.policy.predecessor_policy_digest != Some(active_digest)
-            || state.checkpoint.authority_policies.len()
-                >= REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1
+        validate_authority_policy_history(history, terminal, finalized.finalized_at_unix_ms)?;
+        self.ensure_durable()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+        let retained_policies = &state.checkpoint.authority_policies;
+        let retained_records = &state.checkpoint.authority_policy_records;
+        let first_retained = retained_policies
+            .first()
+            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        let retained_start = history
+            .iter()
+            .position(|record| &record.policy == first_retained)
+            .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
+        if (retained_records.is_empty() && retained_start != 0)
+            || retained_start
+                .checked_add(retained_policies.len())
+                .is_none_or(|end| end > history.len())
+            || retained_policies
+                .iter()
+                .zip(&history[retained_start..])
+                .any(|(policy, record)| policy != &record.policy)
+            || (!retained_records.is_empty()
+                && retained_records
+                    .iter()
+                    .zip(&history[retained_start..])
+                    .any(|(retained, authenticated)| retained != authenticated))
         {
             return Err(ReputationRuntimeError::AuthorityPolicyLineage);
         }
-
         let mut candidate = state.checkpoint.clone();
-        candidate.authority_policies.push(record.policy.clone());
-        candidate.active_authority_policy_record = Some(record.clone());
-        let mut rebound_ready = 0_u32;
-        for delivery in &mut candidate.pending {
-            if delivery.state != ReputationJournalDeliveryStateV1::Ready {
-                continue;
-            }
-            let rebound = ReputationJournalEntryV1::try_new(
-                delivery.entry.provider_id,
-                record.policy_digest,
-                record
-                    .policy
-                    .recorder_authority(delivery.entry.source_kind())
-                    .clone(),
-                delivery.entry.source_time_unix_ms,
-                delivery.entry.predecessor_event_id,
-                delivery.entry.payload.clone(),
-            )
-            .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)?;
-            delivery.entry_digest = journal_entry_digest(&rebound)?;
-            delivery.entry = rebound;
-            rebound_ready = rebound_ready
-                .checked_add(1)
-                .ok_or(ReputationRuntimeError::JournalResourceExhausted)?;
+        let mut next_history_index = retained_start
+            .checked_add(candidate.authority_policies.len())
+            .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
+        if candidate.active_authority_policy_record.is_none() {
+            next_history_index = next_history_index
+                .checked_sub(1)
+                .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
         }
-        ensure_retained_journal_identities_unique(&candidate)?;
-        self.commit_journal_candidate(&mut state, candidate)?;
-        Ok(ReputationJournalPolicySyncOutcomeV1::Rotated { rebound_ready })
+        let mut rotations = 0_u32;
+        let mut changed = false;
+        for record in &history[next_history_index..] {
+            match apply_authority_policy_record(
+                &mut candidate,
+                record.clone(),
+                finalized.finalized_at_unix_ms,
+            )? {
+                ReputationJournalPolicySyncOutcomeV1::ExactReplay => {}
+                ReputationJournalPolicySyncOutcomeV1::Initialized => changed = true,
+                ReputationJournalPolicySyncOutcomeV1::Rotated { .. } => {
+                    changed = true;
+                    rotations = rotations
+                        .checked_add(1)
+                        .ok_or(ReputationRuntimeError::JournalResourceExhausted)?;
+                }
+            }
+        }
+        if candidate.active_authority_policy_record.as_ref() != Some(terminal)
+            || candidate.authority_policies.last() != Some(&terminal.policy)
+        {
+            return Err(ReputationRuntimeError::AuthorityPolicyLineage);
+        }
+        if changed {
+            self.commit_journal_candidate(&mut state, candidate)?;
+        }
+        Ok(rotations)
     }
 
     /// Atomically reconcile one typed committed-event page and advance its cursor.
@@ -1704,12 +2108,20 @@ impl ReputationJournalProducerOutboxV1 {
         for event in &page.events {
             let committed = committed_from_journal_cursor(event.cursor());
             let digest = journal_entry_digest(&event.entry)?;
+            let source_material_digest = journal_source_material_digest(
+                event.entry.provider_id,
+                event.entry.source_time_unix_ms,
+                event.entry.predecessor_event_id,
+                &event.entry.payload,
+            )?;
+            reconcile_finalized_stream_token_gateway_admission(&mut candidate, &event.entry)?;
             if let Some(existing) = candidate.completed.iter().find(|entry| {
                 entry.event_id == event.entry.event_id || entry.source_id == event.entry.source_id
             }) {
                 if existing.event_id != event.entry.event_id
                     || existing.source_id != event.entry.source_id
                     || existing.entry_digest != digest
+                    || existing.source_material_digest != source_material_digest
                     || existing.committed != committed
                 {
                     return Err(ReputationRuntimeError::JournalAcknowledgementConflict);
@@ -1722,6 +2134,7 @@ impl ReputationJournalProducerOutboxV1 {
                 if existing.event_id != event.entry.event_id
                     || existing.source_id != event.entry.source_id
                     || existing.entry_digest != digest
+                    || existing.source_material_digest != source_material_digest
                     || existing.committed != committed
                 {
                     return Err(ReputationRuntimeError::JournalAcknowledgementConflict);
@@ -1736,6 +2149,7 @@ impl ReputationJournalProducerOutboxV1 {
                 if delivery.event_id != event.entry.event_id
                     || delivery.source_id != event.entry.source_id
                     || delivery.entry_digest != digest
+                    || delivery.source_material_digest != source_material_digest
                 {
                     return Err(ReputationRuntimeError::JournalSourceConflict);
                 }
@@ -1747,6 +2161,7 @@ impl ReputationJournalProducerOutboxV1 {
                         event_id: delivery.event_id,
                         source_id: delivery.source_id,
                         entry_digest: delivery.entry_digest,
+                        source_material_digest: delivery.source_material_digest,
                         committed,
                     });
                 acknowledged = acknowledged
@@ -1762,6 +2177,7 @@ impl ReputationJournalProducerOutboxV1 {
                 if delivery.entry.event_id != event.entry.event_id
                     || delivery.entry.source_id != event.entry.source_id
                     || delivery.entry_digest != digest
+                    || delivery.source_material_digest != source_material_digest
                 {
                     return Err(ReputationRuntimeError::JournalSourceConflict);
                 }
@@ -1773,6 +2189,7 @@ impl ReputationJournalProducerOutboxV1 {
                         event_id: delivery.entry.event_id,
                         source_id: delivery.entry.source_id,
                         entry_digest: delivery.entry_digest,
+                        source_material_digest: delivery.source_material_digest,
                         committed,
                     });
                 acknowledged = acknowledged
@@ -1785,6 +2202,7 @@ impl ReputationJournalProducerOutboxV1 {
                         event_id: event.entry.event_id,
                         source_id: event.entry.source_id,
                         entry_digest: digest,
+                        source_material_digest,
                         committed,
                     });
             }
@@ -1847,6 +2265,7 @@ impl ReputationJournalProducerOutboxV1 {
     ///
     /// Rejects an invalid baseline, unknown event, unsafe state transition, or
     /// exhausted retry budget.
+    #[cfg(test)]
     pub fn begin_submission(
         &self,
         event_id: ReputationJournalEventIdV1,
@@ -1870,25 +2289,44 @@ impl ReputationJournalProducerOutboxV1 {
             entry.state = ReputationJournalDeliveryStateV1::Ambiguous;
             Ok(())
         })?;
-        self.pending_by_id(event_id)
+        self.ensure_durable()?;
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+        let entry = state
+            .checkpoint
+            .pending
+            .iter()
+            .find(|entry| entry.entry.event_id == event_id)
+            .ok_or(ReputationRuntimeError::UnknownJournalEvent)?;
+        entry.submission(&self.policy.chain_id)
     }
 
-    /// Rebind one never-exposed Ready row to the active policy and enter ambiguity.
+    /// Bind one never-exposed Ready row to its source-time-valid policy and
+    /// enter ambiguity.
     ///
     /// This is the rotation-safe worker entrypoint. The caller supplies the
     /// digest read from the same exact finalized view used as the absence
-    /// baseline. Rows that have ever entered Ambiguous or Submitted are never
-    /// rewritten.
+    /// baseline, including that view's authoritative block time. A source
+    /// observation not strictly earlier than the finalized view is not exposed
+    /// for signing; this ensures a later block with the same timestamp cannot
+    /// rotate policy and retroactively invalidate Ambiguous bytes. Rows that
+    /// have ever entered Ambiguous or Submitted are never rewritten. A row
+    /// sourced before the active policy's activation retains its historical
+    /// policy bytes; only source material in the active interval is rebound.
     ///
     /// # Errors
     ///
-    /// Rejects a stale policy digest, invalid baseline, non-Ready row,
-    /// collision, exhausted retry budget, or persistence failure.
+    /// Rejects a stale policy digest, invalid or source-incomplete baseline,
+    /// non-Ready row, collision, exhausted retry budget, or persistence
+    /// failure.
     pub fn begin_submission_against_active_policy(
         &self,
         event_id: ReputationJournalEventIdV1,
         active_policy_digest: [u8; 32],
         baseline_finalized: ReputationFinalizedIdentityV1,
+        baseline_finalized_at_unix_ms: u64,
     ) -> Result<ReputationJournalSubmissionV1, ReputationRuntimeError> {
         baseline_finalized
             .validate()
@@ -1903,16 +2341,18 @@ impl ReputationJournalProducerOutboxV1 {
             .authority_policies
             .last()
             .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
-        if active
-            .canonical_digest()
-            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?
-            != active_policy_digest
-            || state
-                .checkpoint
-                .active_authority_policy_record
-                .as_ref()
-                .map(|record| record.policy_digest)
-                != Some(active_policy_digest)
+        let active_record = state
+            .checkpoint
+            .active_authority_policy_record
+            .as_ref()
+            .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
+        if baseline_finalized_at_unix_ms == 0
+            || active
+                .canonical_digest()
+                .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?
+                != active_policy_digest
+            || active_record.policy_digest != active_policy_digest
+            || active_record.activated_at_unix_ms > baseline_finalized_at_unix_ms
         {
             return Err(ReputationRuntimeError::AuthorityPolicyLineage);
         }
@@ -1930,7 +2370,12 @@ impl ReputationJournalProducerOutboxV1 {
             {
                 return Err(ReputationRuntimeError::InvalidJournalTransition);
             }
-            if delivery.entry.authority_policy_digest == active_policy_digest {
+            if delivery.entry.source_time_unix_ms >= baseline_finalized_at_unix_ms {
+                return Err(ReputationRuntimeError::JournalSourceNotFinalized);
+            }
+            if delivery.entry.authority_policy_digest == active_policy_digest
+                || delivery.entry.source_time_unix_ms < active_record.activated_at_unix_ms
+            {
                 false
             } else {
                 let rebound = ReputationJournalEntryV1::try_new(
@@ -2092,6 +2537,7 @@ impl ReputationJournalProducerOutboxV1 {
                 event_id: entry.entry.event_id,
                 source_id: entry.entry.source_id,
                 entry_digest: entry.entry_digest,
+                source_material_digest: entry.source_material_digest,
                 committed,
             });
         candidate.completed.sort_by_key(|entry| entry.sequence);
@@ -2117,35 +2563,35 @@ impl ReputationJournalProducerOutboxV1 {
             .state
             .lock()
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
-        let active_policy = state
-            .checkpoint
-            .authority_policies
-            .last()
-            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
-        let active_policy_digest = active_policy
-            .canonical_digest()
-            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
-        let entry = ReputationJournalEntryV1::try_new(
+        self.enqueue_payload_locked(&mut state, provider_id, source_time_unix_ms, payload)
+    }
+
+    fn enqueue_payload_locked(
+        &self,
+        state: &mut JournalProducerRuntimeState,
+        provider_id: ProviderId,
+        source_time_unix_ms: u64,
+        payload: ReputationJournalPayloadV1,
+    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+        let source_id = payload.source_id();
+        let source_material_digest =
+            journal_source_material_digest(provider_id, source_time_unix_ms, None, &payload)?;
+        if let Some(outcome) =
+            retained_source_enqueue_outcome(&state.checkpoint, source_id, source_material_digest)
+        {
+            return outcome;
+        }
+        let entry = journal_entry_for_payload(
+            &state.checkpoint,
             provider_id,
-            active_policy_digest,
-            active_policy
-                .recorder_authority(payload.source_kind())
-                .clone(),
             source_time_unix_ms,
-            None,
             payload,
-        )
-        .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)?;
+        )?;
         let entry_digest = journal_entry_digest(&entry)?;
+        if let Some(event_id) = inspect_stream_token_gateway_admission(&state.checkpoint, &entry)? {
+            return Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id });
+        }
         for retained in retained_journal_identities(&state.checkpoint) {
-            if retained.source_id == entry.source_id {
-                if retained.event_id == entry.event_id && retained.entry_digest == entry_digest {
-                    return Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay {
-                        event_id: entry.event_id,
-                    });
-                }
-                return Err(ReputationRuntimeError::JournalSourceConflict);
-            }
             if retained.event_id == entry.event_id {
                 return Err(ReputationRuntimeError::JournalSourceConflict);
             }
@@ -2163,9 +2609,11 @@ impl ReputationJournalProducerOutboxV1 {
             .checked_add(1)
             .ok_or(ReputationRuntimeError::JournalSequenceExhausted)?;
         let event_id = entry.event_id;
+        retain_stream_token_gateway_admission(&mut candidate, &entry)?;
         candidate.pending.push(StoredReputationJournalDeliveryV1 {
             sequence,
             entry_digest,
+            source_material_digest,
             entry,
             state: ReputationJournalDeliveryStateV1::Ready,
             attempts: 0,
@@ -2173,26 +2621,99 @@ impl ReputationJournalProducerOutboxV1 {
             failure_receipts: Vec::new(),
         });
         candidate.pending.sort_by_key(|entry| entry.sequence);
-        self.commit_journal_candidate(&mut state, candidate)?;
+        self.commit_journal_candidate(state, candidate)?;
         Ok(ReputationJournalEnqueueOutcomeV1::Inserted { event_id })
     }
 
-    fn pending_by_id(
+    #[cfg(test)]
+    fn enqueue_counted_stream_token_validation(
         &self,
-        event_id: ReputationJournalEventIdV1,
-    ) -> Result<ReputationJournalSubmissionV1, ReputationRuntimeError> {
+        gateway_id: [u8; 32],
+        context: &StreamTokenValidationRequestContextV1,
+        validation: StreamTokenCountedValidationV1,
+    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+        // TODO: this is a non-deployed local sequencing foundation. Before any
+        // Torii capture is wired, bind a qualified policy-pinned gateway
+        // adapter, fence the checkpoint with deployment-owned sealed CAS,
+        // replace full-checkpoint synchronous rewrites with an efficient
+        // ordered outbox, and make quota admission transactional and durable
+        // with the journal row.
+        // TODO: define chain-authoritative cross-gateway/global request-context
+        // deduplication before any dual-gateway deployment capture is enabled.
+        if !validation.status.counts_for_provider() {
+            return Err(ReputationRuntimeError::InvalidJournalEntry);
+        }
+        let request_context_digest = context
+            .digest()
+            .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)?;
+        let provider_id = context.provider_id();
         self.ensure_durable()?;
-        let state = self
+        let mut state = self
             .state
             .lock()
             .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
-        let entry = state
+        if let Some(retained) = state
             .checkpoint
-            .pending
+            .stream_token_gateway_admissions
             .iter()
-            .find(|entry| entry.entry.event_id == event_id)
-            .ok_or(ReputationRuntimeError::UnknownJournalEvent)?;
-        entry.submission(&self.policy.chain_id)
+            .find(|retained| {
+                retained.binding.gateway_id == gateway_id
+                    && retained.binding.request_context_digest == request_context_digest
+            })
+        {
+            let replay = StreamTokenValidationOutcomeV1 {
+                binding: retained.binding,
+                token_body_digest: Some(validation.token_body_digest),
+                token_key_version: Some(validation.token_key_version),
+                validated_at_unix_ms: validation.validated_at_unix_ms,
+                status: validation.status,
+            };
+            return if retained.admission_digest
+                == stream_token_admission_digest(provider_id, &replay)?
+            {
+                Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: retained.event_id,
+                })
+            } else {
+                Err(ReputationRuntimeError::JournalSourceConflict)
+            };
+        }
+        // TODO: the replay suffix is deliberately bounded by the dedicated
+        // counted-token admission cap.
+        // Deployment-owned archival replay lookup is required before claiming
+        // indefinite idempotency after this local suffix compacts.
+        let gateway_sequence = match state
+            .checkpoint
+            .stream_token_gateway_heads
+            .iter()
+            .find(|head| head.binding.gateway_id == gateway_id)
+        {
+            Some(head) => head
+                .binding
+                .gateway_sequence
+                .checked_add(1)
+                .ok_or(ReputationRuntimeError::JournalSequenceExhausted)?,
+            None => 1,
+        };
+        let binding = StreamTokenValidationBindingV1::try_new(
+            gateway_id,
+            gateway_sequence,
+            request_context_digest,
+        )
+        .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)?;
+        let outcome = StreamTokenValidationOutcomeV1 {
+            binding,
+            token_body_digest: Some(validation.token_body_digest),
+            token_key_version: Some(validation.token_key_version),
+            validated_at_unix_ms: validation.validated_at_unix_ms,
+            status: validation.status,
+        };
+        self.enqueue_payload_locked(
+            &mut state,
+            provider_id,
+            validation.validated_at_unix_ms,
+            ReputationJournalPayloadV1::StreamTokenValidation(outcome),
+        )
     }
 
     fn mutate_pending(
@@ -2299,6 +2820,7 @@ impl ReputationJournalProducerOutboxV1 {
                     event_id: entry.entry.event_id,
                     source_id: entry.entry.source_id,
                     entry_digest: entry.entry_digest,
+                    source_material_digest: entry.source_material_digest,
                     attempts,
                     failure_receipts: entry.failure_receipts,
                 });
@@ -2318,16 +2840,21 @@ impl ReputationJournalProducerOutboxV1 {
         state: &mut JournalProducerRuntimeState,
         candidate: ReputationJournalProducerCheckpointV1,
     ) -> Result<(), ReputationRuntimeError> {
-        validate_journal_checkpoint(&candidate, &self.policy, self.policy_digest)?;
-        let encoded =
-            norito::to_bytes(&candidate).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
-        if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > self.policy.checkpoint_max_bytes {
-            return Err(ReputationRuntimeError::CheckpointTooLarge);
-        }
+        let next_mutation_generation = state
+            .mutation_generation
+            .checked_add(1)
+            .ok_or(ReputationRuntimeError::JournalMutationGenerationExhausted)?;
+        let (candidate, encoded) = encode_bounded_journal_checkpoint(
+            candidate,
+            &self.policy,
+            self.policy_digest,
+            self.policy.checkpoint_max_bytes,
+        )?;
         match self.store.commit_bytes(&encoded, state.fingerprint) {
             Ok(fingerprint) => {
                 state.checkpoint = candidate;
                 state.fingerprint = Some(fingerprint);
+                state.mutation_generation = next_mutation_generation;
                 Ok(())
             }
             Err(CheckpointStoreError::DurabilityUncertain) => {
@@ -2350,13 +2877,48 @@ impl ReputationJournalProducerOutboxV1 {
 #[derive(Debug, Clone)]
 pub struct PorReputationJournalProducerV1 {
     outbox: Arc<ReputationJournalProducerOutboxV1>,
+    query: Arc<dyn ReputationFinalizedQueryV1>,
+    query_policy: ReputationJournalDeliveryPolicyV1,
 }
 
 impl PorReputationJournalProducerV1 {
-    /// Bind the adapter to the durable journal outbox.
-    #[must_use]
-    pub fn new(outbox: Arc<ReputationJournalProducerOutboxV1>) -> Self {
-        Self { outbox }
+    /// Bind the adapter to the durable journal outbox and exact finalized query.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a chain mismatch or a missing, substituted, stale, test-marked,
+    /// or policy-mismatched finalized-query provider.
+    pub fn new(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<dyn ReputationFinalizedQueryV1>,
+        query_policy: ReputationJournalDeliveryPolicyV1,
+    ) -> Result<Self, ReputationRuntimeError> {
+        query_policy.validate()?;
+        if outbox.policy.chain_id != query_policy.chain_id {
+            return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+        }
+        qualify_runtime_provider(
+            &query_policy.finalized_query_handle,
+            query_policy.finalized_query_qualification,
+            query.as_ref(),
+        )?;
+        Ok(Self {
+            outbox,
+            query,
+            query_policy,
+        })
+    }
+
+    fn from_qualified_delivery_worker(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<dyn ReputationFinalizedQueryV1>,
+        query_policy: ReputationJournalDeliveryPolicyV1,
+    ) -> Self {
+        Self {
+            outbox,
+            query,
+            query_policy,
+        }
     }
 
     /// Validate and durably enqueue one terminal PoR projection.
@@ -2374,35 +2936,115 @@ impl PorReputationJournalProducerV1 {
         outcome: PorTerminalOutcomeV1,
     ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
         let source_time_unix_ms = outcome.decided_at_unix_ms;
-        self.outbox.enqueue_payload(
-            provider_id,
-            source_time_unix_ms,
-            ReputationJournalPayloadV1::PorTerminal(outcome),
-        )
+        let payload = ReputationJournalPayloadV1::PorTerminal(outcome);
+        let source_id = payload.source_id();
+        let source_material_digest =
+            journal_source_material_digest(provider_id, source_time_unix_ms, None, &payload)?;
+        let source_query = FindSorafsReputationJournalEventBySourceId::new(source_id, None);
+
+        for _ in 0..POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1 {
+            self.outbox.ensure_durable()?;
+            let (mutation_generation, finalized_height_floor) = {
+                let state = self
+                    .outbox
+                    .state
+                    .lock()
+                    .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+                if let Some(outcome) = retained_source_enqueue_outcome(
+                    &state.checkpoint,
+                    source_id,
+                    source_material_digest,
+                ) {
+                    return outcome;
+                }
+                journal_entry_for_payload(
+                    &state.checkpoint,
+                    provider_id,
+                    source_time_unix_ms,
+                    payload.clone(),
+                )?;
+                (
+                    state.mutation_generation,
+                    state.checkpoint.source_replay_finalized_height_floor,
+                )
+            };
+
+            self.query_policy
+                .revalidate_query_provider(self.query.as_ref())?;
+            let view_result = self.query.reputation_journal_event_by_source_id(
+                &self.query_policy.chain_id,
+                u64::MAX,
+                source_query,
+            );
+            self.query_policy
+                .revalidate_query_provider(self.query.as_ref())?;
+            let view = view_result?;
+            view.validate_for_request(&self.query_policy.chain_id, u64::MAX, source_query)?;
+            if view.anchor.identity.height < finalized_height_floor {
+                return Err(ReputationRuntimeError::FinalizedRollback);
+            }
+            let finalized = view
+                .event
+                .map(|event| {
+                    let digest = journal_source_material_digest(
+                        event.entry.provider_id,
+                        event.entry.source_time_unix_ms,
+                        event.entry.predecessor_event_id,
+                        &event.entry.payload,
+                    )?;
+                    Ok((event.entry.event_id, digest))
+                })
+                .transpose()?;
+
+            self.outbox.ensure_durable()?;
+            let mut state = self
+                .outbox
+                .state
+                .lock()
+                .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+            if state.mutation_generation != mutation_generation {
+                continue;
+            }
+            if view.anchor.identity.height < state.checkpoint.source_replay_finalized_height_floor {
+                return Err(ReputationRuntimeError::FinalizedRollback);
+            }
+            if let Some(outcome) = retained_source_enqueue_outcome(
+                &state.checkpoint,
+                source_id,
+                source_material_digest,
+            ) {
+                return outcome;
+            }
+            return match finalized {
+                Some((event_id, digest)) if digest == source_material_digest => {
+                    Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id })
+                }
+                Some(_) => Err(ReputationRuntimeError::JournalSourceConflict),
+                None => self.outbox.enqueue_payload_locked(
+                    &mut state,
+                    provider_id,
+                    source_time_unix_ms,
+                    payload,
+                ),
+            };
+        }
+        Err(ReputationRuntimeError::JournalReplayRaceExhausted)
     }
 }
 
-/// Stream-token adapter that journals only safely provider-attributable results.
+#[cfg(test)]
 #[derive(Debug, Clone)]
-pub struct CountedStreamTokenReputationJournalProducerV1 {
+struct CountedStreamTokenReputationJournalProducerV1 {
     outbox: Arc<ReputationJournalProducerOutboxV1>,
 }
 
+#[cfg(test)]
 impl CountedStreamTokenReputationJournalProducerV1 {
-    /// Bind the adapter to the durable journal outbox.
-    #[must_use]
-    pub fn new(outbox: Arc<ReputationJournalProducerOutboxV1>) -> Self {
+    fn new(outbox: Arc<ReputationJournalProducerOutboxV1>) -> Self {
         Self { outbox }
     }
 
-    /// Validate one terminal token result and durably enqueue it only when it
-    /// is safely attributable to the provider.
-    ///
-    /// # Errors
-    ///
-    /// Rejects malformed typed material, source conflicts, or persistence
-    /// failures.
-    pub fn enqueue_counted(
+    fn enqueue_counted(
         &self,
         provider_id: ProviderId,
         outcome: StreamTokenValidationOutcomeV1,
@@ -2420,13 +3062,24 @@ impl CountedStreamTokenReputationJournalProducerV1 {
             )
             .map(CountedStreamTokenProducerOutcomeV1::Enqueued)
     }
+
+    fn enqueue_validation(
+        &self,
+        gateway_id: [u8; 32],
+        context: &StreamTokenValidationRequestContextV1,
+        validation: StreamTokenCountedValidationV1,
+    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
+        self.outbox
+            .enqueue_counted_stream_token_validation(gateway_id, context, validation)
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RetainedJournalIdentity {
     event_id: ReputationJournalEventIdV1,
     source_id: ReputationJournalSourceIdV1,
     entry_digest: [u8; 32],
+    source_material_digest: [u8; 32],
 }
 
 fn retained_journal_identities(
@@ -2439,6 +3092,7 @@ fn retained_journal_identities(
             event_id: entry.entry.event_id,
             source_id: entry.entry.source_id,
             entry_digest: entry.entry_digest,
+            source_material_digest: entry.source_material_digest,
         })
         .chain(
             checkpoint
@@ -2448,6 +3102,7 @@ fn retained_journal_identities(
                     event_id: entry.event_id,
                     source_id: entry.source_id,
                     entry_digest: entry.entry_digest,
+                    source_material_digest: entry.source_material_digest,
                 }),
         )
         .chain(
@@ -2458,6 +3113,7 @@ fn retained_journal_identities(
                     event_id: entry.event_id,
                     source_id: entry.source_id,
                     entry_digest: entry.entry_digest,
+                    source_material_digest: entry.source_material_digest,
                 }),
         )
         .chain(
@@ -2468,8 +3124,27 @@ fn retained_journal_identities(
                     event_id: entry.event_id,
                     source_id: entry.source_id,
                     entry_digest: entry.entry_digest,
+                    source_material_digest: entry.source_material_digest,
                 }),
         )
+}
+
+fn retained_source_enqueue_outcome(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    source_id: ReputationJournalSourceIdV1,
+    source_material_digest: [u8; 32],
+) -> Option<Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError>> {
+    retained_journal_identities(checkpoint)
+        .find(|retained| retained.source_id == source_id)
+        .map(|retained| {
+            if retained.source_material_digest == source_material_digest {
+                Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: retained.event_id,
+                })
+            } else {
+                Err(ReputationRuntimeError::JournalSourceConflict)
+            }
+        })
 }
 
 fn ensure_retained_journal_identities_unique(
@@ -2481,6 +3156,7 @@ fn ensure_retained_journal_identities_unique(
         if retained.event_id == ReputationJournalEventIdV1::ZERO
             || retained.source_id == ReputationJournalSourceIdV1::ZERO
             || retained.entry_digest == [0; 32]
+            || retained.source_material_digest == [0; 32]
             || !event_ids.insert(retained.event_id)
             || !source_ids.insert(retained.source_id)
         {
@@ -2503,30 +3179,268 @@ fn compact_journal_tombstones(
         .ok_or(ReputationRuntimeError::JournalResourceExhausted)?
         > tombstone_limit
     {
-        let completed_oldest = checkpoint
-            .completed
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, entry)| entry.committed.sequence)
-            .map(|(position, entry)| (position, entry.committed.sequence));
-        let observed_oldest = checkpoint
-            .observed
-            .first()
-            .map(|entry| entry.committed.sequence);
-        match (completed_oldest, observed_oldest) {
-            (Some((position, completed)), Some(observed)) if completed <= observed => {
-                checkpoint.completed.remove(position);
-            }
-            (Some(_), Some(_)) | (None, Some(_)) => {
-                checkpoint.observed.remove(0);
-            }
-            (Some((position, _)), None) => {
-                checkpoint.completed.remove(position);
-            }
-            (None, None) => break,
-        }
+        let evicted_height = evict_oldest_journal_tombstone(checkpoint)
+            .ok_or(ReputationRuntimeError::JournalResourceExhausted)?;
+        checkpoint.source_replay_finalized_height_floor = checkpoint
+            .source_replay_finalized_height_floor
+            .max(evicted_height);
     }
     Ok(())
+}
+
+fn evict_oldest_journal_tombstone(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+) -> Option<u64> {
+    let completed_oldest = checkpoint
+        .completed
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, entry)| entry.committed.sequence)
+        .map(|(position, entry)| (position, entry.committed.sequence));
+    let observed_oldest = checkpoint
+        .observed
+        .first()
+        .map(|entry| entry.committed.sequence);
+    match (completed_oldest, observed_oldest) {
+        (Some((position, completed)), Some(observed)) if completed <= observed => {
+            Some(checkpoint.completed.remove(position).committed.block_height)
+        }
+        (Some(_), Some(_)) | (None, Some(_)) => {
+            Some(checkpoint.observed.remove(0).committed.block_height)
+        }
+        (Some((position, _)), None) => {
+            Some(checkpoint.completed.remove(position).committed.block_height)
+        }
+        (None, None) => None,
+    }
+}
+
+fn stream_token_admission_eviction_plan(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+) -> Vec<ReputationJournalEventIdV1> {
+    let pinned_bindings = checkpoint
+        .stream_token_gateway_heads
+        .iter()
+        .map(|head| head.binding)
+        .collect::<BTreeSet<_>>();
+    let mut candidates = checkpoint
+        .stream_token_gateway_admissions
+        .iter()
+        .filter(|admission| !pinned_bindings.contains(&admission.binding))
+        .map(|admission| {
+            (
+                (
+                    admission.binding.gateway_sequence,
+                    admission.binding.gateway_id,
+                    admission.event_id,
+                ),
+                admission.event_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|(age, _)| *age);
+    candidates
+        .into_iter()
+        .map(|(_, event_id)| event_id)
+        .collect()
+}
+
+struct JournalCheckpointEvictionProbe {
+    checkpoint: ReputationJournalProducerCheckpointV1,
+    removed: Vec<StoredStreamTokenGatewayAdmissionV1>,
+    prefix: usize,
+}
+
+impl JournalCheckpointEvictionProbe {
+    fn new(checkpoint: &ReputationJournalProducerCheckpointV1, plan_len: usize) -> Self {
+        Self {
+            checkpoint: checkpoint.clone(),
+            removed: Vec::with_capacity(plan_len),
+            prefix: 0,
+        }
+    }
+
+    fn move_to_prefix(
+        &mut self,
+        plan: &[ReputationJournalEventIdV1],
+        target: usize,
+    ) -> Result<(), ReputationRuntimeError> {
+        if target > plan.len() {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        while self.prefix < target {
+            let event_id = plan[self.prefix];
+            let position = self
+                .checkpoint
+                .stream_token_gateway_admissions
+                .iter()
+                .position(|admission| admission.event_id == event_id)
+                .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+            self.removed.push(
+                self.checkpoint
+                    .stream_token_gateway_admissions
+                    .swap_remove(position),
+            );
+            self.prefix = self
+                .prefix
+                .checked_add(1)
+                .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        }
+        while self.prefix > target {
+            let admission = self
+                .removed
+                .pop()
+                .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+            self.checkpoint
+                .stream_token_gateway_admissions
+                .push(admission);
+            self.prefix -= 1;
+        }
+        self.checkpoint
+            .stream_token_gateway_admissions
+            .sort_by_key(|admission| {
+                (
+                    admission.binding.gateway_id,
+                    admission.binding.gateway_sequence,
+                )
+            });
+        Ok(())
+    }
+
+    fn encoded_frame_len(&self) -> Result<usize, ReputationRuntimeError> {
+        // This avoids materializing the final output Vec for a probe. Norito's
+        // field serializers may still use their normal staging allocations.
+        norito::core::encoded_frame_len(&self.checkpoint)
+            .map_err(|_| ReputationRuntimeError::CanonicalEncoding)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct JournalCheckpointEvictionSearch {
+    prefix: usize,
+    #[cfg(test)]
+    probes: usize,
+}
+
+fn checkpoint_frame_fits(encoded_len: usize, checkpoint_max_bytes: u64) -> bool {
+    u64::try_from(encoded_len).unwrap_or(u64::MAX) <= checkpoint_max_bytes
+}
+
+fn smallest_stream_token_admission_eviction_prefix(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    plan: &[ReputationJournalEventIdV1],
+    checkpoint_max_bytes: u64,
+    original_encoded_len: usize,
+) -> Result<JournalCheckpointEvictionSearch, ReputationRuntimeError> {
+    if checkpoint_frame_fits(original_encoded_len, checkpoint_max_bytes) {
+        return Ok(JournalCheckpointEvictionSearch {
+            prefix: 0,
+            #[cfg(test)]
+            probes: 0,
+        });
+    }
+    if plan.is_empty() {
+        return Err(ReputationRuntimeError::CheckpointTooLarge);
+    }
+
+    let mut probe = JournalCheckpointEvictionProbe::new(checkpoint, plan.len());
+    probe.move_to_prefix(plan, plan.len())?;
+    #[cfg(test)]
+    let mut probes = 1;
+    if !checkpoint_frame_fits(probe.encoded_frame_len()?, checkpoint_max_bytes) {
+        return Err(ReputationRuntimeError::CheckpointTooLarge);
+    }
+
+    // Prefix zero is already known to be too large and the full plan is known
+    // to fit. The encoded size is monotonic because the plan only removes
+    // complete admission rows, so a lower-bound search finds the unique
+    // smallest fitting prefix.
+    let mut lower = 1;
+    let mut upper = plan.len();
+    while lower < upper {
+        let middle = lower + (upper - lower) / 2;
+        probe.move_to_prefix(plan, middle)?;
+        #[cfg(test)]
+        probes += 1;
+        if checkpoint_frame_fits(probe.encoded_frame_len()?, checkpoint_max_bytes) {
+            upper = middle;
+        } else {
+            lower = middle
+                .checked_add(1)
+                .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        }
+    }
+    Ok(JournalCheckpointEvictionSearch {
+        prefix: lower,
+        #[cfg(test)]
+        probes,
+    })
+}
+
+fn apply_stream_token_admission_eviction_prefix(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+    plan: &[ReputationJournalEventIdV1],
+    prefix: usize,
+) -> Result<(), ReputationRuntimeError> {
+    let selected = plan
+        .get(..prefix)
+        .ok_or(ReputationRuntimeError::InvalidCheckpoint)?
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if selected.len() != prefix {
+        return Err(ReputationRuntimeError::InvalidCheckpoint);
+    }
+    let original_len = checkpoint.stream_token_gateway_admissions.len();
+    checkpoint
+        .stream_token_gateway_admissions
+        .retain(|admission| !selected.contains(&admission.event_id));
+    if original_len.checked_sub(checkpoint.stream_token_gateway_admissions.len()) != Some(prefix) {
+        return Err(ReputationRuntimeError::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+fn encode_bounded_journal_checkpoint(
+    mut candidate: ReputationJournalProducerCheckpointV1,
+    policy: &ReputationJournalProducerPolicyV1,
+    policy_digest: [u8; 32],
+    checkpoint_max_bytes: u64,
+) -> Result<(ReputationJournalProducerCheckpointV1, Vec<u8>), ReputationRuntimeError> {
+    validate_journal_checkpoint_structure(&candidate, policy, policy_digest)?;
+    let original_encoded_len = norito::core::encoded_frame_len(&candidate)
+        .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    let eviction_plan = stream_token_admission_eviction_plan(&candidate);
+    let search = smallest_stream_token_admission_eviction_prefix(
+        &candidate,
+        &eviction_plan,
+        checkpoint_max_bytes,
+        original_encoded_len,
+    )?;
+    if search.prefix > 0 {
+        apply_stream_token_admission_eviction_prefix(
+            &mut candidate,
+            &eviction_plan,
+            search.prefix,
+        )?;
+        validate_journal_checkpoint_structure(&candidate, policy, policy_digest)?;
+    }
+
+    let encoded_len = if search.prefix == 0 {
+        original_encoded_len
+    } else {
+        norito::core::encoded_frame_len(&candidate)
+            .map_err(|_| ReputationRuntimeError::CanonicalEncoding)?
+    };
+    if !checkpoint_frame_fits(encoded_len, checkpoint_max_bytes) {
+        return Err(ReputationRuntimeError::CheckpointTooLarge);
+    }
+    let encoded =
+        norito::to_bytes(&candidate).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    if encoded.len() != encoded_len || !checkpoint_frame_fits(encoded.len(), checkpoint_max_bytes) {
+        return Err(ReputationRuntimeError::CanonicalEncoding);
+    }
+    Ok((candidate, encoded))
 }
 
 fn validate_journal_scan_progress(
@@ -2570,10 +3484,429 @@ fn instruction_for_entry(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+struct ReputationJournalSourceMaterialV1 {
+    provider_id: ProviderId,
+    source_time_unix_ms: u64,
+    predecessor_event_id: Option<ReputationJournalEventIdV1>,
+    payload: ReputationJournalPayloadV1,
+}
+
+fn journal_source_material_digest(
+    provider_id: ProviderId,
+    source_time_unix_ms: u64,
+    predecessor_event_id: Option<ReputationJournalEventIdV1>,
+    payload: &ReputationJournalPayloadV1,
+) -> Result<[u8; 32], ReputationRuntimeError> {
+    hash_canonical(
+        b"sorafs-reputation-journal-source-material-v1",
+        &ReputationJournalSourceMaterialV1 {
+            provider_id,
+            source_time_unix_ms,
+            predecessor_event_id,
+            payload: payload.clone(),
+        },
+    )
+}
+
 fn journal_entry_digest(
     entry: &ReputationJournalEntryV1,
 ) -> Result<[u8; 32], ReputationRuntimeError> {
     hash_canonical(b"sorafs-reputation-journal-producer-entry-v1", entry)
+}
+
+fn stream_token_admission_digest(
+    provider_id: ProviderId,
+    outcome: &StreamTokenValidationOutcomeV1,
+) -> Result<[u8; 32], ReputationRuntimeError> {
+    // `validated_at_unix_ms` is intentionally excluded from allocator replay
+    // identity. A retry of the same nonce-bound request may be observed later,
+    // but must return the first durable event (whose original timestamp remains
+    // authoritative) rather than manufacture another gateway sequence.
+    let status_bytes =
+        norito::to_bytes(&outcome.status).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    let status_len =
+        u64::try_from(status_bytes.len()).map_err(|_| ReputationRuntimeError::CanonicalEncoding)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs.reputation.stream-token.admission.v1");
+    hasher.update(provider_id.as_bytes());
+    hasher.update(&outcome.binding.gateway_id);
+    hasher.update(&outcome.binding.gateway_sequence.to_le_bytes());
+    hasher.update(&outcome.binding.request_context_digest);
+    match outcome.token_body_digest {
+        Some(digest) => {
+            hasher.update(&[1]);
+            hasher.update(&digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    match outcome.token_key_version {
+        Some(version) => {
+            hasher.update(&[1]);
+            hasher.update(&version.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.update(&status_len.to_le_bytes());
+    hasher.update(&status_bytes);
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn inspect_stream_token_gateway_admission(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    entry: &ReputationJournalEntryV1,
+) -> Result<Option<ReputationJournalEventIdV1>, ReputationRuntimeError> {
+    let ReputationJournalPayloadV1::StreamTokenValidation(outcome) = &entry.payload else {
+        return Ok(None);
+    };
+    if !outcome.status.counts_for_provider() {
+        return Err(ReputationRuntimeError::InvalidJournalEntry);
+    }
+    if let Some(retained) = checkpoint
+        .stream_token_gateway_admissions
+        .iter()
+        .find(|retained| {
+            retained.binding.gateway_id == outcome.binding.gateway_id
+                && retained.binding.gateway_sequence == outcome.binding.gateway_sequence
+        })
+    {
+        let admission_digest = stream_token_admission_digest(entry.provider_id, outcome)?;
+        return if retained.binding == outcome.binding
+            && retained.admission_digest == admission_digest
+            && retained.event_id == entry.event_id
+            && retained.entry == *entry
+        {
+            Ok(Some(retained.event_id))
+        } else {
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        };
+    }
+    let Some(head) = checkpoint
+        .stream_token_gateway_heads
+        .iter()
+        .find(|head| head.binding.gateway_id == outcome.binding.gateway_id)
+    else {
+        return Ok(None);
+    };
+    if outcome.binding.gateway_sequence < head.binding.gateway_sequence {
+        return Err(ReputationRuntimeError::JournalSourceConflict);
+    }
+    if outcome.binding.gateway_sequence > head.binding.gateway_sequence {
+        return Ok(None);
+    }
+    let admission_digest = stream_token_admission_digest(entry.provider_id, outcome)?;
+    if head.binding != outcome.binding || head.admission_digest != admission_digest {
+        return Err(ReputationRuntimeError::JournalSourceConflict);
+    }
+    if head.event_id != entry.event_id {
+        return Err(ReputationRuntimeError::JournalSourceConflict);
+    }
+    Ok(Some(head.event_id))
+}
+
+fn retain_stream_token_gateway_admission(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+    entry: &ReputationJournalEntryV1,
+) -> Result<(), ReputationRuntimeError> {
+    let ReputationJournalPayloadV1::StreamTokenValidation(outcome) = &entry.payload else {
+        return Ok(());
+    };
+    if !outcome.status.counts_for_provider() {
+        return Err(ReputationRuntimeError::InvalidJournalEntry);
+    }
+    let admission_digest = stream_token_admission_digest(entry.provider_id, outcome)?;
+    let retained = StoredStreamTokenGatewayHeadV1 {
+        binding: outcome.binding,
+        admission_digest,
+        event_id: entry.event_id,
+    };
+    match checkpoint
+        .stream_token_gateway_heads
+        .iter_mut()
+        .find(|head| head.binding.gateway_id == outcome.binding.gateway_id)
+    {
+        Some(head) => {
+            if outcome.binding.gateway_sequence <= head.binding.gateway_sequence {
+                return Err(ReputationRuntimeError::JournalSourceConflict);
+            }
+            *head = retained;
+        }
+        None => {
+            if checkpoint.stream_token_gateway_heads.len()
+                >= REPUTATION_STREAM_TOKEN_GATEWAY_HEADS_MAX_V1
+            {
+                return Err(ReputationRuntimeError::JournalResourceExhausted);
+            }
+            checkpoint.stream_token_gateway_heads.push(retained);
+        }
+    }
+    checkpoint
+        .stream_token_gateway_heads
+        .sort_by_key(|head| head.binding.gateway_id);
+    retain_stream_token_gateway_admission_suffix(
+        checkpoint,
+        StoredStreamTokenGatewayAdmissionV1 {
+            binding: outcome.binding,
+            admission_digest,
+            event_id: entry.event_id,
+            entry: entry.clone(),
+        },
+        REPUTATION_STREAM_TOKEN_GATEWAY_ADMISSIONS_MAX_V1,
+    )
+}
+
+fn reconcile_finalized_stream_token_gateway_admission(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+    entry: &ReputationJournalEntryV1,
+) -> Result<(), ReputationRuntimeError> {
+    let ReputationJournalPayloadV1::StreamTokenValidation(outcome) = &entry.payload else {
+        return Ok(());
+    };
+    if !outcome.status.counts_for_provider() {
+        // Chain-authoritative excluded outcomes remain in the generic
+        // committed/observed reconciliation state, but they can never create
+        // local replay admissions or advance a gateway allocator head.
+        return Ok(());
+    }
+    let admission_digest = stream_token_admission_digest(entry.provider_id, outcome)?;
+    let retained = StoredStreamTokenGatewayHeadV1 {
+        binding: outcome.binding,
+        admission_digest,
+        event_id: entry.event_id,
+    };
+    match checkpoint
+        .stream_token_gateway_heads
+        .iter_mut()
+        .find(|head| head.binding.gateway_id == outcome.binding.gateway_id)
+    {
+        Some(head) if outcome.binding.gateway_sequence < head.binding.gateway_sequence => {
+            // A finalized scan may legitimately observe an older locally
+            // pending sequence after a newer sequence was admitted. The typed
+            // finalized page plus the event/source checks below authenticate
+            // the row, while the durable local high-water mark never moves backwards.
+        }
+        Some(head) if outcome.binding.gateway_sequence == head.binding.gateway_sequence => {
+            if *head != retained {
+                return Err(ReputationRuntimeError::JournalSourceConflict);
+            }
+        }
+        Some(head) => *head = retained,
+        None => {
+            if checkpoint.stream_token_gateway_heads.len()
+                >= REPUTATION_STREAM_TOKEN_GATEWAY_HEADS_MAX_V1
+            {
+                return Err(ReputationRuntimeError::JournalResourceExhausted);
+            }
+            checkpoint.stream_token_gateway_heads.push(retained);
+            checkpoint
+                .stream_token_gateway_heads
+                .sort_by_key(|head| head.binding.gateway_id);
+        }
+    }
+    retain_stream_token_gateway_admission_suffix(
+        checkpoint,
+        StoredStreamTokenGatewayAdmissionV1 {
+            binding: outcome.binding,
+            admission_digest,
+            event_id: entry.event_id,
+            entry: entry.clone(),
+        },
+        REPUTATION_STREAM_TOKEN_GATEWAY_ADMISSIONS_MAX_V1,
+    )
+}
+
+fn retain_stream_token_gateway_admission_suffix(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+    retained: StoredStreamTokenGatewayAdmissionV1,
+    max_retained: usize,
+) -> Result<(), ReputationRuntimeError> {
+    if let Some(existing) = checkpoint
+        .stream_token_gateway_admissions
+        .iter()
+        .find(|existing| {
+            existing.binding.gateway_id == retained.binding.gateway_id
+                && existing.binding.gateway_sequence == retained.binding.gateway_sequence
+        })
+    {
+        return if *existing == retained {
+            Ok(())
+        } else {
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        };
+    }
+    checkpoint.stream_token_gateway_admissions.push(retained);
+    while checkpoint.stream_token_gateway_admissions.len() > max_retained {
+        if !evict_oldest_non_head_stream_token_admission(checkpoint) {
+            return Err(ReputationRuntimeError::JournalResourceExhausted);
+        }
+    }
+    checkpoint
+        .stream_token_gateway_admissions
+        .sort_by_key(|admission| {
+            (
+                admission.binding.gateway_id,
+                admission.binding.gateway_sequence,
+            )
+        });
+    Ok(())
+}
+
+fn evict_oldest_non_head_stream_token_admission(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+) -> bool {
+    let Some(position) = checkpoint
+        .stream_token_gateway_admissions
+        .iter()
+        .enumerate()
+        .filter_map(|(position, admission)| {
+            let head = checkpoint
+                .stream_token_gateway_heads
+                .iter()
+                .find(|head| head.binding.gateway_id == admission.binding.gateway_id)?;
+            (head.binding != admission.binding).then_some((
+                position,
+                (
+                    admission.binding.gateway_sequence,
+                    admission.binding.gateway_id,
+                    admission.event_id,
+                ),
+            ))
+        })
+        .min_by_key(|(_, age)| *age)
+        .map(|(position, _)| position)
+    else {
+        return false;
+    };
+    checkpoint.stream_token_gateway_admissions.remove(position);
+    true
+}
+
+fn apply_authority_policy_record(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+    record: ReputationJournalAuthorityPolicyRecordV1,
+    finalized_at_unix_ms: u64,
+) -> Result<ReputationJournalPolicySyncOutcomeV1, ReputationRuntimeError> {
+    record
+        .validate()
+        .map_err(|_| ReputationRuntimeError::InvalidAuthorityPolicy)?;
+    if record.activated_at_unix_ms > finalized_at_unix_ms {
+        return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
+    }
+    let active = checkpoint
+        .authority_policies
+        .last()
+        .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+    let active_digest = active
+        .canonical_digest()
+        .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+    if record.policy_digest == active_digest {
+        if record.policy != *active {
+            return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
+        }
+        return match &checkpoint.active_authority_policy_record {
+            Some(existing) if existing == &record => {
+                Ok(ReputationJournalPolicySyncOutcomeV1::ExactReplay)
+            }
+            Some(_) => Err(ReputationRuntimeError::AuthorityPolicyRecordConflict),
+            None => {
+                if checkpoint.pending.iter().any(|delivery| {
+                    delivery.entry.source_time_unix_ms < record.activated_at_unix_ms
+                }) {
+                    return Err(ReputationRuntimeError::InvalidAuthorityPolicy);
+                }
+                checkpoint.authority_policy_records.push(record.clone());
+                checkpoint.active_authority_policy_record = Some(record);
+                Ok(ReputationJournalPolicySyncOutcomeV1::Initialized)
+            }
+        };
+    }
+    let expected_revision = active
+        .revision
+        .checked_add(1)
+        .ok_or(ReputationRuntimeError::AuthorityPolicyLineage)?;
+    if record.policy.revision != expected_revision
+        || record.policy.predecessor_policy_digest != Some(active_digest)
+        || checkpoint.authority_policies.len()
+            >= REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1
+        || checkpoint
+            .active_authority_policy_record
+            .as_ref()
+            .is_none_or(|active_record| {
+                active_record.policy_digest != active_digest
+                    || active_record.activated_at_unix_ms > record.activated_at_unix_ms
+            })
+    {
+        return Err(ReputationRuntimeError::AuthorityPolicyLineage);
+    }
+
+    checkpoint.authority_policies.push(record.policy.clone());
+    checkpoint.authority_policy_records.push(record.clone());
+    checkpoint.active_authority_policy_record = Some(record.clone());
+    let mut rebound_ready = 0_u32;
+    let (pending, stream_token_gateway_heads, stream_token_gateway_admissions) = (
+        &mut checkpoint.pending,
+        &mut checkpoint.stream_token_gateway_heads,
+        &mut checkpoint.stream_token_gateway_admissions,
+    );
+    for delivery in pending {
+        if delivery.state != ReputationJournalDeliveryStateV1::Ready
+            || delivery.entry.source_time_unix_ms < record.activated_at_unix_ms
+        {
+            continue;
+        }
+        let rebound = ReputationJournalEntryV1::try_new(
+            delivery.entry.provider_id,
+            record.policy_digest,
+            record
+                .policy
+                .recorder_authority(delivery.entry.source_kind())
+                .clone(),
+            delivery.entry.source_time_unix_ms,
+            delivery.entry.predecessor_event_id,
+            delivery.entry.payload.clone(),
+        )
+        .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)?;
+        delivery.entry_digest = journal_entry_digest(&rebound)?;
+        if let ReputationJournalPayloadV1::StreamTokenValidation(outcome) = &rebound.payload {
+            let admission_digest = stream_token_admission_digest(rebound.provider_id, outcome)?;
+            let head = stream_token_gateway_heads
+                .iter_mut()
+                .find(|head| head.binding.gateway_id == outcome.binding.gateway_id)
+                .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+            if outcome.binding.gateway_sequence > head.binding.gateway_sequence {
+                return Err(ReputationRuntimeError::InvalidCheckpoint);
+            }
+            if outcome.binding.gateway_sequence == head.binding.gateway_sequence {
+                if head.binding != outcome.binding || head.admission_digest != admission_digest {
+                    return Err(ReputationRuntimeError::InvalidCheckpoint);
+                }
+                head.event_id = rebound.event_id;
+            }
+            if let Some(admission) = stream_token_gateway_admissions
+                .iter_mut()
+                .find(|admission| admission.binding == outcome.binding)
+            {
+                if admission.admission_digest != admission_digest
+                    || admission.event_id != delivery.entry.event_id
+                    || admission.entry != delivery.entry
+                {
+                    return Err(ReputationRuntimeError::InvalidCheckpoint);
+                }
+                admission.event_id = rebound.event_id;
+                admission.entry = rebound.clone();
+            }
+        }
+        delivery.entry = rebound;
+        rebound_ready = rebound_ready
+            .checked_add(1)
+            .ok_or(ReputationRuntimeError::JournalResourceExhausted)?;
+    }
+    ensure_retained_journal_identities_unique(checkpoint)?;
+    Ok(ReputationJournalPolicySyncOutcomeV1::Rotated { rebound_ready })
 }
 
 fn decode_journal_checkpoint(
@@ -2587,7 +3920,81 @@ fn decode_journal_checkpoint(
     Ok(checkpoint)
 }
 
+fn decode_journal_checkpoint_for_policy_recovery(
+    bytes: &[u8],
+    policy: &ReputationJournalProducerPolicyV1,
+    policy_digest: [u8; 32],
+) -> Result<ReputationJournalProducerCheckpointV1, ReputationRuntimeError> {
+    let checkpoint: ReputationJournalProducerCheckpointV1 =
+        decode_runtime_checkpoint(bytes, policy.checkpoint_max_bytes)?;
+    validate_journal_checkpoint_structure(&checkpoint, policy, policy_digest)?;
+    Ok(checkpoint)
+}
+
+fn journal_authority_policy_at(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    source_time_unix_ms: u64,
+) -> Result<&ReputationJournalAuthorityPolicyV1, ReputationRuntimeError> {
+    if checkpoint.authority_policy_records.is_empty() {
+        return Err(ReputationRuntimeError::AuthorityPolicyLineage);
+    }
+    if checkpoint.authority_policy_records.len() != checkpoint.authority_policies.len() {
+        return Err(ReputationRuntimeError::InvalidCheckpoint);
+    }
+    checkpoint
+        .authority_policy_records
+        .iter()
+        .zip(&checkpoint.authority_policies)
+        .rev()
+        .find_map(|(record, policy)| {
+            (source_time_unix_ms >= record.activated_at_unix_ms).then_some((record, policy))
+        })
+        .ok_or(ReputationRuntimeError::InvalidAuthorityPolicy)
+        .and_then(|(record, policy)| {
+            if record.policy == *policy {
+                Ok(policy)
+            } else {
+                Err(ReputationRuntimeError::InvalidCheckpoint)
+            }
+        })
+}
+
+fn journal_entry_for_payload(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    provider_id: ProviderId,
+    source_time_unix_ms: u64,
+    payload: ReputationJournalPayloadV1,
+) -> Result<ReputationJournalEntryV1, ReputationRuntimeError> {
+    let source_policy = journal_authority_policy_at(checkpoint, source_time_unix_ms)?;
+    let source_policy_digest = source_policy
+        .canonical_digest()
+        .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+    ReputationJournalEntryV1::try_new(
+        provider_id,
+        source_policy_digest,
+        source_policy
+            .recorder_authority(payload.source_kind())
+            .clone(),
+        source_time_unix_ms,
+        None,
+        payload,
+    )
+    .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)
+}
+
 fn validate_journal_checkpoint(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    policy: &ReputationJournalProducerPolicyV1,
+    policy_digest: [u8; 32],
+) -> Result<(), ReputationRuntimeError> {
+    validate_journal_checkpoint_structure(checkpoint, policy, policy_digest)?;
+    if checkpoint.authority_policies.last() != Some(&policy.authority_policy) {
+        return Err(ReputationRuntimeError::InvalidCheckpoint);
+    }
+    Ok(())
+}
+
+fn validate_journal_checkpoint_structure(
     checkpoint: &ReputationJournalProducerCheckpointV1,
     policy: &ReputationJournalProducerPolicyV1,
     policy_digest: [u8; 32],
@@ -2597,6 +4004,8 @@ fn validate_journal_checkpoint(
         || checkpoint.policy_digest != policy_digest
         || checkpoint.authority_policies.is_empty()
         || checkpoint.authority_policies.len() > REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1
+        || checkpoint.authority_policy_records.len()
+            > REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1
         || checkpoint.next_sequence == 0
         || checkpoint.last_assigned_sequence.checked_add(1) != Some(checkpoint.next_sequence)
         || checkpoint.pending.len()
@@ -2612,23 +4021,43 @@ fn validate_journal_checkpoint(
         || checkpoint.dead_letters.len()
             > usize::try_from(policy.max_dead_letters)
                 .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?
+        || checkpoint.stream_token_gateway_heads.len()
+            > REPUTATION_STREAM_TOKEN_GATEWAY_HEADS_MAX_V1
+        || checkpoint.stream_token_gateway_admissions.len()
+            > REPUTATION_STREAM_TOKEN_GATEWAY_ADMISSIONS_MAX_V1
     {
         return Err(ReputationRuntimeError::InvalidCheckpoint);
     }
+    // Count ceilings remain independent logical resource bounds. Byte
+    // compaction may prune only non-head stream-token admission cache rows.
+    // Generic completed/observed identities remain exact-replay authorities
+    // unless count compaction applies; irreducible byte pressure fails closed.
+    let mut policy_positions_by_digest = BTreeMap::new();
+    let mut policy_positions_by_revision = BTreeMap::new();
     let mut previous_policy: Option<(&ReputationJournalAuthorityPolicyV1, [u8; 32])> = None;
-    for authority_policy in &checkpoint.authority_policies {
+    for (position, authority_policy) in checkpoint.authority_policies.iter().enumerate() {
         authority_policy
             .validate()
             .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
         let digest = authority_policy
             .canonical_digest()
             .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
-        if let Some((previous, previous_digest)) = previous_policy {
-            if authority_policy.revision != previous.revision.saturating_add(1)
-                || authority_policy.predecessor_policy_digest != Some(previous_digest)
-            {
-                return Err(ReputationRuntimeError::InvalidCheckpoint);
-            }
+        if policy_positions_by_digest
+            .insert(digest, position)
+            .is_some()
+            || policy_positions_by_revision
+                .insert(authority_policy.revision, position)
+                .is_some()
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        match previous_policy {
+            None if authority_policy.revision == 1
+                && authority_policy.predecessor_policy_digest.is_none() => {}
+            Some((previous, previous_digest))
+                if previous.revision.checked_add(1) == Some(authority_policy.revision)
+                    && authority_policy.predecessor_policy_digest == Some(previous_digest) => {}
+            _ => return Err(ReputationRuntimeError::InvalidCheckpoint),
         }
         previous_policy = Some((authority_policy, digest));
     }
@@ -2636,17 +4065,45 @@ fn validate_journal_checkpoint(
         .authority_policies
         .last()
         .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
-    if let Some(record) = &checkpoint.active_authority_policy_record {
-        record
-            .validate()
-            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
-        if record.policy != *active_policy {
+    if checkpoint.authority_policy_records.is_empty() {
+        if checkpoint.active_authority_policy_record.is_some()
+            || checkpoint.authority_policies.len() != 1
+        {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
-    } else if checkpoint.authority_policies.len() != 1
-        || checkpoint.authority_policies.first() != Some(&policy.authority_policy)
-    {
-        return Err(ReputationRuntimeError::InvalidCheckpoint);
+    } else {
+        if checkpoint.authority_policy_records.len() != checkpoint.authority_policies.len()
+            || checkpoint.active_authority_policy_record
+                != checkpoint.authority_policy_records.last().cloned()
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        let mut previous_activation = 0_u64;
+        for (position, (record, authority_policy)) in checkpoint
+            .authority_policy_records
+            .iter()
+            .zip(&checkpoint.authority_policies)
+            .enumerate()
+        {
+            record
+                .validate()
+                .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+            if record.policy != *authority_policy
+                || record.activated_at_unix_ms < previous_activation
+                || policy_positions_by_revision.get(&record.policy.revision) != Some(&position)
+                || policy_positions_by_digest.get(&record.policy_digest) != Some(&position)
+            {
+                return Err(ReputationRuntimeError::InvalidCheckpoint);
+            }
+            previous_activation = record.activated_at_unix_ms;
+        }
+        if checkpoint
+            .active_authority_policy_record
+            .as_ref()
+            .is_none_or(|record| record.policy != *active_policy)
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
     }
     if checkpoint
         .observed_journal_after
@@ -2665,24 +4122,216 @@ fn validate_journal_checkpoint(
     {
         return Err(ReputationRuntimeError::InvalidCheckpoint);
     }
+    let mut retained_by_event = BTreeMap::new();
+    let mut retained_by_source = BTreeMap::new();
+    for retained in retained_journal_identities(checkpoint) {
+        if retained.event_id == ReputationJournalEventIdV1::ZERO
+            || retained.source_id == ReputationJournalSourceIdV1::ZERO
+            || retained.entry_digest == [0; 32]
+            || retained.source_material_digest == [0; 32]
+            || retained_by_event
+                .insert(retained.event_id, retained)
+                .is_some()
+            || retained_by_source
+                .insert(retained.source_id, retained)
+                .is_some()
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+    }
+    let mut pending_by_event = BTreeMap::new();
+    for delivery in &checkpoint.pending {
+        if pending_by_event
+            .insert(delivery.entry.event_id, delivery)
+            .is_some()
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+    }
     let mut sequences = BTreeSet::new();
-    let mut event_ids = BTreeSet::new();
-    let mut source_ids = BTreeSet::new();
     let mut committed_sequences = BTreeSet::new();
     let mut max_sequence = 0_u64;
+    let mut previous_gateway_id = None;
+    let mut gateway_heads_by_id = BTreeMap::new();
+    for head in &checkpoint.stream_token_gateway_heads {
+        if head.binding.gateway_id == [0; 32]
+            || head.binding.gateway_sequence == 0
+            || head.binding.request_context_digest == [0; 32]
+            || head.binding.validation_id() == [0; 32]
+            || head.admission_digest == [0; 32]
+            || head.event_id == ReputationJournalEventIdV1::ZERO
+            || previous_gateway_id.is_some_and(|previous| previous >= head.binding.gateway_id)
+            || gateway_heads_by_id
+                .insert(head.binding.gateway_id, head)
+                .is_some()
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        previous_gateway_id = Some(head.binding.gateway_id);
+    }
+    let mut admissions_by_sequence = BTreeMap::new();
+    let mut admissions_by_binding = BTreeMap::new();
+    let mut admissions_by_event = BTreeMap::new();
+    let mut previous_admission_binding = None;
+    for admission in &checkpoint.stream_token_gateway_admissions {
+        let ReputationJournalPayloadV1::StreamTokenValidation(outcome) = &admission.entry.payload
+        else {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        };
+        let head = gateway_heads_by_id
+            .get(&admission.binding.gateway_id)
+            .copied()
+            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        let entry_policy_position = policy_positions_by_digest
+            .get(&admission.entry.authority_policy_digest)
+            .copied()
+            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        admission
+            .entry
+            .validate_against_policy(&checkpoint.authority_policies[entry_policy_position])
+            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+        if let Some(record) = checkpoint
+            .authority_policy_records
+            .get(entry_policy_position)
+            && (admission.entry.source_time_unix_ms < record.activated_at_unix_ms
+                || checkpoint
+                    .authority_policy_records
+                    .get(entry_policy_position.saturating_add(1))
+                    .is_some_and(|successor| {
+                        admission.entry.source_time_unix_ms >= successor.activated_at_unix_ms
+                    }))
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        let entry_digest = journal_entry_digest(&admission.entry)?;
+        let source_material_digest = journal_source_material_digest(
+            admission.entry.provider_id,
+            admission.entry.source_time_unix_ms,
+            admission.entry.predecessor_event_id,
+            &admission.entry.payload,
+        )?;
+        if admission.binding.gateway_id == [0; 32]
+            || admission.binding.gateway_sequence == 0
+            || admission.binding.request_context_digest == [0; 32]
+            || admission.admission_digest == [0; 32]
+            || admission.event_id == ReputationJournalEventIdV1::ZERO
+            || admission.entry.event_id != admission.event_id
+            || admission.entry.source_kind() != ReputationJournalSourceKindV1::StreamToken
+            || admission.binding != outcome.binding
+            || !outcome.status.counts_for_provider()
+            || stream_token_admission_digest(admission.entry.provider_id, outcome)?
+                != admission.admission_digest
+            || admission.binding.gateway_sequence > head.binding.gateway_sequence
+            || previous_admission_binding.is_some_and(|previous| {
+                previous
+                    >= (
+                        admission.binding.gateway_id,
+                        admission.binding.gateway_sequence,
+                    )
+            })
+            || admissions_by_sequence
+                .insert(
+                    (
+                        admission.binding.gateway_id,
+                        admission.binding.gateway_sequence,
+                    ),
+                    admission,
+                )
+                .is_some()
+            || admissions_by_binding
+                .insert(admission.binding, admission)
+                .is_some()
+            || admissions_by_event
+                .insert(admission.event_id, admission)
+                .is_some()
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+        let retained_event = retained_by_event.get(&admission.event_id).copied();
+        let retained_source = retained_by_source.get(&admission.entry.source_id).copied();
+        match (retained_event, retained_source) {
+            (None, None) => {}
+            (Some(by_event), Some(by_source))
+                if by_event == by_source
+                    && by_event.entry_digest == entry_digest
+                    && by_event.source_material_digest == source_material_digest =>
+            {
+                if pending_by_event
+                    .get(&admission.event_id)
+                    .is_some_and(|delivery| delivery.entry != admission.entry)
+                {
+                    return Err(ReputationRuntimeError::InvalidCheckpoint);
+                }
+            }
+            _ => return Err(ReputationRuntimeError::InvalidCheckpoint),
+        }
+        previous_admission_binding = Some((
+            admission.binding.gateway_id,
+            admission.binding.gateway_sequence,
+        ));
+    }
+    for head in &checkpoint.stream_token_gateway_heads {
+        let admission = admissions_by_binding
+            .get(&head.binding)
+            .copied()
+            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        if admission.admission_digest != head.admission_digest
+            || admission.event_id != head.event_id
+            || admissions_by_event.get(&head.event_id).copied() != Some(admission)
+        {
+            return Err(ReputationRuntimeError::InvalidCheckpoint);
+        }
+    }
     let mut previous_pending = 0_u64;
     for entry in &checkpoint.pending {
-        let entry_policy = checkpoint
-            .authority_policies
-            .iter()
-            .find(|candidate| {
-                candidate.canonical_digest().ok() == Some(entry.entry.authority_policy_digest)
-            })
+        let entry_policy_position = policy_positions_by_digest
+            .get(&entry.entry.authority_policy_digest)
+            .copied()
             .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        let entry_policy = &checkpoint.authority_policies[entry_policy_position];
         entry
             .entry
             .validate_against_policy(entry_policy)
             .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+        if let Some(record) = checkpoint
+            .authority_policy_records
+            .get(entry_policy_position)
+        {
+            if entry.entry.source_time_unix_ms < record.activated_at_unix_ms
+                || checkpoint
+                    .authority_policy_records
+                    .get(entry_policy_position.saturating_add(1))
+                    .is_some_and(|successor| {
+                        entry.entry.source_time_unix_ms >= successor.activated_at_unix_ms
+                    })
+            {
+                return Err(ReputationRuntimeError::InvalidCheckpoint);
+            }
+        }
+        if let ReputationJournalPayloadV1::StreamTokenValidation(outcome) = &entry.entry.payload {
+            let head = gateway_heads_by_id
+                .get(&outcome.binding.gateway_id)
+                .copied()
+                .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+            let admission_digest = stream_token_admission_digest(entry.entry.provider_id, outcome)?;
+            if outcome.binding.gateway_sequence > head.binding.gateway_sequence {
+                return Err(ReputationRuntimeError::InvalidCheckpoint);
+            }
+            if outcome.binding.gateway_sequence == head.binding.gateway_sequence
+                && (head.binding != outcome.binding
+                    || head.admission_digest != admission_digest
+                    || head.event_id != entry.entry.event_id)
+            {
+                return Err(ReputationRuntimeError::InvalidCheckpoint);
+            }
+            if let Some(admission) = admissions_by_binding.get(&outcome.binding).copied()
+                && (admission.admission_digest != admission_digest
+                    || admission.event_id != entry.entry.event_id
+                    || admission.entry != entry.entry)
+            {
+                return Err(ReputationRuntimeError::InvalidCheckpoint);
+            }
+        }
         if !matches!(
             entry.entry.source_kind(),
             ReputationJournalSourceKindV1::Por | ReputationJournalSourceKindV1::StreamToken
@@ -2690,6 +4339,13 @@ fn validate_journal_checkpoint(
             || entry.sequence <= previous_pending
             || entry.entry_digest == [0; 32]
             || journal_entry_digest(&entry.entry)? != entry.entry_digest
+            || entry.source_material_digest == [0; 32]
+            || journal_source_material_digest(
+                entry.entry.provider_id,
+                entry.entry.source_time_unix_ms,
+                entry.entry.predecessor_event_id,
+                &entry.entry.payload,
+            )? != entry.source_material_digest
             || entry.attempts > policy.max_attempts
             || entry.failure_receipts.len()
                 > usize::try_from(entry.attempts)
@@ -2707,10 +4363,7 @@ fn validate_journal_checkpoint(
         }
         previous_pending = entry.sequence;
         max_sequence = max_sequence.max(entry.sequence);
-        if !sequences.insert(entry.sequence)
-            || !event_ids.insert(entry.entry.event_id)
-            || !source_ids.insert(entry.entry.source_id)
-        {
+        if !sequences.insert(entry.sequence) {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
     }
@@ -2721,11 +4374,10 @@ fn validate_journal_checkpoint(
             || entry.event_id == ReputationJournalEventIdV1::ZERO
             || entry.source_id == ReputationJournalSourceIdV1::ZERO
             || entry.entry_digest == [0; 32]
+            || entry.source_material_digest == [0; 32]
             || entry.committed.validate().is_err()
             || !committed_sequences.insert(entry.committed.sequence)
             || !sequences.insert(entry.sequence)
-            || !event_ids.insert(entry.event_id)
-            || !source_ids.insert(entry.source_id)
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
@@ -2737,11 +4389,10 @@ fn validate_journal_checkpoint(
         if entry.event_id == ReputationJournalEventIdV1::ZERO
             || entry.source_id == ReputationJournalSourceIdV1::ZERO
             || entry.entry_digest == [0; 32]
+            || entry.source_material_digest == [0; 32]
             || entry.committed.validate().is_err()
             || entry.committed.sequence <= previous_observed_sequence
             || !committed_sequences.insert(entry.committed.sequence)
-            || !event_ids.insert(entry.event_id)
-            || !source_ids.insert(entry.source_id)
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
@@ -2754,14 +4405,13 @@ fn validate_journal_checkpoint(
             || entry.event_id == ReputationJournalEventIdV1::ZERO
             || entry.source_id == ReputationJournalSourceIdV1::ZERO
             || entry.entry_digest == [0; 32]
+            || entry.source_material_digest == [0; 32]
             || entry.attempts != policy.max_attempts
             || entry.failure_receipts.len()
                 > usize::try_from(entry.attempts)
                     .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?
             || !valid_failure_receipts(&entry.failure_receipts)
             || !sequences.insert(entry.sequence)
-            || !event_ids.insert(entry.event_id)
-            || !source_ids.insert(entry.source_id)
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
@@ -2787,7 +4437,9 @@ pub struct ReputationJournalDeliveryPolicyV1 {
     version: u8,
     chain_id: ChainId,
     finalized_query_handle: String,
+    finalized_query_qualification: ReputationRuntimeProviderQualificationV1,
     transaction_submitter_handle: String,
+    transaction_submitter_qualification: ReputationRuntimeProviderQualificationV1,
     page_items: u32,
     max_pages_per_tick: u32,
     max_submissions_per_tick: u32,
@@ -2802,17 +4454,28 @@ impl ReputationJournalDeliveryPolicyV1 {
     pub fn strict_v1(
         chain_id: ChainId,
         finalized_query_handle: impl Into<String>,
+        finalized_query_qualification: ReputationRuntimeProviderQualificationV1,
         transaction_submitter_handle: impl Into<String>,
     ) -> Result<Self, ReputationRuntimeError> {
         let page_items = u32::try_from(REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1)
             .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
+        let finalized_query_handle = validate_runtime_handle(finalized_query_handle.into())?;
+        let transaction_submitter_handle =
+            validate_runtime_handle(transaction_submitter_handle.into())?;
+        let transaction_submitter_qualification = ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            reputation_journal_submitter_policy_digest_v1(
+                &chain_id,
+                &transaction_submitter_handle,
+            )?,
+        );
         let policy = Self {
             version: REPUTATION_JOURNAL_DELIVERY_POLICY_VERSION_V1,
             chain_id,
-            finalized_query_handle: validate_runtime_handle(finalized_query_handle.into())?,
-            transaction_submitter_handle: validate_runtime_handle(
-                transaction_submitter_handle.into(),
-            )?,
+            finalized_query_handle,
+            finalized_query_qualification,
+            transaction_submitter_handle,
+            transaction_submitter_qualification,
             page_items,
             max_pages_per_tick: REPUTATION_JOURNAL_DELIVERY_MAX_PAGES_PER_TICK_V1,
             max_submissions_per_tick: REPUTATION_JOURNAL_DELIVERY_MAX_SUBMISSIONS_PER_TICK_V1,
@@ -2833,6 +4496,17 @@ impl ReputationJournalDeliveryPolicyV1 {
             || self.max_submissions_per_tick == 0
             || self.max_submissions_per_tick
                 > REPUTATION_JOURNAL_DELIVERY_MAX_SUBMISSIONS_PER_TICK_V1
+            || self.finalized_query_qualification.revision()
+                != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+            || !self.finalized_query_qualification.is_valid()
+            || self.transaction_submitter_qualification.revision()
+                != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+            || !self.transaction_submitter_qualification.is_valid()
+            || self.transaction_submitter_qualification.policy_digest()
+                != reputation_journal_submitter_policy_digest_v1(
+                    &self.chain_id,
+                    &self.transaction_submitter_handle,
+                )?
         {
             return Err(ReputationRuntimeError::InvalidRuntimePolicy);
         }
@@ -2840,6 +4514,78 @@ impl ReputationJournalDeliveryPolicyV1 {
         validate_runtime_handle(self.transaction_submitter_handle.clone())?;
         Ok(())
     }
+
+    /// Qualify or revalidate the exact finalized-query provider.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a provider whose handle, revision, or public policy does not
+    /// match the independently constructed delivery policy.
+    pub fn revalidate_query_provider(
+        &self,
+        query: &dyn ReputationFinalizedQueryV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.finalized_query_handle,
+            self.finalized_query_qualification,
+            query,
+        )
+    }
+
+    /// Qualify or revalidate the exact native transaction submitter.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a provider whose handle, revision, or public policy does not
+    /// match the independently constructed delivery policy.
+    pub fn revalidate_submitter_provider(
+        &self,
+        submitter: &dyn ReputationJournalTransactionSubmitterV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.transaction_submitter_handle,
+            self.transaction_submitter_qualification,
+            submitter,
+        )
+    }
+}
+
+/// Derive the public V1 policy digest for a chain-bound journal submitter.
+///
+/// The handle remains an independently configured identity; including its
+/// digest here prevents the same qualification from authorizing a substituted
+/// submitter role.
+///
+/// # Errors
+///
+/// Rejects an invalid chain or malformed/test-marked runtime handle, or a
+/// canonical digest failure.
+pub fn reputation_journal_submitter_policy_digest_v1(
+    chain_id: &ChainId,
+    handle: &str,
+) -> Result<[u8; 32], ReputationRuntimeError> {
+    if chain_id.as_str().is_empty()
+        || chain_id.as_str().len() > super::REPUTATION_INGEST_MAX_CHAIN_ID_BYTES_V1
+    {
+        return Err(ReputationRuntimeError::InvalidRuntimePolicy);
+    }
+    let handle = validate_runtime_handle(handle.to_owned())?;
+    hash_canonical(
+        b"sorafs-reputation-journal-submitter-policy-v1",
+        &ReputationJournalSubmitterPolicyDigestMaterialV1 {
+            chain_id: chain_id.clone(),
+            handle_digest: domain_digest(
+                b"sorafs-reputation-runtime-handle-v1",
+                handle.as_bytes(),
+            )?,
+        },
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
+struct ReputationJournalSubmitterPolicyDigestMaterialV1 {
+    chain_id: ChainId,
+    handle_digest: [u8; 32],
 }
 
 /// Exact canonical append request sent to an injected transaction submitter.
@@ -2959,13 +4705,7 @@ impl ReputationJournalTransactionSubmitOutcomeV1 {
 /// reject any request whose `authority` is not the exact account derived from
 /// the selected signing key. A queued receipt is only a handoff
 /// acknowledgement; this interface has no method that can report finality.
-pub trait ReputationJournalTransactionSubmitterV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the submitter lifetime.
-    fn handle(&self) -> &str;
-
-    /// Verify authenticated signer and transaction-queue readiness.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationJournalTransactionSubmitterV1: ReputationRuntimeProviderV1 {
     /// Return whether one exact governed authority has a runtime-only signer.
     fn supports_authority(&self, authority: &AccountId) -> bool;
 
@@ -3071,12 +4811,19 @@ impl ReputationJournalDeliveryWorkerV1 {
         submitter: Arc<dyn ReputationJournalTransactionSubmitterV1>,
     ) -> Result<Self, ReputationRuntimeError> {
         policy.validate()?;
-        if outbox.policy.chain_id != policy.chain_id
-            || query.handle() != policy.finalized_query_handle
-            || submitter.handle() != policy.transaction_submitter_handle
-        {
+        if outbox.policy.chain_id != policy.chain_id {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
+        qualify_runtime_provider(
+            &policy.finalized_query_handle,
+            policy.finalized_query_qualification,
+            query.as_ref(),
+        )?;
+        qualify_runtime_provider(
+            &policy.transaction_submitter_handle,
+            policy.transaction_submitter_qualification,
+            submitter.as_ref(),
+        )?;
         Ok(Self {
             outbox,
             query,
@@ -3090,13 +4837,11 @@ impl ReputationJournalDeliveryWorkerV1 {
     /// Return a concrete production callback for native PoR terminal owners.
     #[must_use]
     pub fn por_producer(&self) -> PorReputationJournalProducerV1 {
-        PorReputationJournalProducerV1::new(Arc::clone(&self.outbox))
-    }
-
-    /// Return a concrete production callback for counted stream-token owners.
-    #[must_use]
-    pub fn counted_stream_token_producer(&self) -> CountedStreamTokenReputationJournalProducerV1 {
-        CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&self.outbox))
+        PorReputationJournalProducerV1::from_qualified_delivery_worker(
+            Arc::clone(&self.outbox),
+            Arc::clone(&self.query),
+            self.policy.clone(),
+        )
     }
 
     /// Execute one bounded scan, retry, and queue-submission tick.
@@ -3209,9 +4954,6 @@ impl ReputationJournalDeliveryWorkerV1 {
         &self,
     ) -> Result<ReputationJournalDeliveryTickOutcomeV1, ReputationRuntimeError> {
         self.ensure_bindings()?;
-        self.query.check_readiness()?;
-        self.submitter.check_readiness()?;
-        self.ensure_bindings()?;
 
         let mut pages = 0_u32;
         let mut committed = 0_u32;
@@ -3221,32 +4963,35 @@ impl ReputationJournalDeliveryWorkerV1 {
             }
             let scan = self.outbox.scan_status()?;
             let requested_after = scan.after;
-            let view = self.query.reputation_journal_delivery_view(
+            self.ensure_query_binding()?;
+            let view_result = self.query.reputation_journal_delivery_view(
                 &self.policy.chain_id,
                 u64::MAX,
                 FindSorafsReputationJournalAuthorityPolicy,
                 requested_after,
                 self.policy.page_items,
-            )?;
-            self.ensure_bindings()?;
-            view.validate(
+            );
+            self.ensure_query_binding()?;
+            let view = view_result?;
+            view.validate_for_request(
                 &self.policy.chain_id,
                 requested_after,
                 self.policy.page_items,
                 u64::MAX,
             )?;
-            if matches!(
-                self.outbox.synchronize_authority_policy(
-                    view.authority_policy.clone(),
-                    view.journal_page.finalized_cursor,
-                )?,
-                ReputationJournalPolicySyncOutcomeV1::Rotated { .. }
-            ) {
+            let rotations = self.outbox.synchronize_authority_policy_history(
+                &view.authority_policy_history,
+                view.journal_page.finalized_cursor,
+            )?;
+            if rotations != 0 {
                 let mut state = self
                     .state
                     .lock()
                     .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
-                state.metrics.policy_rotations = state.metrics.policy_rotations.saturating_add(1);
+                state.metrics.policy_rotations = state
+                    .metrics
+                    .policy_rotations
+                    .saturating_add(u64::from(rotations));
             }
             let has_more = view.journal_page.has_more;
             committed = committed
@@ -3324,17 +5069,26 @@ impl ReputationJournalDeliveryWorkerV1 {
             if submissions >= self.policy.max_submissions_per_tick {
                 break;
             }
-            let submission = self.outbox.begin_submission_against_active_policy(
+            let submission = match self.outbox.begin_submission_against_active_policy(
                 pending.event_id,
                 terminal_view.authority_policy.policy_digest,
                 current_identity,
-            )?;
-            if !self.submitter.supports_authority(&submission.authority) {
+                terminal_view.anchor.finalized_at_unix_ms,
+            ) {
+                Ok(submission) => submission,
+                Err(ReputationRuntimeError::JournalSourceNotFinalized) => continue,
+                Err(error) => return Err(error),
+            };
+            self.ensure_submitter_binding()?;
+            let supports_authority = self.submitter.supports_authority(&submission.authority);
+            self.ensure_submitter_binding()?;
+            if !supports_authority {
                 return Err(ReputationRuntimeError::JournalSubmitterAuthorityMismatch);
             }
             let request = journal_transaction_request(submission)?;
+            self.ensure_submitter_binding()?;
             let outcome = self.submitter.submit(&request);
-            self.ensure_bindings()?;
+            self.ensure_submitter_binding()?;
             if outcome.receipt() == [0; 32] {
                 return Err(ReputationRuntimeError::InvalidExternalReceipt);
             }
@@ -3378,12 +5132,17 @@ impl ReputationJournalDeliveryWorkerV1 {
     }
 
     fn ensure_bindings(&self) -> Result<(), ReputationRuntimeError> {
-        if self.query.handle() != self.policy.finalized_query_handle
-            || self.submitter.handle() != self.policy.transaction_submitter_handle
-        {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
-        }
-        Ok(())
+        self.ensure_query_binding()?;
+        self.ensure_submitter_binding()
+    }
+
+    fn ensure_query_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy.revalidate_query_provider(self.query.as_ref())
+    }
+
+    fn ensure_submitter_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy
+            .revalidate_submitter_provider(self.submitter.as_ref())
     }
 }
 
@@ -3479,13 +5238,7 @@ pub struct ReputationThresholdSigningRequestV1 {
 /// The client must reconcile by `idempotency_key`: returning `None` means the
 /// operation remains pending, and a later call must never sign different
 /// material under the same key.
-pub trait ReputationThresholdSignerClientV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the provider lifetime.
-    fn handle(&self) -> &str;
-
-    /// Verify authenticated connectivity and governed signer readiness.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
+pub trait ReputationThresholdSignerClientV1: ReputationRuntimeProviderV1 {
     /// Submit or reconcile one exact unsigned-material operation.
     fn reconcile_signature(
         &self,
@@ -3510,24 +5263,65 @@ pub struct ReputationGovernanceDagPublicationRequestV1 {
     pub canonical_signed_result: Vec<u8>,
 }
 
+/// Authenticated bounded proof that one publication is included below a signed
+/// Governance DAG head.
+///
+/// `inclusion_path` is in ascending block order, contains the exact requested
+/// snapshot exactly once, and ends at `head.head_block_cid`. After the first
+/// acknowledgement, its first block must be the immediate successor of the
+/// previously authenticated head.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ReputationGovernanceDagReadbackV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Pinned-publisher signed head manifest.
+    pub head: GovernanceDagHeadV1,
+    /// Bounded contiguous block suffix containing the requested snapshot.
+    pub inclusion_path: Vec<GovernanceDagBlockV1>,
+}
+
 /// Identity-pinned Governance DAG publication and readback client.
 ///
-/// A successful acknowledgement is the exact signed DAG block read back from
-/// the governed publication service. A submitter-side success without this
-/// block remains pending.
-pub trait ReputationGovernanceDagClientV1: Send + Sync + fmt::Debug {
-    /// Opaque deployment handle, stable for the provider lifetime.
-    fn handle(&self) -> &str;
-
-    /// Verify authenticated publication/readback readiness.
-    fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1>;
-
-    /// Publish or reconcile the exact snapshot, returning its signed DAG block
-    /// only after authenticated readback.
+/// A submitter-side success without a verified signed head and bounded
+/// inclusion path remains pending.
+pub trait ReputationGovernanceDagClientV1: ReputationRuntimeProviderV1 {
+    /// Publish or reconcile the exact snapshot, returning an authenticated
+    /// signed-head inclusion receipt only after readback.
     fn reconcile_publication(
         &self,
         request: &ReputationGovernanceDagPublicationRequestV1,
-    ) -> Result<Option<GovernanceDagBlockV1>, ReputationExternalFailureV1>;
+    ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>;
+}
+
+/// Derive the payload-free public policy digest for one Governance DAG client.
+///
+/// The digest binds the configured publisher peer identity and exact Ed25519
+/// public key under the reputation Governance DAG role. Runtime credentials,
+/// private keys, endpoints, and publication payloads are deliberately absent.
+///
+/// # Errors
+///
+/// Rejects an empty or oversized peer identity and an inert or malformed
+/// Ed25519 public key.
+pub fn reputation_governance_dag_policy_digest_v1(
+    publisher_peer_id: &[u8],
+    publisher_public_key: [u8; 32],
+) -> Result<[u8; 32], ReputationRuntimeError> {
+    if publisher_peer_id.is_empty()
+        || publisher_peer_id.len() > REPUTATION_RUNTIME_MAX_GOVERNANCE_PEER_ID_BYTES_V1
+        || publisher_public_key == [0; 32]
+        || !valid_ed25519_verifying_key(publisher_public_key)
+    {
+        return Err(ReputationRuntimeError::InvalidRuntimePolicy);
+    }
+    let peer_id_len = u64::try_from(publisher_peer_id.len())
+        .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"sorafs-reputation-governance-dag-provider-ed25519-v1");
+    hasher.update(&peer_id_len.to_le_bytes());
+    hasher.update(publisher_peer_id);
+    hasher.update(&publisher_public_key);
+    Ok(*hasher.finalize().as_bytes())
 }
 
 /// Payload-free proof that the exact threshold result is in the Governance DAG.
@@ -3572,14 +5366,9 @@ impl ReputationGovernanceDagAcknowledgementV1 {
     }
 }
 
-/// Compact durable form of the authenticated Governance DAG readback.
-///
-/// The signed reputation payload is already retained by the publication
-/// checkpoint, so persisting the full block would duplicate its potentially
-/// large provider inventory. These fields are sufficient to reconstruct the
-/// exact block and re-run both node and block signature verification.
+/// Compact durable form of the exact target block in a Governance DAG path.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct StoredReputationGovernanceDagReadbackV1 {
+struct StoredReputationGovernanceDagTargetBlockV1 {
     block_cid: Vec<u8>,
     prev_block_cid: Option<Vec<u8>>,
     sequence: u64,
@@ -3592,7 +5381,7 @@ struct StoredReputationGovernanceDagReadbackV1 {
     block_signature: GovernanceLogSignatureV1,
 }
 
-impl StoredReputationGovernanceDagReadbackV1 {
+impl StoredReputationGovernanceDagTargetBlockV1 {
     fn from_block(block: &GovernanceDagBlockV1) -> Self {
         Self {
             block_cid: block.block_cid.clone(),
@@ -3633,12 +5422,74 @@ impl StoredReputationGovernanceDagReadbackV1 {
     }
 }
 
+/// Durable signed-head readback with the exact target payload stored once.
+///
+/// Non-target path blocks and the signed head are retained verbatim. The
+/// target block is reconstructed from the checkpoint's separately retained
+/// signed reputation snapshot before every validation, including restart.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredReputationGovernanceDagReadbackV1 {
+    version: u8,
+    head: GovernanceDagHeadV1,
+    path_before_target: Vec<GovernanceDagBlockV1>,
+    target: StoredReputationGovernanceDagTargetBlockV1,
+    path_after_target: Vec<GovernanceDagBlockV1>,
+}
+
+impl StoredReputationGovernanceDagReadbackV1 {
+    fn from_readback(
+        readback: &ReputationGovernanceDagReadbackV1,
+        target_index: usize,
+    ) -> Result<Self, ReputationRuntimeError> {
+        let target = readback
+            .inclusion_path
+            .get(target_index)
+            .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+        Ok(Self {
+            version: readback.version,
+            head: readback.head.clone(),
+            path_before_target: readback.inclusion_path[..target_index].to_vec(),
+            target: StoredReputationGovernanceDagTargetBlockV1::from_block(target),
+            path_after_target: readback.inclusion_path[target_index + 1..].to_vec(),
+        })
+    }
+
+    fn reconstruct_readback(
+        &self,
+        signed_result: &SignedReputationSnapshotV1,
+    ) -> Result<ReputationGovernanceDagReadbackV1, ReputationRuntimeError> {
+        let path_len = self
+            .path_before_target
+            .len()
+            .checked_add(1)
+            .and_then(|len| len.checked_add(self.path_after_target.len()))
+            .ok_or(ReputationRuntimeError::InvalidCheckpoint)?;
+        if path_len > REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 {
+            return Err(ReputationRuntimeError::GovernanceReadbackPathTooLong {
+                found: path_len,
+                maximum: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1,
+            });
+        }
+        let mut inclusion_path = Vec::with_capacity(path_len);
+        inclusion_path.extend(self.path_before_target.iter().cloned());
+        inclusion_path.push(self.target.reconstruct_block(signed_result));
+        inclusion_path.extend(self.path_after_target.iter().cloned());
+        Ok(ReputationGovernanceDagReadbackV1 {
+            version: self.version,
+            head: self.head.clone(),
+            inclusion_path,
+        })
+    }
+}
+
 /// Strict external publication contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationPublicationPolicyV1 {
     trust_policy_digest: [u8; 32],
     threshold_signer_handle: String,
+    threshold_signer_qualification: ReputationRuntimeProviderQualificationV1,
     governance_dag_handle: String,
+    governance_dag_qualification: ReputationRuntimeProviderQualificationV1,
     governance_publisher_peer_id: Vec<u8>,
     governance_publisher_public_key: [u8; 32],
     governance_publisher_key_digest: [u8; 32],
@@ -3674,8 +5525,9 @@ impl ReputationPublicationPolicyV1 {
                 > REPUTATION_RUNTIME_MAX_GOVERNANCE_PEER_ID_BYTES_V1
             || governance_publisher_public_key == [0; 32]
             || !valid_ed25519_verifying_key(governance_publisher_public_key)
-            || checkpoint_max_bytes < REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1
-            || checkpoint_max_bytes > REPUTATION_PUBLICATION_MAX_CHECKPOINT_BYTES_V1
+            || !(REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1
+                ..=REPUTATION_PUBLICATION_MAX_CHECKPOINT_BYTES_V1)
+                .contains(&checkpoint_max_bytes)
         {
             return Err(ReputationRuntimeError::InvalidRuntimePolicy);
         }
@@ -3683,15 +5535,73 @@ impl ReputationPublicationPolicyV1 {
             b"sorafs-reputation-governance-publisher-key-v1",
             &governance_publisher_public_key,
         )?;
+        let governance_dag_policy_digest = reputation_governance_dag_policy_digest_v1(
+            &governance_publisher_peer_id,
+            governance_publisher_public_key,
+        )?;
         Ok(Self {
             trust_policy_digest,
             threshold_signer_handle,
+            threshold_signer_qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                trust_policy_digest,
+            ),
             governance_dag_handle,
+            governance_dag_qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                governance_dag_policy_digest,
+            ),
             governance_publisher_peer_id,
             governance_publisher_public_key,
             governance_publisher_key_digest,
             checkpoint_max_bytes,
         })
+    }
+
+    /// Return the independently governed threshold-signer qualification.
+    #[must_use]
+    pub const fn threshold_signer_qualification(&self) -> ReputationRuntimeProviderQualificationV1 {
+        self.threshold_signer_qualification
+    }
+
+    /// Return the independently governed Governance DAG qualification.
+    #[must_use]
+    pub const fn governance_dag_qualification(&self) -> ReputationRuntimeProviderQualificationV1 {
+        self.governance_dag_qualification
+    }
+
+    /// Qualify or revalidate the external threshold signer.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a signer whose handle, revision, or trust-policy digest differs
+    /// from the publication policy.
+    pub fn revalidate_threshold_signer(
+        &self,
+        signer: &dyn ReputationThresholdSignerClientV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.threshold_signer_handle,
+            self.threshold_signer_qualification,
+            signer,
+        )
+    }
+
+    /// Qualify or revalidate authenticated Governance DAG publication/readback.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a client whose handle, revision, or governed publisher
+    /// peer-and-key digest differs from the publication policy.
+    pub fn revalidate_governance_dag(
+        &self,
+        governance_dag: &dyn ReputationGovernanceDagClientV1,
+    ) -> Result<(), ReputationRuntimeError> {
+        assert_runtime_provider_qualification(
+            &self.governance_dag_handle,
+            self.governance_dag_qualification,
+            governance_dag,
+        )
     }
 
     fn digest(&self) -> Result<[u8; 32], ReputationRuntimeError> {
@@ -3773,7 +5683,8 @@ impl ReputationCommittedSnapshotV1 {
         policy: &ReputationPublicationPolicyV1,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         governance_readback: &StoredReputationGovernanceDagReadbackV1,
-    ) -> Result<(), ReputationRuntimeError> {
+        previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
+    ) -> Result<ReputationGovernanceDagReadbackV1, ReputationRuntimeError> {
         verify_persisted_signed_result(&self.signed_result, trust_policy)?;
         if self.sequence == 0
             || self.material_digest == [0; 32]
@@ -3783,20 +5694,23 @@ impl ReputationCommittedSnapshotV1 {
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
-        let block = governance_readback.reconstruct_block(&self.signed_result);
-        let expected_acknowledgement = governance_acknowledgement_from_block(
+        let readback = governance_readback
+            .reconstruct_readback(&self.signed_result)
+            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+        let (expected_acknowledgement, _) = governance_acknowledgement_from_readback(
             policy,
             self.sequence,
             self.material_digest,
             self.signed_result_digest,
             &self.signed_result,
-            &block,
+            &readback,
+            previous_readback,
         )
         .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
         if expected_acknowledgement != self.governance_acknowledgement {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
-        Ok(())
+        Ok(readback)
     }
 }
 
@@ -3834,13 +5748,14 @@ impl ReputationCommittedReadProjectionV1 {
         policy: &ReputationPublicationPolicyV1,
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         governance_readback: &StoredReputationGovernanceDagReadbackV1,
+        previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
     ) -> Result<bool, ReputationRuntimeError> {
-        committed.validate(policy, trust_policy, governance_readback)?;
         if let Some(existing) = &self.latest {
             if existing == &committed {
                 return Ok(false);
             }
         }
+        committed.validate(policy, trust_policy, governance_readback, previous_readback)?;
         if self
             .events
             .iter()
@@ -3873,7 +5788,7 @@ impl ReputationCommittedReadProjectionV1 {
         if self.version != REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1
             || self.publication_policy_digest != policy_digest
             || self.events.len() > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1
-            || self.latest.is_some() != !self.events.is_empty()
+            || self.latest.is_none() != self.events.is_empty()
         {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
@@ -3957,6 +5872,49 @@ pub trait ReputationCommittedReadApiV1: Send + Sync + fmt::Debug {
     }
 }
 
+/// Activation state of the durable native-outcome admission runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReputationNativeOutcomeAdmissionStateV1 {
+    /// The configured runtime is waiting for its deployment-owned dependencies.
+    Deferred,
+    /// The runtime is active and every admission must succeed or fail closed.
+    Active,
+}
+
+/// Object-safe durable admission boundary for native reputation outcomes.
+///
+/// Implementations must commit the native journal producer checkpoint before
+/// returning success. Repeating the exact provider and typed source must return
+/// [`ReputationJournalEnqueueOutcomeV1::ExactReplay`]; substituting payload
+/// material for the same native source must fail closed.
+pub trait ReputationNativeOutcomeAdmissionApiV1: Send + Sync + fmt::Debug {
+    /// Return whether the configured runtime has completed activation.
+    ///
+    /// A supervised caller may idle while this reports
+    /// [`ReputationNativeOutcomeAdmissionStateV1::Deferred`].
+    /// Once active, dependency substitution, staleness, or unavailability must
+    /// be returned as an error rather than downgraded to deferred.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime-state error when activation state cannot be read.
+    fn activation_state(
+        &self,
+    ) -> Result<ReputationNativeOutcomeAdmissionStateV1, ReputationRuntimeError>;
+
+    /// Durably admit one retained PoR terminal.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation, source-conflict, runtime-binding, or durable
+    /// checkpoint error. No success may be reported for best-effort admission.
+    fn record_por_terminal(
+        &self,
+        provider_id: ProviderId,
+        outcome: PorTerminalOutcomeV1,
+    ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationPublicationCheckpointV1 {
     version: u8,
@@ -4006,11 +5964,18 @@ impl ReputationPublicationCheckpointV1 {
         if retention_limit == 0 || retention_limit > REPUTATION_COMMITTED_READ_MAX_EVENTS_V1 {
             return Err(ReputationRuntimeError::PublicationCheckpointConflict);
         }
+        let previous_readback = self
+            .committed_snapshots
+            .last()
+            .zip(self.committed_governance_readbacks.last())
+            .map(|(previous, readback)| readback.reconstruct_readback(&previous.signed_result))
+            .transpose()?;
         let appended = self.committed_read.append(
             committed.clone(),
             policy,
             trust_policy,
             &governance_readback,
+            previous_readback.as_ref(),
         )?;
         if !appended {
             return if self.committed_snapshots.last() == Some(&committed)
@@ -4123,11 +6088,19 @@ impl ReputationPublicationReconcilerV1 {
             .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
         if trust_policy.canonical_digest().ok() != Some(policy.trust_policy_digest)
             || projector.policy.snapshot_trust_policy_digest != policy.trust_policy_digest
-            || threshold_signer.handle() != policy.threshold_signer_handle
-            || governance_dag.handle() != policy.governance_dag_handle
         {
             return Err(ReputationRuntimeError::RuntimeBindingMismatch);
         }
+        qualify_runtime_provider(
+            &policy.threshold_signer_handle,
+            policy.threshold_signer_qualification,
+            threshold_signer.as_ref(),
+        )?;
+        qualify_runtime_provider(
+            &policy.governance_dag_handle,
+            policy.governance_dag_qualification,
+            governance_dag.as_ref(),
+        )?;
         let policy_digest = policy.digest()?;
         let store = AtomicCheckpointStore::new(
             root,
@@ -4192,7 +6165,10 @@ impl ReputationPublicationReconcilerV1 {
 
         if self.pending_publication()?.is_none() {
             let request = threshold_signing_request(&delivery)?;
-            let signed = match self.threshold_signer.reconcile_signature(&request) {
+            self.ensure_threshold_signer_binding()?;
+            let signed_result = self.threshold_signer.reconcile_signature(&request);
+            self.ensure_threshold_signer_binding()?;
+            let signed = match signed_result {
                 Ok(Some(signed)) => signed,
                 Ok(None) => return Ok(ReputationPublicationOutcomeV1::AwaitingThresholdSignature),
                 Err(failure) => {
@@ -4203,7 +6179,6 @@ impl ReputationPublicationReconcilerV1 {
                     );
                 }
             };
-            self.ensure_external_bindings()?;
             self.validate_signed_result(&delivery, &signed)?;
             self.store_signed_result(&delivery, signed)?;
         }
@@ -4219,8 +6194,9 @@ impl ReputationPublicationReconcilerV1 {
         self.validate_signed_result(&delivery, &pending.signed_result)?;
         if pending.governance_acknowledgement.is_none() {
             let request = governance_publication_request(&pending)?;
-            let block = match self.governance_dag.reconcile_publication(&request) {
-                Ok(Some(block)) => block,
+            let readback_result = self.reconcile_governance_publication(&request)?;
+            let readback = match readback_result {
+                Ok(Some(readback)) => readback,
                 Ok(None) => return Ok(ReputationPublicationOutcomeV1::AwaitingGovernanceDag),
                 Err(failure) => {
                     return self.record_external_failure(
@@ -4230,9 +6206,9 @@ impl ReputationPublicationReconcilerV1 {
                     );
                 }
             };
-            self.ensure_external_bindings()?;
-            let (acknowledgement, readback) = self.validate_governance_block(&pending, &block)?;
-            self.store_governance_readback(acknowledgement, readback)?;
+            let (acknowledgement, stored_readback) =
+                self.validate_governance_readback(&pending, &readback)?;
+            self.store_governance_readback(acknowledgement, stored_readback)?;
         }
 
         let pending = self
@@ -4380,10 +6356,23 @@ impl ReputationPublicationReconcilerV1 {
         Ok(())
     }
 
-    fn validate_governance_block(
+    fn reconcile_governance_publication(
+        &self,
+        request: &ReputationGovernanceDagPublicationRequestV1,
+    ) -> Result<
+        Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>,
+        ReputationRuntimeError,
+    > {
+        self.ensure_governance_dag_binding()?;
+        let result = self.governance_dag.reconcile_publication(request);
+        self.ensure_governance_dag_binding()?;
+        Ok(result)
+    }
+
+    fn validate_governance_readback(
         &self,
         pending: &StoredReputationPublicationV1,
-        block: &GovernanceDagBlockV1,
+        readback: &ReputationGovernanceDagReadbackV1,
     ) -> Result<
         (
             ReputationGovernanceDagAcknowledgementV1,
@@ -4391,17 +6380,31 @@ impl ReputationPublicationReconcilerV1 {
         ),
         ReputationRuntimeError,
     > {
-        let acknowledgement = governance_acknowledgement_from_block(
+        let previous_readback = {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+            state
+                .checkpoint
+                .committed_snapshots
+                .last()
+                .zip(state.checkpoint.committed_governance_readbacks.last())
+                .map(|(committed, stored)| stored.reconstruct_readback(&committed.signed_result))
+                .transpose()?
+        };
+        let (acknowledgement, target_index) = governance_acknowledgement_from_readback(
             &self.policy,
             pending.sequence,
             pending.material_digest,
             pending.signed_result_digest,
             &pending.signed_result,
-            block,
+            readback,
+            previous_readback.as_ref(),
         )?;
         Ok((
             acknowledgement,
-            StoredReputationGovernanceDagReadbackV1::from_block(block),
+            StoredReputationGovernanceDagReadbackV1::from_readback(readback, target_index)?,
         ))
     }
 
@@ -4461,9 +6464,6 @@ impl ReputationPublicationReconcilerV1 {
     /// The identity check is repeated after the probes so an adapter cannot
     /// swap its governed binding during readiness validation.
     pub fn check_readiness(&self) -> Result<(), ReputationRuntimeError> {
-        self.ensure_external_bindings()?;
-        self.threshold_signer.check_readiness()?;
-        self.governance_dag.check_readiness()?;
         self.ensure_external_bindings()
     }
 
@@ -4628,12 +6628,18 @@ impl ReputationPublicationReconcilerV1 {
     }
 
     fn ensure_external_bindings(&self) -> Result<(), ReputationRuntimeError> {
-        if self.threshold_signer.handle() != self.policy.threshold_signer_handle
-            || self.governance_dag.handle() != self.policy.governance_dag_handle
-        {
-            return Err(ReputationRuntimeError::RuntimeBindingChanged);
-        }
-        Ok(())
+        self.ensure_threshold_signer_binding()?;
+        self.ensure_governance_dag_binding()
+    }
+
+    fn ensure_threshold_signer_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy
+            .revalidate_threshold_signer(self.threshold_signer.as_ref())
+    }
+
+    fn ensure_governance_dag_binding(&self) -> Result<(), ReputationRuntimeError> {
+        self.policy
+            .revalidate_governance_dag(self.governance_dag.as_ref())
     }
 
     fn commit_publication_candidate(
@@ -4785,27 +6791,121 @@ fn verify_persisted_signed_result(
         .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)
 }
 
-fn governance_acknowledgement_from_block(
+fn validate_governance_readback_envelope<'a>(
+    policy: &ReputationPublicationPolicyV1,
+    readback: &'a ReputationGovernanceDagReadbackV1,
+) -> Result<(&'a GovernanceDagBlockV1, &'a GovernanceDagBlockV1), ReputationRuntimeError> {
+    let path_len = readback.inclusion_path.len();
+    if path_len > REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 {
+        return Err(ReputationRuntimeError::GovernanceReadbackPathTooLong {
+            found: path_len,
+            maximum: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1,
+        });
+    }
+    if path_len == 0 {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    if readback.version != REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1 {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+
+    readback
+        .head
+        .validate()
+        .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    if readback.head.publisher_peer_id != policy.governance_publisher_peer_id
+        || readback.head.head_signature.public_key != policy.governance_publisher_public_key
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    let maximum = u64::try_from(REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1)
+        .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    if (readback.head.block_count <= maximum && readback.head.checkpoint_cid.is_some())
+        || (readback.head.block_count > maximum && readback.head.checkpoint_cid.is_none())
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+
+    validate_governance_dag_chain_v1(
+        &readback.inclusion_path,
+        Some(readback.head.head_block_cid.as_slice()),
+    )
+    .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    let first = readback
+        .inclusion_path
+        .first()
+        .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    let tip = readback
+        .inclusion_path
+        .last()
+        .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    if tip.sequence.checked_add(1) != Some(readback.head.block_count)
+        || readback.head.generated_at < tip.timestamp
+        || readback.inclusion_path.iter().any(|block| {
+            block.publisher_peer_id != policy.governance_publisher_peer_id
+                || block.node.publisher_peer_id != policy.governance_publisher_peer_id
+                || block.block_signature.public_key != policy.governance_publisher_public_key
+                || block.node.publisher_signature.public_key
+                    != policy.governance_publisher_public_key
+        })
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    if readback.head.block_count > maximum
+        && first.sequence == readback.head.block_count - maximum
+        && readback.head.checkpoint_cid.as_deref() != Some(first.block_cid.as_slice())
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    Ok((first, tip))
+}
+
+fn governance_acknowledgement_from_readback(
     policy: &ReputationPublicationPolicyV1,
     sequence: u64,
     material_digest: [u8; 32],
-    signed_result_digest: [u8; 32],
+    expected_signed_result_digest: [u8; 32],
     signed_result: &SignedReputationSnapshotV1,
-    block: &GovernanceDagBlockV1,
-) -> Result<ReputationGovernanceDagAcknowledgementV1, ReputationRuntimeError> {
-    block
-        .validate()
-        .map_err(|_| ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    readback: &ReputationGovernanceDagReadbackV1,
+    previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
+) -> Result<(ReputationGovernanceDagAcknowledgementV1, usize), ReputationRuntimeError> {
     if sequence == 0
         || material_digest == [0; 32]
-        || signed_result_digest == [0; 32]
-        || block.publisher_peer_id != policy.governance_publisher_peer_id
-        || block.node.publisher_peer_id != policy.governance_publisher_peer_id
-        || block.block_signature.public_key != policy.governance_publisher_public_key
-        || block.node.publisher_signature.public_key != policy.governance_publisher_public_key
-        || block.node.payload
-            != GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone())
-        || block.node.timestamp < signed_result.snapshot.generated_at_unix
+        || expected_signed_result_digest == [0; 32]
+        || signed_result_digest(signed_result).ok() != Some(expected_signed_result_digest)
+    {
+        return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+    }
+    let (first, _) = validate_governance_readback_envelope(policy, readback)?;
+    if let Some(previous_readback) = previous_readback {
+        let (_, previous_tip) = validate_governance_readback_envelope(policy, previous_readback)?;
+        if first.prev_block_cid.as_deref() != Some(previous_tip.block_cid.as_slice())
+            || first.node.prev_cid.as_deref() != Some(previous_tip.node.node_cid.as_slice())
+            || previous_tip.sequence.checked_add(1) != Some(first.sequence)
+            || first.timestamp < previous_tip.timestamp
+            || first.node.timestamp < previous_tip.node.timestamp
+            || first.timestamp < previous_readback.head.generated_at
+            || first.node.timestamp < previous_readback.head.generated_at
+            || readback.head.block_count <= previous_readback.head.block_count
+            || readback.head.generated_at < previous_readback.head.generated_at
+        {
+            return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+        }
+    }
+
+    let target_payload = GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone());
+    let mut target_index = None;
+    for (index, block) in readback.inclusion_path.iter().enumerate() {
+        if block.node.payload == target_payload {
+            if target_index.replace(index).is_some() {
+                return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
+            }
+        }
+    }
+    let target_index =
+        target_index.ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?;
+    let block = &readback.inclusion_path[target_index];
+    if block.node.timestamp < signed_result.snapshot.generated_at_unix
         || block.timestamp < signed_result.snapshot.generated_at_unix
     {
         return Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement);
@@ -4814,7 +6914,7 @@ fn governance_acknowledgement_from_block(
         version: REPUTATION_GOVERNANCE_DAG_ACKNOWLEDGEMENT_VERSION_V1,
         sequence,
         material_digest,
-        signed_result_digest,
+        signed_result_digest: expected_signed_result_digest,
         dag_block_sequence: block.sequence,
         dag_block_cid: exact_32(&block.block_cid)
             .ok_or(ReputationRuntimeError::InvalidGovernanceAcknowledgement)?,
@@ -4824,7 +6924,7 @@ fn governance_acknowledgement_from_block(
         publisher_key_digest: policy.governance_publisher_key_digest,
     };
     acknowledgement.validate()?;
-    Ok(acknowledgement)
+    Ok((acknowledgement, target_index))
 }
 
 fn decode_publication_checkpoint(
@@ -4857,13 +6957,19 @@ fn validate_publication_checkpoint(
     }
     checkpoint.committed_read.validate(policy_digest)?;
     let mut retained_snapshot_ids = BTreeSet::new();
+    let mut previous_readback = None;
     for ((committed, governance_readback), event) in checkpoint
         .committed_snapshots
         .iter()
         .zip(&checkpoint.committed_governance_readbacks)
         .zip(&checkpoint.committed_read.events)
     {
-        committed.validate(policy, trust_policy, governance_readback)?;
+        let readback = committed.validate(
+            policy,
+            trust_policy,
+            governance_readback,
+            previous_readback.as_ref(),
+        )?;
         if !retained_snapshot_ids.insert(committed.signed_result.snapshot.snapshot_id) {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
@@ -4875,6 +6981,7 @@ fn validate_publication_checkpoint(
         if event != &expected_event {
             return Err(ReputationRuntimeError::InvalidCheckpoint);
         }
+        previous_readback = Some(readback);
     }
     if let Some(pending) = &checkpoint.pending {
         verify_persisted_signed_result(&pending.signed_result, trust_policy)?;
@@ -4906,14 +7013,17 @@ fn validate_publication_checkpoint(
         ) {
             (None, None) => {}
             (Some(acknowledgement), Some(readback)) => {
-                let block = readback.reconstruct_block(&pending.signed_result);
-                let expected_acknowledgement = governance_acknowledgement_from_block(
+                let readback = readback
+                    .reconstruct_readback(&pending.signed_result)
+                    .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+                let (expected_acknowledgement, _) = governance_acknowledgement_from_readback(
                     policy,
                     pending.sequence,
                     pending.material_digest,
                     pending.signed_result_digest,
                     &pending.signed_result,
-                    &block,
+                    &readback,
+                    previous_readback.as_ref(),
                 )
                 .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
                 if acknowledgement != expected_acknowledgement {
@@ -5016,14 +7126,20 @@ impl ReputationRuntimeSupervisorV1 {
             .map(ReputationJournalDeliveryWorkerV1::por_producer)
     }
 
-    /// Return the concrete callback injected into the stream-token owner.
-    #[must_use]
-    pub fn counted_stream_token_journal_producer(
-        &self,
-    ) -> Option<CountedStreamTokenReputationJournalProducerV1> {
+    /// Revalidate every active deployment-owned dependency without advancing
+    /// finalized, delivery, or publication state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fail-closed binding error for missing, stale, test-marked, or
+    /// substituted active dependencies.
+    pub fn check_external_bindings(&self) -> Result<(), ReputationRuntimeError> {
+        self.finalized.ensure_query_binding()?;
+        self.publication.check_readiness()?;
         self.journal_delivery
             .as_ref()
-            .map(ReputationJournalDeliveryWorkerV1::counted_stream_token_producer)
+            .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
+            .ensure_bindings()
     }
 
     /// Execute one supervisor-owned deterministic reconciliation tick.
@@ -5189,6 +7305,9 @@ pub enum ReputationRuntimeError {
     /// An injected dependency changed identity after construction.
     #[error("reputation runtime dependency identity changed")]
     RuntimeBindingChanged,
+    /// A provider returned a zero or otherwise malformed public qualification.
+    #[error("reputation runtime provider qualification is invalid")]
+    InvalidProviderQualification,
     /// A finalized anchor is inert or carries an invalid timestamp.
     #[error("reputation finalized anchor is invalid")]
     InvalidFinalizedAnchor,
@@ -5237,9 +7356,18 @@ pub enum ReputationRuntimeError {
     /// One native source id was presented with conflicting canonical material.
     #[error("reputation journal producer source conflicts with retained material")]
     JournalSourceConflict,
+    /// Concurrent durable mutations exhausted the bounded source-replay retry.
+    #[error("reputation journal source replay race retry budget is exhausted")]
+    JournalReplayRaceExhausted,
+    /// The in-memory durable-mutation generation cannot advance.
+    #[error("reputation journal durable mutation generation is exhausted")]
+    JournalMutationGenerationExhausted,
     /// A journal event is not retained in the producer outbox.
     #[error("reputation journal producer event is unknown")]
     UnknownJournalEvent,
+    /// A source observation is newer than the exact finalized policy view.
+    #[error("reputation journal source observation is not finalized")]
+    JournalSourceNotFinalized,
     /// A journal delivery transition is unsafe from the current crash state.
     #[error("reputation journal producer transition is invalid")]
     InvalidJournalTransition,
@@ -5270,6 +7398,14 @@ pub enum ReputationRuntimeError {
     /// Governance readback is invalid, forged, or from the wrong publisher.
     #[error("reputation Governance DAG acknowledgement is invalid")]
     InvalidGovernanceAcknowledgement,
+    /// A Governance DAG inclusion readback exceeds the hard V1 path bound.
+    #[error("reputation Governance DAG inclusion path has {found} blocks; maximum is {maximum}")]
+    GovernanceReadbackPathTooLong {
+        /// Observed inclusion-path block count.
+        found: usize,
+        /// Hard maximum accepted by this runtime.
+        maximum: usize,
+    },
     /// Publication durable state conflicts with projector/external state.
     #[error("reputation publication checkpoint conflicts with reconciliation state")]
     PublicationCheckpointConflict,
@@ -5279,7 +7415,7 @@ pub enum ReputationRuntimeError {
     /// A durable checkpoint is malformed, noncanonical, or inconsistent.
     #[error("reputation runtime checkpoint is invalid")]
     InvalidCheckpoint,
-    /// A durable checkpoint exceeds its hard byte ceiling.
+    /// Irreducible durable state exceeds its hard byte ceiling after replay compaction.
     #[error("reputation runtime checkpoint exceeds its byte ceiling")]
     CheckpointTooLarge,
     /// Durable state is unsafe or inaccessible.
@@ -5328,14 +7464,54 @@ impl From<CheckpointStoreError> for ReputationRuntimeError {
 }
 
 fn validate_runtime_handle(handle: String) -> Result<String, ReputationRuntimeError> {
-    if handle.is_empty()
-        || handle.len() > REPUTATION_RUNTIME_MAX_HANDLE_BYTES_V1
-        || handle.trim() != handle
-        || handle.chars().any(char::is_control)
+    validate_production_runtime_handle(&handle)
+        .map_err(|_| ReputationRuntimeError::InvalidRuntimePolicy)?;
+    Ok(handle)
+}
+
+fn qualify_runtime_provider<P: ReputationRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: ReputationRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), ReputationRuntimeError> {
+    validate_runtime_handle(expected_handle.to_owned())?;
+    if !expected_qualification.is_valid()
+        || expected_qualification.revision()
+            != REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
     {
         return Err(ReputationRuntimeError::InvalidRuntimePolicy);
     }
-    Ok(handle)
+    if validate_runtime_handle(provider.handle().to_owned()).is_err()
+        || provider.handle() != expected_handle
+    {
+        return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+    }
+    let qualification = provider.qualification()?;
+    if !qualification.is_valid() {
+        return Err(ReputationRuntimeError::InvalidProviderQualification);
+    }
+    if qualification != expected_qualification || provider.handle() != expected_handle {
+        return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+    }
+    Ok(())
+}
+
+fn assert_runtime_provider_qualification<P: ReputationRuntimeProviderV1 + ?Sized>(
+    expected_handle: &str,
+    expected_qualification: ReputationRuntimeProviderQualificationV1,
+    provider: &P,
+) -> Result<(), ReputationRuntimeError> {
+    if provider.handle() != expected_handle {
+        return Err(ReputationRuntimeError::RuntimeBindingChanged);
+    }
+    let qualification = provider.qualification()?;
+    if !qualification.is_valid()
+        || qualification != expected_qualification
+        || provider.handle() != expected_handle
+    {
+        return Err(ReputationRuntimeError::RuntimeBindingChanged);
+    }
+    Ok(())
 }
 
 fn decode_runtime_checkpoint<T>(bytes: &[u8], max_bytes: u64) -> Result<T, ReputationRuntimeError>
@@ -5402,16 +7578,15 @@ fn valid_ed25519_verifying_key(bytes: [u8; 32]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, fs};
+    use std::{collections::VecDeque, fs, path::Path};
 
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::sorafs::reputation::{
         PorTerminalStatusV1, REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
         ReputationJournalFinalizedEventV1, StreamTokenExcludedKindV1,
-        StreamTokenValidationStatusV1,
+        StreamTokenValidationBindingV1, StreamTokenValidationStatusV1,
     };
-    use sorafs_manifest::GovernanceSignatureAlgorithm;
     use sorafs_manifest::reputation::{
         REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
         ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
@@ -5422,6 +7597,7 @@ mod tests {
             SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
         },
     };
+    use sorafs_manifest::{GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceSignatureAlgorithm};
     use tempfile::TempDir;
 
     use super::*;
@@ -5470,6 +7646,48 @@ mod tests {
         .expect("authority policy record")
     }
 
+    fn successor_authority_policy(
+        predecessor: &ReputationJournalAuthorityPolicyV1,
+        recorder_marker: u8,
+    ) -> ReputationJournalAuthorityPolicyV1 {
+        let mut successor = predecessor.clone();
+        successor.revision = predecessor.revision.checked_add(1).expect("test revision");
+        successor.predecessor_policy_digest = Some(
+            predecessor
+                .canonical_digest()
+                .expect("predecessor policy digest"),
+        );
+        successor.por_recorder_authority = account(recorder_marker);
+        successor
+    }
+
+    fn open_initialized_producer_outbox(
+        root: &Path,
+        policy: ReputationJournalProducerPolicyV1,
+    ) -> ReputationJournalProducerOutboxV1 {
+        let record = authority_record(
+            policy.authority_policy.clone(),
+            FINALIZED_AT_MS.saturating_sub(1_000),
+        );
+        let outbox =
+            ReputationJournalProducerOutboxV1::open(root, policy).expect("producer outbox");
+        assert!(matches!(
+            outbox
+                .synchronize_authority_policy(
+                    record,
+                    ReputationJournalFinalizedCursorV1 {
+                        height: 1,
+                        block_hash: [0x70; 32],
+                        finalized_at_unix_ms: FINALIZED_AT_MS,
+                    },
+                )
+                .expect("initialize producer authority policy"),
+            ReputationJournalPolicySyncOutcomeV1::Initialized
+                | ReputationJournalPolicySyncOutcomeV1::ExactReplay
+        ));
+        outbox
+    }
+
     fn delivery_view(
         height: u64,
         block_hash: [u8; 32],
@@ -5483,6 +7701,7 @@ mod tests {
                 identity: ReputationFinalizedIdentityV1 { height, block_hash },
                 finalized_at_unix_ms,
             },
+            authority_policy_history: vec![authority_policy.clone()],
             authority_policy,
             journal_page: ReputationJournalFinalizedEventPageV1 {
                 finalized_cursor: ReputationJournalFinalizedCursorV1 {
@@ -5537,10 +7756,29 @@ mod tests {
         }
     }
 
+    fn por_journal_entry(
+        provider_id: ProviderId,
+        outcome: PorTerminalOutcomeV1,
+    ) -> ReputationJournalEntryV1 {
+        let policy = journal_authority_policy();
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy.canonical_digest().expect("authority policy digest"),
+            policy.por_recorder_authority,
+            outcome.decided_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(outcome),
+        )
+        .expect("canonical PoR journal entry")
+    }
+
     fn counted_token(validation_marker: u8, request_marker: u8) -> StreamTokenValidationOutcomeV1 {
         StreamTokenValidationOutcomeV1 {
-            validation_id: [validation_marker; 32],
-            request_digest: [request_marker; 32],
+            binding: StreamTokenValidationBindingV1 {
+                gateway_id: [validation_marker; 32],
+                gateway_sequence: 1,
+                request_context_digest: [request_marker; 32],
+            },
             token_body_digest: Some([0x52; 32]),
             token_key_version: Some(1),
             validated_at_unix_ms: FINALIZED_AT_MS,
@@ -5550,8 +7788,11 @@ mod tests {
 
     fn excluded_token(validation_marker: u8) -> StreamTokenValidationOutcomeV1 {
         StreamTokenValidationOutcomeV1 {
-            validation_id: [validation_marker; 32],
-            request_digest: [0x61; 32],
+            binding: StreamTokenValidationBindingV1 {
+                gateway_id: [validation_marker; 32],
+                gateway_sequence: 1,
+                request_context_digest: [0x61; 32],
+            },
             token_body_digest: None,
             token_key_version: None,
             validated_at_unix_ms: FINALIZED_AT_MS,
@@ -5559,6 +7800,62 @@ mod tests {
                 StreamTokenExcludedKindV1::MissingToken,
             ),
         }
+    }
+
+    fn stream_token_entry(outcome: StreamTokenValidationOutcomeV1) -> ReputationJournalEntryV1 {
+        let policy = journal_authority_policy();
+        ReputationJournalEntryV1::try_new(
+            provider(9),
+            policy.canonical_digest().expect("authority policy digest"),
+            policy.token_recorder_authority,
+            outcome.validated_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::StreamTokenValidation(outcome),
+        )
+        .expect("canonical stream-token journal entry")
+    }
+
+    fn finalized_journal_event(
+        sequence: u64,
+        block_height: u64,
+        block_hash: [u8; 32],
+        event_index: u32,
+        entry: ReputationJournalEntryV1,
+    ) -> ReputationJournalFinalizedEventV1 {
+        ReputationJournalFinalizedEventV1 {
+            sequence,
+            block_height,
+            block_hash,
+            event_index,
+            recorded_at_unix_ms: entry.source_time_unix_ms.saturating_add(10),
+            entry,
+        }
+    }
+
+    fn counted_validation(
+        validated_at_unix_ms: u64,
+        status: StreamTokenValidationStatusV1,
+    ) -> StreamTokenCountedValidationV1 {
+        StreamTokenCountedValidationV1 {
+            token_body_digest: [0x52; 32],
+            token_key_version: 1,
+            validated_at_unix_ms,
+            status,
+        }
+    }
+
+    fn counted_request_context(nonce: &str) -> StreamTokenValidationRequestContextV1 {
+        StreamTokenValidationRequestContextV1::try_new(
+            provider(9),
+            [0x33; 32],
+            sorafs_manifest::canonical_manifest_root_cid([0x44; 32]),
+            "sorafs.sf1@1.0.0".to_owned(),
+            nonce,
+            Some(b"Q2Fub25pY2FsVG9rZW4="),
+            iroha_data_model::sorafs::reputation::StreamTokenRequestRouteV1::car_range(64, 1_023)
+                .expect("canonical CAR range"),
+        )
+        .expect("canonical payload-free request context")
     }
 
     fn trust_policy() -> ReputationSnapshotTrustPolicyV1 {
@@ -5695,14 +7992,22 @@ mod tests {
         };
     }
 
-    fn governance_block(signed_result: &SignedReputationSnapshotV1) -> GovernanceDagBlockV1 {
+    fn governance_block_after(
+        signed_result: &SignedReputationSnapshotV1,
+        previous: Option<&GovernanceDagBlockV1>,
+    ) -> GovernanceDagBlockV1 {
         let signing_key = SigningKey::from_bytes(&[0xB1; 32]);
         let publisher_peer_id = b"peer-a".to_vec();
-        let publication_timestamp = signed_result.snapshot.generated_at_unix;
+        let publication_timestamp =
+            previous.map_or(signed_result.snapshot.generated_at_unix, |block| {
+                block
+                    .timestamp
+                    .max(signed_result.snapshot.generated_at_unix)
+            });
         let mut node = GovernanceLogNodeV1 {
             version: GOVERNANCE_LOG_VERSION_V1,
             node_cid: Vec::new(),
-            prev_cid: None,
+            prev_cid: previous.map(|block| block.node.node_cid.clone()),
             timestamp: publication_timestamp,
             publisher_peer_id: publisher_peer_id.clone(),
             payload: GovernanceLogPayloadV1::SignedReputationSnapshot(signed_result.clone()),
@@ -5716,8 +8021,10 @@ mod tests {
         let mut block = GovernanceDagBlockV1 {
             version: GOVERNANCE_DAG_BLOCK_VERSION_V1,
             block_cid: Vec::new(),
-            prev_block_cid: None,
-            sequence: 0,
+            prev_block_cid: previous.map(|block| block.block_cid.clone()),
+            sequence: previous.map_or(0, |block| {
+                block.sequence.checked_add(1).expect("fixture sequence")
+            }),
             timestamp: publication_timestamp,
             publisher_peer_id,
             node,
@@ -5738,6 +8045,70 @@ mod tests {
         block
     }
 
+    fn governance_head(path: &[GovernanceDagBlockV1]) -> GovernanceDagHeadV1 {
+        let signing_key = SigningKey::from_bytes(&[0xB1; 32]);
+        let tip = path.last().expect("non-empty Governance DAG path");
+        let block_count = tip.sequence.checked_add(1).expect("fixture block count");
+        let mut head = GovernanceDagHeadV1 {
+            version: GOVERNANCE_DAG_HEAD_VERSION_V1,
+            head_block_cid: tip.block_cid.clone(),
+            block_count,
+            generated_at: tip.timestamp,
+            publisher_peer_id: b"peer-a".to_vec(),
+            checkpoint_cid: (block_count
+                > u64::try_from(REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1)
+                    .expect("fixture bound"))
+            .then(|| path.first().expect("non-empty path").block_cid.clone()),
+            head_signature: empty_governance_signature(),
+        };
+        let payload = head
+            .signature_payload_bytes()
+            .expect("encode Governance DAG head signature payload");
+        head.head_signature = GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: signing_key.sign(&payload).to_bytes().to_vec(),
+        };
+        head.validate()
+            .expect("validate Governance DAG head fixture");
+        head
+    }
+
+    fn governance_readback_after(
+        policy: &ReputationPublicationPolicyV1,
+        sequence: u64,
+        material_digest: [u8; 32],
+        signed_result_digest: [u8; 32],
+        signed_result: &SignedReputationSnapshotV1,
+        previous_readback: Option<&ReputationGovernanceDagReadbackV1>,
+    ) -> (
+        ReputationGovernanceDagAcknowledgementV1,
+        StoredReputationGovernanceDagReadbackV1,
+    ) {
+        let previous_tip = previous_readback.and_then(|readback| readback.inclusion_path.last());
+        let block = governance_block_after(signed_result, previous_tip);
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&block)),
+            inclusion_path: vec![block],
+        };
+        let (acknowledgement, target_index) = governance_acknowledgement_from_readback(
+            policy,
+            sequence,
+            material_digest,
+            signed_result_digest,
+            signed_result,
+            &readback,
+            previous_readback,
+        )
+        .expect("derive governance acknowledgement");
+        (
+            acknowledgement,
+            StoredReputationGovernanceDagReadbackV1::from_readback(&readback, target_index)
+                .expect("store Governance DAG readback"),
+        )
+    }
+
     fn governance_readback(
         policy: &ReputationPublicationPolicyV1,
         sequence: u64,
@@ -5748,19 +8119,13 @@ mod tests {
         ReputationGovernanceDagAcknowledgementV1,
         StoredReputationGovernanceDagReadbackV1,
     ) {
-        let block = governance_block(signed_result);
-        let acknowledgement = governance_acknowledgement_from_block(
+        governance_readback_after(
             policy,
             sequence,
             material_digest,
             signed_result_digest,
             signed_result,
-            &block,
-        )
-        .expect("derive governance acknowledgement");
-        (
-            acknowledgement,
-            StoredReputationGovernanceDagReadbackV1::from_block(&block),
+            None,
         )
     }
 
@@ -5805,22 +8170,42 @@ mod tests {
     #[derive(Debug)]
     struct NullQuery {
         handle: String,
+        qualification: Mutex<ReputationRuntimeProviderQualificationV1>,
+        drift_after_anchor: bool,
     }
 
-    impl ReputationFinalizedQueryV1 for NullQuery {
+    impl ReputationRuntimeProviderV1 for NullQuery {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(*self.qualification.lock().expect("qualification lock"))
         }
+    }
 
+    impl ReputationFinalizedQueryV1 for NullQuery {
         fn finalized_at_or_before(
             &self,
-            _chain_id: &ChainId,
-            _maximum_height: u64,
+            chain_id: &ChainId,
+            maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
+            if self.drift_after_anchor {
+                self.qualification
+                    .lock()
+                    .expect("qualification lock")
+                    .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+                return Ok(ReputationFinalizedAnchorV1 {
+                    chain_id: chain_id.clone(),
+                    identity: ReputationFinalizedIdentityV1 {
+                        height: maximum_height,
+                        block_hash: [0x91; 32],
+                    },
+                    finalized_at_unix_ms: FINALIZED_AT_MS,
+                });
+            }
             Err(ReputationExternalFailureV1::try_new([1; 32]).expect("failure"))
         }
 
@@ -5833,6 +8218,15 @@ mod tests {
             _limit: u32,
         ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1> {
             Err(ReputationExternalFailureV1::try_new([8; 32]).expect("failure"))
+        }
+
+        fn reputation_journal_event_by_source_id(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            Err(ReputationExternalFailureV1::try_new([9; 32]).expect("failure"))
         }
 
         fn proof_outcome_page(
@@ -5893,18 +8287,23 @@ mod tests {
     #[derive(Debug)]
     struct ScriptedDeliveryQuery {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
         views: Mutex<VecDeque<ReputationJournalDeliveryFinalizedViewV1>>,
     }
 
-    impl ReputationFinalizedQueryV1 for ScriptedDeliveryQuery {
+    impl ReputationRuntimeProviderV1 for ScriptedDeliveryQuery {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationFinalizedQueryV1 for ScriptedDeliveryQuery {
         fn finalized_at_or_before(
             &self,
             _chain_id: &ChainId,
@@ -5931,6 +8330,15 @@ mod tests {
                 .expect("script lock")
                 .pop_front()
                 .ok_or_else(|| ReputationExternalFailureV1::try_new([0xE2; 32]).expect("failure"))
+        }
+
+        fn reputation_journal_event_by_source_id(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            unreachable!("delivery test does not query one source")
         }
 
         fn proof_outcome_page(
@@ -5988,21 +8396,321 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
-    struct RecordingJournalSubmitter {
+    type ScriptedSourceQueryResult =
+        Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1>;
+    type ScriptedSourceQueryHook = Box<dyn FnOnce() + Send>;
+
+    struct ScriptedSourceQuery {
         handle: String,
-        requests: Mutex<Vec<ReputationJournalTransactionRequestV1>>,
+        qualification: Mutex<ReputationRuntimeProviderQualificationV1>,
+        responses: Mutex<VecDeque<ScriptedSourceQueryResult>>,
+        drift_after_lookup: AtomicBool,
+        lookup_hooks: Mutex<VecDeque<ScriptedSourceQueryHook>>,
     }
 
-    impl ReputationJournalTransactionSubmitterV1 for RecordingJournalSubmitter {
+    impl fmt::Debug for ScriptedSourceQuery {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ScriptedSourceQuery")
+                .field("handle", &self.handle)
+                .field(
+                    "drift_after_lookup",
+                    &self.drift_after_lookup.load(Ordering::Acquire),
+                )
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl ReputationRuntimeProviderV1 for ScriptedSourceQuery {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(*self.qualification.lock().expect("qualification lock"))
+        }
+    }
+
+    impl ReputationFinalizedQueryV1 for ScriptedSourceQuery {
+        fn finalized_at_or_before(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+        ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test uses the combined source view")
         }
 
+        fn reputation_journal_delivery_view(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _policy_query: FindSorafsReputationJournalAuthorityPolicy,
+            _after: Option<ReputationJournalFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test uses the combined source view")
+        }
+
+        fn reputation_journal_event_by_source_id(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            let response = {
+                let mut responses = self.responses.lock().expect("source responses lock");
+                if responses.len() > 1 {
+                    responses.pop_front().expect("non-empty response queue")
+                } else {
+                    responses
+                        .front()
+                        .expect("source response queue must not be empty")
+                        .clone()
+                }
+            };
+            if let Some(hook) = self
+                .lookup_hooks
+                .lock()
+                .expect("lookup hooks lock")
+                .pop_front()
+            {
+                hook();
+            }
+            if self.drift_after_lookup.load(Ordering::Acquire) {
+                self.qualification
+                    .lock()
+                    .expect("qualification lock")
+                    .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+            }
+            response
+        }
+
+        fn proof_outcome_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<ProofOutcomeFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ProofOutcomeFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query proof outcomes")
+        }
+
+        fn reputation_journal_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<ReputationJournalFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ReputationJournalFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test uses the combined source view")
+        }
+
+        fn repair_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<RepairFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<RepairFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query repairs")
+        }
+
+        fn orderbook_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<OrderbookFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<OrderbookFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query orderbook")
+        }
+
+        fn reserve_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<ReserveFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ReserveFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query reserve events")
+        }
+
+        fn reserve_provider_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after_provider_id: Option<ProviderId>,
+            _limit: u32,
+        ) -> Result<ReserveProviderAccountPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query reserve providers")
+        }
+    }
+
+    const SOURCE_QUERY_HANDLE: &str = "ledger.reputation.source.primary";
+    const SOURCE_QUERY_QUALIFICATION: ReputationRuntimeProviderQualificationV1 =
+        ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            [0xC7; 32],
+        );
+
+    fn source_finalized_view(
+        event: Option<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationJournalSourceFinalizedViewV1 {
+        source_finalized_view_at(10, [0xB7; 32], FINALIZED_AT_MS.saturating_add(1_000), event)
+    }
+
+    fn source_finalized_view_at(
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix_ms: u64,
+        event: Option<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationJournalSourceFinalizedViewV1 {
+        ReputationJournalSourceFinalizedViewV1 {
+            anchor: ReputationFinalizedAnchorV1 {
+                chain_id: ChainId::from("reputation-runtime-test"),
+                identity: ReputationFinalizedIdentityV1 { height, block_hash },
+                finalized_at_unix_ms,
+            },
+            event,
+        }
+    }
+
+    fn scripted_source_query(response: ScriptedSourceQueryResult) -> Arc<ScriptedSourceQuery> {
+        scripted_source_query_sequence([response])
+    }
+
+    fn scripted_source_query_sequence(
+        responses: impl IntoIterator<Item = ScriptedSourceQueryResult>,
+    ) -> Arc<ScriptedSourceQuery> {
+        let responses = responses.into_iter().collect::<VecDeque<_>>();
+        assert!(!responses.is_empty(), "script at least one source response");
+        Arc::new(ScriptedSourceQuery {
+            handle: SOURCE_QUERY_HANDLE.to_owned(),
+            qualification: Mutex::new(SOURCE_QUERY_QUALIFICATION),
+            responses: Mutex::new(responses),
+            drift_after_lookup: AtomicBool::new(false),
+            lookup_hooks: Mutex::new(VecDeque::new()),
+        })
+    }
+
+    fn por_producer_with_query(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<ScriptedSourceQuery>,
+    ) -> PorReputationJournalProducerV1 {
+        let policy = ReputationJournalDeliveryPolicyV1::strict_v1(
+            outbox.policy.chain_id.clone(),
+            SOURCE_QUERY_HANDLE,
+            SOURCE_QUERY_QUALIFICATION,
+            "queue.reputation.journal",
+        )
+        .expect("source replay query policy");
+        let query: Arc<dyn ReputationFinalizedQueryV1> = query;
+        PorReputationJournalProducerV1::new(outbox, query, policy)
+            .expect("qualified PoR journal producer")
+    }
+
+    fn por_producer(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+    ) -> PorReputationJournalProducerV1 {
+        por_producer_with_query(
+            outbox,
+            scripted_source_query(Ok(source_finalized_view(None))),
+        )
+    }
+
+    fn insert_commit_and_compact_por_source(
+        outbox: &ReputationJournalProducerOutboxV1,
+        target_provider: ProviderId,
+        target: PorTerminalOutcomeV1,
+        filler: PorTerminalOutcomeV1,
+    ) -> ReputationJournalEventIdV1 {
+        let target_event_id = match outbox
+            .enqueue_payload(
+                target_provider,
+                target.decided_at_unix_ms,
+                ReputationJournalPayloadV1::PorTerminal(target),
+            )
+            .expect("insert racing target")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id } => event_id,
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { .. } => {
+                panic!("racing target must be a first insert")
+            }
+        };
+        let filler_event_id = match outbox
+            .enqueue_payload(
+                provider(9),
+                filler.decided_at_unix_ms,
+                ReputationJournalPayloadV1::PorTerminal(filler),
+            )
+            .expect("insert racing compaction filler")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id } => event_id,
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { .. } => {
+                panic!("racing compaction filler must be a first insert")
+            }
+        };
+        let baseline = ReputationFinalizedIdentityV1 {
+            height: 9,
+            block_hash: [0xB5; 32],
+        };
+        outbox
+            .begin_submission(target_event_id, baseline)
+            .expect("begin racing target");
+        outbox
+            .begin_submission(filler_event_id, baseline)
+            .expect("begin racing compaction filler");
+        outbox
+            .acknowledge_committed(
+                target_event_id,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 1,
+                    block_height: 10,
+                    block_hash: [0xB7; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("commit racing target");
+        outbox
+            .acknowledge_committed(
+                filler_event_id,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 2,
+                    block_height: 11,
+                    block_hash: [0xB8; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("commit racing compaction filler");
+        target_event_id
+    }
+
+    fn durable_journal_checkpoint_snapshot(
+        root: &Path,
+        outbox: &ReputationJournalProducerOutboxV1,
+    ) -> (Vec<u8>, Option<[u8; 32]>) {
+        let bytes = fs::read(root.join(REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1))
+            .expect("read durable journal checkpoint");
+        let fingerprint = outbox.state.lock().expect("producer state").fingerprint;
+        (bytes, fingerprint)
+    }
+
+    #[derive(Debug)]
+    struct RecordingJournalSubmitter {
+        handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
+        requests: Mutex<Vec<ReputationJournalTransactionRequestV1>>,
+    }
+
+    impl ReputationRuntimeProviderV1 for RecordingJournalSubmitter {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
+        }
+    }
+
+    impl ReputationJournalTransactionSubmitterV1 for RecordingJournalSubmitter {
         fn supports_authority(&self, _authority: &AccountId) -> bool {
             true
         }
@@ -6024,17 +8732,22 @@ mod tests {
     #[derive(Debug)]
     struct NullThresholdSigner {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
     }
 
-    impl ReputationThresholdSignerClientV1 for NullThresholdSigner {
+    impl ReputationRuntimeProviderV1 for NullThresholdSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationThresholdSignerClientV1 for NullThresholdSigner {
         fn reconcile_signature(
             &self,
             _request: &ReputationThresholdSigningRequestV1,
@@ -6046,22 +8759,61 @@ mod tests {
     #[derive(Debug)]
     struct NullGovernanceDag {
         handle: String,
+        qualification: ReputationRuntimeProviderQualificationV1,
     }
 
-    impl ReputationGovernanceDagClientV1 for NullGovernanceDag {
+    impl ReputationRuntimeProviderV1 for NullGovernanceDag {
         fn handle(&self) -> &str {
             &self.handle
         }
 
-        fn check_readiness(&self) -> Result<(), ReputationExternalFailureV1> {
-            Ok(())
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(self.qualification)
         }
+    }
 
+    impl ReputationGovernanceDagClientV1 for NullGovernanceDag {
         fn reconcile_publication(
             &self,
             _request: &ReputationGovernanceDagPublicationRequestV1,
-        ) -> Result<Option<GovernanceDagBlockV1>, ReputationExternalFailureV1> {
+        ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
+        {
             Ok(None)
+        }
+    }
+
+    #[derive(Debug)]
+    struct DriftingGovernanceDag {
+        handle: String,
+        qualification: Mutex<ReputationRuntimeProviderQualificationV1>,
+        readback: ReputationGovernanceDagReadbackV1,
+    }
+
+    impl ReputationRuntimeProviderV1 for DriftingGovernanceDag {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(*self.qualification.lock().expect("qualification lock"))
+        }
+    }
+
+    impl ReputationGovernanceDagClientV1 for DriftingGovernanceDag {
+        fn reconcile_publication(
+            &self,
+            _request: &ReputationGovernanceDagPublicationRequestV1,
+        ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
+        {
+            self.qualification
+                .lock()
+                .expect("qualification lock")
+                .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+            Ok(Some(self.readback.clone()))
         }
     }
 
@@ -6071,6 +8823,8 @@ mod tests {
         trust_policy: ReputationSnapshotTrustPolicyV1,
         policy: ReputationPublicationPolicyV1,
     ) -> ReputationPublicationReconcilerV1 {
+        let signer_qualification = policy.threshold_signer_qualification();
+        let dag_qualification = policy.governance_dag_qualification();
         ReputationPublicationReconcilerV1::open(
             root,
             projector,
@@ -6078,9 +8832,11 @@ mod tests {
             policy,
             Arc::new(NullThresholdSigner {
                 handle: "signer-a".to_owned(),
+                qualification: signer_qualification,
             }),
             Arc::new(NullGovernanceDag {
                 handle: "dag-a".to_owned(),
+                qualification: dag_qualification,
             }),
         )
         .expect("publication reconciler")
@@ -6096,18 +8852,83 @@ mod tests {
         );
         let policy = ReputationFinalizedQueryPolicyV1::try_new(&ingest, "query-a", 32, 1_024)
             .expect("query policy");
+        let query_qualification = policy.query_qualification();
         let result = ReputationCommittedProjectorRuntimeV1::new(
             projector,
             &ingest,
             policy,
             Arc::new(NullQuery {
                 handle: "query-b".to_owned(),
+                qualification: Mutex::new(query_qualification),
+                drift_after_anchor: false,
             }),
         );
         assert!(matches!(
             result,
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         ));
+    }
+
+    #[test]
+    fn runtime_handles_use_canonical_production_grammar() {
+        for handle in [
+            "hsm://sorafs/reputation/threshold-primary",
+            "https-pinned-source-pool:reputation-finalized-primary",
+        ] {
+            assert_eq!(
+                validate_runtime_handle(handle.to_owned()),
+                Ok(handle.to_owned())
+            );
+        }
+        for handle in [
+            "hsm://sorafs/reputation/operator@threshold",
+            "hsm://sorafs/reputation/threshold?token",
+            "hsm://sorafs/reputation/threshold#fragment",
+            "hsm://sorafs/reputation/%74hreshold",
+            "hsm://sorafs/reputation/threshold\\primary",
+        ] {
+            assert_eq!(
+                validate_runtime_handle(handle.to_owned()),
+                Err(ReputationRuntimeError::InvalidRuntimePolicy)
+            );
+        }
+    }
+
+    #[test]
+    fn finalized_query_result_is_discarded_when_qualification_drifts() {
+        let temp = TempDir::new().expect("tempdir");
+        let trust = trust_policy();
+        let ingest = ingest_policy(&trust);
+        let projector = Arc::new(
+            ReputationIngestService::open(temp.path(), ingest.clone()).expect("projector"),
+        );
+        let policy = ReputationFinalizedQueryPolicyV1::try_new(&ingest, "query-a", 32, 1_024)
+            .expect("query policy");
+        let query = Arc::new(NullQuery {
+            handle: "query-a".to_owned(),
+            qualification: Mutex::new(policy.query_qualification()),
+            drift_after_anchor: true,
+        });
+        let runtime = ReputationCommittedProjectorRuntimeV1::new(
+            Arc::clone(&projector),
+            &ingest,
+            policy,
+            query,
+        )
+        .expect("qualified runtime");
+
+        assert!(matches!(
+            runtime.reconcile_once(),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        assert!(
+            projector
+                .status()
+                .expect("projector status")
+                .latest_finalized
+                .is_none(),
+            "the anchor returned during qualification drift must not reach durable ingest"
+        );
     }
 
     #[test]
@@ -6120,6 +8941,122 @@ mod tests {
         ));
         ReputationFinalizedQueryPolicyV1::try_new(&ingest, "query-a", 32, 517)
             .expect("exact worst-case provider-page budget");
+    }
+
+    #[test]
+    fn exact_journal_view_validation_rejects_malformed_bootstrap_projection() {
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let authority_policy =
+            authority_record(journal_authority_policy(), FINALIZED_AT_MS - 1_000);
+        let view = delivery_view(
+            10,
+            [0x81; 32],
+            FINALIZED_AT_MS,
+            authority_policy.clone(),
+            Vec::new(),
+        );
+        view.validate_for_request(&chain_id, None, 1, u64::MAX)
+            .expect("valid exact bootstrap view");
+        assert!(matches!(
+            view.validate_for_request(&chain_id, None, 0, u64::MAX),
+            Err(ReputationRuntimeError::QueryResourceExhausted)
+        ));
+        assert!(matches!(
+            view.validate_for_request(&chain_id, None, 1, 9),
+            Err(ReputationRuntimeError::FinalizedAnchorPastTarget)
+        ));
+
+        let mut malformed_continuation = view.clone();
+        malformed_continuation.journal_page.has_more = true;
+        assert!(matches!(
+            malformed_continuation.validate_for_request(&chain_id, None, 1, u64::MAX),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+
+        let mut missing_policy_history = view.clone();
+        missing_policy_history.authority_policy_history.clear();
+        assert!(matches!(
+            missing_policy_history.validate_for_request(&chain_id, None, 1, u64::MAX),
+            Err(ReputationRuntimeError::AuthorityPolicyLineage)
+        ));
+
+        let mut future_policy = view.clone();
+        future_policy.authority_policy =
+            authority_record(journal_authority_policy(), FINALIZED_AT_MS + 1);
+        assert!(matches!(
+            future_policy.validate_for_request(&chain_id, None, 1, u64::MAX),
+            Err(ReputationRuntimeError::InvalidAuthorityPolicy)
+        ));
+
+        let mut mismatched_cursor = view;
+        mismatched_cursor
+            .journal_page
+            .finalized_cursor
+            .finalized_at_unix_ms += 1;
+        assert!(matches!(
+            mismatched_cursor.validate_for_request(&chain_id, None, 1, u64::MAX),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+    }
+
+    #[test]
+    fn source_finalized_view_validation_rejects_request_and_event_substitution() {
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let outcome = verified_por(0x19);
+        let source_id = ReputationJournalSourceIdV1::for_por_challenge(outcome.challenge_id);
+        let query = FindSorafsReputationJournalEventBySourceId::new(source_id, None);
+        let event = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(7), outcome),
+        );
+        let view = source_finalized_view(Some(event));
+        view.validate_for_request(&chain_id, u64::MAX, query)
+            .expect("exact source response");
+
+        let expected_cursor = ReputationJournalFinalizedCursorV1 {
+            height: view.anchor.identity.height,
+            block_hash: view.anchor.identity.block_hash,
+            finalized_at_unix_ms: view.anchor.finalized_at_unix_ms,
+        };
+        view.validate_for_request(
+            &chain_id,
+            u64::MAX,
+            FindSorafsReputationJournalEventBySourceId::new(source_id, Some(expected_cursor)),
+        )
+        .expect("exact requested finalized cursor");
+
+        let mut wrong_cursor = expected_cursor;
+        wrong_cursor.block_hash[0] ^= 1;
+        assert!(matches!(
+            view.validate_for_request(
+                &chain_id,
+                u64::MAX,
+                FindSorafsReputationJournalEventBySourceId::new(source_id, Some(wrong_cursor),),
+            ),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+        assert!(matches!(
+            view.validate_for_request(
+                &chain_id,
+                9,
+                FindSorafsReputationJournalEventBySourceId::new(source_id, None),
+            ),
+            Err(ReputationRuntimeError::FinalizedAnchorPastTarget)
+        ));
+
+        let substituted_source =
+            ReputationJournalSourceIdV1::for_por_challenge(verified_por(0x1A).challenge_id);
+        assert!(matches!(
+            view.validate_for_request(
+                &chain_id,
+                u64::MAX,
+                FindSorafsReputationJournalEventBySourceId::new(substituted_source, None),
+            ),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
     }
 
     #[test]
@@ -6169,12 +9106,607 @@ mod tests {
     }
 
     #[test]
-    fn counted_token_adapter_filters_unattributable_attempts() {
+    fn producer_rejects_first_seen_material_before_policy_record_initialization() {
         let temp = TempDir::new().expect("tempdir");
         let outbox = Arc::new(
             ReputationJournalProducerOutboxV1::open(temp.path(), producer_policy())
                 .expect("producer outbox"),
         );
+        assert!(matches!(
+            por_producer(outbox).enqueue_terminal(provider(9), verified_por(0x10)),
+            Err(ReputationRuntimeError::AuthorityPolicyLineage)
+        ));
+    }
+
+    #[test]
+    fn por_source_lookup_releases_outbox_lock_and_rechecks_racing_insert() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let terminal = verified_por(0x11);
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        let raced_outcome = Arc::new(Mutex::new(None));
+        let raced_outcome_for_hook = Arc::clone(&raced_outcome);
+        let outbox_for_hook = Arc::clone(&outbox);
+        let terminal_for_hook = terminal.clone();
+        query
+            .lookup_hooks
+            .lock()
+            .expect("lookup hooks lock")
+            .push_back(Box::new(move || {
+                let outcome = outbox_for_hook
+                    .enqueue_payload(
+                        provider(7),
+                        terminal_for_hook.decided_at_unix_ms,
+                        ReputationJournalPayloadV1::PorTerminal(terminal_for_hook),
+                    )
+                    .expect("racing producer insert");
+                *raced_outcome_for_hook.lock().expect("raced outcome lock") = Some(outcome);
+            }));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        let outcome = producer
+            .enqueue_terminal(provider(7), terminal)
+            .expect("outer replay after racing insert");
+        let raced = raced_outcome
+            .lock()
+            .expect("raced outcome lock")
+            .expect("lookup hook inserted the source");
+        let ReputationJournalEnqueueOutcomeV1::Inserted {
+            event_id: raced_event_id,
+        } = raced
+        else {
+            panic!("the racing first writer must insert");
+        };
+        assert_eq!(
+            outcome,
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: raced_event_id
+            }
+        );
+        assert_eq!(outbox.status().expect("producer status").ready, 1);
+    }
+
+    #[test]
+    fn por_source_lookup_retries_insert_commit_compact_race_as_exact_replay() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let terminal = verified_por(0x51);
+        let authoritative_entry = por_journal_entry(provider(7), terminal.clone());
+        let authoritative_event_id = authoritative_entry.event_id;
+        let authoritative_source_id = authoritative_entry.source_id;
+        let authoritative_event =
+            finalized_journal_event(1, 10, [0xB7; 32], 0, authoritative_entry);
+        let query = scripted_source_query_sequence([
+            Ok(source_finalized_view_at(
+                9,
+                [0xB5; 32],
+                FINALIZED_AT_MS.saturating_add(500),
+                None,
+            )),
+            Ok(source_finalized_view_at(
+                11,
+                [0xB8; 32],
+                FINALIZED_AT_MS.saturating_add(1_000),
+                Some(authoritative_event),
+            )),
+        ]);
+        let post_compaction_snapshot = Arc::new(Mutex::new(None));
+        let post_compaction_snapshot_for_hook = Arc::clone(&post_compaction_snapshot);
+        let outbox_for_hook = Arc::clone(&outbox);
+        let checkpoint_root = temp.path().to_path_buf();
+        let terminal_for_hook = terminal.clone();
+        query
+            .lookup_hooks
+            .lock()
+            .expect("lookup hooks lock")
+            .push_back(Box::new(move || {
+                assert_eq!(
+                    insert_commit_and_compact_por_source(
+                        &outbox_for_hook,
+                        provider(7),
+                        terminal_for_hook,
+                        verified_por(0x52),
+                    ),
+                    authoritative_event_id
+                );
+                *post_compaction_snapshot_for_hook
+                    .lock()
+                    .expect("post-compaction snapshot lock") = Some(
+                    durable_journal_checkpoint_snapshot(&checkpoint_root, &outbox_for_hook),
+                );
+            }));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        assert_eq!(
+            producer
+                .enqueue_terminal(provider(7), terminal)
+                .expect("retry authoritative exact replay after compaction"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: authoritative_event_id
+            }
+        );
+        let expected_snapshot = post_compaction_snapshot
+            .lock()
+            .expect("post-compaction snapshot lock")
+            .clone()
+            .expect("race hook captured the durable state");
+        assert_eq!(
+            durable_journal_checkpoint_snapshot(temp.path(), &outbox),
+            expected_snapshot,
+            "authoritative replay must not rewrite durable bytes or fingerprint"
+        );
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != authoritative_source_id)
+        );
+    }
+
+    #[test]
+    fn por_source_lookup_retries_insert_commit_compact_race_as_conflict() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let terminal = verified_por(0x53);
+        let authoritative_entry = por_journal_entry(provider(8), terminal.clone());
+        let authoritative_source_id = authoritative_entry.source_id;
+        let authoritative_event =
+            finalized_journal_event(1, 10, [0xB7; 32], 0, authoritative_entry);
+        let query = scripted_source_query_sequence([
+            Ok(source_finalized_view_at(
+                9,
+                [0xB5; 32],
+                FINALIZED_AT_MS.saturating_add(500),
+                None,
+            )),
+            Ok(source_finalized_view_at(
+                11,
+                [0xB8; 32],
+                FINALIZED_AT_MS.saturating_add(1_000),
+                Some(authoritative_event),
+            )),
+        ]);
+        let post_compaction_snapshot = Arc::new(Mutex::new(None));
+        let post_compaction_snapshot_for_hook = Arc::clone(&post_compaction_snapshot);
+        let outbox_for_hook = Arc::clone(&outbox);
+        let checkpoint_root = temp.path().to_path_buf();
+        let terminal_for_hook = terminal.clone();
+        query
+            .lookup_hooks
+            .lock()
+            .expect("lookup hooks lock")
+            .push_back(Box::new(move || {
+                insert_commit_and_compact_por_source(
+                    &outbox_for_hook,
+                    provider(8),
+                    terminal_for_hook,
+                    verified_por(0x54),
+                );
+                *post_compaction_snapshot_for_hook
+                    .lock()
+                    .expect("post-compaction snapshot lock") = Some(
+                    durable_journal_checkpoint_snapshot(&checkpoint_root, &outbox_for_hook),
+                );
+            }));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), terminal),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        let expected_snapshot = post_compaction_snapshot
+            .lock()
+            .expect("post-compaction snapshot lock")
+            .clone()
+            .expect("race hook captured the durable state");
+        assert_eq!(
+            durable_journal_checkpoint_snapshot(temp.path(), &outbox),
+            expected_snapshot,
+            "authoritative conflict must not rewrite durable bytes or fingerprint"
+        );
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != authoritative_source_id)
+        );
+    }
+
+    #[test]
+    fn por_source_lookup_recovers_exact_replay_after_local_tombstone_eviction() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let producer = por_producer(Arc::clone(&outbox));
+        let first_terminal = verified_por(0x12);
+        let second_terminal = verified_por(0x13);
+        let first = match producer
+            .enqueue_terminal(provider(7), first_terminal.clone())
+            .expect("first terminal")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let second = match producer
+            .enqueue_terminal(provider(8), second_terminal)
+            .expect("second terminal")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let baseline = ReputationFinalizedIdentityV1 {
+            height: 9,
+            block_hash: [0xB5; 32],
+        };
+        outbox
+            .begin_submission(first, baseline)
+            .expect("begin first");
+        outbox
+            .begin_submission(second, baseline)
+            .expect("begin second");
+        outbox
+            .acknowledge_committed(
+                first,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 1,
+                    block_height: 10,
+                    block_hash: [0xB7; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("commit first");
+        outbox
+            .acknowledge_committed(
+                second,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 2,
+                    block_height: 10,
+                    block_hash: [0xB7; 32],
+                    event_index: 1,
+                },
+            )
+            .expect("commit second");
+        let first_source =
+            ReputationJournalSourceIdV1::for_por_challenge(first_terminal.challenge_id);
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert!(
+                retained_journal_identities(&state.checkpoint)
+                    .all(|retained| retained.source_id != first_source),
+                "the first local tombstone must be evicted before authoritative replay"
+            );
+        }
+
+        let finalized = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(7), first_terminal.clone()),
+        );
+        let query = scripted_source_query(Ok(source_finalized_view(Some(finalized))));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before replay");
+        assert_eq!(
+            producer
+                .enqueue_terminal(provider(7), first_terminal)
+                .expect("authoritative exact replay"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id: first }
+        );
+        assert_eq!(outbox.status().expect("status after replay"), before);
+    }
+
+    #[test]
+    fn source_replay_height_floor_survives_restart_and_rejects_stale_absence() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        insert_commit_and_compact_por_source(
+            &outbox,
+            provider(7),
+            verified_por(0x55),
+            verified_por(0x56),
+        );
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+            assert_ne!(state.mutation_generation, 0);
+        }
+        drop(outbox);
+
+        let restored = Arc::new(
+            ReputationJournalProducerOutboxV1::open(temp.path(), policy)
+                .expect("restore replay-height floor"),
+        );
+        {
+            let state = restored.state.lock().expect("restored producer state");
+            assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+            assert_eq!(
+                state.mutation_generation, 0,
+                "the concurrency generation is intentionally process-local"
+            );
+        }
+        let stale_query = scripted_source_query(Ok(source_finalized_view_at(
+            9,
+            [0xB5; 32],
+            FINALIZED_AT_MS.saturating_add(500),
+            None,
+        )));
+        let producer = por_producer_with_query(Arc::clone(&restored), stale_query);
+        let durable_before = durable_journal_checkpoint_snapshot(temp.path(), &restored);
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(10), verified_por(0x57)),
+            Err(ReputationRuntimeError::FinalizedRollback)
+        ));
+        assert_eq!(
+            durable_journal_checkpoint_snapshot(temp.path(), &restored),
+            durable_before,
+            "a view behind the persisted replay floor must not mutate bytes or fingerprint"
+        );
+        assert_eq!(
+            restored
+                .state
+                .lock()
+                .expect("restored producer state")
+                .mutation_generation,
+            0
+        );
+    }
+
+    #[test]
+    fn observed_tombstone_compaction_advances_source_replay_height_floor() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = open_initialized_producer_outbox(temp.path(), policy);
+        let block_hash = [0xB9; 32];
+        let first = finalized_journal_event(
+            1,
+            10,
+            block_hash,
+            0,
+            por_journal_entry(provider(7), verified_por(0x58)),
+        );
+        let second = finalized_journal_event(
+            2,
+            10,
+            block_hash,
+            1,
+            por_journal_entry(provider(8), verified_por(0x59)),
+        );
+        let first_source = first.entry.source_id;
+        let second_source = second.entry.source_id;
+
+        assert_eq!(
+            outbox
+                .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                    finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                        height: 10,
+                        block_hash,
+                        finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(100),
+                    },
+                    events: vec![first, second],
+                    has_more: false,
+                    next_after: None,
+                })
+                .expect("reconcile external finalized events"),
+            0
+        );
+
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+        assert_eq!(state.checkpoint.observed.len(), 1);
+        assert_eq!(state.checkpoint.observed[0].source_id, second_source);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != first_source)
+        );
+    }
+
+    #[test]
+    fn por_source_lookup_fails_closed_after_bounded_generation_races() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let initial_generation = outbox
+            .state
+            .lock()
+            .expect("producer state")
+            .mutation_generation;
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        for marker in [0x61, 0x62, 0x63] {
+            let outbox_for_hook = Arc::clone(&outbox);
+            query
+                .lookup_hooks
+                .lock()
+                .expect("lookup hooks lock")
+                .push_back(Box::new(move || {
+                    let terminal = verified_por(marker);
+                    assert!(matches!(
+                        outbox_for_hook.enqueue_payload(
+                            provider(marker),
+                            terminal.decided_at_unix_ms,
+                            ReputationJournalPayloadV1::PorTerminal(terminal),
+                        ),
+                        Ok(ReputationJournalEnqueueOutcomeV1::Inserted { .. })
+                    ));
+                }));
+        }
+        let candidate = verified_por(0x60);
+        let candidate_source =
+            ReputationJournalSourceIdV1::for_por_challenge(candidate.challenge_id);
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), candidate),
+            Err(ReputationRuntimeError::JournalReplayRaceExhausted)
+        ));
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(
+            state.mutation_generation,
+            initial_generation
+                + u64::try_from(POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1)
+                    .expect("retry bound fits u64")
+        );
+        assert_eq!(state.checkpoint.pending.len(), 3);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != candidate_source)
+        );
+    }
+
+    #[test]
+    fn failed_durable_commit_does_not_advance_mutation_generation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = open_initialized_producer_outbox(temp.path(), producer_policy());
+        let (generation_before, checkpoint_before, fingerprint_before) = {
+            let state = outbox.state.lock().expect("producer state");
+            (
+                state.mutation_generation,
+                state.checkpoint.clone(),
+                state.fingerprint,
+            )
+        };
+        let checkpoint_path = temp
+            .path()
+            .join(REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1);
+        let mut concurrent_bytes =
+            fs::read(&checkpoint_path).expect("read producer checkpoint bytes");
+        concurrent_bytes.push(0);
+        fs::write(&checkpoint_path, concurrent_bytes).expect("simulate concurrent durable writer");
+
+        let terminal = verified_por(0x64);
+        assert!(matches!(
+            outbox.enqueue_payload(
+                provider(7),
+                terminal.decided_at_unix_ms,
+                ReputationJournalPayloadV1::PorTerminal(terminal),
+            ),
+            Err(ReputationRuntimeError::CheckpointStale)
+        ));
+        let state = outbox
+            .state
+            .lock()
+            .expect("producer state after stale commit");
+        assert_eq!(state.mutation_generation, generation_before);
+        assert_eq!(state.checkpoint, checkpoint_before);
+        assert_eq!(state.fingerprint, fingerprint_before);
+    }
+
+    #[test]
+    fn por_source_lookup_rejects_authoritative_material_conflict_without_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let terminal = verified_por(0x14);
+        let conflicting = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(8), terminal.clone()),
+        );
+        let query = scripted_source_query(Ok(source_finalized_view(Some(conflicting))));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before conflict");
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), terminal),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        assert_eq!(outbox.status().expect("status after conflict"), before);
+    }
+
+    #[test]
+    fn por_source_lookup_rejects_provider_drift_without_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        query.drift_after_lookup.store(true, Ordering::Release);
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before drift");
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), verified_por(0x15)),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        assert_eq!(outbox.status().expect("status after drift"), before);
+    }
+
+    #[test]
+    fn por_source_lookup_external_failure_does_not_mutate_outbox() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let failure = ReputationExternalFailureV1::try_new([0xE7; 32]).expect("failure");
+        let query = scripted_source_query(Err(failure));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before failure");
+
+        assert_eq!(
+            producer.enqueue_terminal(provider(7), verified_por(0x16)),
+            Err(ReputationRuntimeError::External(failure))
+        );
+        assert_eq!(outbox.status().expect("status after failure"), before);
+    }
+
+    #[test]
+    fn por_source_lookup_malformed_response_does_not_mutate_outbox() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let malformed = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(7), verified_por(0x18)),
+        );
+        let query = scripted_source_query(Ok(source_finalized_view(Some(malformed))));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before malformed response");
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), verified_por(0x17)),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+        assert_eq!(
+            outbox.status().expect("status after malformed response"),
+            before
+        );
+    }
+
+    #[test]
+    fn counted_token_adapter_filters_unattributable_attempts() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
         let producer = CountedStreamTokenReputationJournalProducerV1::new(outbox.clone());
         assert_eq!(
             producer
@@ -6183,6 +9715,25 @@ mod tests {
             CountedStreamTokenProducerOutcomeV1::NotCounted
         );
         assert!(outbox.pending(8).expect("pending").is_empty());
+        assert_eq!(
+            producer
+                .enqueue_counted(provider(8), excluded_token(1))
+                .expect("exact excluded replay ignores unattributable provider input"),
+            CountedStreamTokenProducerOutcomeV1::NotCounted
+        );
+        let mut substituted_excluded = excluded_token(1);
+        substituted_excluded.binding.request_context_digest[0] ^= 1;
+        assert_eq!(
+            producer
+                .enqueue_counted(provider(9), substituted_excluded)
+                .expect("excluded material never enters durable sequence state"),
+            CountedStreamTokenProducerOutcomeV1::NotCounted
+        );
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert!(state.checkpoint.stream_token_gateway_heads.is_empty());
+            assert!(state.checkpoint.stream_token_gateway_admissions.is_empty());
+        }
 
         let token_source_time_unix_ms = FINALIZED_AT_MS - 125;
         let mut token = counted_token(2, 3);
@@ -6222,12 +9773,643 @@ mod tests {
     }
 
     #[test]
+    fn finalized_excluded_tokens_never_create_or_advance_gateway_admissions() {
+        let temp = TempDir::new().expect("tempdir");
+        let policy = producer_policy();
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        let gateway_id = [0x91; 32];
+        let mut excluded_before = excluded_token(0x91);
+        excluded_before.binding.gateway_id = gateway_id;
+        let mut counted = counted_token(0x91, 0x62);
+        counted.binding.gateway_sequence = 2;
+        let counted_event_id = stream_token_entry(counted).event_id;
+        let mut excluded_after = excluded_token(0x91);
+        excluded_after.binding.gateway_id = gateway_id;
+        excluded_after.binding.gateway_sequence = 3;
+        excluded_after.binding.request_context_digest = [0x63; 32];
+        let block_hash = [0xA8; 32];
+        outbox
+            .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                    height: 10,
+                    block_hash,
+                    finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(100),
+                },
+                events: vec![
+                    finalized_journal_event(
+                        1,
+                        10,
+                        block_hash,
+                        0,
+                        stream_token_entry(excluded_before),
+                    ),
+                    finalized_journal_event(2, 10, block_hash, 1, stream_token_entry(counted)),
+                    finalized_journal_event(
+                        3,
+                        10,
+                        block_hash,
+                        2,
+                        stream_token_entry(excluded_after),
+                    ),
+                ],
+                has_more: false,
+                next_after: None,
+            })
+            .expect("reconcile counted and excluded finalized rows");
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert_eq!(state.checkpoint.observed.len(), 3);
+            assert_eq!(state.checkpoint.stream_token_gateway_heads.len(), 1);
+            assert_eq!(state.checkpoint.stream_token_gateway_admissions.len(), 1);
+            let head = state
+                .checkpoint
+                .stream_token_gateway_heads
+                .first()
+                .expect("counted gateway head");
+            let _: ReputationJournalEventIdV1 = head.event_id;
+            assert_eq!(head.binding.gateway_sequence, 2);
+            assert_eq!(head.event_id, counted_event_id);
+            let retained = state
+                .checkpoint
+                .stream_token_gateway_admissions
+                .first()
+                .expect("counted replay admission");
+            assert_eq!(retained.binding, counted.binding);
+            assert_eq!(retained.entry.event_id, counted_event_id);
+        }
+        drop(outbox);
+        let restored = ReputationJournalProducerOutboxV1::open(temp.path(), policy)
+            .expect("restore excluded-safe checkpoint");
+        let state = restored.state.lock().expect("restored producer state");
+        assert_eq!(
+            state
+                .checkpoint
+                .stream_token_gateway_heads
+                .first()
+                .expect("restored counted head")
+                .binding
+                .gateway_sequence,
+            2
+        );
+        assert_eq!(state.checkpoint.stream_token_gateway_admissions.len(), 1);
+    }
+
+    #[test]
+    fn late_finalization_retains_repeated_context_by_consensus_gateway_sequence() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let gateway_id = [0x92; 32];
+        let repeated_context = [0x64; 32];
+        let mut later_gateway_sequence = counted_token(0x92, 0x64);
+        later_gateway_sequence.binding.gateway_id = gateway_id;
+        later_gateway_sequence.binding.gateway_sequence = 2;
+        later_gateway_sequence.binding.request_context_digest = repeated_context;
+        let later_gateway_entry = stream_token_entry(later_gateway_sequence);
+        let later_gateway_event_id = later_gateway_entry.event_id;
+        outbox
+            .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                    height: 10,
+                    block_hash: [0xB8; 32],
+                    finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(100),
+                },
+                events: vec![finalized_journal_event(
+                    1,
+                    10,
+                    [0xB8; 32],
+                    0,
+                    later_gateway_entry,
+                )],
+                has_more: false,
+                next_after: None,
+            })
+            .expect("reconcile sequence two before sequence one");
+
+        let mut earlier_gateway_sequence = later_gateway_sequence;
+        earlier_gateway_sequence.binding.gateway_sequence = 1;
+        let earlier_gateway_entry = stream_token_entry(earlier_gateway_sequence);
+        let earlier_gateway_event_id = earlier_gateway_entry.event_id;
+        outbox
+            .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                    height: 11,
+                    block_hash: [0xB9; 32],
+                    finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(200),
+                },
+                events: vec![finalized_journal_event(
+                    2,
+                    11,
+                    [0xB9; 32],
+                    0,
+                    earlier_gateway_entry,
+                )],
+                has_more: false,
+                next_after: None,
+            })
+            .expect("late older gateway sequence with repeated context");
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert_eq!(
+                state
+                    .checkpoint
+                    .stream_token_gateway_admissions
+                    .iter()
+                    .map(|admission| (
+                        admission.binding.gateway_sequence,
+                        admission.binding.request_context_digest,
+                    ))
+                    .collect::<Vec<_>>(),
+                vec![(1, repeated_context), (2, repeated_context)]
+            );
+            assert_eq!(
+                state
+                    .checkpoint
+                    .stream_token_gateway_admissions
+                    .iter()
+                    .map(|admission| admission.event_id)
+                    .collect::<Vec<_>>(),
+                vec![earlier_gateway_event_id, later_gateway_event_id]
+            );
+            let head = state
+                .checkpoint
+                .stream_token_gateway_heads
+                .first()
+                .expect("gateway head");
+            assert_eq!(head.binding.gateway_sequence, 2);
+            assert_eq!(head.event_id, later_gateway_event_id);
+        }
+    }
+
+    #[test]
+    fn counted_validation_allocates_atomic_gateway_sequences_and_recovers() {
+        let temp = TempDir::new().expect("tempdir");
+        let policy = producer_policy();
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let gateway_id = [0x91; 32];
+
+        let mut workers = Vec::new();
+        for index in 0_u8..16 {
+            let producer = producer.clone();
+            workers.push(std::thread::spawn(move || {
+                let context = counted_request_context(&format!("concurrent-nonce-{index:02}"));
+                producer.enqueue_validation(
+                    gateway_id,
+                    &context,
+                    counted_validation(
+                        FINALIZED_AT_MS - 500 + u64::from(index),
+                        StreamTokenValidationStatusV1::Accepted,
+                    ),
+                )
+            }));
+        }
+        for worker in workers {
+            assert!(matches!(
+                worker.join().expect("join validation worker"),
+                Ok(ReputationJournalEnqueueOutcomeV1::Inserted { .. })
+            ));
+        }
+
+        let mut gateway_sequences = {
+            let state = outbox.state.lock().expect("producer state");
+            state
+                .checkpoint
+                .pending
+                .iter()
+                .filter_map(|delivery| {
+                    let ReputationJournalPayloadV1::StreamTokenValidation(outcome) =
+                        &delivery.entry.payload
+                    else {
+                        return None;
+                    };
+                    Some(outcome.binding.gateway_sequence)
+                })
+                .collect::<Vec<_>>()
+        };
+        gateway_sequences.sort_unstable();
+        assert_eq!(gateway_sequences, (1_u64..=16).collect::<Vec<_>>());
+
+        let (latest_context, earlier_context) = {
+            let state = outbox.state.lock().expect("producer state");
+            let latest = state
+                .checkpoint
+                .stream_token_gateway_heads
+                .iter()
+                .find(|head| head.binding.gateway_id == gateway_id)
+                .expect("gateway head");
+            let latest_context = state
+                .checkpoint
+                .pending
+                .iter()
+                .find_map(|delivery| {
+                    let ReputationJournalPayloadV1::StreamTokenValidation(outcome) =
+                        &delivery.entry.payload
+                    else {
+                        return None;
+                    };
+                    (outcome.binding == latest.binding).then(|| {
+                        (
+                            latest.binding.request_context_digest,
+                            delivery.entry.event_id,
+                        )
+                    })
+                })
+                .expect("latest pending gateway event");
+            let earlier = state
+                .checkpoint
+                .pending
+                .iter()
+                .find_map(|delivery| {
+                    let ReputationJournalPayloadV1::StreamTokenValidation(outcome) =
+                        &delivery.entry.payload
+                    else {
+                        return None;
+                    };
+                    (outcome.binding.gateway_id == gateway_id && outcome.binding != latest.binding)
+                        .then(|| {
+                            (
+                                outcome.binding.request_context_digest,
+                                delivery.entry.event_id,
+                                delivery.entry.clone(),
+                            )
+                        })
+                })
+                .expect("earlier pending gateway event");
+            (latest_context, earlier)
+        };
+        let earlier_replay_context = (0_u8..16)
+            .map(|index| counted_request_context(&format!("concurrent-nonce-{index:02}")))
+            .find(|context| context.digest().ok() == Some(earlier_context.0))
+            .expect("recover earlier exact request context");
+        assert_eq!(
+            producer
+                .enqueue_validation(
+                    gateway_id,
+                    &earlier_replay_context,
+                    counted_validation(
+                        FINALIZED_AT_MS + 200,
+                        StreamTokenValidationStatusV1::Accepted,
+                    ),
+                )
+                .expect("non-head retry is retained"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: earlier_context.1
+            }
+        );
+        outbox
+            .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                    height: 10,
+                    block_hash: [0xA4; 32],
+                    finalized_at_unix_ms: FINALIZED_AT_MS + 220,
+                },
+                events: vec![ReputationJournalFinalizedEventV1 {
+                    sequence: 1,
+                    block_height: 10,
+                    block_hash: [0xA4; 32],
+                    event_index: 0,
+                    recorded_at_unix_ms: FINALIZED_AT_MS + 210,
+                    entry: earlier_context.2,
+                }],
+                has_more: false,
+                next_after: None,
+            })
+            .expect("finalize earlier retained validation");
+        assert_eq!(
+            producer
+                .enqueue_validation(
+                    gateway_id,
+                    &earlier_replay_context,
+                    counted_validation(
+                        FINALIZED_AT_MS + 230,
+                        StreamTokenValidationStatusV1::Accepted,
+                    ),
+                )
+                .expect("completed non-head retry is retained"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: earlier_context.1
+            }
+        );
+        let replay_context = (0_u8..16)
+            .map(|index| counted_request_context(&format!("concurrent-nonce-{index:02}")))
+            .find(|context| context.digest().ok() == Some(latest_context.0))
+            .expect("recover latest exact request context");
+        assert_eq!(
+            producer
+                .enqueue_validation(
+                    gateway_id,
+                    &replay_context,
+                    counted_validation(
+                        FINALIZED_AT_MS + 250,
+                        StreamTokenValidationStatusV1::Accepted,
+                    ),
+                )
+                .expect("latest retry is an exact replay"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: latest_context.1
+            }
+        );
+        assert_eq!(outbox.status().expect("status").ready, 15);
+        assert_eq!(outbox.status().expect("status").completed, 1);
+
+        assert!(matches!(
+            producer.enqueue_validation(
+                gateway_id,
+                &replay_context,
+                counted_validation(
+                    FINALIZED_AT_MS + 251,
+                    StreamTokenValidationStatusV1::ProviderViolation(
+                        iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1::RequestQuotaExceeded,
+                    ),
+                ),
+            ),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+
+        drop(producer);
+        drop(outbox);
+        let restored = Arc::new(
+            ReputationJournalProducerOutboxV1::open(temp.path(), policy)
+                .expect("restore producer checkpoint"),
+        );
+        CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&restored))
+            .enqueue_validation(
+                gateway_id,
+                &counted_request_context("restart-nonce-17"),
+                counted_validation(
+                    FINALIZED_AT_MS + 300,
+                    StreamTokenValidationStatusV1::Accepted,
+                ),
+            )
+            .expect("post-restart validation");
+        let state = restored.state.lock().expect("restored producer state");
+        assert_eq!(
+            state
+                .checkpoint
+                .stream_token_gateway_heads
+                .iter()
+                .find(|head| head.binding.gateway_id == gateway_id)
+                .expect("restored gateway head")
+                .binding
+                .gateway_sequence,
+            17
+        );
+    }
+
+    #[test]
+    fn counted_validation_saturation_does_not_advance_gateway_head() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_pending = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let gateway_id = [0x92; 32];
+        producer
+            .enqueue_validation(
+                gateway_id,
+                &counted_request_context("capacity-nonce-01"),
+                counted_validation(
+                    FINALIZED_AT_MS - 100,
+                    StreamTokenValidationStatusV1::Accepted,
+                ),
+            )
+            .expect("first validation");
+        assert!(matches!(
+            producer.enqueue_validation(
+                gateway_id,
+                &counted_request_context("capacity-nonce-02"),
+                counted_validation(
+                    FINALIZED_AT_MS - 99,
+                    StreamTokenValidationStatusV1::Accepted,
+                ),
+            ),
+            Err(ReputationRuntimeError::JournalResourceExhausted)
+        ));
+        let state = outbox.state.lock().expect("producer state");
+        let head = state
+            .checkpoint
+            .stream_token_gateway_heads
+            .iter()
+            .find(|head| head.binding.gateway_id == gateway_id)
+            .expect("gateway head");
+        assert_eq!(head.binding.gateway_sequence, 1);
+        assert_eq!(state.checkpoint.pending.len(), 1);
+    }
+
+    #[test]
+    fn bounded_gateway_replay_suffix_keeps_newest_rows_and_every_head() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 2;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let first = counted_token(0x93, 1);
+        let first_event_id = match producer
+            .enqueue_counted(provider(9), first)
+            .expect("first gateway row")
+        {
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+            ) => event_id,
+            other => panic!("unexpected first admission: {other:?}"),
+        };
+        for sequence in 2_u64..=3 {
+            let mut outcome = counted_token(0x93, u8::try_from(sequence).expect("small sequence"));
+            outcome.binding.gateway_sequence = sequence;
+            producer
+                .enqueue_counted(provider(9), outcome)
+                .expect("newer gateway row");
+        }
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(
+            state
+                .checkpoint
+                .stream_token_gateway_admissions
+                .iter()
+                .map(|admission| admission.binding.gateway_sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "the token replay cap must be independent of max_completed"
+        );
+        let mut candidate = state.checkpoint.clone();
+        let admissions = std::mem::take(&mut candidate.stream_token_gateway_admissions);
+        for admission in admissions {
+            retain_stream_token_gateway_admission_suffix(&mut candidate, admission, 2)
+                .expect("bounded replay retention");
+        }
+        assert_eq!(
+            candidate
+                .stream_token_gateway_admissions
+                .iter()
+                .map(|admission| admission.binding.gateway_sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        let first_admission = state
+            .checkpoint
+            .stream_token_gateway_admissions
+            .iter()
+            .find(|admission| admission.event_id == first_event_id)
+            .expect("first admission")
+            .clone();
+        retain_stream_token_gateway_admission_suffix(&mut candidate, first_admission, 2)
+            .expect("an evicted old row cannot displace newer history");
+        assert_eq!(
+            candidate
+                .stream_token_gateway_admissions
+                .iter()
+                .map(|admission| admission.binding.gateway_sequence)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        let head = candidate
+            .stream_token_gateway_heads
+            .iter()
+            .find(|head| head.binding.gateway_id == first.binding.gateway_id)
+            .expect("gateway head");
+        assert_eq!(head.binding.gateway_sequence, 3);
+        assert!(
+            candidate
+                .stream_token_gateway_admissions
+                .iter()
+                .any(|admission| admission.binding == head.binding
+                    && admission.event_id == head.event_id)
+        );
+        drop(state);
+    }
+
+    #[test]
+    fn bounded_gateway_replay_suffix_pins_every_head_across_gateways() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        for gateway_marker in [0x95, 0x96] {
+            let first = counted_token(gateway_marker, 1);
+            producer
+                .enqueue_counted(provider(9), first)
+                .expect("first gateway row");
+            let mut second = counted_token(gateway_marker, 2);
+            second.binding.gateway_sequence = 2;
+            producer
+                .enqueue_counted(provider(9), second)
+                .expect("second gateway row");
+        }
+        let state = outbox.state.lock().expect("producer state");
+        let mut candidate = state.checkpoint.clone();
+        let admissions = std::mem::take(&mut candidate.stream_token_gateway_admissions);
+        for admission in admissions {
+            retain_stream_token_gateway_admission_suffix(&mut candidate, admission, 3)
+                .expect("bounded multi-gateway replay retention");
+        }
+        assert_eq!(candidate.stream_token_gateway_admissions.len(), 3);
+        for head in &candidate.stream_token_gateway_heads {
+            assert!(
+                candidate
+                    .stream_token_gateway_admissions
+                    .iter()
+                    .any(|admission| admission.binding == head.binding
+                        && admission.event_id == head.event_id),
+                "each gateway head must remain pinned"
+            );
+        }
+        assert_eq!(
+            candidate
+                .stream_token_gateway_admissions
+                .iter()
+                .map(|admission| (
+                    admission.binding.gateway_id,
+                    admission.binding.gateway_sequence,
+                ))
+                .collect::<Vec<_>>(),
+            vec![([0x95; 32], 2), ([0x96; 32], 1), ([0x96; 32], 2)]
+        );
+    }
+
+    #[test]
+    fn gateway_admission_checkpoint_rejects_canonical_and_head_cross_link_tampering() {
+        let temp = TempDir::new().expect("tempdir");
+        let policy = producer_policy();
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let first = counted_token(0x94, 1);
+        let first_event_id = match producer
+            .enqueue_counted(provider(9), first)
+            .expect("first admission")
+        {
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+            ) => event_id,
+            other => panic!("unexpected first admission: {other:?}"),
+        };
+        let mut second = counted_token(0x94, 2);
+        second.binding.gateway_sequence = 2;
+        producer
+            .enqueue_counted(provider(9), second)
+            .expect("second admission");
+        let checkpoint = outbox
+            .state
+            .lock()
+            .expect("producer state")
+            .checkpoint
+            .clone();
+
+        let authority_policy = journal_authority_policy();
+        let substituted_entry = ReputationJournalEntryV1::try_new(
+            provider(8),
+            authority_policy
+                .canonical_digest()
+                .expect("authority policy digest"),
+            authority_policy.token_recorder_authority,
+            first.validated_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::StreamTokenValidation(first),
+        )
+        .expect("canonical substituted admission entry");
+        let mut canonical_tamper = checkpoint.clone();
+        let substituted_admission = &mut canonical_tamper.stream_token_gateway_admissions[0];
+        substituted_admission.admission_digest =
+            stream_token_admission_digest(provider(8), &first).expect("substituted digest");
+        substituted_admission.event_id = substituted_entry.event_id;
+        substituted_admission.entry = substituted_entry;
+        assert!(matches!(
+            validate_journal_checkpoint_structure(&canonical_tamper, &policy, outbox.policy_digest,),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+
+        let mut cross_link_tamper = checkpoint;
+        cross_link_tamper.stream_token_gateway_heads[0].event_id = first_event_id;
+        assert!(matches!(
+            validate_journal_checkpoint_structure(
+                &cross_link_tamper,
+                &policy,
+                outbox.policy_digest,
+            ),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
     fn producer_rejects_same_source_with_substituted_material() {
         let temp = TempDir::new().expect("tempdir");
-        let outbox = Arc::new(
-            ReputationJournalProducerOutboxV1::open(temp.path(), producer_policy())
-                .expect("producer outbox"),
-        );
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
         let producer = CountedStreamTokenReputationJournalProducerV1::new(outbox);
         producer
             .enqueue_counted(provider(9), counted_token(4, 5))
@@ -6239,13 +10421,211 @@ mod tests {
     }
 
     #[test]
+    fn stream_token_gateway_head_survives_restart_and_replays_only_exact_history() {
+        let temp = TempDir::new().expect("tempdir");
+        let policy = producer_policy();
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(outbox.clone());
+        let first = counted_token(4, 5);
+        let first_event_id = match producer
+            .enqueue_counted(provider(9), first)
+            .expect("first gateway sequence")
+        {
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+            ) => event_id,
+            other => panic!("unexpected first admission: {other:?}"),
+        };
+        let mut second = counted_token(4, 6);
+        second.binding.gateway_sequence = 2;
+        let second_event_id = match producer
+            .enqueue_counted(provider(9), second)
+            .expect("strictly newer gateway sequence")
+        {
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+            ) => event_id,
+            other => panic!("unexpected second admission: {other:?}"),
+        };
+        let first_entry = outbox
+            .state
+            .lock()
+            .expect("journal state")
+            .checkpoint
+            .pending
+            .iter()
+            .find(|delivery| delivery.entry.event_id == first_event_id)
+            .expect("first pending entry")
+            .entry
+            .clone();
+        assert_eq!(
+            outbox
+                .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                    finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                        height: 10,
+                        block_hash: [0xA5; 32],
+                        finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(100),
+                    },
+                    events: vec![ReputationJournalFinalizedEventV1 {
+                        sequence: 1,
+                        block_height: 10,
+                        block_hash: [0xA5; 32],
+                        event_index: 0,
+                        recorded_at_unix_ms: FINALIZED_AT_MS.saturating_add(50),
+                        entry: first_entry,
+                    }],
+                    has_more: false,
+                    next_after: None,
+                })
+                .expect("older pending sequence may finalize after a newer admission"),
+            1
+        );
+        assert_eq!(outbox.status().expect("status").ready, 1);
+        assert_eq!(outbox.status().expect("status").completed, 1);
+        drop(producer);
+        drop(outbox);
+
+        let restored = Arc::new(
+            ReputationJournalProducerOutboxV1::open(temp.path(), policy.clone())
+                .expect("restore producer outbox"),
+        );
+        let producer = CountedStreamTokenReputationJournalProducerV1::new(restored.clone());
+        assert_eq!(
+            producer
+                .enqueue_counted(provider(9), second)
+                .expect("latest exact replay"),
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: second_event_id
+                }
+            )
+        );
+
+        let mut substituted_context = second;
+        substituted_context.binding.request_context_digest[0] ^= 1;
+        assert!(matches!(
+            producer.enqueue_counted(provider(9), substituted_context),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        let mut substituted_outcome = second;
+        substituted_outcome.status = StreamTokenValidationStatusV1::ProviderViolation(
+            iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1::RequestQuotaExceeded,
+        );
+        assert!(matches!(
+            producer.enqueue_counted(provider(9), substituted_outcome),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        assert!(matches!(
+            producer.enqueue_counted(provider(8), second),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        assert_eq!(
+            producer
+                .enqueue_counted(provider(9), first)
+                .expect("retained older exact replay"),
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: first_event_id
+                }
+            )
+        );
+        let mut stale_substituted = first;
+        stale_substituted.status = StreamTokenValidationStatusV1::ProviderViolation(
+            iroha_data_model::sorafs::reputation::StreamTokenViolationKindV1::RequestQuotaExceeded,
+        );
+        assert!(matches!(
+            producer.enqueue_counted(provider(9), stale_substituted),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+
+        let mut third = second;
+        third.binding.gateway_sequence = 3;
+        third.binding.request_context_digest = [0x77; 32];
+        third.validated_at_unix_ms = FINALIZED_AT_MS.saturating_add(260);
+        let third_pre_rotation_event_id = match producer
+            .enqueue_counted(provider(9), third)
+            .expect("strictly increasing gateway sequence")
+        {
+            CountedStreamTokenProducerOutcomeV1::Enqueued(
+                ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+            ) => event_id,
+            other => panic!("unexpected third admission: {other:?}"),
+        };
+
+        let current_policy = policy.authority_policy.clone();
+        restored
+            .synchronize_authority_policy(
+                authority_record(current_policy.clone(), FINALIZED_AT_MS - 1_000),
+                ReputationJournalFinalizedCursorV1 {
+                    height: 11,
+                    block_hash: [0xA6; 32],
+                    finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(200),
+                },
+            )
+            .expect("initialize active policy record");
+        let mut successor = current_policy.clone();
+        successor.revision = successor.revision.saturating_add(1);
+        successor.predecessor_policy_digest =
+            Some(current_policy.canonical_digest().expect("current digest"));
+        successor.token_recorder_authority = account(0x71);
+        let successor_authority = successor.token_recorder_authority.clone();
+        assert_eq!(
+            restored
+                .synchronize_authority_policy(
+                    authority_record(successor, FINALIZED_AT_MS.saturating_add(250)),
+                    ReputationJournalFinalizedCursorV1 {
+                        height: 12,
+                        block_hash: [0xA7; 32],
+                        finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(300),
+                    },
+                )
+                .expect("rotate multiple ready sequences behind one gateway head"),
+            ReputationJournalPolicySyncOutcomeV1::Rotated { rebound_ready: 1 }
+        );
+        let state = restored.state.lock().expect("rotated producer state");
+        let rebound = state
+            .checkpoint
+            .pending
+            .iter()
+            .find(|delivery| {
+                matches!(
+                    &delivery.entry.payload,
+                    ReputationJournalPayloadV1::StreamTokenValidation(outcome)
+                        if outcome.binding == third.binding
+                )
+            })
+            .expect("rebound stream-token row");
+        assert_ne!(rebound.entry.event_id, third_pre_rotation_event_id);
+        assert_eq!(rebound.entry.recorded_by, successor_authority);
+        let head = state
+            .checkpoint
+            .stream_token_gateway_heads
+            .iter()
+            .find(|head| head.binding == third.binding)
+            .expect("rebound gateway head");
+        assert_eq!(head.event_id, rebound.entry.event_id);
+        let admission = state
+            .checkpoint
+            .stream_token_gateway_admissions
+            .iter()
+            .find(|admission| admission.binding == third.binding)
+            .expect("rebound gateway admission");
+        assert_eq!(admission.event_id, rebound.entry.event_id);
+        assert_eq!(admission.entry, rebound.entry);
+    }
+
+    #[test]
     fn ambiguous_journal_append_survives_restart_and_requires_later_finality() {
         let temp = TempDir::new().expect("tempdir");
         let policy = producer_policy();
-        let outbox = Arc::new(
-            ReputationJournalProducerOutboxV1::open(temp.path(), policy.clone()).expect("outbox"),
-        );
-        let producer = PorReputationJournalProducerV1::new(outbox.clone());
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        let producer = por_producer(outbox.clone());
         let mut terminal = verified_por(8);
         terminal.decided_at_unix_ms = FINALIZED_AT_MS - 250;
         let source_time_unix_ms = terminal.decided_at_unix_ms;
@@ -6281,9 +10661,17 @@ mod tests {
 
         let restored =
             ReputationJournalProducerOutboxV1::open(temp.path(), policy).expect("restore outbox");
-        let restored_submission = restored
-            .pending_by_id(event_id)
-            .expect("restore exact submitted instruction");
+        let restored_submission = {
+            let state = restored.state.lock().expect("restored journal state");
+            state
+                .checkpoint
+                .pending
+                .iter()
+                .find(|delivery| delivery.entry.event_id == event_id)
+                .expect("restored submitted delivery")
+                .submission(&restored.policy.chain_id)
+                .expect("restore exact submitted instruction")
+        };
         assert_eq!(
             restored_submission.instruction,
             submitted_instruction.instruction
@@ -6338,11 +10726,11 @@ mod tests {
     #[test]
     fn committed_journal_ack_is_exactly_once_and_fork_safe() {
         let temp = TempDir::new().expect("tempdir");
-        let outbox = Arc::new(
-            ReputationJournalProducerOutboxV1::open(temp.path(), producer_policy())
-                .expect("producer outbox"),
-        );
-        let producer = PorReputationJournalProducerV1::new(outbox.clone());
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let producer = por_producer(outbox.clone());
         let event_id = match producer
             .enqueue_terminal(provider(7), verified_por(9))
             .expect("enqueue PoR")
@@ -6391,8 +10779,7 @@ mod tests {
     fn scanner_tombstones_peer_commit_before_local_callback_and_restart() {
         let temp = TempDir::new().expect("tempdir");
         let policy = producer_policy();
-        let outbox =
-            ReputationJournalProducerOutboxV1::open(temp.path(), policy.clone()).expect("outbox");
+        let outbox = open_initialized_producer_outbox(temp.path(), policy.clone());
         let terminal = verified_por(0x2A);
         let entry = ReputationJournalEntryV1::try_new(
             provider(7),
@@ -6433,7 +10820,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(temp.path(), policy).expect("restore"),
         );
         assert_eq!(
-            PorReputationJournalProducerV1::new(Arc::clone(&restored))
+            por_producer(Arc::clone(&restored))
                 .enqueue_terminal(provider(7), terminal)
                 .expect("late callback"),
             ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id }
@@ -6446,26 +10833,28 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let policy = journal_authority_policy();
         let record = authority_record(policy.clone(), FINALIZED_AT_MS - 1_000);
-        let outbox = Arc::new(
-            ReputationJournalProducerOutboxV1::open(
-                temp.path(),
-                ReputationJournalProducerPolicyV1::strict_v1(
-                    ChainId::from("reputation-runtime-test"),
-                    policy,
-                )
-                .expect("producer policy"),
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                policy,
             )
-            .expect("outbox"),
-        );
-        let event_id = match PorReputationJournalProducerV1::new(Arc::clone(&outbox))
+            .expect("producer policy"),
+        ));
+        let event_id = match por_producer(Arc::clone(&outbox))
             .enqueue_terminal(provider(7), verified_por(0x31))
             .expect("enqueue terminal")
         {
             ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
             | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
         };
+        let query_qualification = ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            [0xC1; 32],
+        );
         let query = Arc::new(ScriptedDeliveryQuery {
             handle: "ledger.finalized.primary".to_owned(),
+            qualification: query_qualification,
             views: Mutex::new(VecDeque::from([delivery_view(
                 10,
                 [0xB1; 32],
@@ -6476,6 +10865,14 @@ mod tests {
         });
         let submitter = Arc::new(RecordingJournalSubmitter {
             handle: "queue.reputation.journal".to_owned(),
+            qualification: ReputationRuntimeProviderQualificationV1::new(
+                REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                reputation_journal_submitter_policy_digest_v1(
+                    &ChainId::from("reputation-runtime-test"),
+                    "queue.reputation.journal",
+                )
+                .expect("submitter policy digest"),
+            ),
             requests: Mutex::new(Vec::new()),
         });
         let worker = ReputationJournalDeliveryWorkerV1::new(
@@ -6483,6 +10880,7 @@ mod tests {
             ReputationJournalDeliveryPolicyV1::strict_v1(
                 ChainId::from("reputation-runtime-test"),
                 query.handle.clone(),
+                query_qualification,
                 submitter.handle.clone(),
             )
             .expect("delivery policy"),
@@ -6539,9 +10937,222 @@ mod tests {
     }
 
     #[test]
+    fn policy_history_recovery_applies_one_and_multiple_missed_rotations_before_open() {
+        let first_policy = journal_authority_policy();
+        let second_policy = successor_authority_policy(&first_policy, 0x51);
+        let third_policy = successor_authority_policy(&second_policy, 0x52);
+        let first_record = authority_record(first_policy.clone(), FINALIZED_AT_MS - 1_000);
+        let second_record = authority_record(second_policy.clone(), FINALIZED_AT_MS + 100);
+        let third_record = authority_record(third_policy.clone(), FINALIZED_AT_MS + 200);
+        let finalized = ReputationJournalFinalizedCursorV1 {
+            height: 12,
+            block_hash: [0xC8; 32],
+            finalized_at_unix_ms: FINALIZED_AT_MS + 300,
+        };
+
+        let strict_missed = TempDir::new().expect("strict-missed tempdir");
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open(
+                strict_missed.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    second_policy.clone(),
+                )
+                .expect("second policy"),
+            ),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+
+        let one_missed = TempDir::new().expect("one-missed tempdir");
+        let initial = ReputationJournalProducerOutboxV1::open(
+            one_missed.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                first_policy.clone(),
+            )
+            .expect("initial policy"),
+        )
+        .expect("initial outbox");
+        initial
+            .synchronize_authority_policy(first_record.clone(), finalized)
+            .expect("initialize first policy");
+        drop(initial);
+
+        let recovered = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+            one_missed.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                second_policy.clone(),
+            )
+            .expect("second policy"),
+            &[first_record.clone(), second_record.clone()],
+            finalized,
+        )
+        .expect("recover one missed rotation");
+        assert_eq!(
+            recovered
+                .scan_status()
+                .expect("one-missed recovery status")
+                .active_authority_policy_revision,
+            2
+        );
+        drop(recovered);
+        ReputationJournalProducerOutboxV1::open(
+            one_missed.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                second_policy,
+            )
+            .expect("strict second policy"),
+        )
+        .expect("ordinary strict open accepts the recovered terminal policy");
+
+        let multiple_missed = TempDir::new().expect("multiple-missed tempdir");
+        let initial = ReputationJournalProducerOutboxV1::open(
+            multiple_missed.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                first_policy,
+            )
+            .expect("initial policy"),
+        )
+        .expect("initial outbox");
+        initial
+            .synchronize_authority_policy(first_record.clone(), finalized)
+            .expect("initialize first policy");
+        drop(initial);
+
+        let recovered = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+            multiple_missed.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                third_policy.clone(),
+            )
+            .expect("third policy"),
+            &[
+                first_record.clone(),
+                second_record.clone(),
+                third_record.clone(),
+            ],
+            finalized,
+        )
+        .expect("recover multiple missed rotations");
+        let state = recovered.state.lock().expect("recovered state");
+        assert_eq!(state.checkpoint.authority_policy_records.len(), 3);
+        assert_eq!(
+            state.checkpoint.active_authority_policy_record,
+            Some(third_record)
+        );
+        drop(state);
+        drop(recovered);
+        ReputationJournalProducerOutboxV1::open(
+            multiple_missed.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                third_policy,
+            )
+            .expect("strict third policy"),
+        )
+        .expect("recovered multi-rotation checkpoint survives strict restart");
+    }
+
+    #[test]
+    fn policy_history_recovery_rejects_skips_duplicates_and_substitution() {
+        let first_policy = journal_authority_policy();
+        let second_policy = successor_authority_policy(&first_policy, 0x61);
+        let third_policy = successor_authority_policy(&second_policy, 0x62);
+        let first_record = authority_record(first_policy.clone(), FINALIZED_AT_MS - 1_000);
+        let second_record = authority_record(second_policy.clone(), FINALIZED_AT_MS + 100);
+        let third_record = authority_record(third_policy.clone(), FINALIZED_AT_MS + 200);
+        let finalized = ReputationJournalFinalizedCursorV1 {
+            height: 12,
+            block_hash: [0xC9; 32],
+            finalized_at_unix_ms: FINALIZED_AT_MS + 300,
+        };
+        let temp = TempDir::new().expect("tempdir");
+        let initial = ReputationJournalProducerOutboxV1::open(
+            temp.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                first_policy,
+            )
+            .expect("first policy"),
+        )
+        .expect("initial outbox");
+        initial
+            .synchronize_authority_policy(first_record.clone(), finalized)
+            .expect("initialize first record");
+        drop(initial);
+
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    third_policy,
+                )
+                .expect("third policy"),
+                &[first_record.clone(), third_record],
+                finalized,
+            ),
+            Err(ReputationRuntimeError::AuthorityPolicyLineage)
+        ));
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    second_policy.clone(),
+                )
+                .expect("second policy"),
+                &[
+                    first_record.clone(),
+                    second_record.clone(),
+                    second_record.clone(),
+                ],
+                finalized,
+            ),
+            Err(ReputationRuntimeError::AuthorityPolicyLineage)
+        ));
+
+        let recovered = ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+            temp.path(),
+            ReputationJournalProducerPolicyV1::strict_v1(
+                ChainId::from("reputation-runtime-test"),
+                second_policy.clone(),
+            )
+            .expect("second policy"),
+            &[first_record.clone(), second_record.clone()],
+            finalized,
+        )
+        .expect("establish retained second record");
+        drop(recovered);
+        let substituted_record = ReputationJournalAuthorityPolicyRecordV1::try_new(
+            second_policy.clone(),
+            account(0x7F),
+            second_record.activated_at_unix_ms,
+        )
+        .expect("substituted activation metadata remains structurally valid");
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open_with_authority_policy_history(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    second_policy,
+                )
+                .expect("second policy"),
+                &[first_record, substituted_record],
+                finalized,
+            ),
+            Err(ReputationRuntimeError::AuthorityPolicyLineage)
+        ));
+    }
+
+    #[test]
     fn policy_rotation_rebinds_only_ready_rows_and_preserves_ambiguous_bytes() {
         let temp = TempDir::new().expect("tempdir");
         let first_policy = journal_authority_policy();
+        let first_activation = FINALIZED_AT_MS - 1_000;
         let outbox = Arc::new(
             ReputationJournalProducerOutboxV1::open(
                 temp.path(),
@@ -6560,11 +11171,11 @@ mod tests {
         };
         outbox
             .synchronize_authority_policy(
-                authority_record(first_policy.clone(), FINALIZED_AT_MS - 1_000),
+                authority_record(first_policy.clone(), first_activation),
                 first_cursor,
             )
             .expect("initialize policy");
-        let producer = PorReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = por_producer(Arc::clone(&outbox));
         let first_id = match producer
             .enqueue_terminal(provider(7), verified_por(0x41))
             .expect("first")
@@ -6575,6 +11186,21 @@ mod tests {
         let second_id = match producer
             .enqueue_terminal(provider(8), verified_por(0x42))
             .expect("second")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let mut post_activation = verified_por(0x43);
+        post_activation.issued_at_unix_ms = post_activation.issued_at_unix_ms.saturating_add(200);
+        post_activation.deadline_at_unix_ms =
+            post_activation.deadline_at_unix_ms.saturating_add(200);
+        post_activation.responded_at_unix_ms = post_activation
+            .responded_at_unix_ms
+            .map(|responded_at| responded_at.saturating_add(200));
+        post_activation.decided_at_unix_ms = post_activation.decided_at_unix_ms.saturating_add(200);
+        let post_activation_id = match producer
+            .enqueue_terminal(provider(9), post_activation)
+            .expect("post-activation source queued before observing rotation")
         {
             ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
             | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
@@ -6594,7 +11220,8 @@ mod tests {
         successor.predecessor_policy_digest =
             Some(first_policy.canonical_digest().expect("first digest"));
         successor.por_recorder_authority = account(0x51);
-        let successor_record = authority_record(successor.clone(), FINALIZED_AT_MS + 150);
+        let successor_activation = FINALIZED_AT_MS + 150;
+        let successor_record = authority_record(successor.clone(), successor_activation);
         assert_eq!(
             outbox
                 .synchronize_authority_policy(
@@ -6608,6 +11235,80 @@ mod tests {
                 .expect("rotate"),
             ReputationJournalPolicySyncOutcomeV1::Rotated { rebound_ready: 1 }
         );
+
+        let late_historical_id = match producer
+            .enqueue_terminal(provider(11), verified_por(0x45))
+            .expect("first-seen historical source after rotation")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let mut boundary_source = verified_por(0x46);
+        boundary_source.issued_at_unix_ms = boundary_source
+            .issued_at_unix_ms
+            .saturating_add(successor_activation - FINALIZED_AT_MS);
+        boundary_source.deadline_at_unix_ms = boundary_source
+            .deadline_at_unix_ms
+            .saturating_add(successor_activation - FINALIZED_AT_MS);
+        boundary_source.responded_at_unix_ms = boundary_source
+            .responded_at_unix_ms
+            .map(|timestamp| timestamp.saturating_add(successor_activation - FINALIZED_AT_MS));
+        boundary_source.decided_at_unix_ms = successor_activation;
+        let boundary_id = match producer
+            .enqueue_terminal(provider(12), boundary_source)
+            .expect("successor activation boundary")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let (late_policy_digest, late_authority, boundary_policy_digest, boundary_authority) = {
+            let state = outbox.state.lock().expect("outbox state");
+            let late = state
+                .checkpoint
+                .pending
+                .iter()
+                .find(|delivery| delivery.entry.event_id == late_historical_id)
+                .expect("late historical row");
+            let boundary = state
+                .checkpoint
+                .pending
+                .iter()
+                .find(|delivery| delivery.entry.event_id == boundary_id)
+                .expect("boundary row");
+            (
+                late.entry.authority_policy_digest,
+                late.entry.recorded_by.clone(),
+                boundary.entry.authority_policy_digest,
+                boundary.entry.recorded_by.clone(),
+            )
+        };
+        assert_eq!(
+            late_policy_digest,
+            first_policy.canonical_digest().expect("first digest")
+        );
+        assert_eq!(late_authority, first_policy.por_recorder_authority);
+        assert_eq!(boundary_policy_digest, successor_record.policy_digest);
+        assert_eq!(boundary_authority, successor.por_recorder_authority);
+
+        let mut predating_source = verified_por(0x47);
+        let predating_delta = FINALIZED_AT_MS - first_activation + 1;
+        predating_source.issued_at_unix_ms = predating_source
+            .issued_at_unix_ms
+            .saturating_sub(predating_delta);
+        predating_source.deadline_at_unix_ms = predating_source
+            .deadline_at_unix_ms
+            .saturating_sub(predating_delta);
+        predating_source.responded_at_unix_ms = predating_source
+            .responded_at_unix_ms
+            .map(|timestamp| timestamp.saturating_sub(predating_delta));
+        predating_source.decided_at_unix_ms = predating_source
+            .decided_at_unix_ms
+            .saturating_sub(predating_delta);
+        assert!(matches!(
+            producer.enqueue_terminal(provider(13), predating_source),
+            Err(ReputationRuntimeError::InvalidAuthorityPolicy)
+        ));
+
         let pending = outbox.pending(8).expect("pending");
         assert!(
             pending.iter().any(|row| {
@@ -6617,9 +11318,26 @@ mod tests {
             "ambiguous exact bytes must remain immutable across rotation"
         );
         assert!(
-            pending.iter().all(|row| row.event_id != second_id),
-            "the never-exposed Ready row must be rebound to the successor"
+            pending.iter().any(|row| row.event_id == second_id),
+            "source material from before activation must retain its historical policy"
         );
+        assert!(
+            pending.iter().all(|row| row.event_id != post_activation_id),
+            "a never-exposed Ready row sourced after activation must be rebound"
+        );
+        assert_eq!(
+            producer
+                .enqueue_terminal(provider(7), verified_por(0x41))
+                .expect("retained source replay resolves before current-policy construction"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id: first_id }
+        );
+        let mut substituted_source = verified_por(0x41);
+        substituted_source.decided_at_unix_ms =
+            substituted_source.decided_at_unix_ms.saturating_add(1);
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), substituted_source),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
 
         reconcile_empty_journal(&outbox, 12, [0xC3; 32], FINALIZED_AT_MS.saturating_add(300));
         outbox
@@ -6640,10 +11358,104 @@ mod tests {
                     height: 12,
                     block_hash: [0xC3; 32],
                 },
+                FINALIZED_AT_MS.saturating_add(300),
             )
-            .expect("rebind retry");
-        assert_ne!(rebound.event_id, first_id);
-        assert_eq!(rebound.authority, successor.por_recorder_authority);
+            .expect("retry source-time-valid historical bytes");
+        assert_eq!(rebound.event_id, first_id);
+        assert_eq!(rebound.authority, first_policy.por_recorder_authority);
+
+        let mut not_yet_finalized_source = verified_por(0x44);
+        not_yet_finalized_source.issued_at_unix_ms = not_yet_finalized_source
+            .issued_at_unix_ms
+            .saturating_add(400);
+        not_yet_finalized_source.deadline_at_unix_ms = not_yet_finalized_source
+            .deadline_at_unix_ms
+            .saturating_add(400);
+        not_yet_finalized_source.responded_at_unix_ms = not_yet_finalized_source
+            .responded_at_unix_ms
+            .map(|responded_at| responded_at.saturating_add(400));
+        not_yet_finalized_source.decided_at_unix_ms = not_yet_finalized_source
+            .decided_at_unix_ms
+            .saturating_add(400);
+        let future_event_id = match producer
+            .enqueue_terminal(provider(10), not_yet_finalized_source)
+            .expect("retain source awaiting a sufficiently new finalized view")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        assert!(matches!(
+            outbox.begin_submission_against_active_policy(
+                future_event_id,
+                successor_record.policy_digest,
+                ReputationFinalizedIdentityV1 {
+                    height: 12,
+                    block_hash: [0xC3; 32],
+                },
+                FINALIZED_AT_MS.saturating_add(300),
+            ),
+            Err(ReputationRuntimeError::JournalSourceNotFinalized)
+        ));
+
+        drop(producer);
+        drop(outbox);
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    first_policy.clone(),
+                )
+                .expect("stale producer policy"),
+            ),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+        let mut substituted_successor = successor.clone();
+        substituted_successor.por_recorder_authority = account(0x52);
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    substituted_successor,
+                )
+                .expect("substituted producer policy"),
+            ),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+        let mut skipped_successor = successor.clone();
+        skipped_successor.revision = skipped_successor.revision.saturating_add(1);
+        skipped_successor.predecessor_policy_digest =
+            Some(successor.canonical_digest().expect("successor digest"));
+        assert!(matches!(
+            ReputationJournalProducerOutboxV1::open(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    skipped_successor,
+                )
+                .expect("skipped producer policy"),
+            ),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+        let restored = Arc::new(
+            ReputationJournalProducerOutboxV1::open(
+                temp.path(),
+                ReputationJournalProducerPolicyV1::strict_v1(
+                    ChainId::from("reputation-runtime-test"),
+                    successor,
+                )
+                .expect("producer policy"),
+            )
+            .expect("restore rotated producer checkpoint"),
+        );
+        let restored_producer = por_producer(restored);
+        assert_eq!(
+            restored_producer
+                .enqueue_terminal(provider(7), verified_por(0x41))
+                .expect("exact retained replay after restart"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id: first_id }
+        );
     }
 
     #[test]
@@ -6685,10 +11497,11 @@ mod tests {
         let temp = TempDir::new().expect("tempdir");
         let mut policy = producer_policy();
         policy.max_completed = 1;
-        let outbox = Arc::new(
-            ReputationJournalProducerOutboxV1::open(temp.path(), policy.clone()).expect("outbox"),
-        );
-        let producer = PorReputationJournalProducerV1::new(outbox.clone());
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        let producer = por_producer(outbox.clone());
         let first = match producer
             .enqueue_terminal(provider(7), verified_por(0x21))
             .expect("first PoR")
@@ -6749,6 +11562,270 @@ mod tests {
     }
 
     #[test]
+    fn journal_checkpoint_byte_ceiling_binary_search_preserves_exact_replay_tombstones() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_attempts = 1;
+        policy.checkpoint_max_bytes = REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1;
+        let policy_digest = policy.digest().expect("producer policy digest");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+
+        let authority_policy = policy.authority_policy.clone();
+        let observed_outcome = verified_por(0x31);
+        let observed_entry = ReputationJournalEntryV1::try_new(
+            provider(6),
+            authority_policy
+                .canonical_digest()
+                .expect("authority policy digest"),
+            authority_policy.por_recorder_authority,
+            observed_outcome.decided_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(observed_outcome),
+        )
+        .expect("observed journal entry");
+        outbox
+            .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                    height: 10,
+                    block_hash: [0xD3; 32],
+                    finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(100),
+                },
+                events: vec![finalized_journal_event(
+                    1,
+                    10,
+                    [0xD3; 32],
+                    0,
+                    observed_entry,
+                )],
+                has_more: false,
+                next_after: None,
+            })
+            .expect("retain observed tombstone");
+
+        let token_producer =
+            CountedStreamTokenReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let mut head_event_id = ReputationJournalEventIdV1::ZERO;
+        for sequence in 1_u8..=17 {
+            let mut token = counted_token(0x97, sequence);
+            token.binding.gateway_sequence = u64::from(sequence);
+            head_event_id = match token_producer
+                .enqueue_counted(provider(9), token)
+                .expect("token admission")
+            {
+                CountedStreamTokenProducerOutcomeV1::Enqueued(
+                    ReputationJournalEnqueueOutcomeV1::Inserted { event_id },
+                ) => event_id,
+                other => panic!("unexpected token admission: {other:?}"),
+            };
+        }
+
+        let por_producer = por_producer(Arc::clone(&outbox));
+        let completed_event_id = match por_producer
+            .enqueue_terminal(provider(7), verified_por(0x32))
+            .expect("local PoR row")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        outbox
+            .begin_submission(
+                completed_event_id,
+                ReputationFinalizedIdentityV1 {
+                    height: 10,
+                    block_hash: [0xD3; 32],
+                },
+            )
+            .expect("begin local PoR submission");
+        outbox
+            .acknowledge_committed(
+                completed_event_id,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 2,
+                    block_height: 11,
+                    block_hash: [0xD4; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("retain completed tombstone");
+
+        let dead_letter_event_id = match por_producer
+            .enqueue_terminal(provider(8), verified_por(0x33))
+            .expect("dead-letter PoR row")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        outbox
+            .begin_submission(
+                dead_letter_event_id,
+                ReputationFinalizedIdentityV1 {
+                    height: 11,
+                    block_hash: [0xD4; 32],
+                },
+            )
+            .expect("begin terminal PoR submission");
+        assert!(matches!(
+            outbox
+                .record_not_submitted(dead_letter_event_id, [0xE3; 32])
+                .expect("dead-letter failed PoR"),
+            ReputationJournalDeliveryOutcomeV1::DeadLettered { attempts: 1 }
+        ));
+
+        let original = outbox
+            .state
+            .lock()
+            .expect("producer state")
+            .checkpoint
+            .clone();
+        assert_eq!(original.observed.len(), 1);
+        assert_eq!(original.completed.len(), 1);
+        assert_eq!(original.dead_letters.len(), 1);
+        assert_eq!(original.stream_token_gateway_admissions.len(), 17);
+        let original_pending = original.pending.clone();
+        let original_completed = original.completed.clone();
+        let original_observed = original.observed.clone();
+        let original_dead_letters = original.dead_letters.clone();
+        let original_heads = original.stream_token_gateway_heads.clone();
+
+        // Derive the minimal fitting prefix independently from the production
+        // search, plan, and eviction helpers. The fixture fixes sequences
+        // 1..=16 as evictable oldest-to-newest and sequence 17 as the head.
+        const EXPECTED_PREFIX: usize = 9;
+        let expected_eviction_order = (1_u64..17)
+            .map(|sequence| {
+                original
+                    .stream_token_gateway_admissions
+                    .iter()
+                    .find(|admission| admission.binding.gateway_sequence == sequence)
+                    .expect("hard-coded non-head admission")
+                    .event_id
+            })
+            .collect::<Vec<_>>();
+        let mut iterative = original.clone();
+        let mut iterative_lengths = vec![
+            norito::core::encoded_frame_len(&iterative).expect("measure original checkpoint frame"),
+        ];
+        let mut expected = None;
+        for (index, event_id) in expected_eviction_order.iter().copied().enumerate() {
+            let position = iterative
+                .stream_token_gateway_admissions
+                .iter()
+                .position(|admission| admission.event_id == event_id)
+                .expect("hard-coded admission remains");
+            iterative.stream_token_gateway_admissions.remove(position);
+            iterative_lengths.push(
+                norito::core::encoded_frame_len(&iterative)
+                    .expect("measure iterative checkpoint frame"),
+            );
+            if index + 1 == EXPECTED_PREFIX {
+                expected = Some(iterative.clone());
+            }
+        }
+        assert_eq!(iterative.stream_token_gateway_admissions.len(), 1);
+        assert!(
+            iterative_lengths
+                .windows(2)
+                .all(|adjacent| adjacent[0] > adjacent[1]),
+            "each complete admission removal must strictly reduce the frame"
+        );
+        let expected = expected.expect("capture independently compacted checkpoint");
+        let ceiling =
+            u64::try_from(iterative_lengths[EXPECTED_PREFIX]).expect("fixture length fits u64");
+        assert!(
+            u64::try_from(iterative_lengths[EXPECTED_PREFIX - 1]).expect("fixture length fits u64")
+                > ceiling,
+            "the preceding prefix must remain over the selected ceiling"
+        );
+
+        let eviction_plan = stream_token_admission_eviction_plan(&original);
+        assert_eq!(eviction_plan, expected_eviction_order);
+        let search = smallest_stream_token_admission_eviction_prefix(
+            &original,
+            &eviction_plan,
+            ceiling,
+            iterative_lengths[0],
+        )
+        .expect("find smallest fitting admission prefix");
+        assert_eq!(search.prefix, EXPECTED_PREFIX);
+        let mut ceiling_log2 = 0;
+        let mut covered = 1;
+        while covered < eviction_plan.len() {
+            covered *= 2;
+            ceiling_log2 += 1;
+        }
+        assert!(
+            search.probes <= ceiling_log2 + 1,
+            "full-plan qualification plus binary search must be logarithmic"
+        );
+
+        let (bounded, bounded_bytes) =
+            encode_bounded_journal_checkpoint(original.clone(), &policy, policy_digest, ceiling)
+                .expect("evict the independently minimal admission prefix");
+        assert_eq!(bounded, expected);
+        assert_eq!(
+            bounded_bytes.len(),
+            norito::core::encoded_frame_len(&bounded).expect("measure exact bounded frame")
+        );
+        assert_eq!(
+            bounded_bytes,
+            norito::to_bytes(&expected).expect("encode exact expected checkpoint")
+        );
+        assert_eq!(bounded.pending, original_pending);
+        assert_eq!(bounded.completed, original_completed);
+        assert_eq!(bounded.observed, original_observed);
+        assert_eq!(bounded.dead_letters, original_dead_letters);
+        assert_eq!(bounded.stream_token_gateway_heads, original_heads);
+        let head = bounded
+            .stream_token_gateway_heads
+            .first()
+            .expect("gateway head");
+        assert_eq!(head.event_id, head_event_id);
+        assert!(
+            bounded
+                .stream_token_gateway_admissions
+                .iter()
+                .any(|admission| admission.binding == head.binding
+                    && admission.event_id == head.event_id),
+            "the canonical head admission must remain pinned"
+        );
+        assert_eq!(
+            decode_journal_checkpoint(&bounded_bytes, &policy, policy_digest)
+                .expect("decode bounded checkpoint"),
+            bounded
+        );
+
+        let irreducible = iterative;
+        let mut irreducible_probe = irreducible.clone();
+        assert!(!evict_oldest_non_head_stream_token_admission(
+            &mut irreducible_probe
+        ));
+        assert_eq!(irreducible.pending, original_pending);
+        assert_eq!(irreducible.completed, original_completed);
+        assert_eq!(irreducible.observed, original_observed);
+        assert_eq!(irreducible.dead_letters, original_dead_letters);
+        assert_eq!(irreducible.stream_token_gateway_heads, original_heads);
+        let irreducible_ceiling = u64::try_from(
+            norito::core::encoded_frame_len(&irreducible).expect("measure irreducible checkpoint"),
+        )
+        .expect("fixture length fits u64")
+        .saturating_sub(1);
+        assert!(matches!(
+            encode_bounded_journal_checkpoint(
+                original.clone(),
+                &policy,
+                policy_digest,
+                irreducible_ceiling,
+            ),
+            Err(ReputationRuntimeError::CheckpointTooLarge)
+        ));
+        assert_eq!(original.completed, original_completed);
+        assert_eq!(original.observed, original_observed);
+    }
+
+    #[test]
     fn publication_construction_rejects_signer_handle_substitution() {
         let projector_root = TempDir::new().expect("projector root");
         let publication_root = TempDir::new().expect("publication root");
@@ -6768,6 +11845,8 @@ mod tests {
             REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1,
         )
         .expect("publication policy");
+        let signer_qualification = policy.threshold_signer_qualification();
+        let dag_qualification = policy.governance_dag_qualification();
         let result = ReputationPublicationReconcilerV1::open(
             publication_root.path(),
             projector,
@@ -6775,15 +11854,163 @@ mod tests {
             policy,
             Arc::new(NullThresholdSigner {
                 handle: "signer-b".to_owned(),
+                qualification: signer_qualification,
             }),
             Arc::new(NullGovernanceDag {
                 handle: "dag-a".to_owned(),
+                qualification: dag_qualification,
             }),
         );
         assert!(matches!(
             result,
             Err(ReputationRuntimeError::RuntimeBindingMismatch)
         ));
+    }
+
+    #[test]
+    fn governance_dag_qualification_binds_peer_identity_and_ed25519_key() {
+        let first_key = SigningKey::from_bytes(&[0xB1; 32])
+            .verifying_key()
+            .to_bytes();
+        let second_key = SigningKey::from_bytes(&[0xB2; 32])
+            .verifying_key()
+            .to_bytes();
+        let expected = reputation_governance_dag_policy_digest_v1(b"peer-a", first_key)
+            .expect("policy digest");
+
+        assert_eq!(
+            expected,
+            reputation_governance_dag_policy_digest_v1(b"peer-a", first_key)
+                .expect("stable policy digest")
+        );
+        assert_ne!(
+            expected,
+            reputation_governance_dag_policy_digest_v1(b"peer-b", first_key)
+                .expect("peer-bound policy digest")
+        );
+        assert_ne!(
+            expected,
+            reputation_governance_dag_policy_digest_v1(b"peer-a", second_key)
+                .expect("key-bound policy digest")
+        );
+        assert!(matches!(
+            reputation_governance_dag_policy_digest_v1(b"", first_key),
+            Err(ReputationRuntimeError::InvalidRuntimePolicy)
+        ));
+        assert!(matches!(
+            reputation_governance_dag_policy_digest_v1(b"peer-a", [0; 32]),
+            Err(ReputationRuntimeError::InvalidRuntimePolicy)
+        ));
+    }
+
+    #[test]
+    fn publication_construction_rejects_same_key_different_peer_qualification() {
+        let projector_root = TempDir::new().expect("projector root");
+        let publication_root = TempDir::new().expect("publication root");
+        let trust = trust_policy();
+        let projector = Arc::new(
+            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
+                .expect("projector"),
+        );
+        let publisher_key = SigningKey::from_bytes(&[0xB1; 32])
+            .verifying_key()
+            .to_bytes();
+        let policy = ReputationPublicationPolicyV1::try_new(
+            &trust,
+            "signer-a",
+            "dag-a",
+            b"peer-a".to_vec(),
+            publisher_key,
+            REPUTATION_RUNTIME_MIN_CHECKPOINT_BYTES_V1,
+        )
+        .expect("publication policy");
+        let substituted_peer_qualification = ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            reputation_governance_dag_policy_digest_v1(b"peer-b", publisher_key)
+                .expect("substituted peer policy digest"),
+        );
+        let result = ReputationPublicationReconcilerV1::open(
+            publication_root.path(),
+            projector,
+            trust,
+            policy.clone(),
+            Arc::new(NullThresholdSigner {
+                handle: "signer-a".to_owned(),
+                qualification: policy.threshold_signer_qualification(),
+            }),
+            Arc::new(NullGovernanceDag {
+                handle: "dag-a".to_owned(),
+                qualification: substituted_peer_qualification,
+            }),
+        );
+
+        assert!(matches!(
+            result,
+            Err(ReputationRuntimeError::RuntimeBindingMismatch)
+        ));
+        assert!(
+            !publication_root
+                .path()
+                .join(REPUTATION_PUBLICATION_CHECKPOINT_FILE_NAME_V1)
+                .exists(),
+            "peer substitution must fail before publication state opens"
+        );
+    }
+
+    #[test]
+    fn governance_readback_is_discarded_when_provider_qualification_drifts() {
+        let projector_root = TempDir::new().expect("projector root");
+        let publication_root = TempDir::new().expect("publication root");
+        let trust = trust_policy();
+        let projector = Arc::new(
+            ReputationIngestService::open(projector_root.path(), ingest_policy(&trust))
+                .expect("projector"),
+        );
+        let policy = publication_policy(&trust);
+        let signed = signed_snapshot(&trust, [0xD8; 16], None, FINALIZED_AT_MS / 1_000);
+        let block = governance_block_after(&signed, None);
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&block)),
+            inclusion_path: vec![block],
+        };
+        let pending = StoredReputationPublicationV1 {
+            sequence: 1,
+            material_digest: [0xD9; 32],
+            signed_result_digest: signed_result_digest(&signed).expect("signed result digest"),
+            signed_result: signed,
+            governance_acknowledgement: None,
+            governance_readback: None,
+        };
+        let request = governance_publication_request(&pending).expect("publication request");
+        let reconciler = ReputationPublicationReconcilerV1::open(
+            publication_root.path(),
+            projector,
+            trust,
+            policy.clone(),
+            Arc::new(NullThresholdSigner {
+                handle: "signer-a".to_owned(),
+                qualification: policy.threshold_signer_qualification(),
+            }),
+            Arc::new(DriftingGovernanceDag {
+                handle: "dag-a".to_owned(),
+                qualification: Mutex::new(policy.governance_dag_qualification()),
+                readback,
+            }),
+        )
+        .expect("open reconciler");
+
+        assert!(matches!(
+            reconciler.reconcile_governance_publication(&request),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        assert!(
+            reconciler
+                .pending_publication()
+                .expect("read durable publication state")
+                .is_none(),
+            "a receipt returned during qualification drift must not become durable"
+        );
     }
 
     #[test]
@@ -6919,6 +12146,8 @@ mod tests {
             [0xFF, 0x00, 0x01],
         )
         .expect("write corrupt publication checkpoint");
+        let signer_qualification = policy.threshold_signer_qualification();
+        let dag_qualification = policy.governance_dag_qualification();
         assert!(matches!(
             ReputationPublicationReconcilerV1::open(
                 publication_root.path(),
@@ -6927,9 +12156,11 @@ mod tests {
                 policy,
                 Arc::new(NullThresholdSigner {
                     handle: "signer-a".to_owned(),
+                    qualification: signer_qualification,
                 }),
                 Arc::new(NullGovernanceDag {
                     handle: "dag-a".to_owned(),
+                    qualification: dag_qualification,
                 }),
             ),
             Err(ReputationRuntimeError::InvalidCheckpoint)
@@ -6967,6 +12198,9 @@ mod tests {
             first_digest,
             &first,
         );
+        let first_public_readback = first_readback
+            .reconstruct_readback(&first)
+            .expect("reconstruct first Governance DAG readback");
         reconciler
             .store_governance_readback(first_acknowledgement, first_readback)
             .expect("store first Governance DAG readback");
@@ -7013,12 +12247,13 @@ mod tests {
         );
 
         let second_digest = signed_result_digest(&second).expect("second signed result digest");
-        let (second_acknowledgement, second_readback) = governance_readback(
+        let (second_acknowledgement, second_readback) = governance_readback_after(
             &policy,
             second_delivery.sequence,
             second_delivery.material_digest,
             second_digest,
             &second,
+            Some(&first_public_readback),
         );
         reconciler
             .store_governance_readback(second_acknowledgement, second_readback)
@@ -7149,6 +12384,7 @@ mod tests {
         let policy_digest = policy.digest().expect("publication policy digest");
         let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
         let mut previous_snapshot_id = None;
+        let mut previous_governance_readback = None;
 
         for offset in 0_u8..3 {
             let snapshot_id = [0xC0 + offset; 16];
@@ -7161,13 +12397,17 @@ mod tests {
             let material_digest = [0xD0 + offset; 32];
             let signed_result_digest = signed_result_digest(&signed).expect("signed result digest");
             let sequence = u64::from(offset) + 1;
-            let (acknowledgement, governance_readback) = governance_readback(
+            let (acknowledgement, governance_readback) = governance_readback_after(
                 &policy,
                 sequence,
                 material_digest,
                 signed_result_digest,
                 &signed,
+                previous_governance_readback.as_ref(),
             );
+            let current_governance_readback = governance_readback
+                .reconstruct_readback(&signed)
+                .expect("reconstruct Governance DAG readback");
             let committed = ReputationCommittedSnapshotV1 {
                 sequence,
                 material_digest,
@@ -7185,6 +12425,7 @@ mod tests {
                 )
                 .expect("commit bounded authoritative snapshot");
             previous_snapshot_id = Some(snapshot_id);
+            previous_governance_readback = Some(current_governance_readback);
         }
 
         assert_eq!(checkpoint.committed_snapshots.len(), 2);
@@ -7306,13 +12547,293 @@ mod tests {
         ));
 
         let pending = checkpoint.pending.as_mut().expect("pending publication");
-        pending.signed_result.signatures[0].signature[0] ^= 0x01;
+        let signing_digest = pending
+            .signed_result
+            .signing_digest()
+            .expect("snapshot signing digest");
+        pending.signed_result.signatures[0].signature = SigningKey::from_bytes(&[0x72; 32])
+            .sign(&signing_digest)
+            .to_bytes();
         pending.signed_result_digest =
             signed_result_digest(&pending.signed_result).expect("forged structural digest");
         let forged = norito::to_bytes(&checkpoint).expect("canonical forged checkpoint");
         assert!(matches!(
             decode_publication_checkpoint(&forged, &policy, policy_digest, &trust),
             Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn signed_head_inclusion_path_is_persisted_and_reverified_on_restart() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let policy_digest = policy.digest().expect("publication policy digest");
+        let before = signed_snapshot(&trust, [0x31; 16], None, FINALIZED_AT_MS / 1_000);
+        let target = signed_snapshot(&trust, [0x32; 16], None, FINALIZED_AT_MS / 1_000 + 1);
+        let after = signed_snapshot(&trust, [0x33; 16], None, FINALIZED_AT_MS / 1_000 + 2);
+        let first = governance_block_after(&before, None);
+        let target_block = governance_block_after(&target, Some(&first));
+        let tip = governance_block_after(&after, Some(&target_block));
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(&[first.clone(), target_block.clone(), tip.clone()]),
+            inclusion_path: vec![first, target_block, tip],
+        };
+        let material_digest = [0x34; 32];
+        let target_digest = signed_result_digest(&target).expect("signed result digest");
+        let (acknowledgement, target_index) = governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            material_digest,
+            target_digest,
+            &target,
+            &readback,
+            None,
+        )
+        .expect("validate signed-head inclusion");
+        assert_eq!(target_index, 1);
+        let mut substituted_head = readback.clone();
+        substituted_head.head.publisher_peer_id = b"peer-b".to_vec();
+        substituted_head.head.head_signature = empty_governance_signature();
+        let substituted_payload = substituted_head
+            .head
+            .signature_payload_bytes()
+            .expect("encode substituted head payload");
+        let governance_signing_key = SigningKey::from_bytes(&[0xB1; 32]);
+        substituted_head.head.head_signature = GovernanceLogSignatureV1 {
+            algorithm: GovernanceSignatureAlgorithm::Ed25519,
+            public_key: governance_signing_key.verifying_key().to_bytes().to_vec(),
+            signature: governance_signing_key
+                .sign(&substituted_payload)
+                .to_bytes()
+                .to_vec(),
+        };
+        substituted_head
+            .head
+            .validate()
+            .expect("substituted head remains cryptographically valid");
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                material_digest,
+                target_digest,
+                &target,
+                &substituted_head,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+        let stored =
+            StoredReputationGovernanceDagReadbackV1::from_readback(&readback, target_index)
+                .expect("compact readback");
+        let committed = ReputationCommittedSnapshotV1 {
+            sequence: 1,
+            material_digest,
+            signed_result_digest: target_digest,
+            signed_result: target,
+            governance_acknowledgement: acknowledgement,
+        };
+        let mut checkpoint = ReputationPublicationCheckpointV1::empty(policy_digest);
+        checkpoint
+            .commit_authoritative(committed, &policy, &trust, stored)
+            .expect("commit signed-head inclusion");
+
+        let canonical = norito::to_bytes(&checkpoint).expect("encode checkpoint");
+        assert_eq!(
+            decode_publication_checkpoint(&canonical, &policy, policy_digest, &trust)
+                .expect("restart must reverify the full retained path"),
+            checkpoint
+        );
+
+        let mut forged_path = checkpoint.clone();
+        forged_path.committed_governance_readbacks[0].path_after_target[0]
+            .block_signature
+            .signature[0] ^= 0x01;
+        let forged_path = norito::to_bytes(&forged_path).expect("encode forged path checkpoint");
+        assert!(matches!(
+            decode_publication_checkpoint(&forged_path, &policy, policy_digest, &trust),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+
+        let mut forged_head = checkpoint;
+        forged_head.committed_governance_readbacks[0]
+            .head
+            .head_signature
+            .signature[0] ^= 0x01;
+        let forged_head = norito::to_bytes(&forged_head).expect("encode forged head checkpoint");
+        assert!(matches!(
+            decode_publication_checkpoint(&forged_head, &policy, policy_digest, &trust),
+            Err(ReputationRuntimeError::InvalidCheckpoint)
+        ));
+    }
+
+    #[test]
+    fn governance_readback_rejects_oversize_path_without_truncation() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let signed = signed_snapshot(&trust, [0x41; 16], None, FINALIZED_AT_MS / 1_000);
+        let mut path = Vec::new();
+        for _ in 0..=REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 {
+            let block = governance_block_after(&signed, path.last());
+            path.push(block);
+        }
+        let readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(&path),
+            inclusion_path: path,
+        };
+        let error = governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            [0x42; 32],
+            signed_result_digest(&signed).expect("signed result digest"),
+            &signed,
+            &readback,
+            None,
+        )
+        .expect_err("oversize inclusion path must fail closed");
+        assert_eq!(
+            error,
+            ReputationRuntimeError::GovernanceReadbackPathTooLong {
+                found: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1 + 1,
+                maximum: REPUTATION_GOVERNANCE_DAG_MAX_INCLUSION_BLOCKS_V1,
+            }
+        );
+    }
+
+    #[test]
+    fn governance_readback_requires_the_exact_target_once() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let target = signed_snapshot(&trust, [0x45; 16], None, FINALIZED_AT_MS / 1_000);
+        let other = signed_snapshot(&trust, [0x46; 16], None, FINALIZED_AT_MS / 1_000);
+        let other_block = governance_block_after(&other, None);
+        let missing = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&other_block)),
+            inclusion_path: vec![other_block],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                [0x47; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &missing,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+
+        let first_target = governance_block_after(&target, None);
+        let wrong_version = ReputationGovernanceDagReadbackV1 {
+            version: 0,
+            head: governance_head(std::slice::from_ref(&first_target)),
+            inclusion_path: vec![first_target.clone()],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                [0x48; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &wrong_version,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+
+        let second_target = governance_block_after(&target, Some(&first_target));
+        let duplicate = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(&[first_target.clone(), second_target.clone()]),
+            inclusion_path: vec![first_target, second_target],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                1,
+                [0x49; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &duplicate,
+                None,
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+    }
+
+    #[test]
+    fn governance_readback_rejects_fork_and_rollback_from_previous_head() {
+        let trust = trust_policy();
+        let policy = publication_policy(&trust);
+        let previous = signed_snapshot(&trust, [0x51; 16], None, FINALIZED_AT_MS / 1_000);
+        let previous_block = governance_block_after(&previous, None);
+        let previous_readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&previous_block)),
+            inclusion_path: vec![previous_block],
+        };
+        governance_acknowledgement_from_readback(
+            &policy,
+            1,
+            [0x52; 32],
+            signed_result_digest(&previous).expect("previous digest"),
+            &previous,
+            &previous_readback,
+            None,
+        )
+        .expect("validate previous authenticated head");
+
+        let target = signed_snapshot(
+            &trust,
+            [0x53; 16],
+            Some(previous.snapshot.snapshot_id),
+            FINALIZED_AT_MS / 1_000 + 1,
+        );
+        let fork_root = governance_block_after(
+            &signed_snapshot(&trust, [0x54; 16], None, FINALIZED_AT_MS / 1_000),
+            None,
+        );
+        let fork_target = governance_block_after(&target, Some(&fork_root));
+        let fork_readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&fork_target)),
+            inclusion_path: vec![fork_target],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                2,
+                [0x55; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &fork_readback,
+                Some(&previous_readback),
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
+        ));
+
+        let rollback_block = governance_block_after(&target, None);
+        let rollback_readback = ReputationGovernanceDagReadbackV1 {
+            version: REPUTATION_GOVERNANCE_DAG_READBACK_VERSION_V1,
+            head: governance_head(std::slice::from_ref(&rollback_block)),
+            inclusion_path: vec![rollback_block],
+        };
+        assert!(matches!(
+            governance_acknowledgement_from_readback(
+                &policy,
+                2,
+                [0x56; 32],
+                signed_result_digest(&target).expect("target digest"),
+                &target,
+                &rollback_readback,
+                Some(&previous_readback),
+            ),
+            Err(ReputationRuntimeError::InvalidGovernanceAcknowledgement)
         ));
     }
 
@@ -7360,6 +12881,7 @@ mod tests {
             .committed_governance_readbacks
             .last_mut()
             .expect("committed Governance DAG readback")
+            .target
             .block_signature
             .signature[0] ^= 0x01;
         let forged = norito::to_bytes(&checkpoint).expect("canonical forged DAG checkpoint");

@@ -54,7 +54,7 @@ public final class SignedTransactionHasher {
         throw new IllegalArgumentException(
             "signed transaction bytes are not the exact canonical bare encoding");
       }
-      return wrapExternalEntrypoint(snapshot);
+      return wrapExternalEntrypoint(decoded.encodedPayload());
     } catch (NoritoException ex) {
       throw new IllegalArgumentException(
           "signed transaction bytes are not a valid canonical bare encoding", ex);
@@ -64,31 +64,32 @@ public final class SignedTransactionHasher {
   /**
    * Returns the canonical Norito bytes for the signed transaction.
    *
-   * <p>Iroha hashes the {@code TransactionEntrypoint::External} enum wrapper around the signed
-   * transaction, not the signed transaction directly. The encoding is:
+   * <p>Iroha hashes the {@code TransactionEntrypoint::External} discriminant and the signed
+   * transaction payload, excluding the authorization proof. The encoding is:
    * {@code u32_LE(0) + COMPACT_LEN(payload.length) + payload}.
    */
   public static byte[] canonicalBytes(final SignedTransaction transaction) {
     try {
-      final byte[] encoded = SignedTransactionEncoder.encode(transaction);
-      return canonicalBytesFromBare(encoded);
+      // Encoding validates the exact signed-transaction wire shape and the nested payload.
+      SignedTransactionEncoder.encode(transaction);
+      return wrapExternalEntrypoint(transaction.encodedPayload());
     } catch (NoritoException | IllegalArgumentException ex) {
       throw new IllegalStateException("Failed to encode signed transaction", ex);
     }
   }
 
-  private static byte[] wrapExternalEntrypoint(final byte[] canonicalBareSignedTransaction) {
-    final byte[] lengthPrefix = encodeCompactLength(canonicalBareSignedTransaction.length);
+  private static byte[] wrapExternalEntrypoint(final byte[] canonicalTransactionPayload) {
+    final byte[] lengthPrefix = encodeCompactLength(canonicalTransactionPayload.length);
     final byte[] result =
-        new byte[4 + lengthPrefix.length + canonicalBareSignedTransaction.length];
+        new byte[4 + lengthPrefix.length + canonicalTransactionPayload.length];
     // u32 LE discriminant = 0 (External variant) — result[0..3] already zeroed
     System.arraycopy(lengthPrefix, 0, result, 4, lengthPrefix.length);
     System.arraycopy(
-        canonicalBareSignedTransaction,
+        canonicalTransactionPayload,
         0,
         result,
         4 + lengthPrefix.length,
-        canonicalBareSignedTransaction.length);
+        canonicalTransactionPayload.length);
     return result;
   }
 

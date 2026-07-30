@@ -1868,7 +1868,7 @@ fn operation_provider_id(
     operation: &ReserveOperationV1,
     projection: &ReserveTransactionProjectionV1,
 ) -> Option<ProviderId> {
-    operation.provider_id().or_else(|| match projection {
+    operation.provider_id().or(match projection {
         ReserveTransactionProjectionV1::MovementDecision { movement, .. } => {
             Some(movement.provider_id)
         }

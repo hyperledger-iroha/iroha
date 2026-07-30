@@ -110,11 +110,14 @@ advert_args=(
   --max-streams=4 \
   --capability=torii \
   --capability=quic \
+  --soranet-pq=strict \
   --range-capability=max_span=1048576,min_granularity=4096,sparse=true,alignment=false,merkle=true \
   --stream-budget=max_in_flight=4,max_bytes_per_sec=5000000,burst=2000000 \
   --transport-hint=torii:0 \
   --transport-hint=quic:1 \
+  --transport-hint=soranet:2 \
   --endpoint=torii:storage.example.com \
+  --endpoint-meta=region:global \
   --topic=sorafs.sf1.primary:global \
   --issued-at=1700000000
 )
@@ -138,10 +141,19 @@ cargo run -p sorafs_car --bin sorafs_provider_advert -- \
   --advert-out=provider.advert \
   --json-out=provider.report.json
 
-# When automation relies on numeric IDs, `--chunker-profile-id=1` remains
-# available, but prefer the canonical handle form (`namespace.name@semver`) so
-# scripts remain stable if IDs change.
 ```
+
+The first-release CLI is a hard cut. `--chunker-profile` accepts only the exact
+`namespace.name@semver` handle; numeric IDs, registry aliases, slash-form
+handles, case variants, and whitespace-padded values fail. Selector tokens and
+structured field names are likewise exact and case-sensitive: availability is
+`hot|warm|cold`; generic capability selectors are
+`torii|quic|potr-mldsa|vendor`; SoraNet PQ and range support use
+`--soranet-pq=guard|majority|strict` and `--range-capability`, respectively;
+booleans are only `true|false`; endpoint kinds are
+`torii|quic|norito-rpc`; and endpoint metadata keys are
+`tls_fingerprint|alpn|region`. Compatibility spellings are rejected instead of
+being normalized.
 
 Provider, stake-pool, capability-payload, endpoint-metadata, and reviewed
 fingerprint hex must be lowercase, even-length, prefix-free, and
@@ -157,6 +169,13 @@ structured payload (`ProviderCapabilityRangeV1`). Providers declare the largest
 chunk span (`max_span`), the minimum seek granularity (`min_granularity`), and
 optional flags for sparse offsets, alignment, and Merkle proof support. The CLI
 rejects missing or inconsistent values and ensures `min_granularity ≤ max_span`.
+The accepted field set is exactly
+`max_span|min_granularity|sparse|alignment|merkle`; each field may occur at most
+once.
+
+`--soranet-pq` emits the typed `SoraNetHybridPq` capability. Each value names
+one cumulative posture: `guard`, `majority`, or `strict`. Stage aliases and
+multi-token combinations are not accepted.
 
 `--stream-budget` introduces the optional `StreamBudgetV1` block that accompanies
 range-capable providers. It declares a deterministic concurrency ceiling
@@ -170,12 +189,19 @@ Norito-level validators perform the same check and also reject empty
 `transport_hints` arrays to prevent malformed offline adverts.
 
 `--transport-hint=protocol:priority` may be repeated to describe the preferred
-transport ordering for ranged fetches (`torii_http_range`, `quic_stream`,
-`soranet_relay`, or vendor extensions). Hints are only accepted when a range
+transport ordering for ranged fetches. CLI selectors map to canonical report/API
+labels as follows: `torii` → `torii_http_range`, `quic` → `quic_stream`,
+`soranet` → `soranet_relay`, and `vendor` → `vendor_reserved`. These output
+labels are not accepted as CLI aliases. Hints are only accepted when a range
 capability is present so downgraded providers cannot advertise transports they
 cannot serve. Client stubs now reject range-capable adverts that omit either
-`stream_budget` or `transport_hints`, preventing malformed metadata from entering
-the multi-source scoreboard or scheduler.
+`stream_budget` or `transport_hints`, preventing malformed metadata from
+entering the multi-source scoreboard or scheduler.
+
+Capability selectors follow the same input/output distinction: `torii`, `quic`,
+the dedicated range flag, the dedicated SoraNet PQ flag, `potr-mldsa`, and
+`vendor` emit the canonical labels `torii_gateway`, `quic_noise`,
+`chunk_range_fetch`, `soranet_pq`, `potr_mldsa`, and `vendor_reserved`.
 
 During multi-source retrieval the orchestrator verifies each chunk against the
 advertised metadata before scheduling it. A provider is skipped (and, if no

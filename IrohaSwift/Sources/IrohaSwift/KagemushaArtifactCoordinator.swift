@@ -150,6 +150,8 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
     private var pending: PendingCandidate?
     private var publicCallbackActive = false
     private var publicCallbackViolation: KagemushaRecursiveSpendError?
+    private let publicCallbackThreadKey =
+        "org.hyperledger.iroha.kagemusha.artifact-coordinator.callback.\(UUID())"
 
     init(sessionFactory: @escaping KagemushaRecursiveSpendArtifactSessionFactory) {
         self.sessionFactory = sessionFactory
@@ -475,6 +477,12 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         publicCallbackActive = true
         publicCallbackViolation = nil
         stateLock.unlock()
+        Thread.current.threadDictionary[publicCallbackThreadKey] = true
+        defer {
+            Thread.current.threadDictionary.removeObject(
+                forKey: publicCallbackThreadKey
+            )
+        }
         do {
             let result = try body()
             stateLock.lock()
@@ -495,6 +503,9 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
     }
 
     private func rejectReentrantLifecycleCall() throws {
+        guard Thread.current.threadDictionary[publicCallbackThreadKey] != nil else {
+            return
+        }
         stateLock.lock()
         defer { stateLock.unlock() }
         guard publicCallbackActive else { return }

@@ -54,8 +54,9 @@ use iroha_smart_contract::data_model::{
         RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
         RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
         RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
-        ResolveSorafsModerationChallenge, RetirePinManifest, SetAssetKeyValue,
-        SetLaneRelayEmergencyValidators, SetPricingSchedule, SetSorafsModerationPolicy,
+        ResolveSorafsModerationChallenge, RetirePinManifest, ReviseReplicationOrderAssignments,
+        RevokeProviderIngestCompletionAuthority, SetAssetKeyValue, SetLaneRelayEmergencyValidators,
+        SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
         SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
         SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
         SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
@@ -142,6 +143,7 @@ pub use sorafs::{
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
     visit_find_sorafs_reputation_journal_authority_policy,
+    visit_find_sorafs_reputation_journal_event_by_source_id,
     visit_find_sorafs_reputation_journal_events, visit_find_sorafs_reserve_appeal_by_id,
     visit_find_sorafs_reserve_appeals, visit_find_sorafs_reserve_events,
     visit_find_sorafs_reserve_movement_by_id, visit_find_sorafs_reserve_movements,
@@ -1168,6 +1170,10 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_complete_replication_order(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ReviseReplicationOrderAssignments>() {
+            sorafs::visit_revise_replication_order_assignments(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<ExpireReplicationOrder>() {
             sorafs::visit_expire_replication_order(executor, isi);
             return;
@@ -1218,6 +1224,14 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<UnregisterProviderOwner>() {
             sorafs::visit_unregister_provider_owner(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetProviderIngestCompletionAuthority>() {
+            sorafs::visit_set_provider_ingest_completion_authority(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RevokeProviderIngestCompletionAuthority>() {
+            sorafs::visit_revoke_provider_ingest_completion_authority(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetPricingSchedule>() {
@@ -1411,10 +1425,10 @@ pub mod settlement {
                     "FX corridor policy updates require an exact typed policy permission"
                 );
             }
-            // Core resolves the governed corridor source and applies the source-specific
-            // authorization rule. In particular, transaction-authority corridors are
-            // intentionally self-service, while fixed-account corridors require the exact
-            // typed settlement permission and source-account match.
+            // Core resolves governed sources and applies the source-specific authorization.
+            // Bilateral DvP/PvP requires an exact counterparty-issued consent token bound to
+            // the complete intent; transaction-authority FX corridors are self-service while
+            // fixed-account corridors require their exact typed permission.
             SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
                 execute!(executor, isi);
@@ -1892,8 +1906,9 @@ pub mod sorafs {
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
         FindSorafsRepairTasks, FindSorafsReputationJournalAuthorityPolicy,
-        FindSorafsReputationJournalEvents, FindSorafsReserveAppealById, FindSorafsReserveEvents,
-        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsReputationJournalEventBySourceId, FindSorafsReputationJournalEvents,
+        FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+        FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -1932,6 +1947,17 @@ pub mod sorafs {
     pub fn visit_find_sorafs_reputation_journal_events<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsReputationJournalEvents,
+    ) {
+    }
+
+    /// One payload-free finalized reputation source result is public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_reputation_journal_event_by_source_id<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsReputationJournalEventBySourceId,
     ) {
     }
 
@@ -2521,6 +2547,26 @@ pub mod sorafs {
         deny!(executor, "Can't complete SoraFS replication order");
     }
 
+    /// Revise a pending replication order's assignments when permitted.
+    pub fn visit_revise_replication_order_assignments<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ReviseReplicationOrderAssignments,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanIssueSorafsReplicationOrder
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't revise SoraFS replication order assignments"
+        );
+    }
+
     /// Expire a replication order when permitted.
     pub fn visit_expire_replication_order<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -2570,6 +2616,46 @@ pub mod sorafs {
         }
 
         deny!(executor, "Can't unregister SoraFS provider owner binding");
+    }
+
+    /// Set a provider-ingest completion authority when permitted.
+    pub fn visit_set_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetProviderIngestCompletionAuthority,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanRegisterSorafsProviderOwner
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't set SoraFS provider-ingest completion authority"
+        );
+    }
+
+    /// Revoke a provider-ingest completion authority when permitted.
+    pub fn visit_revoke_provider_ingest_completion_authority<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &RevokeProviderIngestCompletionAuthority,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        if CanUnregisterSorafsProviderOwner
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(
+            executor,
+            "Can't revoke SoraFS provider-ingest completion authority"
+        );
     }
 
     /// Update the `SoraFS` pricing schedule when permitted.
@@ -3229,6 +3315,7 @@ pub mod domain {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -3546,6 +3633,7 @@ pub mod account {
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -3856,6 +3944,7 @@ pub mod asset_definition {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -5361,6 +5450,7 @@ pub mod trigger {
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
             | AnyPermission::CanInvokeContractEntrypoint(_)
+            | AnyPermission::CanExecuteSettlement(_)
             | AnyPermission::CanManageFxCorridors(_)
             | AnyPermission::CanSetFxCorridorPolicy(_)
             | AnyPermission::CanSettleFxCorridor(_)
@@ -5730,10 +5820,12 @@ mod sorafs_permission_tests {
             IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
             RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
-            ResolveSorafsCapacityDispute, RetirePinManifest, SetPricingSchedule,
-            SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
-            SetSorafsReputationJournalAuthorityPolicy, SubmitSorafsModerationAppeal,
-            SubmitSorafsModerationCommit, UnregisterProviderOwner, UpsertProviderCredit,
+            ResolveSorafsCapacityDispute, RetirePinManifest, ReviseReplicationOrderAssignments,
+            RevokeProviderIngestCompletionAuthority, SetPricingSchedule,
+            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetSorafsPopIssuerPolicy, SetSorafsReputationJournalAuthorityPolicy,
+            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, UnregisterProviderOwner,
+            UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -5750,8 +5842,8 @@ mod sorafs_permission_tests {
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEvents,
-            FindSorafsReserveEvents,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReputationJournalEvents, FindSorafsReserveEvents,
         },
         sorafs::{
             capacity::{
@@ -5762,14 +5854,19 @@ mod sorafs_permission_tests {
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
                 ModerationAppealIntakeV1, ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
             },
-            pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
+            pin_registry::{
+                ManifestAliasBinding, ManifestDigest, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderId,
+            },
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
             reputation::{
                 PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalEntryV1, ReputationJournalFinalizedCursorV1,
-                ReputationJournalPayloadV1, StreamTokenValidationOutcomeV1,
+                ReputationJournalPayloadV1, ReputationJournalSourceIdV1,
+                StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
                 StreamTokenValidationStatusV1,
             },
             reserve::ReserveFinalizedCursorV1,
@@ -5787,6 +5884,7 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
+    use sorafs_manifest::capacity::ReplicationAssignmentV1;
 
     use super::*;
     use crate::{Iroha, prelude, tests::with_mock_permissions};
@@ -6088,8 +6186,11 @@ mod sorafs_permission_tests {
             1_700_000_000_000,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [0x41; 32],
-                request_digest: [0x42; 32],
+                binding: StreamTokenValidationBindingV1 {
+                    gateway_id: [0x41; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0x42; 32],
+                },
                 token_body_digest: Some([0x43; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_700_000_000_000,
@@ -6115,11 +6216,57 @@ mod sorafs_permission_tests {
         IssueReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), vec![0x22], 1, 2)
     }
 
+    fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
+        ProviderIngestCompletionAuthorityV1::new(
+            owner_account_id(),
+            ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x13; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x14; 32],
+            },
+        )
+    }
+
     fn complete_replication_order() -> CompleteReplicationOrder {
         CompleteReplicationOrder::new(
             ReplicationOrderId::new([0x11; 32]),
             ProviderId::new([0x12; 32]),
             3,
+            provider_ingest_completion_authority(),
+            1,
+            ProviderIngestFinalizedAnchorV1 {
+                height: 2,
+                block_hash: [0x15; 32],
+            },
+        )
+    }
+
+    fn revise_replication_order_assignments() -> ReviseReplicationOrderAssignments {
+        ReviseReplicationOrderAssignments::new(
+            ReplicationOrderId::new([0x11; 32]),
+            1,
+            2,
+            vec![ReplicationAssignmentV1 {
+                provider_id: [0x12; 32],
+                slice_gib: 1,
+                lane: None,
+            }],
+        )
+    }
+
+    fn set_provider_ingest_completion_authority() -> SetProviderIngestCompletionAuthority {
+        SetProviderIngestCompletionAuthority::new(
+            ProviderId::new([0x12; 32]),
+            None,
+            provider_ingest_completion_authority(),
+        )
+    }
+
+    fn revoke_provider_ingest_completion_authority() -> RevokeProviderIngestCompletionAuthority {
+        RevokeProviderIngestCompletionAuthority::new(
+            ProviderId::new([0x12; 32]),
+            provider_ingest_completion_authority(),
         )
     }
 
@@ -6305,6 +6452,13 @@ mod sorafs_permission_tests {
     );
 
     sorafs_permission_case!(
+        revise_replication_order_assignments_requires_permission,
+        revise_replication_order_assignments(),
+        CanIssueSorafsReplicationOrder,
+        sorafs::visit_revise_replication_order_assignments
+    );
+
+    sorafs_permission_case!(
         expire_replication_order_requires_permission,
         expire_replication_order(),
         CanIssueSorafsReplicationOrder,
@@ -6323,6 +6477,20 @@ mod sorafs_permission_tests {
         unregister_provider_owner(),
         CanUnregisterSorafsProviderOwner,
         sorafs::visit_unregister_provider_owner
+    );
+
+    sorafs_permission_case!(
+        set_provider_ingest_completion_authority_requires_permission,
+        set_provider_ingest_completion_authority(),
+        CanRegisterSorafsProviderOwner,
+        sorafs::visit_set_provider_ingest_completion_authority
+    );
+
+    sorafs_permission_case!(
+        revoke_provider_ingest_completion_authority_requires_permission,
+        revoke_provider_ingest_completion_authority(),
+        CanUnregisterSorafsProviderOwner,
+        sorafs::visit_revoke_provider_ingest_completion_authority
     );
 
     sorafs_permission_case!(
@@ -6453,17 +6621,21 @@ mod sorafs_permission_tests {
 
     #[test]
     fn reputation_journal_query_is_public_transparency_state() {
+        let cursor = ReputationJournalFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0x45; 32],
+            finalized_at_unix_ms: 1_700_000_000_000,
+        };
         assert_allowed_without_permission(
-            FindSorafsReputationJournalEvents::new(
-                Some(ReputationJournalFinalizedCursorV1 {
-                    height: 7,
-                    block_hash: [0x45; 32],
-                    finalized_at_unix_ms: 1_700_000_000_000,
-                }),
-                None,
-                16,
-            ),
+            FindSorafsReputationJournalEvents::new(Some(cursor), None, 16),
             sorafs::visit_find_sorafs_reputation_journal_events,
+        );
+        assert_allowed_without_permission(
+            FindSorafsReputationJournalEventBySourceId::new(
+                ReputationJournalSourceIdV1([0x46; 32]),
+                Some(cursor),
+            ),
+            super::visit_find_sorafs_reputation_journal_event_by_source_id,
         );
     }
 

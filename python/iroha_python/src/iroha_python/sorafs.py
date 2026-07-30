@@ -75,6 +75,7 @@ __all__ = [
     "SORAFS_REFERENCE_MAX_LABEL_BYTES_V1",
     "SorafsGovernanceDagBlockInput",
     "SorafsFixtureBundlePayloadInput",
+    "validate_appeal_finance_cancel_asset_lock",
     "validate_orderbook_payload",
     "sign_orderbook_payload",
     "derive_orderbook_order_id",
@@ -867,6 +868,36 @@ def validate_orderbook_payload(
         _normalize_generated_at_unix(generated_at_unix),
     )
     return _reference_outcome_from_json(payload, "orderbook validation")
+
+
+def validate_appeal_finance_cancel_asset_lock(
+    norito_bytes: bytes | bytearray | memoryview,
+    *,
+    label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Diagnose one bare appeal-finance ``CancelAssetLock`` V1 archive."""
+
+    payload_bytes = _bytes_payload(norito_bytes, "norito_bytes")
+    resolved_label = _reference_label(
+        label,
+        "sdk:sorafs.appeal_finance.cancel_asset_lock",
+        "label",
+    )
+    generated_at = _normalize_generated_at_unix(generated_at_unix)
+    native = _require_sorafs_native_function(
+        "sorafs_validate_appeal_finance_cancel_asset_lock_json",
+        "appeal-finance CancelAssetLock validation",
+    )
+    payload = native(
+        payload_bytes,
+        resolved_label,
+        generated_at,
+    )
+    return _reference_outcome_from_json(
+        payload,
+        "appeal-finance CancelAssetLock validation",
+    )
 
 
 def sign_orderbook_payload(

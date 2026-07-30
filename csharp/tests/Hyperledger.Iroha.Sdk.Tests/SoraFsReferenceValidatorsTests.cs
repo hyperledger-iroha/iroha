@@ -30,8 +30,30 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { Abi = 20 }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
+            new FakeNativeBoundary { Abi = 22 }));
+        Assert.False(SoraFsReferenceValidators.IsAvailable(
             new FakeNativeBoundary { SymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsAvailable(
+            new FakeNativeBoundary { AppealFinanceSymbolsAvailable = false }));
+        Assert.False(SoraFsReferenceValidators.IsAvailable(
+            new FakeNativeBoundary
+            {
+                AbiError = new DllNotFoundException("bridge missing"),
+            }));
+    }
+
+    [Fact]
+    public void AppealFinanceAvailabilityRequiresAbiAndSymbol()
+    {
+        Assert.True(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary()));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary { Abi = 20 }));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary { Abi = 22 }));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
+            new FakeNativeBoundary { AppealFinanceSymbolsAvailable = false }));
+        Assert.False(SoraFsReferenceValidators.IsAppealFinanceAvailable(
             new FakeNativeBoundary
             {
                 AbiError = new DllNotFoundException("bridge missing"),
@@ -45,6 +67,8 @@ public sealed class SoraFsReferenceValidatorsTests
             new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { Abi = 20 }));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary { Abi = 22 }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
             new FakeNativeBoundary { OrderbookPdpSymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
@@ -61,6 +85,8 @@ public sealed class SoraFsReferenceValidatorsTests
             new FakeNativeBoundary()));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { Abi = 20 }));
+        Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
+            new FakeNativeBoundary { Abi = 22 }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
             new FakeNativeBoundary { FixtureBundleSymbolsAvailable = false }));
         Assert.False(SoraFsReferenceValidators.IsFixtureBundleAvailable(
@@ -128,6 +154,30 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.Equal(4, commitment[0]);
         Assert.Equal(5, challenge[0]);
         Assert.Equal(6, proof[0]);
+    }
+
+    [Fact]
+    public void AppealFinanceValidationCopiesInputsAndFreesOutput()
+    {
+        var native = new FakeNativeBoundary();
+        var payload = new byte[] { 1, 2, 3 };
+        var json = SoraFsReferenceValidators.ValidateAppealFinanceCancelAssetLockJson(
+            payload,
+            "cancel_asset_lock_v1.to",
+            123,
+            native);
+
+        Assert.Equal(1, native.AppealFinanceCalls);
+        Assert.NotSame(payload, native.LastAppealFinanceBytes);
+        Assert.Equal(payload, native.LastAppealFinanceBytes!);
+        Assert.Equal(
+            "cancel_asset_lock_v1.to",
+            Encoding.UTF8.GetString(native.LastAppealFinanceLabel!));
+        Assert.Contains("\"generated_at\":123", json, StringComparison.Ordinal);
+        Assert.Equal(1, native.FreeCalls);
+
+        native.LastAppealFinanceBytes![0] = 0x7f;
+        Assert.Equal(1, payload[0]);
     }
 
     [Fact]
@@ -666,17 +716,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void LinkedFixtureBundleMatchesNativeReferenceWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsFixtureBundleAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with fixture-bundle symbol is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsFixtureBundleAvailable(),
+            "ABI-21 connect_norito_bridge with fixture-bundle symbol is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -719,17 +761,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomesWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsOrderbookPdpAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
+            "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
 
         var orderbookRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -857,12 +891,106 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
+    public void AppealFinanceCancelAssetLockProfilesMatchNativeReference()
+    {
+        Assert.True(
+            SoraFsReferenceValidators.IsAppealFinanceAvailable(),
+            "ABI-21 appeal-finance reference bridge is required.");
+        var fixtureRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest",
+            "appeal_finance");
+        var profiles = new[]
+        {
+            (
+                Path: "cancel_asset_lock_v1.to",
+                Status: "Ok",
+                Code: "SFS-OK-000",
+                Category: "validation"),
+            (
+                Path: Path.Combine(
+                    "negative",
+                    "cancel_asset_lock_legacy_missing_expected_v1.to"),
+                Status: "Error",
+                Code: "SFS-NORITO-001",
+                Category: "norito"),
+            (
+                Path: Path.Combine(
+                    "negative",
+                    "cancel_asset_lock_zero_expected_v1.to"),
+                Status: "Error",
+                Code: "SFS-VAL-001",
+                Category: "validation"),
+        };
+
+        foreach (var profile in profiles)
+        {
+            var outcomeJson =
+                SoraFsReferenceValidators.ValidateAppealFinanceCancelAssetLockJson(
+                    File.ReadAllBytes(Path.Combine(fixtureRoot, profile.Path)),
+                    Path.GetFileName(profile.Path),
+                    123);
+            using var outcome = JsonDocument.Parse(outcomeJson);
+            Assert.Equal(
+                profile.Status,
+                outcome.RootElement.GetProperty("status").GetString());
+            Assert.Equal(
+                profile.Code,
+                outcome.RootElement.GetProperty("code").GetString());
+            Assert.Equal(
+                profile.Category,
+                outcome.RootElement.GetProperty("category").GetString());
+            Assert.Equal(1, outcome.RootElement.GetProperty("version").GetInt32());
+            Assert.Equal(
+                123ul,
+                outcome.RootElement.GetProperty("generated_at").GetUInt64());
+            Assert.Contains(
+                "sorafs.reference.appeal_finance",
+                outcome.RootElement
+                    .GetProperty("telemetry_tags")
+                    .EnumerateArray()
+                    .Select(tag => tag.GetString()));
+        }
+
+        var referenceRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest",
+            "reference_sdk");
+        foreach (var profile in new[]
+        {
+            (
+                Path: "cancel_asset_lock_v1.to",
+                Expected:
+                    "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"),
+            (
+                Path: Path.Combine(
+                    "negative",
+                    "cancel_asset_lock_zero_expected_v1.to"),
+                Expected:
+                    "appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json"),
+        })
+        {
+            var outcome =
+                SoraFsReferenceValidators.ValidateAppealFinanceCancelAssetLockJson(
+                    File.ReadAllBytes(Path.Combine(fixtureRoot, profile.Path)),
+                    Path.GetFileName(profile.Path),
+                    123);
+            Assert.Equal(
+                File.ReadAllText(
+                    Path.Combine(referenceRoot, profile.Expected),
+                    Encoding.UTF8),
+                outcome);
+        }
+    }
+
+    [Fact]
     public void OrderbookBuildersProduceAcceptedPayloadsWhenNativeAvailable()
     {
-        if (!SoraFsReferenceValidators.IsOrderbookPdpAvailable())
-        {
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsOrderbookPdpAvailable(),
+            "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
         var privateKey = Enumerable.Repeat((byte)0xb7, 32).ToArray();
         var owner = Encoding.UTF8.GetBytes("buyer@sora");
         var orderId = SoraFsReferenceValidators.DeriveOrderbookOrderId(owner, 7);
@@ -940,17 +1068,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void GovernanceLogNodeMatchesModerationGoldenByteForByteWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with governance reference symbols is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsAvailable(),
+            "ABI-21 connect_norito_bridge with governance reference symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -983,17 +1103,9 @@ public sealed class SoraFsReferenceValidatorsTests
     [Fact]
     public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
     {
-        if (!SoraFsReferenceValidators.IsAvailable())
-        {
-            Assert.False(
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
-                    "1",
-                    StringComparison.Ordinal),
-                "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
-            return;
-        }
+        Assert.True(
+            SoraFsReferenceValidators.IsAvailable(),
+            "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
 
         var fixtureRoot = Path.Combine(
             AppContext.BaseDirectory,
@@ -1287,6 +1399,8 @@ public sealed class SoraFsReferenceValidatorsTests
 
         internal bool FixtureBundleSymbolsAvailable { get; set; } = true;
 
+        internal bool AppealFinanceSymbolsAvailable { get; set; } = true;
+
         internal int ReturnCode { get; set; }
 
         internal Func<ulong, byte[]> OutputFactory { get; set; } =
@@ -1300,6 +1414,8 @@ public sealed class SoraFsReferenceValidatorsTests
 
         internal int OrderbookCalls { get; private set; }
 
+        internal int AppealFinanceCalls { get; private set; }
+
         internal int PdpBundleCalls { get; private set; }
 
         internal int FixtureBundleCalls { get; private set; }
@@ -1311,6 +1427,10 @@ public sealed class SoraFsReferenceValidatorsTests
         internal byte[]? LastOrderbookBytes { get; private set; }
 
         internal byte[]? LastOrderbookLabel { get; private set; }
+
+        internal byte[]? LastAppealFinanceBytes { get; private set; }
+
+        internal byte[]? LastAppealFinanceLabel { get; private set; }
 
         internal byte[]? LastPdpCommitment { get; private set; }
 
@@ -1372,6 +1492,11 @@ public sealed class SoraFsReferenceValidatorsTests
             return FixtureBundleSymbolsAvailable;
         }
 
+        public bool HasAppealFinanceSymbols()
+        {
+            return AppealFinanceSymbolsAvailable;
+        }
+
         public NativeValidationResult ValidateOrderbookPayload(
             uint kind,
             byte[] bytes,
@@ -1382,6 +1507,18 @@ public sealed class SoraFsReferenceValidatorsTests
             LastOrderbookKind = kind;
             LastOrderbookBytes = bytes;
             LastOrderbookLabel = label;
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
+        public NativeValidationResult ValidateAppealFinanceCancelAssetLock(
+            byte[] bytes,
+            byte[] label,
+            ulong generatedAt)
+        {
+            AppealFinanceCalls++;
+            LastAppealFinanceBytes = bytes;
+            LastAppealFinanceLabel = label;
             LastGeneratedAt = generatedAt;
             return AllocateResult(generatedAt);
         }

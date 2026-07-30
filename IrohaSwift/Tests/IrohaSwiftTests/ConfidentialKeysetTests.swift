@@ -65,16 +65,6 @@ final class ConfidentialKeysetTests: XCTestCase {
             XCTAssertEqual(seed, seedFromBase64)
 
             let keyset = try ConfidentialKeyset.derive(from: seed)
-            guard keyset.nullifierKeyHex == positive.derived.nullifierKeyHex.lowercased(),
-                  keyset.incomingViewKeyHex == positive.derived.incomingViewKeyHex.lowercased(),
-                  keyset.outgoingViewKeyHex == positive.derived.outgoingViewKeyHex.lowercased(),
-                  keyset.fullViewKeyHex == positive.derived.fullViewKeyHex.lowercased(),
-                  keyset.nullifierKey.base64EncodedString() == positive.derived.nullifierKeyBase64,
-                  keyset.incomingViewKey.base64EncodedString() == positive.derived.incomingViewKeyBase64,
-                  keyset.outgoingViewKey.base64EncodedString() == positive.derived.outgoingViewKeyBase64,
-                  keyset.fullViewKey.base64EncodedString() == positive.derived.fullViewKeyBase64 else {
-                throw XCTSkip("Key derivation fixture mismatch in this environment for \(positive.caseId)")
-            }
             XCTAssertEqual(keyset.nullifierKeyHex, positive.derived.nullifierKeyHex.lowercased())
             XCTAssertEqual(keyset.incomingViewKeyHex, positive.derived.incomingViewKeyHex.lowercased())
             XCTAssertEqual(keyset.outgoingViewKeyHex, positive.derived.outgoingViewKeyHex.lowercased())

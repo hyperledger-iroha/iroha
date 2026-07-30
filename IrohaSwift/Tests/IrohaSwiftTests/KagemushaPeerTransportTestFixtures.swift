@@ -46,6 +46,12 @@ enum KagemushaPeerTransportTestFixtures {
     static func paymentRequest(seed: UInt8 = 0x41) throws
         -> KagemushaRecipientPaymentRequest
     {
+        if seed == 0x41 {
+            return try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+                recipientRequestArchive(),
+                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+            )
+        }
         let signingKey = try P256.Signing.PrivateKey(
             rawRepresentation: fixed32(seed)
         )
@@ -105,107 +111,44 @@ enum KagemushaPeerTransportTestFixtures {
     ) throws
         -> KagemushaRecursiveSpendPeerPaymentV4
     {
-        let requestDigest = Data(SHA256.hash(data: request.archive))
-        guard let fixtureDigest = Data(hexString:
-            "6e62171fc4d85584f96aa4c5b49c2633e66cea2719a361ae9cdf96251c41b608"
-        ) else {
-            throw KagemushaRecursiveSpendError.invalidField("transportFixture.digestHex")
+        guard request.archive == (try recipientRequestArchive()) else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "transportFixture.recipientRequest"
+            )
         }
-        guard let archive = Data(hexString: canonicalRecipientBundleArchiveHex),
-              var legacyBundlePayload = noritoDecodeFrame(archive)?.payload,
-              let digestRange = legacyBundlePayload.range(of: fixtureDigest),
-              legacyBundlePayload[digestRange.upperBound...].range(of: fixtureDigest) == nil else {
-            throw KagemushaRecursiveSpendError.invalidField("transportFixture.bundleHex")
-        }
-        legacyBundlePayload.replaceSubrange(digestRange, with: requestDigest)
-        let bundleArchiveV4 = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.bundleWireNameV4,
-            payload: legacyBundlePayload
+        let payment = try KagemushaRecursiveSpendPeerPaymentV4(
+            noritoArchive: rustFixtureData("offline_peer_payment_v4.hex")
         )
-        let bundleV4 = try KagemushaRecursiveSpendBundleV4(
-            noritoArchive: bundleArchiveV4
+        _ = try KagemushaReceiverAcknowledgement.prepare(
+            request: request,
+            payment: payment,
+            acceptedAtMilliseconds: 1_900_000_001_000
         )
-        let witness = try membershipWitness(root: fixed32(0x44))
-        let localWitnessArchive = try KagemushaRecursiveSpendCodecs
-            .encodeMembershipWitness(witness)
-        guard let witnessPayload = noritoDecodeFrame(localWitnessArchive)?.payload else {
-            throw KagemushaRecursiveSpendError.invalidArchive("transportFixture.witnessFrame")
-        }
-        var paymentWriter = CompactNoritoWriter()
-        paymentWriter.writeField(legacyBundlePayload)
-        paymentWriter.writeField(witnessPayload)
-        let provenancePayload = Data([0x01])
-        let provenanceArchive = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
-            payload: provenancePayload
-        )
-        paymentWriter.writeField(provenancePayload)
-        let paymentArchive = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.peerPaymentWireNameV4,
-            payload: paymentWriter.data
-        )
-        return KagemushaRecursiveSpendPeerPaymentV4(
-            recipientBundle: bundleV4,
-            recipientMembershipWitness: witness,
-            topUpProvenance: try KagemushaRecursiveSpendTopUpProvenanceV4(
-                noritoArchive: provenanceArchive
-            ),
-            noritoArchive: paymentArchive
-        )
+        return payment
     }
 
     static func acknowledgement(
         request: KagemushaRecipientPaymentRequest,
         payment: KagemushaRecursiveSpendPeerPaymentV4,
-        receiverSigningSeed: UInt8 = 0x41
+        receiverSigningSeed: UInt8 = 0x46
     ) throws -> KagemushaReceiverAcknowledgement {
-        let requestDigest = Data(SHA256.hash(data: request.archive))
-        let acceptedAtMilliseconds: UInt64 = 1_800_000_001_000
-        var payloadWriter = CompactNoritoWriter()
-        payloadWriter.writeField(fixed32(0x54))
-        payloadWriter.writeField(requestDigest)
-        payloadWriter.writeField(Data(SHA256.hash(data: payment.recipientBundle.noritoArchive)))
-        payloadWriter.writeField(request.payload.recipientOutput.noteCommitment)
-        payloadWriter.writeField(CompactNorito.encodeUInt64(acceptedAtMilliseconds))
-        payloadWriter.writeField(CompactNorito.encodeString(request.payload.receiverDeviceID))
-        payloadWriter.writeField(request.payload.recipientKeyReference)
-        payloadWriter.writeField(request.payload.receiverPublicKey.sec1Bytes)
-        let payloadArchive = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.acknowledgementPayloadWireName,
-            payload: payloadWriter.data
-        )
-        let payload = try KagemushaReceiverAcknowledgementPayload(
-            operationID: fixed32(0x54),
-            recipientRequestDigest: requestDigest,
-            paymentBundleDigest: Data(SHA256.hash(data: payment.recipientBundle.noritoArchive)),
-            recipientCommitment: request.payload.recipientOutput.noteCommitment,
-            acceptedAtMilliseconds: acceptedAtMilliseconds,
-            receiverDeviceID: request.payload.receiverDeviceID,
-            receiverKeyReference: request.payload.recipientKeyReference,
-            receiverPublicKey: request.payload.receiverPublicKey,
-            archive: payloadArchive
+        let payload = try KagemushaReceiverAcknowledgement.prepare(
+            request: request,
+            payment: payment,
+            acceptedAtMilliseconds: 1_900_000_001_000
         )
         let signingKey = try P256.Signing.PrivateKey(
             rawRepresentation: fixed32(receiverSigningSeed)
         )
-        let signature = try signingKey.signature(for: payloadArchive)
+        let signature = try signingKey.signature(for: payload.signingBytes())
         let deviceSignature = try KagemushaDeviceSignatureV2(
             derBytes: signature.derRepresentation
         )
-        guard let payloadBytes = noritoDecodeFrame(payloadArchive)?.payload else {
-            throw KagemushaRecursiveSpendError.invalidArchive("transportFixture.ackPayloadFrame")
-        }
-        var acknowledgementWriter = CompactNoritoWriter()
-        acknowledgementWriter.writeField(payloadBytes)
-        acknowledgementWriter.writeField(deviceSignature.rawBytes)
-        let acknowledgementArchive = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.acknowledgementWireName,
-            payload: acknowledgementWriter.data
-        )
-        return try KagemushaReceiverAcknowledgement(
+        return try KagemushaReceiverAcknowledgement.create(
             payload: payload,
             signature: deviceSignature,
-            archive: acknowledgementArchive
+            request: request,
+            payment: payment
         )
     }
 
@@ -238,52 +181,4 @@ enum KagemushaPeerTransportTestFixtures {
         return bytes
     }
 
-    private static func membershipWitness(
-        root: Data
-    ) throws -> KagemushaNoteMembershipWitness {
-        let leafIndex: UInt32 = 5
-        let inputPath = try PrivacyConfidentialMerklePathWitnessV2(
-            siblings: (0..<16).map { fixed32(UInt8($0 + 1)) },
-            directions: Data((0..<16).map {
-                UInt8((UInt64(leafIndex) >> UInt64($0)) & 1)
-            }),
-            root: root
-        )
-        let dummyPath = try PrivacyConfidentialMerklePathWitnessV2(
-            siblings: (0..<16).map { fixed32(UInt8($0 + 33)) },
-            directions: Data(repeating: 0, count: 16),
-            root: root
-        )
-        return try KagemushaNoteMembershipWitness(
-            leafIndex: leafIndex,
-            inputPath: inputPath,
-            dummyInputPath: dummyPath
-        )
-    }
-
-    /// Rust-generated canonical bundle template. `payment(request:)` rebinds
-    /// its peer-split request digest and reframes the opaque bundle payload as
-    /// ABI-21 solely for transport-state-machine tests. Proof acceptance stays
-    /// covered by the native bridge tests; this fixture never enters a wallet.
-    private static let canonicalRecipientBundleArchiveHex = [
-        "4e5254300000dd08ef107254cbcf59c74170bd235bac005503000000000000698b08642ee59045020000000000000000b305",
-        "1b1a1973776966742d6b6167656d757368612d7472616e73706f727420010101020103010401050106014701080189010a01",
-        "0b010c010d010e010f011004020000002044444444444444444444444444444444444444444444444444444444444444444b",
-        "0100000000000000422052525252525252525252525252525252525252525252525252525252525252522054545454545454",
-        "545454545454545454545454545454545454545454545454540402000000040100000096011b1a1973776966742d6b616765",
-        "6d757368612d7472616e73706f727420010101020103010401050106014701080189010a010b010c010d010e010f01102042",
-        "4242424242424242424242424242424242424242424242424242424242424220434343434343434343434343434343434343",
-        "434343434343434343434343434316107d00000000000000000000000000000004020000005701000000000000004e2c2054",
-        "5454545454545454545454545454545454545454545454545454545454545401010800000000000000002018000000000000",
-        "00e3c98bd553300eafa14ec05dca52bd82784dbb29cdcb807179017700000000722053535353535353535353535353535353",
-        "535353535353535353535353535353530400000000206e62171fc4d85584f96aa4c5b49c2633e66cea2719a361ae9cdf9625",
-        "1c41b60820515151515151515151515151515151515151515151515151515151515151515104010000000400000000371514",
-        "7472616e73706f72742d666978747572652d763320a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7",
-        "a7a7a757191868616c6f322f6970612d70617374612d6379636c652d76313c3b6b6167656d757368612d7265637572736976",
-        "652d7370656e642d737465702d65712d74776f2d706172656e742d65786163742d73746174652d76319e0157191868616c6f",
-        "322f6970612d70617374612d6379636c652d76313c3b6b6167656d757368612d7265637572736976652d7370656e642d7374",
-        "65702d65712d74776f2d706172656e742d65786163742d73746174652d7631206b36dd593e0690a5b4b423e9e1337a3dc1c3",
-        "2f6580ab6d002c4deac80add071124191868616c6f322f6970612d70617374612d6379636c652d7631090100000000000000",
-        "b0",
-    ].joined()
 }

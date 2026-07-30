@@ -8,20 +8,127 @@ on:
       - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
       - "csharp/**"
       - "crates/connect_norito_bridge/**"
+      - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
+      - "crates/iroha_core/src/smartcontracts/isi/escrow.rs"
+      - "crates/iroha_data_model/src/bin/cancel_asset_lock_fixtures.rs"
+      - "crates/iroha_data_model/src/escrow.rs"
+      - "crates/iroha_data_model/src/events/data/escrow.rs"
+      - "crates/iroha_data_model/src/isi/mod.rs"
+      - "crates/iroha_data_model/src/isi/escrow.rs"
+      - "crates/iroha_data_model/src/isi/registry.rs"
+      - "crates/iroha_data_model/src/testing/cancel_asset_lock.rs"
+      - "crates/kotodama_lang/src/samples/native_escrow.ko"
+      - "crates/kotodama_lang/src/samples/native_escrow.to"
       - "crates/sorafs_manifest/**"
       - "fixtures/account/address_vectors.json"
+      - "fixtures/sorafs_manifest/appeal_finance/**"
       - "fixtures/sorafs_manifest/governance/**"
+      - "fixtures/sorafs_manifest/reference_sdk/**"
+      - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "fixtures/kagemusha_recursive_spend_abi6/**"
       - "fixtures/kagemusha_recursive_spend_abi7/**"
+      - "integration_tests/tests/native_escrow.rs"
+      - "scripts/check_sorafs_reference_sdk_fixtures.py"
+      - "scripts/check_native_sdk_abi21_artifact.py"
+      - "scripts/package_csharp_native_artifacts.py"
+      - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
+      - "scripts/tests/package_csharp_native_artifacts_test.py"
+      - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_sorafs_release_automation_test.py"
+      - "docs/source/sorafs_reference_sdk_plan.md"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
   workflow_dispatch:
 
 jobs:
+  native-release-artifacts:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            library_name: libconnect_norito_bridge.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rid: linux-arm64
+            library_name: libconnect_norito_bridge.so
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            rid: osx-x64
+            library_name: libconnect_norito_bridge.dylib
+          - os: macos-14
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            library_name: libconnect_norito_bridge.dylib
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            library_name: connect_norito_bridge.dll
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Build native C# bridge on its matching release host
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          if [[ "$host_target" != "$target" ]]; then
+            echo "C# native runner host ${host_target} does not match required target ${target}" >&2
+            exit 1
+          fi
+          if [[ -e target ]]; then
+            echo "C# native release build requires a fresh target directory" >&2
+            exit 1
+          fi
+          cargo build --locked --release -p connect_norito_bridge --target "$target"
+
+      - name: Authenticate and stage exact ABI-21 C# native bridge
+        shell: bash
+        run: |
+          target="${{ matrix.target }}"
+          library_name="${{ matrix.library_name }}"
+          artifact="$RUNNER_TEMP/csharp-native-upload/$target/$library_name"
+          manifest="$RUNNER_TEMP/csharp-native-upload/$target/native-sdk-abi21.json"
+          mkdir -p "$(dirname "$artifact")"
+          cp "target/$target/release/$library_name" "$artifact"
+          python scripts/check_native_sdk_abi21_artifact.py record \
+            --artifact "$artifact" \
+            --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE" \
+            --sdk csharp \
+            --target "$target"
+          python scripts/check_native_sdk_abi21_artifact.py verify \
+            --artifact "$artifact" \
+            --manifest "$manifest" \
+            --source-root "$GITHUB_WORKSPACE"
+
+      - name: Upload authenticated target-native input
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-native-${{ matrix.target }}
+          path: ${{ runner.temp }}/csharp-native-upload
+          if-no-files-found: error
+          retention-days: 14
+
   build-test-pack:
+    needs: native-release-artifacts
     runs-on: ubuntu-latest
     env:
       IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
-      LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug
+      LD_LIBRARY_PATH: ${{ runner.temp }}/csharp-native-package/runtimes/linux-x64/native
     defaults:
       run:
         working-directory: csharp
@@ -32,15 +139,28 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
-      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          shared-key: csharp-sorafs-reference-native
+          python-version: "3.12"
 
-      - name: Build SoraFS reference native bridge
+      - name: Download all authenticated target-native inputs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: csharp-native-*
+          path: ${{ runner.temp }}/csharp-native-inputs
+          merge-multiple: true
+
+      - name: Run C# native package contract tests
         working-directory: ${{ github.workspace }}
-        run: cargo build --locked -p connect_norito_bridge
+        run: python3 -I scripts/tests/package_csharp_native_artifacts_test.py
+
+      - name: Assemble deterministic five-RID native package tree
+        working-directory: ${{ github.workspace }}
+        run: >-
+          python3 scripts/package_csharp_native_artifacts.py stage
+          --input-root "$RUNNER_TEMP/csharp-native-inputs"
+          --output-root "$RUNNER_TEMP/csharp-native-package"
+          --source-root "$GITHUB_WORKSPACE"
 
       - name: Restore
         run: dotnet restore Hyperledger.Iroha.Sdk.sln
@@ -52,10 +172,107 @@ jobs:
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
 
       - name: Pack
-        run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build --output artifacts/packages
+        run: >-
+          dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj
+          -c Release
+          --no-build
+          --output "$RUNNER_TEMP/csharp-packages"
+          -p:IrohaNativePackageRoot="$RUNNER_TEMP/csharp-native-package"
+          -p:IrohaNativePackagePython=python3
+
+      - name: Verify exact native inventory in packed NuGet
+        working-directory: ${{ github.workspace }}
+        run: |
+          shopt -s nullglob
+          candidates=("$RUNNER_TEMP"/csharp-packages/Hyperledger.Iroha.Sdk.*.nupkg)
+          primary=()
+          for candidate in "${candidates[@]}"; do
+            [[ "$candidate" == *.symbols.nupkg ]] || primary+=("$candidate")
+          done
+          if [[ "${#primary[@]}" -ne 1 ]]; then
+            echo "expected exactly one primary Hyperledger.Iroha.Sdk NuGet package" >&2
+            exit 1
+          fi
+          python3 scripts/package_csharp_native_artifacts.py verify-package \
+            --package "${primary[0]}" \
+            --stage-root "$RUNNER_TEMP/csharp-native-package" \
+            --source-root "$GITHUB_WORKSPACE"
 
       - name: Package consumer smoke
+        env:
+          CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_DIR: ${{ runner.temp }}/csharp-packages
+          CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: ${{ runner.temp }}/csharp-native-package
+          CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: linux-x64
         run: ../ci/check_csharp_sdk_package_consumer.sh
+
+      - name: Stage package and provenance for native-host smokes
+        run: |
+          bundle="$RUNNER_TEMP/csharp-package-bundle"
+          mkdir -p "$bundle/packages"
+          cp "$RUNNER_TEMP"/csharp-packages/*.nupkg "$bundle/packages/"
+          cp -R "$RUNNER_TEMP/csharp-native-package" "$bundle/native-package"
+
+      - name: Upload five-RID C# SDK package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: csharp-sdk-native-package-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-package-bundle
+          if-no-files-found: error
+          retention-days: 14
+
+  native-package-smoke:
+    needs: build-test-pack
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            library_name: libconnect_norito_bridge.so
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            rid: linux-arm64
+            library_name: libconnect_norito_bridge.so
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            rid: osx-x64
+            library_name: libconnect_norito_bridge.dylib
+          - os: macos-14
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            library_name: libconnect_norito_bridge.dylib
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            library_name: connect_norito_bridge.dll
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Download five-RID C# SDK package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: csharp-sdk-native-package-${{ github.sha }}
+          path: ${{ runner.temp }}/csharp-sdk-package
+
+      - name: Smoke packed native bridge through NuGet consumer
+        shell: bash
+        env:
+          CSHARP_SDK_PACKAGE_CONSUMER_PACKAGE_DIR: ${{ runner.temp }}/csharp-sdk-package/packages
+          CSHARP_SDK_PACKAGE_CONSUMER_NATIVE_PACKAGE_ROOT: ${{ runner.temp }}/csharp-sdk-package/native-package
+          CSHARP_SDK_PACKAGE_CONSUMER_PYTHON_BIN: python
+          CSHARP_SDK_PACKAGE_CONSUMER_RUNTIME_IDENTIFIER: ${{ matrix.rid }}
+        run: ci/check_csharp_sdk_package_consumer.sh
 
   kagemusha-native-bridge-sdk:
     runs-on: ${{ matrix.os }}

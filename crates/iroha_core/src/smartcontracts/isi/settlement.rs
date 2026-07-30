@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use iroha_data_model::{
-    asset::{AssetBalancePolicy, AssetBalanceScope, AssetId, AssetValue},
+    asset::{AssetBalancePolicy, AssetBalanceScope, AssetId},
     events::data::prelude::{ConfigurationEvent, ParameterChanged},
     isi::{
         error::{
@@ -19,7 +19,7 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_executor_data_model::permission::settlement::{
-    CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+    CanExecuteSettlement, CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
 };
 use iroha_primitives::{
     json::Json,
@@ -28,8 +28,9 @@ use iroha_primitives::{
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::{
-    apply_resolved_numeric_asset_transfer_delta, assert_numeric_spec_with,
-    execute_native_fx_numeric_asset_pair, validate_native_fx_numeric_asset_pair,
+    assert_numeric_spec_with, execute_authorized_numeric_asset_pair,
+    execute_native_fx_numeric_asset_pair, validate_authorized_numeric_asset_pair,
+    validate_native_fx_numeric_asset_pair,
 };
 #[cfg(test)]
 use crate::smartcontracts::isi::error::MathError;
@@ -67,7 +68,7 @@ fn settlement_failure_reason(err: &Error) -> &'static str {
                 "zero_quantity"
             } else if msg.contains("reciprocal") {
                 "counterparty_mismatch"
-            } else if msg.contains("not supported yet") {
+            } else if msg.contains("not supported yet") || msg.contains("AllOrNothing") {
                 "unsupported_policy"
             } else if msg.contains("available") || msg.contains("requires") {
                 "insufficient_funds"
@@ -341,15 +342,6 @@ fn resolve_settlement_leg_source_asset_id(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
 ) -> Result<AssetId, Error> {
-    if let Some(scoped_asset_id) = stx.world.assets.iter().find_map(|(asset_id, balance)| {
-        (asset_id.definition() == leg.asset_definition_id()
-            && asset_id.account() == leg.from()
-            && balance.as_ref().checked_sub(leg.quantity()).is_ok())
-        .then(|| asset_id.clone())
-    }) {
-        return Ok(scoped_asset_id);
-    }
-
     stx.world.resolve_asset_id_for_current_scope(&AssetId::new(
         leg.asset_definition_id().clone(),
         leg.from().clone(),
@@ -369,25 +361,48 @@ fn resolve_settlement_leg_asset_ids(
     Ok((withdraw, deposit))
 }
 
-fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Result<(), Error> {
-    let asset_id = resolve_settlement_leg_source_asset_id(stx, leg)?;
-    let available = stx
-        .world
-        .assets
-        .get(&asset_id)
-        .map_or_else(Quantity::zero, |balance| balance.as_ref().clone());
-    if available.checked_sub(leg.quantity()).is_err() {
+fn resolve_authorized_settlement_leg_asset_ids(
+    stx: &StateTransaction<'_, '_>,
+    leg: &SettlementLeg,
+    authorized_source: AssetId,
+) -> Result<(AssetId, AssetId), Error> {
+    if authorized_source.account() != leg.from()
+        || authorized_source.definition() != leg.asset_definition_id()
+    {
         return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "settlement leg requires {} but only {} is available for {}",
-                leg.quantity(),
-                available,
-                leg.from()
-            )
-            .into(),
+            "settlement consent asset does not match the debited leg".into(),
         ));
     }
-    Ok(())
+    let definition = stx
+        .world
+        .asset_definition(authorized_source.definition())
+        .map_err(Error::from)?;
+    let dataspace_hint = match (definition.balance_scope_policy(), authorized_source.scope()) {
+        (AssetBalancePolicy::Global, AssetBalanceScope::Global) => None,
+        (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Dataspace(dataspace)) => {
+            Some(*dataspace)
+        }
+        (AssetBalancePolicy::Global, AssetBalanceScope::Dataspace(_)) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "settlement consent cannot attach a dataspace scope to a global asset".into(),
+            ));
+        }
+        (AssetBalancePolicy::DataspaceRestricted, AssetBalanceScope::Global) => {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "settlement consent must name the exact dataspace balance for a restricted asset"
+                    .into(),
+            ));
+        }
+    };
+    let withdraw = stx
+        .world
+        .resolve_asset_id_for_scope_hint(&authorized_source, dataspace_hint)?;
+    let deposit = AssetId::with_scope(
+        leg.asset_definition_id().clone(),
+        leg.to().clone(),
+        withdraw.scope().clone(),
+    );
+    Ok((withdraw, deposit))
 }
 
 fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
@@ -397,112 +412,6 @@ fn ensure_leg_quantity(leg: &SettlementLeg) -> Result<(), Error> {
         ));
     }
     Ok(())
-}
-
-fn numeric_spec_for_leg(
-    stx: &mut StateTransaction<'_, '_>,
-    leg: &SettlementLeg,
-) -> Result<NumericSpec, Error> {
-    stx.numeric_spec_for(leg.asset_definition_id())
-        .map_err(Error::from)
-}
-
-fn apply_settlement_leg(
-    stx: &mut StateTransaction<'_, '_>,
-    leg: &SettlementLeg,
-    spec: NumericSpec,
-) -> Result<AppliedSettlementLeg, Error> {
-    assert_numeric_spec_with(leg.quantity().as_numeric(), spec)?;
-    let (source, destination) = resolve_settlement_leg_asset_ids(stx, leg)?;
-    let before = capture_settlement_assets(stx, &source, &destination);
-    let external_event_len = stx.world.external_event_buf.len();
-    let internal_event_len = stx.world.internal_event_buf.len();
-    apply_resolved_numeric_asset_transfer_delta(stx, &source, &destination, leg.quantity())?;
-    let after = capture_settlement_assets(stx, &source, &destination);
-    Ok(AppliedSettlementLeg {
-        before,
-        after,
-        external_event_len,
-        internal_event_len,
-    })
-}
-
-fn rollback_settlement_leg(
-    stx: &mut StateTransaction<'_, '_>,
-    applied: &AppliedSettlementLeg,
-) -> Result<(), Error> {
-    // This is a narrowly scoped compensating write, not a forward credit. Verify that no
-    // intervening balance mutation occurred, then restore the exact pre-leg entries without
-    // reapplying policies that may now reject the source's original balance.
-    for expected in &applied.after {
-        let current = stx.world.assets.get(&expected.id).cloned();
-        if current != expected.balance {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "settlement rollback balance changed unexpectedly for {}",
-                    expected.id
-                )
-                .into(),
-            ));
-        }
-    }
-
-    for snapshot in &applied.before {
-        if let Some(balance) = snapshot.balance.clone() {
-            stx.world.assets.insert(snapshot.id.clone(), balance);
-            stx.world.track_asset_holder(&snapshot.id);
-            stx.world.refresh_nonzero_asset_holder(&snapshot.id);
-        } else {
-            let _ = stx.world.remove_asset_and_metadata(&snapshot.id);
-        }
-        if let Some(metadata) = snapshot.metadata.clone() {
-            stx.world
-                .asset_metadata
-                .insert(snapshot.id.clone(), metadata);
-        } else {
-            stx.world.asset_metadata.remove(snapshot.id.clone());
-        }
-    }
-
-    stx.world
-        .external_event_buf
-        .truncate(applied.external_event_len);
-    stx.world
-        .internal_event_buf
-        .truncate(applied.internal_event_len);
-    Ok(())
-}
-
-#[derive(Clone, Debug)]
-struct SettlementAssetSnapshot {
-    id: AssetId,
-    balance: Option<AssetValue>,
-    metadata: Option<Metadata>,
-}
-
-#[derive(Clone, Debug)]
-struct AppliedSettlementLeg {
-    before: Vec<SettlementAssetSnapshot>,
-    after: Vec<SettlementAssetSnapshot>,
-    external_event_len: usize,
-    internal_event_len: usize,
-}
-
-fn capture_settlement_assets(
-    stx: &StateTransaction<'_, '_>,
-    source: &AssetId,
-    destination: &AssetId,
-) -> Vec<SettlementAssetSnapshot> {
-    let capture = |id: &AssetId| SettlementAssetSnapshot {
-        id: id.clone(),
-        balance: stx.world.assets.get(id).cloned(),
-        metadata: stx.world.asset_metadata.get(id).cloned(),
-    };
-    let mut snapshots = vec![capture(source)];
-    if source != destination {
-        snapshots.push(capture(destination));
-    }
-    snapshots
 }
 
 fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (AssetId, AssetId) {
@@ -517,53 +426,11 @@ fn scoped_fx_leg_asset_ids(leg: &SettlementLeg, dataspace: DataSpaceId) -> (Asse
     )
 }
 
-fn enforce_atomicity(plan: SettlementPlan) {
-    match plan.atomicity() {
-        SettlementAtomicity::AllOrNothing
-        | SettlementAtomicity::CommitFirstLeg
-        | SettlementAtomicity::CommitSecondLeg => {}
-    }
-}
-
-fn log_atomicity_warning(stage: &str, rollback_err: &Error) {
-    iroha_logger::warn!(
-        error = %rollback_err,
-        "failed to rollback {stage} settlement leg after error"
-    );
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 struct SettlementPairOutcome {
     first_committed: bool,
     second_committed: bool,
     fx_window_ms: Option<u64>,
-}
-
-#[derive(Debug)]
-struct SettlementPairError {
-    outcome: SettlementPairOutcome,
-    error: Box<Error>,
-}
-
-impl SettlementPairError {
-    fn new(outcome: SettlementPairOutcome, error: Error) -> Self {
-        Self {
-            outcome,
-            error: Box::new(error),
-        }
-    }
-
-    fn outcome(&self) -> &SettlementPairOutcome {
-        &self.outcome
-    }
-
-    fn error(&self) -> &Error {
-        self.error.as_ref()
-    }
-
-    fn into_error(self) -> Error {
-        *self.error
-    }
 }
 
 fn dvp_committed(plan: SettlementPlan, outcome: &SettlementPairOutcome) -> (bool, bool) {
@@ -586,41 +453,6 @@ fn pvp_committed(plan: SettlementPlan, outcome: &SettlementPairOutcome) -> (bool
             (outcome.second_committed, outcome.first_committed)
         }
     }
-}
-
-fn execute_settlement_pair(
-    stx: &mut StateTransaction<'_, '_>,
-    first: (&SettlementLeg, NumericSpec),
-    second: (&SettlementLeg, NumericSpec),
-    plan: SettlementPlan,
-) -> Result<SettlementPairOutcome, SettlementPairError> {
-    enforce_atomicity(plan);
-
-    let mut outcome = SettlementPairOutcome::default();
-
-    let first_applied = match apply_settlement_leg(stx, first.0, first.1) {
-        Ok(applied) => applied,
-        Err(err) => return Err(SettlementPairError::new(outcome, err)),
-    };
-    outcome.first_committed = true;
-
-    if let Err(err) = apply_settlement_leg(stx, second.0, second.1) {
-        match plan.atomicity() {
-            SettlementAtomicity::AllOrNothing | SettlementAtomicity::CommitSecondLeg => {
-                if let Err(rollback_err) = rollback_settlement_leg(stx, &first_applied) {
-                    log_atomicity_warning("first", &rollback_err);
-                } else {
-                    outcome.first_committed = false;
-                }
-            }
-            SettlementAtomicity::CommitFirstLeg => {
-                // nothing to roll back; first leg intentionally committed
-            }
-        }
-        return Err(SettlementPairError::new(outcome, err));
-    }
-    outcome.second_committed = true;
-    Ok(outcome)
 }
 
 fn exact_fx_destination_amount(
@@ -647,13 +479,113 @@ fn exact_fx_destination_amount(
     Ok(destination_amount)
 }
 
+fn ensure_bilateral_settlement_id_unused(
+    stx: &StateTransaction<'_, '_>,
+    settlement_id: &SettlementId,
+) -> Result<(), Error> {
+    if stx
+        .world
+        .settlement_ledgers
+        .get(settlement_id)
+        .is_some_and(|ledger| {
+            ledger
+                .entries()
+                .iter()
+                .any(|entry| entry.outcome.is_success())
+        })
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("settlement id `{settlement_id}` has already been committed").into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_bilateral_settlement_shape(
+    first_leg: &SettlementLeg,
+    second_leg: &SettlementLeg,
+    plan: SettlementPlan,
+) -> Result<(), Error> {
+    if first_leg.from() == first_leg.to() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "bilateral settlement requires two distinct counterparties".into(),
+        ));
+    }
+    if first_leg.asset_definition_id() == second_leg.asset_definition_id() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "bilateral settlement legs must use distinct asset definitions".into(),
+        ));
+    }
+    if plan.atomicity() != SettlementAtomicity::AllOrNothing {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "DvP and PvP settlements require AllOrNothing atomicity".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_bilateral_counterparty_consent(
+    stx: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    debited_account: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+    settlement_id: &SettlementId,
+    intent_hash: Hash,
+) -> Result<AssetId, Error> {
+    let direct_permissions = stx
+        .world
+        .account_permissions
+        .get(authority)
+        .into_iter()
+        .flat_map(BTreeSet::iter);
+    let role_permissions = stx
+        .world
+        .account_roles
+        .iter()
+        .filter_map(|(role_key, ())| {
+            (&role_key.account == authority)
+                .then(|| stx.world.roles.get(&role_key.id))
+                .flatten()
+        })
+        .flat_map(|role| role.permissions());
+    let authorized_sources = direct_permissions
+        .chain(role_permissions)
+        .filter_map(|permission| CanExecuteSettlement::try_from(permission).ok())
+        .filter(|consent| {
+            consent.debited_asset.account() == debited_account
+                && consent.debited_asset.definition() == asset_definition_id
+                && consent.settlement_id == *settlement_id
+                && consent.intent_hash == intent_hash
+        })
+        .map(|consent| consent.debited_asset)
+        .collect::<BTreeSet<_>>();
+    let mut sources = authorized_sources.into_iter();
+    let Some(source) = sources.next() else {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "bilateral settlement requires exact consent from debited account `{debited_account}`"
+            )
+            .into(),
+        ));
+    };
+    if sources.next().is_some() {
+        return Err(InstructionExecutionError::InvariantViolation(
+            "bilateral settlement consent is ambiguous across multiple balance scopes".into(),
+        ));
+    }
+    Ok(source)
+}
+
 fn validate_dvp_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
+    settlement_id: &SettlementId,
+    intent_hash: Hash,
     delivery_leg: &SettlementLeg,
     payment_leg: &SettlementLeg,
     plan: SettlementPlan,
-) -> Result<(NumericSpec, NumericSpec), Error> {
+) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
+    ensure_bilateral_settlement_id_unused(stx, settlement_id)?;
     if delivery_leg.from() != authority {
         return Err(InstructionExecutionError::InvariantViolation(
             "DvP delivery leg must be authorised by the delivering account".into(),
@@ -664,28 +596,47 @@ fn validate_dvp_preconditions(
             "DvP counterparties must be reciprocal across delivery and payment legs".into(),
         ));
     }
+    ensure_bilateral_settlement_shape(delivery_leg, payment_leg, plan)?;
+    let payment_source = ensure_bilateral_counterparty_consent(
+        stx,
+        authority,
+        payment_leg.from(),
+        payment_leg.asset_definition_id(),
+        settlement_id,
+        intent_hash,
+    )?;
 
     ensure_leg_quantity(delivery_leg)?;
     ensure_leg_quantity(payment_leg)?;
     ensure_leg_accounts(stx, delivery_leg)?;
     ensure_leg_accounts(stx, payment_leg)?;
-    let delivery_spec = numeric_spec_for_leg(stx, delivery_leg)?;
-    let payment_spec = numeric_spec_for_leg(stx, payment_leg)?;
-    assert_numeric_spec_with(delivery_leg.quantity().as_numeric(), delivery_spec)?;
-    ensure_leg_funding(stx, delivery_leg)?;
-    ensure_leg_funding(stx, payment_leg)?;
-    enforce_atomicity(plan);
+    let delivery_assets = resolve_settlement_leg_asset_ids(stx, delivery_leg)?;
+    let payment_assets =
+        resolve_authorized_settlement_leg_asset_ids(stx, payment_leg, payment_source)?;
+    validate_authorized_numeric_asset_pair(
+        stx,
+        authority,
+        delivery_assets.0.clone(),
+        delivery_assets.1.clone(),
+        delivery_leg.quantity().clone(),
+        payment_assets.0.clone(),
+        payment_assets.1.clone(),
+        payment_leg.quantity().clone(),
+    )?;
 
-    Ok((delivery_spec, payment_spec))
+    Ok((delivery_assets, payment_assets))
 }
 
 fn validate_pvp_preconditions(
     authority: &AccountId,
     stx: &mut StateTransaction<'_, '_>,
+    settlement_id: &SettlementId,
+    intent_hash: Hash,
     primary_leg: &SettlementLeg,
     counter_leg: &SettlementLeg,
     plan: SettlementPlan,
-) -> Result<(NumericSpec, NumericSpec), Error> {
+) -> Result<((AssetId, AssetId), (AssetId, AssetId)), Error> {
+    ensure_bilateral_settlement_id_unused(stx, settlement_id)?;
     if primary_leg.from() != authority {
         return Err(InstructionExecutionError::InvariantViolation(
             "PvP primary leg must be authorised by the initiating account".into(),
@@ -696,20 +647,35 @@ fn validate_pvp_preconditions(
             "PvP counterparties must be reciprocal across primary and counter legs".into(),
         ));
     }
+    ensure_bilateral_settlement_shape(primary_leg, counter_leg, plan)?;
+    let counter_source = ensure_bilateral_counterparty_consent(
+        stx,
+        authority,
+        counter_leg.from(),
+        counter_leg.asset_definition_id(),
+        settlement_id,
+        intent_hash,
+    )?;
 
     ensure_leg_quantity(primary_leg)?;
     ensure_leg_quantity(counter_leg)?;
     ensure_leg_accounts(stx, primary_leg)?;
     ensure_leg_accounts(stx, counter_leg)?;
-    let primary_spec = numeric_spec_for_leg(stx, primary_leg)?;
-    let counter_spec = numeric_spec_for_leg(stx, counter_leg)?;
-    assert_numeric_spec_with(primary_leg.quantity().as_numeric(), primary_spec)?;
-    assert_numeric_spec_with(counter_leg.quantity().as_numeric(), counter_spec)?;
-    ensure_leg_funding(stx, primary_leg)?;
-    ensure_leg_funding(stx, counter_leg)?;
-    enforce_atomicity(plan);
+    let primary_assets = resolve_settlement_leg_asset_ids(stx, primary_leg)?;
+    let counter_assets =
+        resolve_authorized_settlement_leg_asset_ids(stx, counter_leg, counter_source)?;
+    validate_authorized_numeric_asset_pair(
+        stx,
+        authority,
+        primary_assets.0.clone(),
+        primary_assets.1.clone(),
+        primary_leg.quantity().clone(),
+        counter_assets.0.clone(),
+        counter_assets.1.clone(),
+        counter_leg.quantity().clone(),
+    )?;
 
-    Ok((primary_spec, counter_spec))
+    Ok((primary_assets, counter_assets))
 }
 
 fn validate_fx_settlement_preconditions(
@@ -1030,6 +996,8 @@ pub(crate) fn admission_validate_dvp(
     let _ = validate_dvp_preconditions(
         authority,
         stx,
+        instruction.settlement_id(),
+        instruction.intent_hash(),
         instruction.delivery_leg(),
         instruction.payment_leg(),
         *instruction.plan(),
@@ -1045,6 +1013,8 @@ pub(crate) fn admission_validate_pvp(
     let _ = validate_pvp_preconditions(
         authority,
         stx,
+        instruction.settlement_id(),
+        instruction.intent_hash(),
         instruction.primary_leg(),
         instruction.counter_leg(),
         *instruction.plan(),
@@ -1059,6 +1029,7 @@ impl Execute for DvpIsi {
         authority: &AccountId,
         stx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let intent_hash = self.intent_hash();
         let DvpIsi {
             settlement_id,
             delivery_leg,
@@ -1067,58 +1038,88 @@ impl Execute for DvpIsi {
             metadata,
         } = self;
 
-        let (delivery_spec, payment_spec) =
-            match validate_dvp_preconditions(authority, stx, &delivery_leg, &payment_leg, plan) {
-                Ok(specs) => specs,
-                Err(err) => {
-                    let reason = settlement_failure_reason(&err);
-                    #[cfg(feature = "telemetry")]
-                    {
-                        stx.telemetry
-                            .note_settlement_failure(SETTLEMENT_KIND_DVP, reason);
-                        stx.telemetry.record_dvp_finality(
-                            &settlement_id,
-                            plan,
-                            SettlementOutcomeKind::Failure,
-                            Some(reason),
-                            false,
-                            false,
-                        );
-                    }
-                    let legs = dvp_leg_snapshots(
-                        plan,
-                        &SettlementPairOutcome::default(),
-                        &delivery_leg,
-                        &payment_leg,
-                    );
-                    record_settlement_snapshot(
-                        stx,
-                        authority,
+        let (delivery_assets, payment_assets) = match validate_dvp_preconditions(
+            authority,
+            stx,
+            &settlement_id,
+            intent_hash,
+            &delivery_leg,
+            &payment_leg,
+            plan,
+        ) {
+            Ok(specs) => specs,
+            Err(err) => {
+                let reason = settlement_failure_reason(&err);
+                #[cfg(feature = "telemetry")]
+                {
+                    stx.telemetry
+                        .note_settlement_failure(SETTLEMENT_KIND_DVP, reason);
+                    stx.telemetry.record_dvp_finality(
                         &settlement_id,
                         plan,
-                        metadata.clone(),
-                        SettlementKind::Dvp,
-                        legs,
-                        None,
-                        SettlementOutcomeRecord::Failure(SettlementFailureRecord {
-                            reason: reason.to_string(),
-                        }),
+                        SettlementOutcomeKind::Failure,
+                        Some(reason),
+                        false,
+                        false,
                     );
-                    return Err(err);
                 }
-            };
+                let legs = dvp_leg_snapshots(
+                    plan,
+                    &SettlementPairOutcome::default(),
+                    &delivery_leg,
+                    &payment_leg,
+                );
+                record_settlement_snapshot(
+                    stx,
+                    authority,
+                    &settlement_id,
+                    plan,
+                    metadata.clone(),
+                    SettlementKind::Dvp,
+                    legs,
+                    None,
+                    SettlementOutcomeRecord::Failure(SettlementFailureRecord {
+                        reason: reason.to_string(),
+                    }),
+                );
+                return Err(err);
+            }
+        };
 
         let first = match plan.order() {
-            SettlementExecutionOrder::DeliveryThenPayment => (&delivery_leg, delivery_spec),
-            SettlementExecutionOrder::PaymentThenDelivery => (&payment_leg, payment_spec),
+            SettlementExecutionOrder::DeliveryThenPayment => (
+                delivery_assets.0.clone(),
+                delivery_assets.1.clone(),
+                delivery_leg.quantity().clone(),
+            ),
+            SettlementExecutionOrder::PaymentThenDelivery => (
+                payment_assets.0.clone(),
+                payment_assets.1.clone(),
+                payment_leg.quantity().clone(),
+            ),
         };
         let second = match plan.order() {
-            SettlementExecutionOrder::DeliveryThenPayment => (&payment_leg, payment_spec),
-            SettlementExecutionOrder::PaymentThenDelivery => (&delivery_leg, delivery_spec),
+            SettlementExecutionOrder::DeliveryThenPayment => (
+                payment_assets.0,
+                payment_assets.1,
+                payment_leg.quantity().clone(),
+            ),
+            SettlementExecutionOrder::PaymentThenDelivery => (
+                delivery_assets.0,
+                delivery_assets.1,
+                delivery_leg.quantity().clone(),
+            ),
         };
 
-        match execute_settlement_pair(stx, first, second, plan) {
-            Ok(outcome) => {
+        match execute_authorized_numeric_asset_pair(
+            stx, authority, first.0, first.1, first.2, second.0, second.1, second.2,
+        ) {
+            Ok(()) => {
+                let outcome = SettlementPairOutcome {
+                    first_committed: true,
+                    second_committed: true,
+                    fx_window_ms: None,
+                };
                 #[cfg(feature = "telemetry")]
                 {
                     let (delivery_committed, payment_committed) = dvp_committed(plan, &outcome);
@@ -1161,11 +1162,11 @@ impl Execute for DvpIsi {
                 Ok(())
             }
             Err(err) => {
-                let reason = settlement_failure_reason(err.error());
+                let outcome = SettlementPairOutcome::default();
+                let reason = settlement_failure_reason(&err);
                 #[cfg(feature = "telemetry")]
                 {
-                    let (delivery_committed, payment_committed) =
-                        dvp_committed(plan, err.outcome());
+                    let (delivery_committed, payment_committed) = dvp_committed(plan, &outcome);
                     stx.telemetry
                         .note_settlement_failure(SETTLEMENT_KIND_DVP, reason);
                     stx.telemetry.record_dvp_finality(
@@ -1177,7 +1178,7 @@ impl Execute for DvpIsi {
                         payment_committed,
                     );
                 }
-                let legs = dvp_leg_snapshots(plan, err.outcome(), &delivery_leg, &payment_leg);
+                let legs = dvp_leg_snapshots(plan, &outcome, &delivery_leg, &payment_leg);
                 record_settlement_snapshot(
                     stx,
                     authority,
@@ -1191,7 +1192,7 @@ impl Execute for DvpIsi {
                         reason: reason.to_string(),
                     }),
                 );
-                Err(err.into_error())
+                Err(err)
             }
         }
     }
@@ -1204,6 +1205,7 @@ impl Execute for PvpIsi {
         authority: &AccountId,
         stx: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        let intent_hash = self.intent_hash();
         let PvpIsi {
             settlement_id,
             primary_leg,
@@ -1212,59 +1214,89 @@ impl Execute for PvpIsi {
             metadata,
         } = self;
 
-        let (primary_spec, counter_spec) =
-            match validate_pvp_preconditions(authority, stx, &primary_leg, &counter_leg, plan) {
-                Ok(specs) => specs,
-                Err(err) => {
-                    let reason = settlement_failure_reason(&err);
-                    #[cfg(feature = "telemetry")]
-                    {
-                        stx.telemetry
-                            .note_settlement_failure(SETTLEMENT_KIND_PVP, reason);
-                        stx.telemetry.record_pvp_finality(
-                            &settlement_id,
-                            plan,
-                            SettlementOutcomeKind::Failure,
-                            Some(reason),
-                            false,
-                            false,
-                            None,
-                        );
-                    }
-                    let legs = pvp_leg_snapshots(
-                        plan,
-                        &SettlementPairOutcome::default(),
-                        &primary_leg,
-                        &counter_leg,
-                    );
-                    record_settlement_snapshot(
-                        stx,
-                        authority,
+        let (primary_assets, counter_assets) = match validate_pvp_preconditions(
+            authority,
+            stx,
+            &settlement_id,
+            intent_hash,
+            &primary_leg,
+            &counter_leg,
+            plan,
+        ) {
+            Ok(specs) => specs,
+            Err(err) => {
+                let reason = settlement_failure_reason(&err);
+                #[cfg(feature = "telemetry")]
+                {
+                    stx.telemetry
+                        .note_settlement_failure(SETTLEMENT_KIND_PVP, reason);
+                    stx.telemetry.record_pvp_finality(
                         &settlement_id,
                         plan,
-                        metadata.clone(),
-                        SettlementKind::Pvp,
-                        legs,
+                        SettlementOutcomeKind::Failure,
+                        Some(reason),
+                        false,
+                        false,
                         None,
-                        SettlementOutcomeRecord::Failure(SettlementFailureRecord {
-                            reason: reason.to_string(),
-                        }),
                     );
-                    return Err(err);
                 }
-            };
+                let legs = pvp_leg_snapshots(
+                    plan,
+                    &SettlementPairOutcome::default(),
+                    &primary_leg,
+                    &counter_leg,
+                );
+                record_settlement_snapshot(
+                    stx,
+                    authority,
+                    &settlement_id,
+                    plan,
+                    metadata.clone(),
+                    SettlementKind::Pvp,
+                    legs,
+                    None,
+                    SettlementOutcomeRecord::Failure(SettlementFailureRecord {
+                        reason: reason.to_string(),
+                    }),
+                );
+                return Err(err);
+            }
+        };
 
         let first = match plan.order() {
-            SettlementExecutionOrder::DeliveryThenPayment => (&primary_leg, primary_spec),
-            SettlementExecutionOrder::PaymentThenDelivery => (&counter_leg, counter_spec),
+            SettlementExecutionOrder::DeliveryThenPayment => (
+                primary_assets.0.clone(),
+                primary_assets.1.clone(),
+                primary_leg.quantity().clone(),
+            ),
+            SettlementExecutionOrder::PaymentThenDelivery => (
+                counter_assets.0.clone(),
+                counter_assets.1.clone(),
+                counter_leg.quantity().clone(),
+            ),
         };
         let second = match plan.order() {
-            SettlementExecutionOrder::DeliveryThenPayment => (&counter_leg, counter_spec),
-            SettlementExecutionOrder::PaymentThenDelivery => (&primary_leg, primary_spec),
+            SettlementExecutionOrder::DeliveryThenPayment => (
+                counter_assets.0,
+                counter_assets.1,
+                counter_leg.quantity().clone(),
+            ),
+            SettlementExecutionOrder::PaymentThenDelivery => (
+                primary_assets.0,
+                primary_assets.1,
+                primary_leg.quantity().clone(),
+            ),
         };
 
-        match execute_settlement_pair(stx, first, second, plan) {
-            Ok(outcome) => {
+        match execute_authorized_numeric_asset_pair(
+            stx, authority, first.0, first.1, first.2, second.0, second.1, second.2,
+        ) {
+            Ok(()) => {
+                let outcome = SettlementPairOutcome {
+                    first_committed: true,
+                    second_committed: true,
+                    fx_window_ms: None,
+                };
                 #[cfg(feature = "telemetry")]
                 {
                     let (primary_committed, counter_committed) = pvp_committed(plan, &outcome);
@@ -1308,10 +1340,11 @@ impl Execute for PvpIsi {
                 Ok(())
             }
             Err(err) => {
-                let reason = settlement_failure_reason(err.error());
+                let outcome = SettlementPairOutcome::default();
+                let reason = settlement_failure_reason(&err);
                 #[cfg(feature = "telemetry")]
                 {
-                    let (primary_committed, counter_committed) = pvp_committed(plan, err.outcome());
+                    let (primary_committed, counter_committed) = pvp_committed(plan, &outcome);
                     stx.telemetry
                         .note_settlement_failure(SETTLEMENT_KIND_PVP, reason);
                     stx.telemetry.record_pvp_finality(
@@ -1321,10 +1354,10 @@ impl Execute for PvpIsi {
                         Some(reason),
                         primary_committed,
                         counter_committed,
-                        err.outcome().fx_window_ms,
+                        outcome.fx_window_ms,
                     );
                 }
-                let legs = pvp_leg_snapshots(plan, err.outcome(), &primary_leg, &counter_leg);
+                let legs = pvp_leg_snapshots(plan, &outcome, &primary_leg, &counter_leg);
                 record_settlement_snapshot(
                     stx,
                     authority,
@@ -1338,7 +1371,7 @@ impl Execute for PvpIsi {
                         reason: reason.to_string(),
                     }),
                 );
-                Err(err.into_error())
+                Err(err)
             }
         }
     }
@@ -1354,13 +1387,14 @@ mod tests {
             rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
         },
         asset::{
-            Asset, AssetBalancePolicy, AssetDefinition,
+            Asset, AssetBalancePolicy, AssetDefinition, AssetTransferAvailability,
+            AssetTransferControlRecord,
             prelude::{AssetDefinitionId, AssetId},
         },
         block::BlockHeader,
         common::Owned,
         domain::{Domain, DomainId},
-        isi::{SetAssetHoldingLimit, error::InstructionEvaluationError},
+        isi::SetAssetHoldingLimit,
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
         sns::{NameControllerV1, NameRecordV1},
@@ -1378,6 +1412,81 @@ mod tests {
             .expect("settlement fixture quantity must be canonical and non-negative")
     }
 
+    fn grant_exact_settlement_consent(
+        stx: &mut StateTransaction<'_, '_>,
+        initiator: &AccountId,
+        debited_asset: AssetId,
+        settlement_id: &SettlementId,
+        intent_hash: Hash,
+    ) {
+        let permission: Permission = CanExecuteSettlement {
+            debited_asset,
+            settlement_id: settlement_id.clone(),
+            intent_hash,
+        }
+        .into();
+        let mut permissions = stx
+            .world
+            .account_permissions
+            .get(initiator)
+            .cloned()
+            .unwrap_or_default();
+        permissions.insert(permission);
+        stx.world
+            .account_permissions
+            .insert(initiator.clone(), permissions);
+    }
+
+    fn grant_dvp_consent(
+        stx: &mut StateTransaction<'_, '_>,
+        initiator: &AccountId,
+        instruction: &DvpIsi,
+    ) {
+        let leg = instruction.payment_leg();
+        let debited_asset = stx
+            .world
+            .assets
+            .iter()
+            .find_map(|(asset_id, _)| {
+                (asset_id.account() == leg.from()
+                    && asset_id.definition() == leg.asset_definition_id())
+                .then(|| asset_id.clone())
+            })
+            .unwrap_or_else(|| AssetId::new(leg.asset_definition_id().clone(), leg.from().clone()));
+        grant_exact_settlement_consent(
+            stx,
+            initiator,
+            debited_asset,
+            instruction.settlement_id(),
+            instruction.intent_hash(),
+        );
+    }
+
+    fn grant_pvp_consent(
+        stx: &mut StateTransaction<'_, '_>,
+        initiator: &AccountId,
+        instruction: &PvpIsi,
+    ) {
+        let leg = instruction.counter_leg();
+        let debited_asset = stx
+            .world
+            .assets
+            .iter()
+            .find_map(|(asset_id, _)| {
+                (asset_id.account() == leg.from()
+                    && asset_id.definition() == leg.asset_definition_id())
+                .then(|| asset_id.clone())
+            })
+            .unwrap_or_else(|| AssetId::new(leg.asset_definition_id().clone(), leg.from().clone()));
+        grant_exact_settlement_consent(
+            stx,
+            initiator,
+            debited_asset,
+            instruction.settlement_id(),
+            instruction.intent_hash(),
+        );
+    }
+
     fn assert_smart_contract_parameter_contains(error: InstructionExecutionError, expected: &str) {
         let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
@@ -1392,15 +1501,39 @@ mod tests {
     }
 
     #[test]
-    fn enforce_atomicity_accepts_commit_variants() {
+    fn bilateral_settlement_rejects_partial_commit_plans() {
+        let first = SettlementLeg::new(
+            AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("domain"),
+                "first".parse().expect("asset name"),
+            ),
+            Quantity::one(),
+            ALICE_ID.clone(),
+            BOB_ID.clone(),
+        );
+        let second = SettlementLeg::new(
+            AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("domain"),
+                "second".parse().expect("asset name"),
+            ),
+            Quantity::one(),
+            BOB_ID.clone(),
+            ALICE_ID.clone(),
+        );
+        super::ensure_bilateral_settlement_shape(&first, &second, SettlementPlan::default())
+            .expect("AllOrNothing is the valid bilateral plan");
         for atomicity in [
-            SettlementAtomicity::AllOrNothing,
             SettlementAtomicity::CommitFirstLeg,
             SettlementAtomicity::CommitSecondLeg,
         ] {
             let plan =
                 SettlementPlan::new(SettlementExecutionOrder::DeliveryThenPayment, atomicity);
-            super::enforce_atomicity(plan);
+            let error = super::ensure_bilateral_settlement_shape(&first, &second, plan)
+                .expect_err("partial settlement must be rejected");
+            assert!(
+                error.to_string().contains("AllOrNothing"),
+                "unexpected error: {error}"
+            );
         }
     }
 
@@ -2224,7 +2357,177 @@ mod tests {
     }
 
     #[test]
-    fn dvp_moves_assets_between_accounts() {
+    fn dvp_rejects_unilateral_counterparty_debit() {
+        let (state, delivery_def_id, payment_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let instruction = DvpIsi::new(
+            "dvp_without_consent".parse().expect("settlement id"),
+            SettlementLeg::new(
+                delivery_def_id.clone(),
+                Quantity::one(),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                payment_def_id.clone(),
+                Quantity::from(1_000_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::default(),
+        );
+
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("initiator must not debit an unconsenting counterparty");
+        assert!(
+            error.to_string().contains("exact consent"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(delivery_def_id, ALICE_ID.clone())),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(payment_def_id, BOB_ID.clone())),
+            Quantity::from(1_000_u32)
+        );
+    }
+
+    #[test]
+    fn pvp_rejects_unilateral_counterparty_debit() {
+        let (state, primary_def_id, counter_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let instruction = PvpIsi::new(
+            "pvp_without_consent".parse().expect("settlement id"),
+            SettlementLeg::new(
+                primary_def_id.clone(),
+                Quantity::from(5_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                counter_def_id.clone(),
+                Quantity::from(500_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::default(),
+        );
+
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("initiator must not debit an unconsenting FX counterparty");
+        assert!(
+            error.to_string().contains("exact consent"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(primary_def_id, ALICE_ID.clone())),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(counter_def_id, BOB_ID.clone())),
+            Quantity::from(1_000_u32)
+        );
+    }
+
+    #[test]
+    fn dvp_consent_is_bound_to_exact_terms_and_settlement_id_is_one_shot() {
+        let (state, delivery_def_id, payment_def_id) =
+            settlement_state_with_balances(Quantity::from(20_u32), Quantity::from(2_000_u32));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let instruction = DvpIsi::new(
+            "dvp_exact_consent".parse().expect("settlement id"),
+            SettlementLeg::new(
+                delivery_def_id,
+                Quantity::from(5_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                payment_def_id,
+                Quantity::from(500_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::default(),
+        );
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+
+        let mut changed_terms = instruction.clone();
+        changed_terms.payment_leg.quantity = Quantity::from(501_u32);
+        let error = changed_terms
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("changed terms require fresh counterparty consent");
+        assert!(error.to_string().contains("exact consent"));
+
+        instruction
+            .clone()
+            .execute(&ALICE_ID, &mut stx)
+            .expect("the exactly authorized settlement must execute");
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a committed settlement id must not execute twice");
+        assert!(error.to_string().contains("already been committed"));
+    }
+
+    #[test]
+    fn dvp_respects_counterparty_outgoing_freeze() {
+        let (state, delivery_def_id, payment_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let instruction = DvpIsi::new(
+            "dvp_frozen_counterparty".parse().expect("settlement id"),
+            SettlementLeg::new(
+                delivery_def_id.clone(),
+                Quantity::from(5_u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            SettlementLeg::new(
+                payment_def_id.clone(),
+                Quantity::from(500_u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            SettlementPlan::default(),
+        );
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+        let mut control = AssetTransferControlRecord::new(payment_def_id.clone());
+        control.availability_revision = 1;
+        control.outgoing_availability = AssetTransferAvailability::Disabled;
+        crate::smartcontracts::isi::asset::isi::update_control_record(&mut stx, &BOB_ID, control)
+            .expect("install outgoing freeze");
+
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("settlement must honor the counterparty freeze");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::AssetTransferAdmission(
+                AssetTransferAdmissionError::OutgoingDisabled(_)
+            )
+        ));
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(delivery_def_id, ALICE_ID.clone())),
+            Quantity::from(10_u32)
+        );
+        assert_eq!(
+            asset_balance_or_zero(&stx, &AssetId::new(payment_def_id, BOB_ID.clone())),
+            Quantity::from(1_000_u32)
+        );
+    }
+
+    #[test]
+    fn dvp_moves_assets_after_exact_counterparty_consent() {
         let (state, delivery_def_id, payment_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -2250,15 +2553,17 @@ mod tests {
             SettlementAtomicity::AllOrNothing,
         );
 
-        DvpIsi {
+        let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg,
             payment_leg,
             plan,
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect("DvP execution succeeds");
+        };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+        instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect("DvP execution succeeds");
 
         let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
@@ -2324,7 +2629,7 @@ mod tests {
         stx.current_dataspace_id = Some(dataspace);
         stx.world.current_dataspace_id = Some(dataspace);
 
-        DvpIsi {
+        let instruction = DvpIsi {
             settlement_id: "dvp_persisted".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
@@ -2343,9 +2648,11 @@ mod tests {
                 SettlementAtomicity::AllOrNothing,
             ),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect("DvP execution succeeds");
+        };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+        instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect("DvP execution succeeds");
 
         stx.apply();
         state_block.commit().expect("commit state block");
@@ -2396,7 +2703,7 @@ mod tests {
         stx.current_dataspace_id = Some(DataSpaceId::new(7));
         stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
 
-        DvpIsi {
+        let instruction = DvpIsi {
             settlement_id: "dvp_partial_commit".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
@@ -2415,9 +2722,11 @@ mod tests {
                 SettlementAtomicity::AllOrNothing,
             ),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect("DvP execution succeeds");
+        };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+        instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect("DvP execution succeeds");
 
         stx.apply();
         state_block.commit().expect("commit state block");
@@ -2469,7 +2778,7 @@ mod tests {
     }
 
     #[test]
-    fn dvp_uses_scoped_source_buckets_for_cross_dataspace_legs() {
+    fn dvp_uses_the_exact_counterparty_authorized_dataspace_balance() {
         let ds1 = DataSpaceId::new(7);
         let ds2 = DataSpaceId::new(11);
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -2533,7 +2842,7 @@ mod tests {
         stx.current_dataspace_id = Some(ds1);
         stx.world.current_dataspace_id = Some(ds1);
 
-        DvpIsi {
+        let instruction = DvpIsi {
             settlement_id: "dvp_cross_scope".parse().unwrap(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id.clone(),
@@ -2552,9 +2861,51 @@ mod tests {
                 SettlementAtomicity::AllOrNothing,
             ),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect("cross-dataspace DvP should resolve each leg against its source bucket");
+        };
+        let mut wrong_scope_instruction = instruction.clone();
+        wrong_scope_instruction.settlement_id =
+            "dvp_cross_scope_wrong".parse().expect("settlement id");
+        grant_exact_settlement_consent(
+            &mut stx,
+            &ALICE_ID,
+            AssetId::with_scope(
+                payment_def_id.clone(),
+                BOB_ID.clone(),
+                AssetBalanceScope::Dataspace(ds1),
+            ),
+            wrong_scope_instruction.settlement_id(),
+            wrong_scope_instruction.intent_hash(),
+        );
+        wrong_scope_instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("consent for an unfunded scope must not discover another private bucket");
+        assert_eq!(
+            asset_balance_or_zero(
+                &stx,
+                &AssetId::with_scope(
+                    delivery_def_id.clone(),
+                    ALICE_ID.clone(),
+                    AssetBalanceScope::Dataspace(ds1),
+                ),
+            ),
+            Quantity::from(10_u32),
+        );
+        assert_eq!(
+            asset_balance_or_zero(
+                &stx,
+                &AssetId::with_scope(
+                    payment_def_id.clone(),
+                    BOB_ID.clone(),
+                    AssetBalanceScope::Dataspace(ds2),
+                ),
+            ),
+            Quantity::from(1_000_u32),
+        );
+
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+        instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect("explicit consent may authorize the exact counterparty dataspace balance");
 
         let alice_delivery_ds1 = AssetId::with_scope(
             delivery_def_id.clone(),
@@ -2577,9 +2928,14 @@ mod tests {
             iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
         );
 
-        assert!(
-            stx.world.asset(&alice_delivery_ds1).is_err(),
-            "delivery source bucket should be debited in its original dataspace"
+        assert_eq!(
+            stx.world
+                .asset(&alice_delivery_ds1)
+                .expect("delivery source bucket")
+                .value()
+                .as_ref()
+                .clone(),
+            Quantity::zero(),
         );
         assert_eq!(
             stx.world
@@ -2599,14 +2955,19 @@ mod tests {
                 .clone(),
             Quantity::from(1_000_u32),
         );
-        assert!(
-            stx.world.asset(&bob_payment_ds2).is_err(),
-            "payment source bucket should be debited in its original dataspace"
+        assert_eq!(
+            stx.world
+                .asset(&bob_payment_ds2)
+                .expect("counterparty payment bucket")
+                .value()
+                .as_ref()
+                .clone(),
+            Quantity::zero(),
         );
     }
 
     #[test]
-    fn dvp_commit_first_keeps_delivery_on_payment_spec_error() {
+    fn dvp_commit_first_is_rejected_without_moving_assets() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_payment_spec(NumericSpec::fractional(2));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2635,75 +2996,42 @@ mod tests {
             ),
             metadata: Metadata::default(),
         };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
-            .expect_err("scale violation should fail payment leg");
+            .expect_err("partial-commit DvP must be rejected");
         assert!(
-            matches!(
-                err,
-                InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(_))
-            ),
+            err.to_string().contains("AllOrNothing"),
             "unexpected error: {err:?}"
         );
 
         let alice_delivery = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
         let bob_delivery = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
-        assert!(
-            stx.world.assets.get(&alice_delivery).is_none(),
-            "delivery leg should remain debited from seller"
-        );
         assert_eq!(
             **stx
                 .world
                 .assets
-                .get(&bob_delivery)
-                .expect("buyer delivery balance"),
+                .get(&alice_delivery)
+                .expect("seller delivery balance"),
             Quantity::from(5_u32),
-            "buyer should retain delivered asset"
+            "seller balance must remain unchanged"
         );
+        assert!(stx.world.assets.get(&bob_delivery).is_none());
 
         let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
         let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
         assert_eq!(
             **stx.world.assets.get(&bob_cash).expect("payer cash balance"),
             Quantity::from(2_u32),
-            "payer cash should be untouched"
+            "payer cash must remain unchanged"
         );
-        assert!(
-            stx.world.assets.get(&alice_cash).is_none(),
-            "payment leg must not credit the seller"
-        );
-
-        let ledger = stx
-            .world
-            .settlement_ledgers
-            .get(&settlement_id)
-            .cloned()
-            .expect("ledger entry recorded");
-        let entry = ledger.entries.last().expect("latest settlement entry");
-        match &entry.outcome {
-            SettlementOutcomeRecord::Failure(failure) => assert_eq!(&failure.reason, "type_error"),
-            other => panic!("expected failure outcome, found {other:?}"),
-        }
-        assert_eq!(entry.kind, SettlementKind::Dvp);
-        assert_eq!(entry.authority, ALICE_ID.clone());
-        assert_eq!(
-            entry
-                .legs
-                .iter()
-                .map(|leg| (leg.role, leg.committed))
-                .collect::<Vec<_>>(),
-            vec![
-                (SettlementLegRole::Delivery, true),
-                (SettlementLegRole::Payment, false)
-            ]
-        );
+        assert!(stx.world.assets.get(&alice_cash).is_none());
     }
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn dvp_commit_second_rolls_back_on_payment_spec_error() {
+    fn dvp_commit_second_is_rejected_without_moving_assets() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_payment_spec(NumericSpec::fractional(2));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -2757,15 +3085,13 @@ mod tests {
             ),
             metadata: Metadata::default(),
         };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
-            .expect_err("scale violation should fail payment leg");
+            .expect_err("partial-commit DvP must be rejected");
         assert!(
-            matches!(
-                err,
-                InstructionExecutionError::Evaluate(InstructionEvaluationError::Type(_))
-            ),
+            err.to_string().contains("AllOrNothing"),
             "unexpected error: {err:?}"
         );
 
@@ -2810,7 +3136,9 @@ mod tests {
             .expect("ledger entry recorded");
         let entry = ledger.entries.last().expect("latest settlement entry");
         match &entry.outcome {
-            SettlementOutcomeRecord::Failure(failure) => assert_eq!(&failure.reason, "type_error"),
+            SettlementOutcomeRecord::Failure(failure) => {
+                assert_eq!(&failure.reason, "unsupported_policy")
+            }
             other => panic!("expected failure outcome, found {other:?}"),
         }
         assert_eq!(
@@ -2843,7 +3171,7 @@ mod tests {
         let internal_events_before = stx.world.internal_event_buf.len();
         let settlement_id: SettlementId = "dvp_holding_first".parse().unwrap();
 
-        let error = DvpIsi {
+        let instruction = DvpIsi {
             settlement_id: settlement_id.clone(),
             delivery_leg: SettlementLeg::new(
                 delivery_def_id,
@@ -2862,9 +3190,11 @@ mod tests {
                 SettlementAtomicity::AllOrNothing,
             ),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("first destination holding limit must reject DvP");
+        };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("first destination holding limit must reject DvP");
         assert_holding_limit_error(&error);
 
         assert_eq!(
@@ -2898,10 +3228,7 @@ mod tests {
 
     #[test]
     fn dvp_holding_limit_rolls_back_first_leg_for_atomic_plans() {
-        for atomicity in [
-            SettlementAtomicity::AllOrNothing,
-            SettlementAtomicity::CommitSecondLeg,
-        ] {
+        for atomicity in [SettlementAtomicity::AllOrNothing] {
             let (state, delivery_def_id, payment_def_id) = settlement_state();
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -2925,7 +3252,7 @@ mod tests {
             let internal_events_before = stx.world.internal_event_buf.len();
             let settlement_id: SettlementId = "dvp_holding_second".parse().unwrap();
 
-            let error = DvpIsi {
+            let instruction = DvpIsi {
                 settlement_id: settlement_id.clone(),
                 delivery_leg: SettlementLeg::new(
                     delivery_def_id.clone(),
@@ -2941,9 +3268,11 @@ mod tests {
                 ),
                 plan: SettlementPlan::new(SettlementExecutionOrder::DeliveryThenPayment, atomicity),
                 metadata: Metadata::default(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("second destination holding limit must reject DvP");
+            };
+            grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
+            let error = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("second destination holding limit must reject DvP");
             assert_holding_limit_error(&error);
 
             assert_eq!(
@@ -3032,6 +3361,7 @@ mod tests {
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
         };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
@@ -3096,7 +3426,7 @@ mod tests {
     }
 
     #[test]
-    fn pvp_swaps_currencies_between_counterparties() {
+    fn pvp_swaps_currencies_after_exact_counterparty_consent() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -3117,15 +3447,17 @@ mod tests {
             ALICE_ID.clone(),
         );
 
-        PvpIsi {
+        let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg,
             counter_leg,
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect("PvP execution succeeds");
+        };
+        grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
+        instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect("PvP execution succeeds");
 
         let alice_primary = AssetId::new(primary_def_id.clone(), ALICE_ID.clone());
         let bob_primary = AssetId::new(primary_def_id.clone(), BOB_ID.clone());
@@ -3231,6 +3563,7 @@ mod tests {
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
         };
+        grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         let err = instruction
             .execute(&ALICE_ID, &mut stx)
@@ -3302,7 +3635,7 @@ mod tests {
         let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
         let settlement_id: SettlementId = "pvp_holding_first".parse().unwrap();
 
-        let error = PvpIsi {
+        let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg: SettlementLeg::new(
                 primary_def_id,
@@ -3318,9 +3651,11 @@ mod tests {
             ),
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("first destination holding limit must reject PvP");
+        };
+        grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("first destination holding limit must reject PvP");
         assert_holding_limit_error(&error);
 
         assert_eq!(
@@ -3350,7 +3685,7 @@ mod tests {
     }
 
     #[test]
-    fn pvp_commit_first_keeps_first_leg_on_second_holding_limit_failure() {
+    fn pvp_commit_first_is_rejected_without_moving_assets() {
         let (state, primary_def_id, counter_def_id) = settlement_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -3363,7 +3698,7 @@ mod tests {
         let alice_counter = AssetId::new(counter_def_id.clone(), ALICE_ID.clone());
         let settlement_id: SettlementId = "pvp_holding_commit_first".parse().unwrap();
 
-        let error = PvpIsi {
+        let instruction = PvpIsi {
             settlement_id: settlement_id.clone(),
             primary_leg: SettlementLeg::new(
                 primary_def_id,
@@ -3382,19 +3717,21 @@ mod tests {
                 SettlementAtomicity::CommitFirstLeg,
             ),
             metadata: Metadata::default(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("second destination holding limit must reject PvP");
-        assert_holding_limit_error(&error);
+        };
+        grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
+        let error = instruction
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("partial-commit PvP must be rejected");
+        assert!(
+            error.to_string().contains("AllOrNothing"),
+            "unexpected error: {error}"
+        );
 
         assert_eq!(
             asset_balance_or_zero(&stx, &alice_primary),
-            Quantity::from(5_u32)
+            Quantity::from(10_u32)
         );
-        assert_eq!(
-            asset_balance_or_zero(&stx, &bob_primary),
-            Quantity::from(5_u32)
-        );
+        assert_eq!(asset_balance_or_zero(&stx, &bob_primary), Quantity::zero());
         assert_eq!(
             asset_balance_or_zero(&stx, &bob_counter),
             Quantity::from(1_000_u32)
@@ -3411,9 +3748,9 @@ mod tests {
             .expect("failed PvP should be recorded");
         let entry = ledger.entries.last().expect("settlement entry");
         let SettlementOutcomeRecord::Failure(failure) = &entry.outcome else {
-            panic!("expected holding-limit failure");
+            panic!("expected atomicity failure");
         };
-        assert_eq!(failure.reason, "holding_limit_exceeded");
+        assert_eq!(failure.reason, "unsupported_policy");
         assert_eq!(
             entry
                 .legs
@@ -3421,7 +3758,7 @@ mod tests {
                 .map(|leg| (leg.role, leg.committed))
                 .collect::<Vec<_>>(),
             vec![
-                (SettlementLegRole::Primary, true),
+                (SettlementLegRole::Primary, false),
                 (SettlementLegRole::Counter, false)
             ]
         );
@@ -3451,6 +3788,7 @@ mod tests {
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
         };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         let err = super::admission_validate_dvp(&ALICE_ID, &mut stx, &instruction)
             .expect_err("admission guard should reject insufficient payment leg");
@@ -3488,6 +3826,7 @@ mod tests {
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
         };
+        grant_dvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         super::admission_validate_dvp(&ALICE_ID, &mut stx, &instruction)
             .expect("admission guard should allow funded trades");
@@ -3517,6 +3856,7 @@ mod tests {
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
         };
+        grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         let err = super::admission_validate_pvp(&ALICE_ID, &mut stx, &instruction)
             .expect_err("admission guard should reject insufficient counter leg");
@@ -3554,22 +3894,10 @@ mod tests {
             plan: SettlementPlan::default(),
             metadata: Metadata::default(),
         };
+        grant_pvp_consent(&mut stx, &ALICE_ID, &instruction);
 
         super::admission_validate_pvp(&ALICE_ID, &mut stx, &instruction)
             .expect("admission guard should allow funded FX settlements");
-    }
-
-    #[test]
-    fn enforce_atomicity_accepts_commit_variants_for_pvp() {
-        for atomicity in [
-            SettlementAtomicity::AllOrNothing,
-            SettlementAtomicity::CommitFirstLeg,
-            SettlementAtomicity::CommitSecondLeg,
-        ] {
-            let plan =
-                SettlementPlan::new(SettlementExecutionOrder::DeliveryThenPayment, atomicity);
-            super::enforce_atomicity(plan);
-        }
     }
 
     #[test]
@@ -3602,6 +3930,13 @@ mod tests {
         );
         assert_eq!(
             super::settlement_failure_reason(&unsupported),
+            "unsupported_policy"
+        );
+        let partial_bilateral = InstructionExecutionError::InvariantViolation(
+            "DvP and PvP settlements require AllOrNothing atomicity".into(),
+        );
+        assert_eq!(
+            super::settlement_failure_reason(&partial_bilateral),
             "unsupported_policy"
         );
 

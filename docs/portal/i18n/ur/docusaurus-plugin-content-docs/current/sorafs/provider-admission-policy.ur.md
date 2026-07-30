@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## قبولیت کا ورک فلو
 
 1. **پروپوزل تیار کرنا**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      شامل کریں جو `ProviderAdmissionProposalV1` + توثیقی bundle بنائے۔
    - ویلیڈیشن: ضروری فیلڈز، stake > 0، اور `profile_id` میں canonical chunker handle کو یقینی بنائیں۔
 2. **گورننس کی منظوری**
@@ -59,7 +59,7 @@ canonical proposal/envelope bytes جاری کرتا ہے، اور `sign`/`verify
 
 ### CLI حوالہ
 
-ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔
+ہر کمانڈ کو `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔
 
 - `proposal`
   - درکار فلیگز: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -101,7 +101,7 @@ canonical proposal/envelope bytes جاری کرتا ہے، اور `sign`/`verify
    `--retention-epoch` بڑھائیں اور ضرورت کے مطابق stake/endpoints اپڈیٹ کریں۔
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -121,7 +121,7 @@ canonical proposal/envelope bytes جاری کرتا ہے، اور `sign`/`verify
 #### ہنگامی منسوخی
 1. متاثرہ envelope کی شناخت کریں اور منسوخی جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

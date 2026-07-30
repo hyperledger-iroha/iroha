@@ -31,6 +31,47 @@ FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256 = hashlib.sha256(
     b"test-only-foundational-predecessor"
 ).hexdigest()
 FOUNDATIONAL_SIGNING_SEED = bytes.fromhex("1f" * 32)
+TOPOLOGY_QUALIFICATION_SUMMARY = {
+    "schema": "sorafs.l1.deployment_qualification.summary.v1",
+    "status": "configuration-qualified",
+    "qualification_scope": "pre-deployment-configuration",
+    "live_evidence_recognized": False,
+    "promotion_eligible": False,
+    "manifest_sha256": hashlib.sha256(
+        b"test-only-exact-topology-manifest"
+    ).hexdigest(),
+    "canonical_manifest_sha256": hashlib.sha256(
+        b"test-only-canonical-topology-manifest"
+    ).hexdigest(),
+    "deployment": {
+        "deployment_id": DEPLOYMENT_ID,
+        "environment": ENVIRONMENT,
+    },
+    "validator_count": 4,
+    "storage_provider_count": 2,
+    "gateway_count": 2,
+    "governance_dag_instance_count": 2,
+    "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+    "runtime_material_policy_valid": True,
+    "signed_model_artifact_count": 1,
+    "required_lane_slots": list(MODULE.DEFAULT_REQUIRED_GATES),
+    "recognized_lane_slot_count": 17,
+    "errors": [],
+}
+TOPOLOGY_QUALIFICATION_SUMMARY_BYTES = json.dumps(
+    TOPOLOGY_QUALIFICATION_SUMMARY
+).encode("utf-8")
+TOPOLOGY_QUALIFICATION = {
+    "qualification_summary_sha256": hashlib.sha256(
+        TOPOLOGY_QUALIFICATION_SUMMARY_BYTES
+    ).hexdigest(),
+    "manifest_sha256": TOPOLOGY_QUALIFICATION_SUMMARY["manifest_sha256"],
+    "canonical_manifest_sha256": TOPOLOGY_QUALIFICATION_SUMMARY[
+        "canonical_manifest_sha256"
+    ],
+    "deployment_id": DEPLOYMENT_ID,
+    "environment": ENVIRONMENT,
+}
 
 
 def ed25519_public_key_from_seed(seed: bytes) -> bytes:
@@ -147,6 +188,11 @@ def foundational_summary(
         "generated_at_unix": generated_at_unix,
         "release_sequence": FOUNDATIONAL_RELEASE_SEQUENCE,
         "previous_envelope_sha256": FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
+        "topology_qualification": {
+            **TOPOLOGY_QUALIFICATION,
+            "deployment_id": deployment_id,
+            "environment": environment,
+        },
         "prerequisites": [
             {
                 "id": prerequisite_id,
@@ -228,6 +274,19 @@ def foundational_cli_args() -> list[str]:
     ]
 
 
+def topology_cli_args(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> list[str]:
+    """Return the mandatory exact qualification input for CLI cases."""
+
+    return [
+        "--topology-qualification-summary",
+        str(write_topology_qualification(root, deployment_id, environment)),
+    ]
+
+
 def production_validation_options(**overrides: object):
     """Return aggregate options including reviewed foundational trust anchors."""
 
@@ -243,6 +302,7 @@ def production_validation_options(**overrides: object):
         "foundational_previous_envelope_sha256": (
             FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256
         ),
+        "topology_qualification": TOPOLOGY_QUALIFICATION,
     }
     values.update(overrides)
     return MODULE.ValidationOptions(**values)
@@ -270,6 +330,23 @@ LANE_FIXTURE_TESTS = {
 
 
 def write_json(path: Path, payload: dict) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def write_topology_qualification(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> Path:
+    """Write the exact schema-qualified topology bytes used by all lanes."""
+
+    path = root / "l1-topology-qualification.summary"
+    payload = copy.deepcopy(TOPOLOGY_QUALIFICATION_SUMMARY)
+    payload["deployment"] = {
+        "deployment_id": deployment_id,
+        "environment": environment,
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -368,10 +445,45 @@ def default_gate_metadata(
     elif gate_name == "gateway_load":
         metadata["metric_count_values"] = [len(MODULE.GATEWAY_LOAD_REQUIRED_METRICS)]
         metadata["metrics"] = sorted(MODULE.GATEWAY_LOAD_REQUIRED_METRICS)
+        streams = [
+            {"name": f"gateway-load-stream-{index:04d}"}
+            for index in range(MODULE.GATEWAY_LOAD_MIN_STREAMS)
+        ]
         fingerprints.update(
             {
+                "cache_coverage": {
+                    "cold_cache_exercised": True,
+                    "mixed_cache_exercised": True,
+                    "warm_cache_exercised": True,
+                },
+                "duration_seconds": MODULE.GATEWAY_LOAD_MIN_STAGING_DURATION_SECS,
+                "error_rate_bps": MODULE.GATEWAY_LOAD_MAX_ERROR_RATE_BPS,
+                "fixture_bundle_digest_hex": SHA256,
+                "gateway_version": "iroha-gateway 1.0.0",
+                "hardware_profile": {"name": "gateway-load-hardware-arm64"},
+                "load_conditions": {
+                    "corruption_injection_bps": (
+                        MODULE.GATEWAY_LOAD_REQUIRED_CORRUPTION_BPS
+                    ),
+                    "denylist_pressure_exercised": True,
+                    "failover_exercised": True,
+                    "malformed_flood_exercised": True,
+                    "rate_limit_pressure_exercised": True,
+                    "revocation_exercised": True,
+                },
                 "metric_count": len(MODULE.GATEWAY_LOAD_REQUIRED_METRICS),
                 "metrics": list(MODULE.GATEWAY_LOAD_REQUIRED_METRICS),
+                "p95_latency_ms": 1_000,
+                "p99_latency_ms": 2_000,
+                "peak_concurrent_range_streams": MODULE.GATEWAY_LOAD_MIN_STREAMS,
+                "provider_count": MODULE.GATEWAY_LOAD_MIN_PROVIDER_COUNT,
+                "providers": [
+                    {"name": "gateway-load-provider-primary"},
+                    {"name": "gateway-load-provider-secondary"},
+                ],
+                "stream_count": len(streams),
+                "streams": streams,
+                "success_rate_bps": MODULE.GATEWAY_LOAD_MIN_SUCCESS_RATE_BPS,
             }
         )
         add_policy()
@@ -584,6 +696,10 @@ def default_gate_metadata(
         add_hex_list("valid_package_index_digests", "package_index_digest_hex")
         add_policy()
         add_hex_list(
+            "valid_provenance_bundle_digests",
+            "provenance_bundle_digest_hex",
+        )
+        add_hex_list(
             "valid_release_key_fingerprints",
             "public_key_fingerprint_hex",
         )
@@ -592,7 +708,12 @@ def default_gate_metadata(
             "valid_release_manifest_reference_digests",
             "release_manifest_digest_hex",
         )
+        add_hex_list("valid_sbom_index_digests", "sbom_index_digest_hex")
         add_hex_list("valid_smoke_output_digests", "smoke_output_digest_hex")
+        add_hex_list(
+            "valid_vulnerability_report_digests",
+            "vulnerability_report_digest_hex",
+        )
         fingerprints["signature_algorithm"] = "ed25519"
     elif gate_name == "repair":
         metadata["metric_count_values"] = [len(MODULE.REPAIR_REQUIRED_METRICS)]
@@ -732,6 +853,7 @@ def gate_summary(
     payload = {
         "schema": gate.schema,
         "status": status,
+        "topology_qualification": dict(TOPOLOGY_QUALIFICATION),
         "required_kinds": gate_required_kinds,
         "thresholds": {"max_evidence_bytes": 2_097_152},
         "evidence_file_count": len(gate_required_kinds),
@@ -879,6 +1001,8 @@ def run_gate(root: Path, *extra: str) -> int:
     write_foundational_summary(root)
     return MODULE.main(
         [
+            "--topology-qualification-summary",
+            str(write_topology_qualification(root)),
             "--evidence-dir",
             str(root),
             "--now-unix",
@@ -999,6 +1123,17 @@ def load_lane_fixture_module(gate_name: str):
     return fixture_module
 
 
+def normalize_fixture_evidence_context(
+    evidence_root: Path,
+) -> None:
+    """Retarget lane fixtures to the one production topology under test."""
+
+    for path in sorted(evidence_root.rglob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        normalize_deployment_context(payload, DEPLOYMENT_ID, ENVIRONMENT)
+        write_json(path, payload)
+
+
 def write_complete_lane_fixture_summary(
     gate_name: str,
     root: Path,
@@ -1007,13 +1142,19 @@ def write_complete_lane_fixture_summary(
     evidence_root = root / gate_name
     evidence_root.mkdir()
     summary = root / f"{gate_name}.json"
+    written_evidence = fixture_module.write_complete_evidence(evidence_root)
+    gate_evidence_root = (
+        written_evidence if isinstance(written_evidence, Path) else evidence_root
+    )
+    normalize_fixture_evidence_context(gate_evidence_root)
+    topology_args = topology_cli_args(root)
 
     if gate_name == "pop_credentials":
-        evidence_dir = fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.MODULE.main(
             [
+                *topology_args,
                 "--evidence-dir",
-                str(evidence_dir),
+                str(gate_evidence_root),
                 "--summary-out",
                 str(summary),
                 "--now-unix",
@@ -1021,9 +1162,9 @@ def write_complete_lane_fixture_summary(
             ]
         )
     elif gate_name == "transparency":
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.MODULE.main(
             [
+                *topology_args,
                 "--evidence-dir",
                 str(evidence_root),
                 "--summary-out",
@@ -1033,18 +1174,18 @@ def write_complete_lane_fixture_summary(
             ]
         )
     elif gate_name == "reputation":
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.run_gate(
             evidence_root,
+            *topology_args,
             "--require-provider",
             "provider-a",
             "--summary-out",
             str(summary),
         )
     elif gate_name == "gateway_compliance":
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.MODULE.main(
             [
+                *topology_args,
                 "--evidence-dir",
                 str(evidence_root),
                 "--summary-out",
@@ -1054,9 +1195,9 @@ def write_complete_lane_fixture_summary(
             ]
         )
     else:
-        fixture_module.write_complete_evidence(evidence_root)
         exit_code = fixture_module.run_gate(
             evidence_root,
+            *topology_args,
             "--summary-out",
             str(summary),
         )
@@ -1111,6 +1252,7 @@ def write_normalized_complete_lane_summaries(
     for gate_name in MODULE.DEFAULT_REQUIRED_GATES:
         payload, now_unix = write_complete_lane_fixture_summary(gate_name, fixture_root)
         normalize_deployment_context(payload, DEPLOYMENT_ID, ENVIRONMENT)
+        payload["topology_qualification"] = copy.deepcopy(TOPOLOGY_QUALIFICATION)
         write_json(summary_root / f"{gate_name}.json", payload)
         now_values.append(now_unix)
     assert now_values
@@ -1331,6 +1473,100 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     }
 
 
+def test_aggregate_ready_requires_exact_canonical_ordered_17_gate_tuple() -> None:
+    assert (
+        MODULE.aggregate_summary_status([], MODULE.DEFAULT_REQUIRED_GATES)
+        == "ready"
+    )
+    assert (
+        MODULE.aggregate_summary_status([], MODULE.DEFAULT_REQUIRED_GATES[:-1])
+        == MODULE.NON_PROMOTABLE_STATUS
+    )
+    assert (
+        MODULE.aggregate_summary_status(
+            [],
+            tuple(reversed(MODULE.DEFAULT_REQUIRED_GATES)),
+        )
+        == MODULE.NON_PROMOTABLE_STATUS
+    )
+    assert (
+        MODULE.aggregate_summary_status(
+            ["canonical aggregate blocker"],
+            MODULE.DEFAULT_REQUIRED_GATES,
+        )
+        == "blocked"
+    )
+
+
+def test_complete_aggregate_without_topology_qualification_stays_blocked(
+    tmp_path: Path,
+) -> None:
+    """Configuration omission can never fall through to a ready aggregate."""
+
+    write_all_gates(tmp_path)
+    write_foundational_summary(tmp_path)
+    summary = tmp_path / "missing-topology-aggregate.json"
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                *foundational_cli_args(),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["status"] == "blocked"
+    assert payload["topology_qualification"] is None
+    assert "--topology-qualification-summary is required" in payload["errors"]
+
+
+def test_aggregate_rejects_lane_and_envelope_topology_substitution(
+    tmp_path: Path,
+) -> None:
+    """One changed topology digest blocks lane and signed-envelope paths."""
+
+    write_all_gates(tmp_path)
+    lane_path = tmp_path / "gateway_load.json"
+    lane = json.loads(lane_path.read_text(encoding="utf-8"))
+    lane["topology_qualification"]["manifest_sha256"] = hashlib.sha256(
+        b"foreign-lane-topology"
+    ).hexdigest()
+    write_json(lane_path, lane)
+    summary = tmp_path / "lane-mismatch-aggregate.json"
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    diagnostics = "\n".join(
+        json.loads(summary.read_text(encoding="utf-8"))["errors"]
+    )
+    assert "must match the reviewed topology" in diagnostics
+
+    summary.unlink()
+    write_gate(tmp_path, "gateway_load")
+    foundation = foundational_summary(
+        lane_summary_sha256=lane_summary_digests(tmp_path)
+    )
+    foundation["topology_qualification"]["manifest_sha256"] = hashlib.sha256(
+        b"foreign-envelope-topology"
+    ).hexdigest()
+    resign_foundational_summary(foundation)
+    write_foundational_summary(tmp_path, foundation)
+    summary = tmp_path / "envelope-mismatch-aggregate.json"
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    diagnostics = "\n".join(
+        json.loads(summary.read_text(encoding="utf-8"))["errors"]
+    )
+    assert "must match the reviewed topology" in diagnostics
+
+
 def test_full_aggregate_rejects_lane_summary_bytes_swapped_after_signing(
     tmp_path: Path,
 ) -> None:
@@ -1363,6 +1599,7 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
         "generated_at_unix",
         "release_sequence",
         "previous_envelope_sha256",
+        "topology_qualification",
         "prerequisites",
         "lane_summaries",
         "signature",
@@ -1810,6 +2047,7 @@ def test_foundational_prerequisite_missing_duplicate_and_untrusted_inputs_block(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(missing_root),
                 *foundational_cli_args(),
                 "--summary-out",
                 str(missing_summary),
@@ -1866,6 +2104,7 @@ def test_foundational_prerequisite_missing_duplicate_and_untrusted_inputs_block(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(untrusted_root),
                 "--summary-out",
                 str(untrusted_summary),
             ]
@@ -1905,6 +2144,7 @@ def test_foundational_prerequisite_path_policy_rejects_symlink_and_traversal(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(root),
                 *foundational_cli_args(),
             ]
         )
@@ -1931,6 +2171,7 @@ def test_foundational_prerequisite_path_policy_rejects_symlink_and_traversal(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(root),
                 *foundational_cli_args(),
             ]
         )
@@ -1971,6 +2212,7 @@ def test_foundational_prerequisite_cli_trust_values_fail_closed_without_echo(
         assert (
             MODULE.main(
                 [
+                    *topology_cli_args(tmp_path),
                     "--evidence-dir",
                     str(tmp_path),
                     "--require-gate",
@@ -1981,6 +2223,7 @@ def test_foundational_prerequisite_cli_trust_values_fail_closed_without_echo(
                     DEPLOYMENT_ID,
                     "--environment",
                     ENVIRONMENT,
+                    *topology_cli_args(tmp_path),
                     *foundational_cli_args(),
                     flag,
                     value,
@@ -2001,6 +2244,7 @@ def test_direct_checker_requires_explicit_deployment_context(tmp_path: Path) -> 
     assert (
         MODULE.main(
             [
+                *topology_cli_args(tmp_path),
                 "--evidence-dir",
                 str(tmp_path),
                 "--require-gate",
@@ -2089,6 +2333,7 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(summary_root),
                 *foundational_cli_args(),
                 "--summary-out",
                 str(summary),
@@ -2159,6 +2404,7 @@ def test_explicit_lane_summary_path_uses_safe_basename(tmp_path: Path) -> None:
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
                 *foundational_cli_args(),
                 "--summary-out",
                 str(summary),
@@ -2195,8 +2441,12 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     args = tmp_path / "aggregate.args"
     args.write_text(
         "\n".join(
-            [
-                f"--evidence-dir {tmp_path}",
+                [
+                    (
+                        "--topology-qualification-summary "
+                        f"{write_topology_qualification(tmp_path)}"
+                    ),
+                    f"--evidence-dir {tmp_path}",
                 "--require-gate gateway_load",
                 f"--now-unix {NOW_UNIX}",
                 f"--deployment-id {DEPLOYMENT_ID}",
@@ -6567,6 +6817,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
         ),
         (
             "reference_sdk_release",
+            "valid_provenance_bundle_digests",
+            ("supply_chain",),
+            "provenance_bundle_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
             "valid_release_key_fingerprints",
             ("signed_manifest",),
             "public_key_fingerprint_hex",
@@ -6582,6 +6838,7 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "valid_release_manifest_reference_digests",
             (
                 "release_archive",
+                "supply_chain",
                 "downstream_bindings",
                 "cookbook_smoke",
                 "ffi_header_contract",
@@ -6591,9 +6848,21 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
         ),
         (
             "reference_sdk_release",
+            "valid_sbom_index_digests",
+            ("supply_chain",),
+            "sbom_index_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
             "valid_smoke_output_digests",
             ("cookbook_smoke",),
             "smoke_output_digest_hex",
+        ),
+        (
+            "reference_sdk_release",
+            "valid_vulnerability_report_digests",
+            ("supply_chain",),
+            "vulnerability_report_digest_hex",
         ),
         (
             "reputation",
@@ -7284,6 +7553,68 @@ def test_gateway_load_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 0
+
+
+def test_gateway_load_staging_contract_is_rechecked_at_promotion() -> None:
+    cases = (
+        (
+            {"duration_seconds": MODULE.GATEWAY_LOAD_MIN_STAGING_DURATION_SECS - 1},
+            "duration_seconds must be an integer >= 86400",
+        ),
+        (
+            {
+                "cache_coverage": {
+                    "cold_cache_exercised": False,
+                    "mixed_cache_exercised": True,
+                    "warm_cache_exercised": True,
+                }
+            },
+            "cache_coverage must exercise cold, warm, and mixed caches",
+        ),
+        (
+            {
+                "load_conditions": {
+                    "corruption_injection_bps": 99,
+                    "denylist_pressure_exercised": True,
+                    "failover_exercised": True,
+                    "malformed_flood_exercised": True,
+                    "rate_limit_pressure_exercised": True,
+                    "revocation_exercised": True,
+                }
+            },
+            "corruption_injection_bps must be exactly 100",
+        ),
+        (
+            {
+                "provider_count": 1,
+                "providers": [{"name": "gateway-load-provider-primary"}],
+            },
+            "provider_count must be an integer >= 2",
+        ),
+        (
+            {"environment": "prod"},
+            "environment must be exactly production",
+        ),
+        (
+            {"gateway_version": "gateway-latest"},
+            "gateway_version must match the release contract",
+        ),
+    )
+    for mutation, diagnostic in cases:
+        payload = gate_summary("gateway_load")
+        add_fingerprint_metadata(
+            payload,
+            kind_name="staging_load",
+            **mutation,
+        )
+
+        _summary, errors = MODULE.validate_gate_summary(
+            MODULE.GATE_BY_NAME["gateway_load"],
+            payload,
+            production_validation_options(),
+        )
+
+        assert any(diagnostic in error for error in errors)
 
 
 def test_gateway_load_suite_bound_artifacts_must_match_suite_digest(
@@ -8388,10 +8719,13 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
     payload["valid_header_digests"] = [SHA256]
     payload["valid_package_index_digests"] = [SHA256]
     payload["valid_policy_digests"] = [SHA256]
+    payload["valid_provenance_bundle_digests"] = [SHA256]
     payload["valid_release_key_fingerprints"] = [SHA256]
     payload["valid_release_manifest_digests"] = [SHA256]
     payload["valid_release_manifest_reference_digests"] = [SHA256]
+    payload["valid_sbom_index_digests"] = [SHA256]
     payload["valid_smoke_output_digests"] = [SHA256]
+    payload["valid_vulnerability_report_digests"] = [SHA256]
     add_fingerprint_metadata(
         payload,
         archive_index_digest_hex=SHA256,
@@ -8400,9 +8734,12 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
         manifest_digest_hex=SHA256,
         package_index_digest_hex=SHA256,
         policy_digest_hex=SHA256,
+        provenance_bundle_digest_hex=SHA256,
         public_key_fingerprint_hex=SHA256,
         release_manifest_digest_hex=SHA256,
+        sbom_index_digest_hex=SHA256,
         smoke_output_digest_hex=SHA256,
+        vulnerability_report_digest_hex=SHA256,
     )
     write_json(tmp_path / "reference_sdk_release.json", payload)
 
@@ -16190,6 +16527,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "deployment_id",
             "environment",
             "expected_required_kinds",
+            "topology_qualification",
             "errors",
             "path",
             "sha256",
@@ -16204,6 +16542,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "summary_file_count",
             "recognized_summary_count",
             "deployment",
+            "topology_qualification",
             "foundational_prerequisites",
             "required",
             "errors",
@@ -16230,6 +16569,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "signer_public_key_fingerprint_sha256",
             "evidence_anchor_sha256",
             "lane_summary_sha256",
+            "topology_qualification",
             "path",
             "sha256",
             "errors",
@@ -16469,12 +16809,27 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
         None,
     )
     assert build_errors == []
-    assert summary["status"] == "ready"
+    assert summary["status"] == MODULE.NON_PROMOTABLE_STATUS
 
     errors: list[str] = []
     MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
     assert errors == []
 
+    promoted_partial = copy.deepcopy(summary)
+    promoted_partial["status"] = "ready"
+    MODULE.validate_aggregate_summary_output(
+        promoted_partial,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary ready required_gates must match the exact canonical "
+        "17-gate inventory"
+        in diagnostics
+    )
+
+    errors = []
     summary["status"] = "blocked"
     MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
     diagnostics = "\n".join(errors)
@@ -16697,7 +17052,10 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
         in diagnostics
     )
     assert "aggregate summary <sensitive-key> is not allowed" in diagnostics
-    assert "aggregate summary status must be ready, failed, or blocked" in diagnostics
+    assert (
+        "aggregate summary status must be ready, partial, failed, or blocked"
+        in diagnostics
+    )
     assert "aggregate summary required_gates must match requested gates" in diagnostics
     assert (
         "aggregate summary recognized_summary_count must match present required rows"
@@ -16736,7 +17094,7 @@ def test_aggregate_summary_output_contracts_fail_closed_from_config(
             None,
         )
         assert build_errors == []
-        assert summary["status"] == "ready"
+        assert summary["status"] == MODULE.NON_PROMOTABLE_STATUS
 
         errors: list[str] = []
         MODULE.validate_aggregate_summary_output(summary, (gate_name,), errors)
@@ -16774,6 +17132,7 @@ def test_aggregate_summary_output_contracts_fail_closed_from_config(
         assert bad_gate not in diagnostics
 
         count_drift = copy.deepcopy(summary)
+        count_drift["status"] = "ready"
         count_drift["recognized_summary_count"] = (
             count_drift["summary_file_count"] + 1
         )
@@ -16894,10 +17253,11 @@ def test_aggregate_summary_output_rejects_overcounted_ready_inventory(
         None,
     )
     assert build_errors == []
-    assert summary["status"] == "ready"
+    assert summary["status"] == MODULE.NON_PROMOTABLE_STATUS
 
     errors: list[str] = []
     over_file_count = copy.deepcopy(summary)
+    over_file_count["status"] = "ready"
     over_file_count["recognized_summary_count"] = (
         over_file_count["summary_file_count"] + 1
     )
@@ -17270,6 +17630,7 @@ def test_duplicate_and_unrequired_summaries_fail_closed_from_config(
                     DEPLOYMENT_ID,
                     "--environment",
                     ENVIRONMENT,
+                    *topology_cli_args(tmp_path),
                     "--summary-out",
                     str(summary),
                 ]

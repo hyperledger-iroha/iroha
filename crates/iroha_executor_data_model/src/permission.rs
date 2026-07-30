@@ -655,6 +655,24 @@ pub mod smart_contract {
 /// Permission tokens governing native FX corridors.
 pub mod settlement {
     use super::*;
+    use iroha_data_model::isi::SettlementId;
+
+    permission! {
+        /// Exact consent from a debited counterparty for one bilateral settlement intent.
+        ///
+        /// Only the account named by `debited_asset` may delegate or revoke this
+        /// token. The intent hash commits to the complete domain-separated DvP
+        /// or PvP instruction, so changing either leg, the plan, metadata, or
+        /// settlement identifier requires fresh consent.
+        pub struct CanExecuteSettlement {
+            /// Exact balance bucket the authorized settlement may debit.
+            pub debited_asset: AssetId,
+            /// One-shot settlement identifier bound by the consent.
+            pub settlement_id: SettlementId,
+            /// Domain-separated commitment to the complete settlement instruction.
+            pub intent_hash: Hash,
+        }
+    }
 
     permission! {
         /// Root permission for delegating native FX corridor governance.
@@ -921,7 +939,7 @@ pub mod sorafs {
     }
 
     permission! {
-        /// Permission to submit policy-authorized PoR or stream-token reputation entries.
+        /// Permission to submit policy-authorized `PoR` or stream-token reputation entries.
         #[derive(Copy)]
         pub struct CanRecordSorafsReputationJournal;
     }

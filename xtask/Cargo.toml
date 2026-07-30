@@ -4,6 +4,17 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("bench-internal"))',
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("cuda"))',
+    'cfg(feature, values("metal"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("parallel-stage1"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [[bin]]
 name = "torii-mock-harness"
 path = "src/bin/torii_mock_harness.rs"
@@ -15,9 +26,6 @@ path = "src/bin/control_plane_mock.rs"
 [features]
 default = []
 vote-tally = ["dep:halo2_proofs"]
-schema-structural = []
-packed-struct = []
-compact-len = []
 
 [dependencies]
 hex = { workspace = true }

@@ -24,6 +24,8 @@ import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.model.instructions.ProofAttachment;
+import org.hyperledger.iroha.android.model.instructions.ProofVerifierKeyRef;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.norito.NoritoDecoder;
 import org.hyperledger.iroha.norito.NoritoEncoder;
@@ -198,6 +200,18 @@ public final class RegisterOfflineDeviceAttestationTests {
                 Executable.instructions(List.of(request.instruction(), request.instruction())))
             .build();
     assertThrows(IllegalArgumentException.class, () -> request.validateExactPayload(extra));
+    final TransactionPayload attached =
+        request
+            .transactionPayload()
+            .toBuilder()
+            .setAttachments(
+                Collections.singletonList(
+                    new ProofAttachment(
+                        "halo2",
+                        new byte[] {0x01},
+                        new ProofVerifierKeyRef("halo2", "vk1"))))
+            .build();
+    assertThrows(IllegalArgumentException.class, () -> request.validateExactPayload(attached));
     assertThrows(
         IllegalArgumentException.class,
         () ->

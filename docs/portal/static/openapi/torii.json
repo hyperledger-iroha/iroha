@@ -43075,11 +43075,12 @@
                 "maxLength": 69632,
                 "minLength": 1,
                 "type": "string",
-                "x-iroha-norito-schema": "BillingAcknowledgementProofBodyV1"
+                "x-iroha-norito-schema": "iroha.torii.v1.sorafs.billing.acknowledgement_proof",
+                "x-iroha-norito-schema-hash": "fe75acabe03d788012f2e7c556319997"
               }
             }
           },
-          "description": "Exact canonical Norito `BillingAcknowledgementProofBodyV1`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
+          "description": "Exact canonical Norito `BillingAcknowledgementProofV1` under schema `iroha.torii.v1.sorafs.billing.acknowledgement_proof`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
           "required": true
         },
         "responses": {

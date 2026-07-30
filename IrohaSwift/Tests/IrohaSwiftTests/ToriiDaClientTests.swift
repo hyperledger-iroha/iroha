@@ -57,8 +57,10 @@ final class ToriiDaClientTests: XCTestCase {
     }
 
     func testSubmitDaBlobPersistsRequestWhenNoSubmit() async throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isAvailable,
-                      "NoritoBridge is required to derive DA payload digest")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge is required to derive DA payload digest"
+        )
         let submission = ToriiDaBlobSubmission(
             payload: Data([0x01, 0x02]),
             laneId: 7,

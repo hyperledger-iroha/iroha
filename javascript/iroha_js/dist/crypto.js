@@ -48,18 +48,8 @@ export const PRIVACY_CAPABILITY_VALIDATION_STATUS_V1 = Object.freeze({
   INVALID_SNAPSHOT: 8,
 });
 const PRIVACY_MAX_BRIDGE_ABI_VERSION = 0xffff_ffff;
-const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
-const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
-const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0";
-const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
-  "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for " +
-  `${ZK_ACE_ALGORITHM_ID} ${ZK_ACE_PRODUCTION_ENTRYPOINT} ` +
-  `${ZK_ACE_PRODUCTION_VK_REF}: ` +
-  "Iroha production allowlist is not enabled for this audited row";
 const U64_MAX = (1n << 64n) - 1n;
 const U64_MAX_DECIMAL_DIGITS = U64_MAX.toString(10).length;
-const U128_MAX = (1n << 128n) - 1n;
-const U128_MAX_DECIMAL_DIGITS = U128_MAX.toString(10).length;
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
   SECP256K1: "secp256k1",
@@ -612,76 +602,6 @@ export function buildKaigiRosterJoinProof(options) {
 }
 
 /**
- * Build a native STARK/FRI-backed ZK-ACE transparent-transfer authorization.
- * @param {{fromAccountId?: string, from?: string, toAccountId?: string, to?: string, assetDefinitionId?: string, asset?: string, amount: string | number | bigint, chainId?: string, chain_id?: string, identityRoot?: ArrayBufferView | ArrayBuffer | Buffer | string, identity_root?: ArrayBufferView | ArrayBuffer | Buffer | string, identityBlinding?: ArrayBufferView | ArrayBuffer | Buffer | string, identity_blinding?: ArrayBufferView | ArrayBuffer | Buffer | string, replaySecret?: ArrayBufferView | ArrayBuffer | Buffer | string, replay_secret?: ArrayBufferView | ArrayBuffer | Buffer | string, policyHash?: ArrayBufferView | ArrayBuffer | Buffer | string, policy_hash?: ArrayBufferView | ArrayBuffer | Buffer | string, verifierKeyId?: string, verifier_key_id?: string, verifyingKeyCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string, vkCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string}} options
- * @returns {object}
- */
-export function buildZkAceTransferAuthorizationV1(options) {
-  if (!options || typeof options !== "object" || Array.isArray(options)) {
-    throw new TypeError("buildZkAceTransferAuthorizationV1 options must be an object");
-  }
-  const native = ensureGenericCryptoNative(
-    resolveNativeBinding(),
-    "zkAceBuildTransferAuthorizationV1",
-  );
-  const nativeArgs = zkAceTransferAuthorizationNativeArgs(options);
-  let resultJson;
-  let nativeError;
-  try {
-    resultJson = native.zkAceBuildTransferAuthorizationV1(...nativeArgs);
-  } catch (error) {
-    nativeError = error;
-  }
-  if (nativeError !== undefined) {
-    throw sanitizeZkAceNativeProverError(nativeError);
-  }
-  let result;
-  try {
-    result = JSON.parse(resultJson);
-  } catch (error) {
-    throw new Error(`native ZK-ACE prover returned invalid JSON: ${error.message}`);
-  }
-  return normalizeZkAceAuthorizationResult(result);
-}
-
-function sanitizeZkAceNativeProverError(error) {
-  const message = error?.message ?? String(error ?? "");
-  if (
-    /PRIVACY_FFI_ERROR_PRODUCTION_DISABLED|production[- ]disabled|Iroha production allowlist/i.test(
-      message,
-    )
-  ) {
-    return new Error(ZK_ACE_PRODUCTION_DISABLED_MESSAGE);
-  }
-  return new Error("native ZK-ACE prover failed");
-}
-
-function zkAceTransferAuthorizationNativeArgs(options) {
-  return [
-    requiredString(options.fromAccountId ?? options.from, "fromAccountId"),
-    requiredString(options.toAccountId ?? options.to, "toAccountId"),
-    requiredString(
-      options.assetDefinitionId ?? options.asset_definition_id ?? options.asset,
-      "assetDefinitionId",
-    ),
-    normalizePositiveU128Literal(options.amount, "amount"),
-    requiredString(options.chainId ?? options.chain_id, "chainId"),
-    fixed32Buffer(options.identityRoot ?? options.identity_root, "identityRoot"),
-    fixed32Buffer(options.identityBlinding ?? options.identity_blinding, "identityBlinding"),
-    fixed32Buffer(options.replaySecret ?? options.replay_secret, "replaySecret"),
-    fixed32Buffer(options.policyHash ?? options.policy_hash, "policyHash"),
-    options.verifierKeyId ?? options.verifier_key_id ?? null,
-    optionalFixed32Buffer(
-      options.verifyingKeyCommitment ??
-        options.verifying_key_commitment ??
-        options.vkCommitment ??
-        options.vk_commitment,
-      "verifyingKeyCommitment",
-    ),
-  ];
-}
-
-/**
  * Derive the confidential key hierarchy from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
  * @returns {{skSpend: Buffer, nk: Buffer, ivk: Buffer, ovk: Buffer, fvk: Buffer, skSpendHex: string, nkHex: string, ivkHex: string, ovkHex: string, fvkHex: string, asHex(): Record<string, string>}}
@@ -1114,14 +1034,6 @@ function toOwnedBuffer(value, name) {
   return Buffer.from(toBuffer(value, name));
 }
 
-function requiredString(value, name) {
-  const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
-  if (!text) {
-    throw new Error(`${name} must be a non-empty string`);
-  }
-  return text;
-}
-
 function normalizeConfidentialV2ExactString(value, name) {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${name} is required`);
@@ -1130,77 +1042,6 @@ function normalizeConfidentialV2ExactString(value, name) {
     throw new Error(`${name} must not contain surrounding whitespace`);
   }
   return value;
-}
-
-function fixed32Buffer(value, name) {
-  const hexValue = normalizeFixed32HexInput(value, name);
-  return Buffer.from(hexValue, "hex");
-}
-
-function optionalFixed32Buffer(value, name) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-  return fixed32Buffer(value, name);
-}
-
-function normalizeProofAttachmentFromNative(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("native ZK-ACE prover returned invalid proof attachment");
-  }
-  const proof = { ...value };
-  if (typeof proof.proof_b64 !== "string" || proof.proof_b64.length === 0) {
-    throw new Error("native ZK-ACE prover returned missing proof_b64");
-  }
-  if (typeof proof.backend !== "string" || proof.backend.length === 0) {
-    throw new Error("native ZK-ACE prover returned missing proof backend");
-  }
-  const verifyingKeyRef = proof.vk_ref ?? proof.verifying_key_ref ?? proof.verifyingKeyRef;
-  if (!verifyingKeyRef || typeof verifyingKeyRef !== "object" || Array.isArray(verifyingKeyRef)) {
-    throw new Error("native ZK-ACE prover returned missing verifying key reference");
-  }
-  const normalized = {
-    backend: proof.backend,
-    proof_b64: proof.proof_b64,
-    vk_ref: verifyingKeyRef,
-  };
-  const commitment =
-    proof.vk_commitment ?? proof.verifying_key_commitment ?? proof.verifyingKeyCommitment;
-  if (commitment !== undefined && commitment !== null) {
-    normalized.vk_commitment = commitment;
-  }
-  const envelopeHash = proof.envelope_hash ?? proof.envelopeHash;
-  if (envelopeHash !== undefined && envelopeHash !== null) {
-    normalized.envelope_hash = envelopeHash;
-  }
-  return normalized;
-}
-
-function normalizeZkAceAuthorizationResult(result) {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    throw new Error("native ZK-ACE prover returned invalid authorization payload");
-  }
-  return {
-    publicInputs: result.public_inputs ?? result.publicInputs,
-    public_inputs: result.public_inputs ?? result.publicInputs,
-    proof: normalizeProofAttachmentFromNative(result.proof),
-    identityCommitment: result.identity_commitment,
-    identity_commitment: result.identity_commitment,
-    txDigest: result.tx_digest,
-    tx_digest: result.tx_digest,
-    replayNullifier: result.replay_nullifier,
-    replay_nullifier: result.replay_nullifier,
-    policyHash: result.policy_hash,
-    policy_hash: result.policy_hash,
-    verifierKeyId: result.verifier_key_id,
-    verifier_key_id: result.verifier_key_id,
-    authorizationProofBytes: Number(result.authorization_proof_bytes ?? 0),
-    authorization_proof_bytes: Number(result.authorization_proof_bytes ?? 0),
-    authorizationPublicInputBytes: Number(result.authorization_public_input_bytes ?? 0),
-    authorization_public_input_bytes: Number(result.authorization_public_input_bytes ?? 0),
-    replayNullifierBytes: Number(result.replay_nullifier_bytes ?? 32),
-    replay_nullifier_bytes: Number(result.replay_nullifier_bytes ?? 32),
-  };
 }
 
 function normalizeFixed32HexInput(value, name) {
@@ -1227,30 +1068,6 @@ function normalizeWholeNumberLiteral(value, name) {
     throw new Error(`${name} must be a whole-number string`);
   }
   return normalized;
-}
-
-function normalizePositiveU128Literal(value, name) {
-  let amount;
-  if (typeof value === "bigint") {
-    amount = value;
-  } else if (typeof value === "number") {
-    if (!Number.isSafeInteger(value)) {
-      throw new Error(`${name} must be a positive decimal u128 string`);
-    }
-    amount = BigInt(value);
-  } else if (typeof value === "string") {
-    const normalized = value.trim();
-    if (!/^\d+$/.test(normalized)) {
-      throw new Error(`${name} must be a positive decimal u128 string`);
-    }
-    amount = BigInt(normalized);
-  } else {
-    throw new Error(`${name} must be a positive decimal u128 string`);
-  }
-  if (amount <= 0n || amount > U128_MAX) {
-    throw new Error(`${name} must be a positive decimal u128 string`);
-  }
-  return amount.toString(10);
 }
 
 function toBufferField(payload, ...fieldNames) {

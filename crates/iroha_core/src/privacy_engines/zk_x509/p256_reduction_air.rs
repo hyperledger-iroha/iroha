@@ -18,7 +18,7 @@ use super::p256_air::P256_SCALAR_MODULUS_BE_V1;
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 
 /// Stable descriptor for 256-bit-to-scalar canonical reduction.
-pub(crate) const ZK_X509_P256_REDUCTION_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-reduction-air-v2-incompatible:input-u256:output-canonical-scalar:16xu16-little-endian:word=reduced+boolean-q-times-order:2pow256-less-than-2n:carry-and-borrow-boolean:all-word-result-difference-limbs-bit-ranged:wallet-low-s-strict-less-than-floor-order-half-plus1:fixed-16-row-topologies:reduction-numeric-fixed36-aux1-constraints122-degree4:low-s-numeric-fixed36-aux1-constraints77-degree3:verifier-preprocessed-one-hot-limb-selectors-and-all-limb-constants:first-last-boundaries:canonical-zero-padding:no-native-row-branch-on-lde:io-and-value-bus-binding-required:activation=false";
+pub(crate) const ZK_X509_P256_REDUCTION_AIR_DESCRIPTOR_V1: &[u8] = b"zk-x509-p256-reduction-air-v2-incompatible:input-u256:output-canonical-scalar:16xu16-little-endian:word=reduced+boolean-q-times-order:2pow256-less-than-2n:carry-and-borrow-boolean:all-word-result-difference-limbs-bit-ranged:wallet-low-s-strict-less-than-floor-order-half-plus1:fixed-16-row-topologies:reduction-numeric-fixed36-aux1-constraints122-degree4:low-s-numeric-fixed36-aux1-constraints77-degree3:verifier-preprocessed-one-hot-limb-selectors-and-all-limb-constants:fixed-schedule-derived-only-from-protocol-limb-count-and-native-domain:no-witness-fixed-input:first-last-boundaries:canonical-zero-padding:no-native-row-branch-on-lde:io-and-value-bus-binding-required:activation=false";
 
 /// Exact row count for one reduction.
 pub(crate) const P256_REDUCTION_ROWS_V1: usize = 16;
@@ -460,16 +460,15 @@ pub(crate) fn evaluate_p256_reduction_row_constraints_v1(
 
 /// Compile verifier-owned numeric rows for the aggregate reduction STARK.
 ///
-/// The native rows must be the exact deterministic limb topology regenerated
-/// by the verifier. They are compiled into polynomial one-hot limb selectors,
-/// all scalar-modulus limbs, boundary selectors, and the sole canonical
-/// padding suffix. No value from a proof can select this topology.
+/// The schedule is derived solely from the protocol constant `LIMBS` and the
+/// verifier-selected native domain. It is compiled into polynomial one-hot
+/// limb selectors, all scalar-modulus limbs, boundary selectors, and the sole
+/// canonical padding suffix. No witness row or value from a proof can select
+/// this topology.
 pub(crate) fn compile_p256_reduction_stark_fixed_rows_v1(
-    fixed_rows: &[P256ReductionFixedRowV1],
     trace_size: usize,
 ) -> Result<Vec<[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1> {
     compile_p256_comparison_stark_fixed_rows_v1(
-        fixed_rows,
         bytes_be_to_limbs_le_v1(P256_SCALAR_MODULUS_BE_V1),
         trace_size,
     )
@@ -480,11 +479,9 @@ pub(crate) fn compile_p256_reduction_stark_fixed_rows_v1(
 /// This uses the same exact 16-row topology as reduction, but preprocesses the
 /// exclusive low-S bound instead of the scalar modulus.
 pub(crate) fn compile_p256_low_s_stark_fixed_rows_v1(
-    fixed_rows: &[P256ReductionFixedRowV1],
     trace_size: usize,
 ) -> Result<Vec<[F; P256_LOW_S_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1> {
     compile_p256_comparison_stark_fixed_rows_v1(
-        fixed_rows,
         bytes_be_to_limbs_le_v1(P256_LOW_S_EXCLUSIVE_BOUND_BE_V1),
         trace_size,
     )
@@ -497,54 +494,36 @@ pub(crate) fn compile_p256_low_s_stark_fixed_rows_v1(
 /// All numeric rows and the canonical padding suffix are regenerated on
 /// demand.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct P256ComparisonStarkFixedProviderV1<'a> {
-    fixed_rows: &'a [P256ReductionFixedRowV1],
+pub(crate) struct P256ComparisonStarkFixedProviderV1 {
     limb_constants: [u16; LIMBS],
     trace_size: usize,
 }
 
-impl<'a> P256ComparisonStarkFixedProviderV1<'a> {
+impl P256ComparisonStarkFixedProviderV1 {
     /// Construct the scalar-modulus reduction schedule.
-    pub(crate) fn reduction_v1(
-        fixed_rows: &'a [P256ReductionFixedRowV1],
-        trace_size: usize,
-    ) -> Result<Self, P256ReductionAirErrorV1> {
+    pub(crate) fn reduction_v1(trace_size: usize) -> Result<Self, P256ReductionAirErrorV1> {
         Self::new_v1(
-            fixed_rows,
             bytes_be_to_limbs_le_v1(P256_SCALAR_MODULUS_BE_V1),
             trace_size,
         )
     }
 
     /// Construct the strict wallet low-S comparison schedule.
-    pub(crate) fn low_s_v1(
-        fixed_rows: &'a [P256ReductionFixedRowV1],
-        trace_size: usize,
-    ) -> Result<Self, P256ReductionAirErrorV1> {
+    pub(crate) fn low_s_v1(trace_size: usize) -> Result<Self, P256ReductionAirErrorV1> {
         Self::new_v1(
-            fixed_rows,
             bytes_be_to_limbs_le_v1(P256_LOW_S_EXCLUSIVE_BOUND_BE_V1),
             trace_size,
         )
     }
 
     fn new_v1(
-        fixed_rows: &'a [P256ReductionFixedRowV1],
         limb_constants: [u16; LIMBS],
         trace_size: usize,
     ) -> Result<Self, P256ReductionAirErrorV1> {
-        if fixed_rows.len() != LIMBS
-            || !trace_size.is_power_of_two()
-            || fixed_rows.len() > trace_size
-            || fixed_rows
-                .iter()
-                .enumerate()
-                .any(|(limb, fixed)| usize::from(fixed.limb) != limb)
-        {
+        if !trace_size.is_power_of_two() || LIMBS > trace_size {
             return Err(P256ReductionAirErrorV1::Topology);
         }
         Ok(Self {
-            fixed_rows,
             limb_constants,
             trace_size,
         })
@@ -559,7 +538,7 @@ impl<'a> P256ComparisonStarkFixedProviderV1<'a> {
             return Err(P256ReductionAirErrorV1::Topology);
         }
         let mut row = [F::ZERO; P256_REDUCTION_STARK_FIXED_WIDTH_V1];
-        if index >= self.fixed_rows.len() {
+        if index >= LIMBS {
             row[STARK_PADDING] = F::ONE;
             return Ok(row);
         }
@@ -583,12 +562,10 @@ impl<'a> P256ComparisonStarkFixedProviderV1<'a> {
 }
 
 fn compile_p256_comparison_stark_fixed_rows_v1(
-    fixed_rows: &[P256ReductionFixedRowV1],
     limb_constants: [u16; LIMBS],
     trace_size: usize,
 ) -> Result<Vec<[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1> {
-    let provider =
-        P256ComparisonStarkFixedProviderV1::new_v1(fixed_rows, limb_constants, trace_size)?;
+    let provider = P256ComparisonStarkFixedProviderV1::new_v1(limb_constants, trace_size)?;
 
     let mut rows = Vec::new();
     rows.try_reserve_exact(trace_size)
@@ -1229,7 +1206,7 @@ mod tests {
             add_small_be(P256_SCALAR_MODULUS_BE_V1, 17),
         ] {
             let trace = build_p256_reduction_trace_v1(word).expect("canonical reduction");
-            let fixed = compile_p256_reduction_stark_fixed_rows_v1(&trace.fixed, trace_size)
+            let fixed = compile_p256_reduction_stark_fixed_rows_v1(trace_size)
                 .expect("verifier reduction preprocessing");
             let mut base = trace.base.to_vec();
             base.resize(trace_size, [F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]);
@@ -1283,7 +1260,7 @@ mod tests {
 
         let trace = build_p256_low_s_trace_v1(P256_LOW_S_MAXIMUM_BE_V1).expect("canonical low-S");
         let bound = bytes_be_to_limbs_le_v1(P256_LOW_S_EXCLUSIVE_BOUND_BE_V1);
-        let fixed = compile_p256_low_s_stark_fixed_rows_v1(&trace.fixed, trace_size)
+        let fixed = compile_p256_low_s_stark_fixed_rows_v1(trace_size)
             .expect("verifier low-S preprocessing");
         let mut base = trace.base.to_vec();
         base.resize(trace_size, [F::ZERO; P256_LOW_S_BASE_WIDTH_V1]);
@@ -1331,45 +1308,35 @@ mod tests {
     }
 
     #[test]
-    fn numeric_fixed_compilers_reject_every_wrong_verifier_topology() {
+    fn numeric_fixed_compilers_are_witness_independent_and_reject_bad_domains() {
         let trace =
             build_p256_reduction_trace_v1([0_u8; 32]).expect("canonical reduction topology");
         type Compiler =
             fn(
-                &[P256ReductionFixedRowV1],
                 usize,
             )
                 -> Result<Vec<[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1]>, P256ReductionAirErrorV1>;
         let reduction_compiler: Compiler = compile_p256_reduction_stark_fixed_rows_v1;
         let low_s_compiler: Compiler = compile_p256_low_s_stark_fixed_rows_v1;
         for compiler in [reduction_compiler, low_s_compiler] {
-            assert!(compiler(&trace.fixed, LIMBS).is_ok());
+            let canonical = compiler(LIMBS).expect("protocol-owned exact schedule");
             for row in 0..LIMBS {
-                let mut changed = trace.fixed;
-                changed[row].limb ^= 1;
+                let mut changed = trace.clone();
+                changed.fixed[row].limb ^= 1;
                 assert_eq!(
-                    compiler(&changed, LIMBS),
+                    changed.validate(),
                     Err(P256ReductionAirErrorV1::Topology),
-                    "substituted verifier row {row} survived"
+                    "mutated witness topology at row {row} was accepted"
+                );
+                assert_eq!(
+                    compiler(LIMBS).expect("fixed schedule remains verifier-owned"),
+                    canonical,
+                    "witness topology influenced verifier preprocessing at row {row}"
                 );
             }
-            assert_eq!(
-                compiler(&trace.fixed[..LIMBS - 1], LIMBS),
-                Err(P256ReductionAirErrorV1::Topology)
-            );
-            assert_eq!(compiler(&[], LIMBS), Err(P256ReductionAirErrorV1::Topology));
-            assert_eq!(
-                compiler(&trace.fixed, LIMBS / 2),
-                Err(P256ReductionAirErrorV1::Topology)
-            );
-            assert_eq!(
-                compiler(&trace.fixed, LIMBS + 1),
-                Err(P256ReductionAirErrorV1::Topology)
-            );
-            assert_eq!(
-                compiler(&trace.fixed, 0),
-                Err(P256ReductionAirErrorV1::Topology)
-            );
+            assert_eq!(compiler(LIMBS / 2), Err(P256ReductionAirErrorV1::Topology));
+            assert_eq!(compiler(LIMBS + 1), Err(P256ReductionAirErrorV1::Topology));
+            assert_eq!(compiler(0), Err(P256ReductionAirErrorV1::Topology));
         }
     }
 
@@ -1379,7 +1346,7 @@ mod tests {
             build_p256_reduction_trace_v1(add_small_be(P256_SCALAR_MODULUS_BE_V1, 0x1_0001))
                 .expect("canonical lifted reduction");
         let trace_size = 32;
-        let fixed = compile_p256_reduction_stark_fixed_rows_v1(&trace.fixed, trace_size)
+        let fixed = compile_p256_reduction_stark_fixed_rows_v1(trace_size)
             .expect("verifier reduction preprocessing");
         let mut base = trace.base.to_vec();
         base.resize(trace_size, [F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]);
@@ -1421,7 +1388,7 @@ mod tests {
     fn numeric_low_s_binds_every_active_padding_and_auxiliary_cell() {
         let trace = build_p256_low_s_trace_v1(P256_LOW_S_MAXIMUM_BE_V1).expect("canonical low-S");
         let trace_size = 32;
-        let fixed = compile_p256_low_s_stark_fixed_rows_v1(&trace.fixed, trace_size)
+        let fixed = compile_p256_low_s_stark_fixed_rows_v1(trace_size)
             .expect("verifier low-S preprocessing");
         let mut base = trace.base.to_vec();
         base.resize(trace_size, [F::ZERO; P256_LOW_S_BASE_WIDTH_V1]);
@@ -1463,7 +1430,7 @@ mod tests {
     fn numeric_coordinated_quotient_carry_borrow_and_high_s_attacks_fail() {
         let word = add_small_be(P256_SCALAR_MODULUS_BE_V1, 0x1_0001);
         let trace = build_p256_reduction_trace_v1(word).expect("canonical lifted reduction");
-        let fixed = compile_p256_reduction_stark_fixed_rows_v1(&trace.fixed, LIMBS)
+        let fixed = compile_p256_reduction_stark_fixed_rows_v1(LIMBS)
             .expect("verifier reduction preprocessing");
         let mut forged = trace.base.to_vec();
         let word_limbs = bytes_be_to_limbs_le_v1(word);
@@ -1493,10 +1460,10 @@ mod tests {
             "coordinated q/carry/borrow forgery must reach only the final canonicality gate"
         );
 
-        let low_s_topology =
+        let _low_s_topology =
             build_p256_low_s_trace_v1(P256_LOW_S_MAXIMUM_BE_V1).expect("canonical low-S");
-        let low_s_fixed = compile_p256_low_s_stark_fixed_rows_v1(&low_s_topology.fixed, LIMBS)
-            .expect("verifier low-S preprocessing");
+        let low_s_fixed =
+            compile_p256_low_s_stark_fixed_rows_v1(LIMBS).expect("verifier low-S preprocessing");
         let bound = bytes_be_to_limbs_le_v1(P256_LOW_S_EXCLUSIVE_BOUND_BE_V1);
         for high_s in [
             P256_LOW_S_EXCLUSIVE_BOUND_BE_V1,
@@ -1532,7 +1499,7 @@ mod tests {
     fn numeric_evaluators_reject_noncanonical_fields_in_every_opening_group() {
         let trace =
             build_p256_reduction_trace_v1([0_u8; 32]).expect("canonical reduction topology");
-        let reduction_fixed = compile_p256_reduction_stark_fixed_rows_v1(&trace.fixed, LIMBS)
+        let reduction_fixed = compile_p256_reduction_stark_fixed_rows_v1(LIMBS)
             .expect("verifier reduction preprocessing");
         let reduction_aux = [F::ZERO; P256_REDUCTION_STARK_AUX_WIDTH_V1];
         for column in 0..P256_REDUCTION_BASE_WIDTH_V1 {
@@ -1599,8 +1566,8 @@ mod tests {
         );
 
         let low_s = build_p256_low_s_trace_v1(P256_LOW_S_MAXIMUM_BE_V1).expect("canonical low-S");
-        let low_s_fixed = compile_p256_low_s_stark_fixed_rows_v1(&low_s.fixed, LIMBS)
-            .expect("verifier low-S preprocessing");
+        let low_s_fixed =
+            compile_p256_low_s_stark_fixed_rows_v1(LIMBS).expect("verifier low-S preprocessing");
         let low_s_aux = [F::ZERO; P256_LOW_S_STARK_AUX_WIDTH_V1];
         for column in 0..P256_LOW_S_BASE_WIDTH_V1 {
             let mut current = low_s.base[0];

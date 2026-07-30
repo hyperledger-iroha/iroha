@@ -6,18 +6,31 @@
 #
 # Keep signing keys, bearer tokens, raw snapshots, proof bytes, and operator
 # secrets in runtime-only locations. This example stores only paths and
-# payload-free rollout summaries in the repository-local artifacts/ directory.
+# strict non-JSON CLI source projections plus payload-free rollout summaries
+# in the repository-local artifacts/ directory. Only the canonical summaries
+# enter the evidence gate; protect the `.raw` source files as operator records.
 # Generated and supplied evidence must include reviewed deployment context:
 # generated_at_unix, deployment_id, environment, and deployment_context_reviewed.
 
 --sorafs-cli-bin
 target/debug/sorafs_cli
+# Use an exact canonical bare HTTPS origin. HTTP is accepted only for
+# localhost or a literal loopback integration fixture.
 --torii-url
 https://validator.example.invalid
+# Set this to the deployment's exact canonical single-key I105 account. Keep
+# the matching key file runtime-only, regular, single-linked, owner-readable
+# only, and at a path whose parents are not symlinks.
+--auth-account
+sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53
+--auth-private-key-file
+/runtime/sorafs/reputation/reader.key
 --snapshot
 /runtime/sorafs/reputation/reputation-snapshot.to
 --publish-evidence
 /runtime/sorafs/reputation/reputation-publication-canary.json
+# Provider ids are exact 1..=256-byte ASCII values from [A-Za-z0-9_.:-];
+# the whole values "." and ".." are reserved URL dot segments and are rejected.
 --provider-id
 provider-a
 --provider-proof
@@ -46,3 +59,4 @@ artifacts/sorafs/reputation/staged/rollout-summary.json
 1
 --watch-poll-interval-ms
 1000
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

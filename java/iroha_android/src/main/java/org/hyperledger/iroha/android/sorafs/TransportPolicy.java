@@ -1,7 +1,5 @@
 package org.hyperledger.iroha.android.sorafs;
 
-import java.util.Locale;
-
 /**
  * Transport selection ordering used by the SoraFS orchestrator.
  *
@@ -32,19 +30,17 @@ public enum TransportPolicy {
   }
 
   /**
-     * Parse a policy label, accepting dash or underscore separated forms. Returns {@code null} when
-     * the input does not match a known policy.
-     */
+   * Parse one exact canonical V1 policy label. Returns {@code null} when the input does not match a
+   * known policy byte-for-byte.
+   */
   public static TransportPolicy fromLabel(final String raw) {
     if (raw == null) {
       return null;
     }
-    final String normalised =
-        raw.trim().toLowerCase(Locale.ROOT).replace('-', '_');
-    return switch (normalised) {
-      case "soranet_first" -> SORANET_FIRST;
-      case "soranet_strict", "soranet_only" -> SORANET_STRICT;
-      case "direct_only" -> DIRECT_ONLY;
+    return switch (raw) {
+      case "soranet-first" -> SORANET_FIRST;
+      case "soranet-strict" -> SORANET_STRICT;
+      case "direct-only" -> DIRECT_ONLY;
       default -> null;
     };
   }

@@ -6,7 +6,6 @@ use std::{
     borrow::{Cow, ToOwned},
     io::{ErrorKind, Read},
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -41,9 +40,7 @@ use iroha_data_model::{
     },
 };
 use iroha_logger::{error, warn};
-use iroha_torii_shared::da::sampling::{
-    build_sampling_plan, compute_sample_window, sampling_plan_to_value,
-};
+use iroha_torii_shared::da::sampling::compute_sample_window;
 #[cfg(feature = "ipa-commitment")]
 use iroha_zkp_halo2::pallas::{
     Params as IpaCurveParams, Polynomial as IpaPolynomial, Scalar as IpaScalar,
@@ -65,7 +62,11 @@ use sorafs_manifest::{
 use zstd::stream::read::Decoder as ZstdDecoder;
 
 use super::persistence::{ReceiptInsertOutcome, receipt_signature_placeholder};
-use super::rs16::build_chunk_commitments;
+use super::rs16::{
+    MAX_CANONICAL_PAYLOAD_BYTES, MAX_CHUNK_SIZE_BYTES, MAX_DATA_CHUNKS, MAX_DATA_SHARDS,
+    MAX_PARITY_SHARDS, MAX_ROW_PARITY_SOURCE_STRIPES, MAX_ROW_PARITY_STRIPES, MIN_CHUNK_SIZE_BYTES,
+    build_chunk_commitments, validate_erasure_work_budget,
+};
 use super::{
     DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
     storage_class_label, taikai, taikai::taikai_ingest,
@@ -125,6 +126,18 @@ pub async fn handler_post_da_ingest(
             format,
         )));
     }
+
+    validate_request_shape(&request).map_err(|(status, message)| {
+        ResponseError::from(build_error_response(status, message, format))
+    })?;
+
+    request.verify_signature().map_err(|_| {
+        ResponseError::from(build_error_response(
+            StatusCode::UNAUTHORIZED,
+            "DA ingest request signature is invalid",
+            format,
+        ))
+    })?;
 
     let canonical = normalize_payload(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, &message, format))
@@ -702,6 +715,14 @@ pub async fn handler_post_da_ingest(
             "sequence already used for a different manifest",
             format,
         )),
+        ReplayInsertOutcome::LaneEpochCapacityExceeded { capacity } => {
+            let message = format!("global DA replay lane/epoch capacity ({capacity}) is exhausted");
+            Ok(build_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &message,
+                format,
+            ))
+        }
     }
 }
 
@@ -849,18 +870,10 @@ fn duplicate_da_ingest_response_from_artifacts(
     Ok(with_status(http_response, StatusCode::ACCEPTED))
 }
 
-#[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
-)]
-pub struct DaManifestQuery {
-    block_hash: Option<String>,
-}
-
 /// HTTP handler for `/v1/da/manifests/{ticket}`.
 pub async fn handler_get_da_manifest(
     State(app): State<SharedAppState>,
     AxumPath(ticket_hex): AxumPath<String>,
-    NoritoQuery(params): NoritoQuery<DaManifestQuery>,
     headers: HeaderMap,
 ) -> Result<Response, ResponseError> {
     utils::negotiate_json_only_response(headers.get(axum::http::header::ACCEPT))
@@ -954,22 +967,6 @@ pub async fn handler_get_da_manifest(
     };
     let manifest_hash = BlobDigest::from_hash(blake3_hash(manifest_bytes));
 
-    let sampling_plan = if let Some(block_hex) = params.block_hash.as_deref() {
-        let block_hash = match parse_block_hash_hex(block_hex) {
-            Ok(hash) => hash,
-            Err(message) => {
-                return Err(ResponseError::from(build_error_response(
-                    StatusCode::BAD_REQUEST,
-                    &message,
-                    format,
-                )));
-            }
-        };
-        Some(build_sampling_plan(&manifest, &block_hash))
-    } else {
-        None
-    };
-
     let mut body = Map::new();
     body.insert(
         "storage_ticket".into(),
@@ -1003,9 +1000,6 @@ pub async fn handler_get_da_manifest(
         Value::from(manifest_bytes.len() as u64),
     );
     body.insert("chunk_plan".into(), chunk_plan);
-    if let Some(plan) = sampling_plan {
-        body.insert("sampling_plan".into(), sampling_plan_to_value(&plan));
-    }
 
     let response = utils::respond_value_with_format(Value::Object(body), format);
     attach_pdp_commitment_header_from_spool(
@@ -1059,6 +1053,15 @@ fn normalize_payload(
     request: &DaIngestRequest,
 ) -> Result<CanonicalPayload<'_>, (StatusCode, String)> {
     let expected_decompressed_len = || {
+        if request.total_size > MAX_CANONICAL_PAYLOAD_BYTES {
+            return Err((
+                StatusCode::PAYLOAD_TOO_LARGE,
+                format!(
+                    "total_size {} exceeds the 64 MiB DA ingest limit",
+                    request.total_size
+                ),
+            ));
+        }
         usize::try_from(request.total_size).map_err(|_| {
             (
                 StatusCode::BAD_REQUEST,
@@ -1095,17 +1098,6 @@ fn normalize_payload(
             )?),
         }),
     }
-}
-
-fn parse_block_hash_hex(input: &str) -> Result<Hash, String> {
-    let trimmed = input
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if trimmed.is_empty() {
-        return Err("block_hash must not be empty when provided".into());
-    }
-    Hash::from_str(trimmed).map_err(|err| format!("invalid block_hash: {err}"))
 }
 
 fn parse_storage_ticket_hex(input: &str) -> Result<[u8; 32], String> {
@@ -1210,10 +1202,30 @@ fn validate_request(
     request: &DaIngestRequest,
     canonical_payload_len: usize,
 ) -> Result<(), (StatusCode, &'static str)> {
+    validate_request_shape(request)?;
+
     if request.total_size != canonical_payload_len as u64 {
         return Err((
             StatusCode::BAD_REQUEST,
             "payload length does not match total_size",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_request_shape(request: &DaIngestRequest) -> Result<(), (StatusCode, &'static str)> {
+    if request.total_size == 0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "total_size must contain at least one byte",
+        ));
+    }
+
+    if request.total_size > MAX_CANONICAL_PAYLOAD_BYTES {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "total_size exceeds the 64 MiB DA ingest limit",
         ));
     }
 
@@ -1224,34 +1236,92 @@ fn validate_request(
         ));
     }
 
-    if request.chunk_size < 2 {
+    if request.chunk_size < MIN_CHUNK_SIZE_BYTES {
         return Err((
             StatusCode::BAD_REQUEST,
-            "chunk_size must be at least 2 bytes for parity encoding",
+            "chunk_size is below the supported 1 KiB minimum",
         ));
     }
 
-    const MAX_CHUNK_SIZE: u32 = 2 * 1024 * 1024;
-    if request.chunk_size > MAX_CHUNK_SIZE {
+    if request.chunk_size > MAX_CHUNK_SIZE_BYTES {
         return Err((
             StatusCode::BAD_REQUEST,
             "chunk_size exceeds supported maximum (2 MiB)",
         ));
     }
 
-    if request.erasure_profile.data_shards == 0 && request.erasure_profile.parity_shards == 0 {
+    let profile = request.erasure_profile;
+    if profile.data_shards == 0 {
         return Err((
             StatusCode::BAD_REQUEST,
-            "erasure profile must include at least one data or parity shard",
+            "erasure profile must include at least one data shard",
         ));
     }
 
-    if request.erasure_profile.parity_shards < 2 {
+    if profile.data_shards > MAX_DATA_SHARDS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "erasure profile exceeds the 64 data-shard limit",
+        ));
+    }
+
+    if profile.parity_shards < 2 {
         return Err((
             StatusCode::BAD_REQUEST,
             "erasure profile requires at least 2 parity shards",
         ));
     }
+
+    if profile.parity_shards > MAX_PARITY_SHARDS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "erasure profile exceeds the 64 parity-shard limit",
+        ));
+    }
+
+    if profile.row_parity_stripes > MAX_ROW_PARITY_STRIPES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "erasure profile exceeds the 64 row-parity-stripe limit",
+        ));
+    }
+
+    let chunk_size = u64::from(request.chunk_size);
+    let data_chunk_count_u64 = request.total_size.div_ceil(chunk_size);
+    let data_chunk_count = usize::try_from(data_chunk_count_u64).map_err(|_| {
+        (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "DA source chunk count exceeds this host's address space",
+        )
+    })?;
+    if data_chunk_count > MAX_DATA_CHUNKS {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "DA manifest exceeds the 1024 source-chunk limit",
+        ));
+    }
+
+    let stripes = data_chunk_count.div_ceil(usize::from(profile.data_shards));
+    if profile.row_parity_stripes > 0 && stripes > MAX_ROW_PARITY_SOURCE_STRIPES {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "row parity exceeds the 64 source-stripe computation limit",
+        ));
+    }
+    let chunk_size_usize = usize::try_from(request.chunk_size).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "chunk_size exceeds this host's address space",
+        )
+    })?;
+    validate_erasure_work_budget(
+        data_chunk_count,
+        chunk_size_usize,
+        usize::from(profile.data_shards),
+        usize::from(profile.parity_shards),
+        usize::from(profile.row_parity_stripes),
+    )
+    .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
 
     Ok(())
 }

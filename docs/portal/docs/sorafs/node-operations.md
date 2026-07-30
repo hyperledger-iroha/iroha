@@ -33,6 +33,7 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
+- Configure distinct proof-outcome, repair, reserve, and orderbook entries under `sorafs.storage.native_transaction_signers`, and inject all four matching live providers. Storage startup requires this durable-drain bundle even when the repair/reserve/orderbook new-work generation flags are disabled. A reserve or orderbook role with both storage and its generation flag disabled is paused before task creation and makes zero external progress. Opening the local `NodeHandle` may still durably normalize an interrupted signer-only `Signing` claim back to `Ready` without refunding its attempt.
 - Ensure the Torii process has read/write access to `data_dir`.
 - Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
 - When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
@@ -84,6 +85,27 @@ Storage-plan probes default to bounded `files`, `chunk_digests_blake3`, and
 truncation fields.
 
 Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+
+### Evidence-viewer checkpoint authority
+
+Before enabling `[sorafs.storage.evidence_viewer]`, bind
+`checkpoint_store_handle`, non-zero `checkpoint_store_revision`, and canonical
+non-zero `checkpoint_store_policy_digest_hex` to the deployment's exact
+linearizable sealed-CAS provider, alongside the required WebAuthn, grant,
+receipt-signer, and erasure bindings. These are public identity and policy pins
+only; CAS credentials, private keys, and vendor diagnostics remain inside the
+runtime provider. The deployment registry must return all five dependencies
+when the viewer is enabled and none when it is disabled. Missing, unrequested,
+substituted, stale, unavailable, or test-marked providers stop startup.
+
+Treat the external signed head as authoritative. `checkpoint_path` names only a
+private revalidated cache: it may be absent, match the authoritative record, or
+be exactly one predecessor behind it, but it must never seed or replace the
+external head. Operate at least two Torii replicas against the same authority
+and rehearse concurrent CAS rejection, ambiguous-result readback, provider
+rotation, rollback, restart, and cache-loss recovery before promotion. The
+source tree supplies the injection contract, not a production CAS/HSM
+implementation or deployment evidence.
 
 ## 2. Finalized Registration → Provider Ingest → Fetch
 

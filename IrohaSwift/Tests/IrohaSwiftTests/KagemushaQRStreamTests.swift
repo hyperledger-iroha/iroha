@@ -4,13 +4,9 @@ import XCTest
 final class KagemushaQRStreamTests: XCTestCase {
     func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
         let samples: [(String, Int, Int)] = [
-            ("request", 824, 6),
+            ("receive-offer", 12_363, 63),
             ("acknowledgement", 471, 4),
-            ("payment-depth-1-hop-1", 6_677, 35),
-            ("payment-depth-8-hop-8", 6_848, 35),
-            ("payment-depth-16-hop-8", 7_040, 36),
-            ("payment-depth-32-hop-8", 7_424, 38),
-            ("payment-depth-64-hop-8", 8_192, 41),
+            ("payment-v4-peer-hop-1", 11_854, 60),
         ]
         let options = KagemushaQRStreamOptions.standard
         for (label, archiveBytes, expectedFrames) in samples {
@@ -27,6 +23,10 @@ final class KagemushaQRStreamTests: XCTestCase {
     }
 
     func testEveryFrameRoundTripsForEveryPeerPayloadAndReassemblesOutOfOrder() throws {
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "ABI-21 Kagemusha bridge is not linked in this test host"
+        )
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let request = try offer.project(
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
@@ -52,21 +52,12 @@ final class KagemushaQRStreamTests: XCTestCase {
 
             let decoder = KagemushaQRStreamDecoder(chainDiscriminant: SccpV1.tairaI105DiscriminantV1)
             var result: KagemushaQRDecodeResult?
-            do {
-                for (offset, frame) in frames.reversed().enumerated() {
-                    let frameText = text(frame)
+            for (offset, frame) in frames.reversed().enumerated() {
+                let frameText = text(frame)
+                result = try decoder.ingest(frameText)
+                if offset.isMultiple(of: 3) {
                     result = try decoder.ingest(frameText)
-                    if offset.isMultiple(of: 3) {
-                        result = try decoder.ingest(frameText)
-                    }
                 }
-            } catch {
-                if payload.kind == .payment,
-                   !KagemushaRecursiveSpend.hasRequiredNativeSymbols {
-                    XCTAssertEqual(error as? KagemushaQRStreamError, .invalidPayload)
-                    continue
-                }
-                throw error
             }
             XCTAssertEqual(result?.payload, payload, "\(payload.kind)")
             XCTAssertEqual(result?.progress, 1, "\(payload.kind)")

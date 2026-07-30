@@ -1151,6 +1151,12 @@ through `ClientResponse.hashHex()`. Callers can forward the returned hash to
 reimplementing the hashing logic, and the same canonical value is preserved when
 pending transactions are replayed from `PendingTransactionQueue`.
 
+The first-release ID commits to the canonical signed `TransactionPayload`
+inside `TransactionEntrypoint::External`, not to the surrounding authorization
+proof. Replacing a signature or multisig proof therefore does not create a
+second ID for the same intent. Proof attachments live in
+`TransactionPayload.attachments()` and remain signature- and ID-bound.
+
 Torii returns a Norito-encoded transaction submission receipt (payload +
 signature) on `/v1/pipeline/transactions`. The Android SDK surfaces the raw
 receipt bytes via `ClientResponse.body()` so callers can decode them with their

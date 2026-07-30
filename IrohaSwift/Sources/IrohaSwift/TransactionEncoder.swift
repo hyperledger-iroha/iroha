@@ -497,6 +497,7 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
         transactionPayload.writeField(try feePayment.canonicalNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(encodeNoneOption())
 
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload.data))
         let signed = encodeSignedTransaction(
@@ -507,7 +508,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             norito: encodeVersionedSignedTransaction(signed),
             signedTransaction: signed,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signed))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload.data))
         )
     }
 
@@ -538,7 +539,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         let signed = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
         return SignedTransactionEnvelope(
             norito: encodeVersionedSignedTransaction(signed), signedTransaction: signed,
-            payload: nil, transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signed))
+            payload: nil,
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         )
     }
 
@@ -588,7 +590,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             norito: encodeVersionedSignedTransaction(signedTransaction),
             signedTransaction: signedTransaction,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         )
     }
 
@@ -636,7 +638,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             norito: encodeVersionedSignedTransaction(signedTransaction),
             signedTransaction: signedTransaction,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         )
     }
 
@@ -672,6 +674,7 @@ enum SingleInstructionSwiftNoritoEncoder {
         transactionPayload.writeField(encodeNoneOption())
         transactionPayload.writeField(try feePayment.canonicalNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(encodeNoneOption())
         return transactionPayload.data
     }
 
@@ -729,14 +732,13 @@ enum SingleInstructionSwiftNoritoEncoder {
         signedTransaction.writeField(CanonicalNorito.encodeConstVec(signature))
         signedTransaction.writeField(transactionPayload)
         signedTransaction.writeField(encodeNoneOption())
-        signedTransaction.writeField(encodeNoneOption())
         return signedTransaction.data
     }
 
-    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+    private static func encodeTransactionEntrypoint(_ transactionPayload: Data) -> Data {
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedTransaction)
+        entrypoint.writeField(transactionPayload)
         return entrypoint.data
     }
 

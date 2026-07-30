@@ -831,38 +831,56 @@ pub trait SetReadOnly {
         trigger
     }
 
-    /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a given time event.
+    /// Returns a bounded iterator of trigger ids matching a given time event.
+    ///
+    /// Retry attempts are selected first. Scheduled matches beyond
+    /// `max_invocations` are discarded with the elapsed interval and are not
+    /// carried into a later block.
     fn match_time_event(
         &self,
         event: TimeEvent,
         current_block_height: u64,
         current_block_time_ms: u64,
-    ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
+        max_invocations: usize,
+    ) -> impl Iterator<Item = TriggerId> + '_ {
         let key_height = "__registered_block_height".parse::<Name>().ok();
-        let mut due_retries = Vec::new();
-        let mut scheduled = Vec::new();
-
-        for (id, action) in self
-            .time_triggers()
-            .iter()
-            .filter(|(_, action)| trigger_is_enabled(action.metadata()))
-        {
-            if action.repeats.is_depleted() {
-                continue;
+        let is_eligible = |action: &LoadedAction<TimeEventFilter>| {
+            if !trigger_is_enabled(action.metadata()) || action.repeats.is_depleted() {
+                return false;
             }
-
             let registered_height = key_height
                 .as_ref()
                 .and_then(|key| action.metadata().get(key))
                 .and_then(|json| json.try_into_any_norito::<u64>().ok());
-            if !registered_height.is_some_and(|height| height != current_block_height) {
+            registered_height.is_some_and(|height| height != current_block_height)
+        };
+
+        // Retry invocations retain their existing priority over ordinary
+        // schedule matches, but both categories share one consensus resource
+        // cap so an elapsed interval can never allocate an unbounded clone list.
+        let mut due_retries = Vec::with_capacity(max_invocations.min(self.time_triggers().len()));
+        for (id, action) in self.time_triggers().iter() {
+            if due_retries.len() == max_invocations {
+                break;
+            }
+            if !is_eligible(action) {
                 continue;
             }
+            if action
+                .retry_state
+                .is_some_and(|retry_state| current_block_time_ms >= retry_state.next_retry_at_ms)
+            {
+                due_retries.push(id.clone());
+            }
+        }
 
-            if let Some(retry_state) = action.retry_state {
-                if current_block_time_ms >= retry_state.next_retry_at_ms {
-                    due_retries.push((id.clone(), action.clone()));
-                }
+        let scheduled_capacity = max_invocations.saturating_sub(due_retries.len());
+        let mut scheduled = Vec::with_capacity(scheduled_capacity);
+        for (id, action) in self.time_triggers().iter() {
+            if scheduled.len() == scheduled_capacity {
+                break;
+            }
+            if !is_eligible(action) || action.retry_state.is_some() {
                 continue;
             }
 
@@ -870,8 +888,11 @@ pub trait SetReadOnly {
             if let Repeats::Exactly(repeats) = action.repeats {
                 count = min(repeats, count);
             }
+            let count = usize::try_from(count)
+                .unwrap_or(usize::MAX)
+                .min(scheduled_capacity - scheduled.len());
             for _ in 0..count {
-                scheduled.push((id.clone(), action.clone()));
+                scheduled.push(id.clone());
             }
         }
 
@@ -1141,18 +1162,20 @@ impl<'set> SetBlock<'set> {
         self.data_triggers.commit();
     }
 
-    /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a given time event.
+    /// Returns a bounded iterator of trigger ids matching a given time event.
     pub fn match_time_event(
         &self,
         event: TimeEvent,
         current_block_height: u64,
         current_block_time_ms: u64,
-    ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
+        max_invocations: usize,
+    ) -> impl Iterator<Item = TriggerId> + '_ {
         <Self as SetReadOnly>::match_time_event(
             self,
             event,
             current_block_height,
             current_block_time_ms,
+            max_invocations,
         )
     }
 
@@ -1807,7 +1830,7 @@ mod tests {
 
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter,
+        events::{execute_trigger::ExecuteTriggerEventFilter, time::Schedule},
         metadata::Metadata,
         prelude::{
             AccountId, Executable, ExecutionTime, InstructionBox, Level, Log, TimeEvent,
@@ -2112,12 +2135,14 @@ mod tests {
 
         assert!(
             block_view
-                .match_time_event(time_event, 42, 1_234)
+                .match_time_event(time_event, 42, 1_234, 16)
                 .next()
                 .is_none(),
             "trigger registered in current block must be skipped"
         );
-        let matches_same_time = block_view.match_time_event(time_event, 99, 1_234).count();
+        let matches_same_time = block_view
+            .match_time_event(time_event, 99, 1_234, 16)
+            .count();
         assert_eq!(
             matches_same_time, 1,
             "trigger should match when height differs even if timestamp matches"
@@ -2129,11 +2154,57 @@ mod tests {
             interval: interval_later,
         };
 
-        let matches_later = block_view.match_time_event(later_event, 99, 2_000).count();
+        let matches_later = block_view
+            .match_time_event(later_event, 99, 2_000, 16)
+            .count();
         assert_eq!(
             matches_later, 1,
             "trigger should appear for subsequent blocks"
         );
+    }
+
+    #[test]
+    fn match_time_event_caps_periodic_materialisation() {
+        crate::test_alias::ensure();
+        let set = Set::default();
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            let trigger_id: TriggerId = "bounded_periodic_trigger".parse().expect("valid id");
+            let authority = sample_authority();
+            let instruction = InstructionBox::from(Log::new(Level::INFO, "noop".to_owned()));
+            let executable = Executable::Instructions(ConstVec::from(vec![instruction]));
+            let mut action = SpecializedAction::new(
+                executable,
+                Repeats::Indefinitely,
+                authority,
+                TimeEventFilter(ExecutionTime::Schedule(Schedule {
+                    start_ms: 0,
+                    period_ms: Some(1),
+                })),
+            );
+            action.metadata.insert(
+                "__registered_block_height".parse().expect("valid name"),
+                Json::from(1_u64),
+            );
+            tx.add_time_trigger(SpecializedTrigger::new(trigger_id, action))
+                .expect("add periodic trigger");
+            tx.apply();
+            block.commit();
+        }
+
+        let event = TimeEvent {
+            interval: TimeInterval {
+                since_ms: 0,
+                length_ms: u64::MAX,
+            },
+        };
+        let matches = set
+            .view()
+            .match_time_event(event, 2, u64::MAX, 3)
+            .collect::<Vec<_>>();
+
+        assert_eq!(matches.len(), 3);
     }
 
     #[test]
@@ -2183,7 +2254,7 @@ mod tests {
 
         assert!(
             block_view
-                .match_time_event(time_event, 99, 1_234)
+                .match_time_event(time_event, 99, 1_234, 16)
                 .next()
                 .is_none(),
             "disabled trigger must be skipped"
@@ -2223,7 +2294,7 @@ mod tests {
 
         assert!(
             block_view
-                .match_time_event(time_event, 99, 1_234)
+                .match_time_event(time_event, 99, 1_234, 16)
                 .next()
                 .is_none(),
             "trigger missing registration metadata must be skipped"

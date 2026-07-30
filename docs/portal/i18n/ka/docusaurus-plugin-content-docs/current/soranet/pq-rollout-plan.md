@@ -97,11 +97,11 @@ rollout_phase = "default"
 
 | ზედაპირი | კანარის (სტადია A) | Ramp (სტადია B) | ნაგულისხმევი (სტადია C) |
 |---------|-----------------|---------------|-----------------|
-| `sorafs_cli` მოტანა | `--anonymity-policy stage-a` ან დაეყრდნო ფაზას | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` მოტანა | `--anonymity-policy anon-guard-pq` ან დაეყრდნო ფაზას | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | ორკესტრატორის კონფიგურაცია JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust კლიენტის კონფიგურაცია (`iroha.toml`) | `rollout_phase = "canary"` (ნაგულისხმევი) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` ხელმოწერილი ბრძანებები | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, სურვილისამებრ `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, სურვილისამებრ `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, სურვილისამებრ `.ANON_STRICT_PQ` |
+| `iroha_cli` ხელმოწერილი ბრძანებები | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, სურვილისამებრ `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, სურვილისამებრ `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, სურვილისამებრ `.ANON_STRICT_PQ` |
 | JavaScript ორკესტრატორის დამხმარეები | `rolloutPhase: "canary"` ან `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | პითონი `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -124,7 +124,7 @@ rollout_phase = "default"
 
 3. **კლიენტი/SDK canary (T პლუს 1 კვირა)**
 
-   - გადაატრიალეთ `rollout_phase = "ramp"` კლიენტის კონფიგურაციებში ან გაიარეთ `stage-b` უგულებელყოფა დანიშნული SDK კოჰორტებისთვის.
+   - გადაატრიალეთ `rollout_phase = "ramp"` კლიენტის კონფიგურაციებში ან გაიარეთ `anon-majority-pq` უგულებელყოფა დანიშნული SDK კოჰორტებისთვის.
    - გადაიღეთ ტელემეტრიული განსხვავებები (`sorafs_orchestrator_policy_events_total` დაჯგუფებული `client_id` და `region`) და მიამაგრეთ ისინი ინციდენტების ჩანაწერში.
 
 4. **ნაგულისხმევი აქცია (T პლუს 3 კვირა)**
@@ -160,7 +160,7 @@ rollout_phase = "default"
 ### პანდუსი → კანარი (სტადია B → ეტაპი A)
 
 1. შემოიტანეთ დაცვის დირექტორიის სნეპშოტი, რომელიც გადაღებულია დაწინაურებამდე `sorafs_cli guard-directory import --guard-directory guards.json`-ით და ხელახლა გაუშვით `sorafs_cli guard-directory verify`, რათა დაქვეითების პაკეტი შეიცავდეს ჰეშებს.
-2. დააყენეთ `rollout_phase = "canary"` (ან გადაახვიეთ `anonymity_policy stage-a`-ით) ორკესტრატორისა და კლიენტის კონფიგურაციებზე, შემდეგ კვლავ დაუკარით PQ საბურღი საბურღი [PQ ratchet runbook] (./pq-ratchet-runbook.md) დაქვეითებული მილსადენის დასამტკიცებლად.
+2. დააყენეთ `rollout_phase = "canary"` (ან გადაახვიეთ `anonymity_policy anon-guard-pq`-ით) ორკესტრატორისა და კლიენტის კონფიგურაციებზე, შემდეგ კვლავ დაუკარით PQ საბურღი საბურღი [PQ ratchet runbook] (./pq-ratchet-runbook.md) დაქვეითებული მილსადენის დასამტკიცებლად.
 3. მიამაგრეთ განახლებული PQ Ratchet და SN16 ტელემეტრიის ეკრანის ანაბეჭდები პლუს გაფრთხილების შედეგები ინციდენტების ჟურნალში, სანამ აცნობებთ მმართველობას.
 
 ### გვარდიის შეხსენებები- მიუთითეთ `docs/source/ops/soranet_transport_rollback.md`, როდესაც ხდება დაქვეითება და დაარეგისტრირეთ ნებისმიერი დროებითი შემარბილებელი საშუალება, როგორც `TODO:` ელემენტი გაშვების ტრეკერში შემდგომი მუშაობისთვის.

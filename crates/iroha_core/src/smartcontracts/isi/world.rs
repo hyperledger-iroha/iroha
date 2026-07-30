@@ -286,6 +286,85 @@ pub mod isi {
         Ok(())
     }
 
+    fn validate_reputation_archive_retention_request(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1;
+
+        let Some(next) = ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(
+            custom,
+        )
+        .map_err(|error| {
+            invalid_smart_contract_parameter(format!(
+                "invalid finalized-reputation archive retention request: {error}"
+            ))
+        })?
+        else {
+            return Ok(());
+        };
+        if &next.chain_id != &state_transaction.chain_id {
+            return Err(invalid_smart_contract_parameter(
+                "finalized-reputation archive retention request targets another chain",
+            ));
+        }
+        if next.compact_through.height >= state_transaction.block_height() {
+            return Err(invalid_smart_contract_parameter(
+                "finalized-reputation archive retention target must precede its authorizing block",
+            ));
+        }
+        let target_index = usize::try_from(next.compact_through.height)
+            .ok()
+            .and_then(|height| height.checked_sub(1))
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter(
+                    "finalized-reputation archive retention target height is not representable",
+                )
+            })?;
+        let target_hash = state_transaction
+            .block_hashes()
+            .get(target_index)
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter(
+                    "finalized-reputation archive retention target is not a committed ancestor",
+                )
+            })?;
+        if target_hash != next.compact_through.block_hash {
+            return Err(invalid_smart_contract_parameter(
+                "finalized-reputation archive retention target hash is not the committed ancestor",
+            ));
+        }
+
+        let parameter_id = ReputationFinalizedArchiveRetentionRequestV1::parameter_id();
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(&parameter_id)
+            .map(|previous| {
+                ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(previous)
+                    .map_err(|error| {
+                        invalid_smart_contract_parameter(format!(
+                            "active finalized-reputation archive retention request is malformed: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(
+                            "active finalized-reputation archive retention parameter changed identity",
+                        )
+                    })
+            })
+            .transpose()?;
+        ReputationFinalizedArchiveRetentionRequestV1::validate_transition(previous.as_ref(), &next)
+            .map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid finalized-reputation archive retention transition: {error}"
+                ))
+            })
+    }
+
     fn parse_trigger_callback_alias_namespace(
         namespace: &str,
     ) -> Result<iroha_data_model::smart_contract::ContractAlias, Error> {
@@ -1099,7 +1178,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
+        if !crate::zk::is_production_verify_backend_label(backend) {
             return None;
         }
         norito::decode_canonical::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -1154,7 +1233,7 @@ pub mod isi {
         if !is_admissible(record_id) || !is_admissible(env_id) {
             return false;
         }
-        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -1206,7 +1285,7 @@ pub mod isi {
     }
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
             halo2_voting_circuit_matches(record_circuit_id, expected_id)
         } else if crate::zk::is_stark_fri_v1_backend(backend) {
             // Enforce canonical vote circuit roles to avoid swapping ballot/tally VKs.
@@ -1231,14 +1310,14 @@ pub mod isi {
     }
 
     fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta)
+        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
     }
 
-    fn ensure_verifier_backend_registry_id_v1(backend: &str) -> Result<(), Error> {
-        if crate::zk::is_verifier_readiness_claim_label(backend) {
+    fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
+        if crate::zk::is_production_claim_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "readiness-claim verifying key backends are not supported".into(),
+                    "production-claim verifying key backends are not supported".into(),
                 ),
             ));
         }
@@ -1256,7 +1335,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
+        if !crate::zk::is_production_verify_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "unsupported verifying key backends are not supported".into(),
@@ -1417,9 +1496,9 @@ pub mod isi {
         Ok(())
     }
 
-    fn readiness_claim_proof_backend_error() -> Error {
+    fn production_claim_proof_backend_error() -> Error {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            "readiness-claim proof backends are not supported".into(),
+            "production-claim proof backends are not supported".into(),
         ))
         .into()
     }
@@ -3122,7 +3201,7 @@ pub mod isi {
                             ),
                         ));
                     }
-                    ensure_verifier_backend_registry_id_v1(id_backend)?;
+                    ensure_production_verifying_key_backend_id(id_backend)?;
                     if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -3140,7 +3219,7 @@ pub mod isi {
                             ),
                         ));
                     }
-                    ensure_verifier_backend_registry_id_v1(id_backend)?;
+                    ensure_production_verifying_key_backend_id(id_backend)?;
                     if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -10373,7 +10452,7 @@ pub mod isi {
                         ),
                     ));
                 }
-                ensure_verifier_backend_registry_id_v1(id_backend)?;
+                ensure_production_verifying_key_backend_id(id_backend)?;
                 if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -10391,7 +10470,7 @@ pub mod isi {
                         ),
                     ));
                 }
-                ensure_verifier_backend_registry_id_v1(id_backend)?;
+                ensure_production_verifying_key_backend_id(id_backend)?;
                 if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -11265,8 +11344,8 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
-        if crate::zk::is_verifier_readiness_claim_label(attachment.backend.as_str()) {
-            return Err(readiness_claim_proof_backend_error());
+        if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
+            return Err(production_claim_proof_backend_error());
         }
         if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -11282,7 +11361,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_verifier_backend_registry_label_v1(attachment.backend.as_str()) {
+        if !crate::zk::is_production_verify_backend_label(attachment.backend.as_str()) {
             return Err(unsupported_proof_backend_error());
         }
         if expects_envelope && envelope_meta.is_none() {
@@ -11309,12 +11388,12 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
-        crate::zk::verifier_backend_registry_tag_v1(backend).is_some_and(|expected| expected == tag)
+        crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
     }
 
     fn backend_requires_open_verify_envelope(backend: &str) -> bool {
         matches!(
-            crate::zk::verifier_backend_registry_tag_v1(backend),
+            crate::zk::production_verify_backend_tag(backend),
             Some(BackendTag::Halo2IpaPasta | BackendTag::Stark)
         )
     }
@@ -20441,6 +20520,7 @@ pub mod isi {
         ) -> Result<(), Error> {
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
+                validate_reputation_archive_retention_request(custom, state_transaction)?;
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
                 ) {
@@ -32627,7 +32707,7 @@ seiyaku GovernanceLifecycle {
             "sis-with-hints",
         ];
 
-        const READINESS_CLAIM_VERIFIER_LABELS: &[&str] = &[
+        const PRODUCTION_CLAIM_VERIFIER_LABELS: &[&str] = &[
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",
@@ -34889,7 +34969,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn register_vk_rejects_readiness_claim_backend_labels() {
+        fn register_vk_rejects_production_claim_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -34908,9 +34988,9 @@ seiyaku GovernanceLifecycle {
             stx.apply();
 
             let exec = Executor::default();
-            for (idx, backend) in READINESS_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
                 let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_readiness_claim_{idx}"));
+                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
                     unsupported_label_generic_record_profile(backend);
@@ -34935,10 +35015,10 @@ seiyaku GovernanceLifecycle {
                 .into();
                 let err = exec
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("readiness-claim verifier label must be rejected");
+                    .expect_err("production-claim verifier label must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("readiness-claim verifying key backends"),
+                    msg.contains("production-claim verifying key backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
                 assert!(
@@ -36279,6 +36359,90 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
+        fn set_parameter_retention_request_requires_exact_ancestor_and_lineage() {
+            use iroha_data_model::sorafs::reputation::{
+                ReputationFinalizedArchiveRetentionRequestV1,
+                ReputationFinalizedArchiveRetentionTargetV1,
+            };
+
+            let chain_id = iroha_data_model::ChainId::from("retention-request-execution");
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_with_chain_for_testing(
+                World::default(),
+                kura,
+                query_handle,
+                chain_id.clone(),
+            );
+            {
+                let mut block_hashes = state.block_hashes.block();
+                for byte in [0x51, 0x52] {
+                    block_hashes.push_for_tests(
+                        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                            Hash::prehashed([byte; Hash::LENGTH]),
+                        ),
+                    );
+                }
+                block_hashes.commit_for_tests();
+            }
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(3).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut state_block = state.block(header);
+            let mut stx = state_block.transaction();
+            let request = |sequence, predecessor, height, hash| {
+                ReputationFinalizedArchiveRetentionRequestV1::try_new(
+                    chain_id.clone(),
+                    sequence,
+                    predecessor,
+                    ReputationFinalizedArchiveRetentionTargetV1::try_new(height, hash)
+                        .expect("valid target shape"),
+                )
+                .expect("valid request shape")
+            };
+
+            let first = request(1, None, 1, [0x51; 32]);
+            SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact committed ancestor is accepted");
+            SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact request replay is idempotent");
+
+            let wrong_hash = request(2, Some(first.request_digest), 2, [0x53; 32]);
+            let error = SetParameter::new(Parameter::Custom(wrong_hash.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("substituted ancestor hash must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("target hash is not the committed ancestor")
+            );
+
+            let skipped = request(3, Some(first.request_digest), 2, [0x52; 32]);
+            let error = SetParameter::new(Parameter::Custom(skipped.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("request sequence skips must fail");
+            assert!(error.to_string().contains("sequence is not contiguous"));
+
+            let successor = request(2, Some(first.request_digest), 2, [0x52; 32]);
+            SetParameter::new(Parameter::Custom(successor.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact successor request");
+
+            let rollback = request(3, Some(successor.request_digest), 1, [0x51; 32]);
+            let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("retention target rollback must fail");
+            assert!(error.to_string().contains("target did not advance"));
+        }
+
+        #[test]
         fn set_parameter_rejects_zero_npos_reconfig_fields() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -36497,14 +36661,14 @@ seiyaku GovernanceLifecycle {
                     BackendTag::Halo2IpaPasta,
                     "pallas",
                     "halo2_default",
-                    "readiness-claim verifying key backends",
+                    "production-claim verifying key backends",
                 ),
                 (
                     "stark/fri/security-review-passed",
                     BackendTag::Stark,
                     "goldilocks",
                     "stark_default",
-                    "readiness-claim verifying key backends",
+                    "production-claim verifying key backends",
                 ),
                 (
                     "halo2/kzg",
@@ -36987,8 +37151,8 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn verify_proof_rejects_readiness_claim_backend_labels_before_registry_lookup() {
-            for (idx, backend) in READINESS_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+        fn verify_proof_rejects_production_claim_backend_labels_before_registry_lookup() {
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let state = State::new(World::default(), kura, query_handle);
@@ -37012,7 +37176,7 @@ seiyaku GovernanceLifecycle {
                 let attachment = ProofAttachment::new_ref(
                     backend.into(),
                     proof_box,
-                    VerifyingKeyId::new(backend, format!("vk_readiness_claim_proof_{idx}")),
+                    VerifyingKeyId::new(backend, format!("vk_production_claim_proof_{idx}")),
                 );
 
                 let mut stx_verify = block.transaction();
@@ -37020,10 +37184,12 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = exec
                     .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
-                    .expect_err("readiness-claim proof backend must reject before registry lookup");
+                    .expect_err(
+                        "production-claim proof backend must reject before registry lookup",
+                    );
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("readiness-claim proof backends"),
+                    msg.contains("production-claim proof backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
             }

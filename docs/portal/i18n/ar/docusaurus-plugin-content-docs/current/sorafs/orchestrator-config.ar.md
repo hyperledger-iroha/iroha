@@ -58,7 +58,7 @@ Sidebar_label: إعدادات المُنسِّق
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```احفظ الملف عبر الطبقات `iroha_config` المعتاد (`defaults/`، مستخدم، فعلي) حتى
 ترث عمليات النشر الحتمية الحدودية لنفسها في جميع الحفلات. لملف احتياطي مباشر فقط

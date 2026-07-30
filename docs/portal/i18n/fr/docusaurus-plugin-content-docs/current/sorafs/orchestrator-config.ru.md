@@ -59,7 +59,7 @@ La configuration dans Norito JSON permet d'utiliser le SDK et l'automatisation.
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

@@ -74,14 +74,14 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
         &self,
         msg: Post<NetworkMessage>,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    ) -> Result<(), Box<NetworkActorAdmissionError<Post<NetworkMessage>>>>;
     /// Admit a reply over the exact authenticated route of its request.
     fn post_reply_recoverable(
         &self,
         msg: Post<NetworkMessage>,
         reply_route: &Self::ReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    ) -> Result<NetworkReplyAdmissionOutcome, Box<NetworkActorAdmissionError<Post<NetworkMessage>>>>;
     /// Extract the authenticated reply route carried by one inbound message.
     fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute>;
     /// Derive the stable authenticated-source owner of an opaque reply route.
@@ -116,8 +116,8 @@ impl GenesisNetwork for IrohaNetwork {
         &self,
         msg: Post<NetworkMessage>,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
-        iroha_p2p::network::NetworkBaseHandle::post_recoverable(self, msg, ticket)
+    ) -> Result<(), Box<NetworkActorAdmissionError<Post<NetworkMessage>>>> {
+        iroha_p2p::network::NetworkBaseHandle::post_recoverable(self, msg, ticket).map_err(Box::new)
     }
 
     fn post_reply_recoverable(
@@ -125,7 +125,7 @@ impl GenesisNetwork for IrohaNetwork {
         msg: Post<NetworkMessage>,
         reply_route: &NetworkReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>
+    ) -> Result<NetworkReplyAdmissionOutcome, Box<NetworkActorAdmissionError<Post<NetworkMessage>>>>
     {
         iroha_p2p::network::NetworkBaseHandle::post_reply_recoverable(
             self,
@@ -133,6 +133,7 @@ impl GenesisNetwork for IrohaNetwork {
             reply_route,
             ticket,
         )
+        .map_err(Box::new)
     }
 
     fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute> {
@@ -416,12 +417,13 @@ where
     S: Clone + Eq + std::hash::Hash,
 {
     fn new(capacity: NonZeroUsize, max_payload_bytes: u64) -> Self {
+        const REPLY_ENVELOPE_ALLOWANCE: u64 = 64 * 1024;
+
         let capacity = capacity.get();
         // Preserve capacity for several independent authenticated sources while
         // still allowing a trusted hub to carry more than one bootstrap client.
         let per_source_capacity = genesis_reply_waiters_per_source(capacity)
             .expect("non-zero subscriber queue has an exact per-source genesis reply share");
-        const REPLY_ENVELOPE_ALLOWANCE: u64 = 64 * 1024;
         let encoded_byte_capacity_per_source =
             max_payload_bytes.saturating_add(REPLY_ENVELOPE_ALLOWANCE);
         let encoded_byte_capacity = encoded_byte_capacity_per_source.saturating_mul(2);
@@ -446,17 +448,17 @@ where
         &mut self,
         source: S,
         pending: PendingGenesisReplyPost<R>,
-    ) -> Result<(), PendingGenesisReplyPost<R>> {
+    ) -> Result<(), Box<PendingGenesisReplyPost<R>>> {
         let source_bytes = self
             .encoded_bytes_by_source
             .get(&source)
             .copied()
             .unwrap_or(0);
         let Some(next_bytes) = self.encoded_bytes.checked_add(pending.encoded_bytes) else {
-            return Err(pending);
+            return Err(Box::new(pending));
         };
         let Some(next_source_bytes) = source_bytes.checked_add(pending.encoded_bytes) else {
-            return Err(pending);
+            return Err(Box::new(pending));
         };
         if self.len >= self.capacity
             || self
@@ -466,7 +468,7 @@ where
             || next_bytes > self.encoded_byte_capacity
             || next_source_bytes > self.encoded_byte_capacity_per_source
         {
-            return Err(pending);
+            return Err(Box::new(pending));
         }
         let queue = self.by_source.entry(source.clone()).or_insert_with(|| {
             self.source_order.push_back(source.clone());
@@ -538,40 +540,42 @@ fn post_or_retain_genesis_reply<N: GenesisNetwork>(
             );
             true
         }
-        Err(NetworkActorAdmissionError::Backpressured {
-            message, ticket, ..
-        }) => {
-            let source = network.reply_source(&reply_route);
-            if let Err(dropped) = pending.push(
-                source,
-                PendingGenesisReplyPost {
-                    message,
-                    ticket,
-                    reply_route,
-                    encoded_bytes,
-                },
-            ) {
-                iroha_logger::debug!(
-                    peer = %dropped.message.peer_id,
-                    "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the response-rematerialization witness"
-                );
+        Err(error) => match *error {
+            NetworkActorAdmissionError::Backpressured {
+                message, ticket, ..
+            } => {
+                let source = network.reply_source(&reply_route);
+                if let Err(dropped) = pending.push(
+                    source,
+                    PendingGenesisReplyPost {
+                        message,
+                        ticket,
+                        reply_route,
+                        encoded_bytes,
+                    },
+                ) {
+                    iroha_logger::debug!(
+                        peer = %dropped.message.peer_id,
+                        "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the response-rematerialization witness"
+                    );
+                }
+                true
             }
-            true
-        }
-        Err(NetworkActorAdmissionError::Closed { .. }) => {
-            iroha_logger::warn!("genesis response corridor closed with the P2P actor");
-            false
-        }
-        Err(NetworkActorAdmissionError::Rejected {
-            message, reason, ..
-        }) => {
-            iroha_logger::warn!(
-                peer = %message.peer_id,
-                ?reason,
-                "genesis response permanently rejected by P2P actor admission"
-            );
-            true
-        }
+            NetworkActorAdmissionError::Closed { .. } => {
+                iroha_logger::warn!("genesis response corridor closed with the P2P actor");
+                false
+            }
+            NetworkActorAdmissionError::Rejected {
+                message, reason, ..
+            } => {
+                iroha_logger::warn!(
+                    peer = %message.peer_id,
+                    ?reason,
+                    "genesis response permanently rejected by P2P actor admission"
+                );
+                true
+            }
+        },
     }
 }
 
@@ -625,25 +629,27 @@ impl GenesisRequestFanout {
                 });
             match network.post_recoverable(message, ticket) {
                 Ok(()) => {}
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message, ticket, ..
-                }) => {
-                    target.pending = Some(PendingGenesisRequestPost { message, ticket });
-                }
-                Err(NetworkActorAdmissionError::Closed { .. }) => {
-                    actor_open = false;
-                    break;
-                }
-                Err(NetworkActorAdmissionError::Rejected {
-                    message, reason, ..
-                }) => {
-                    target.permanently_rejected = true;
-                    iroha_logger::warn!(
-                        peer = %message.peer_id,
-                        ?reason,
-                        "genesis request permanently rejected by P2P actor admission"
-                    );
-                }
+                Err(error) => match *error {
+                    NetworkActorAdmissionError::Backpressured {
+                        message, ticket, ..
+                    } => {
+                        target.pending = Some(PendingGenesisRequestPost { message, ticket });
+                    }
+                    NetworkActorAdmissionError::Closed { .. } => {
+                        actor_open = false;
+                        break;
+                    }
+                    NetworkActorAdmissionError::Rejected {
+                        message, reason, ..
+                    } => {
+                        target.permanently_rejected = true;
+                        iroha_logger::warn!(
+                            peer = %message.peer_id,
+                            ?reason,
+                            "genesis request permanently rejected by P2P actor admission"
+                        );
+                    }
+                },
             }
         }
         actor_open
@@ -747,12 +753,11 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                         None
                     }
                     message = rx.recv(), if rx_open => {
-                        match message {
-                            Some(message) => Some(message),
-                            None => {
-                                rx_open = false;
-                                None
-                            }
+                        if let Some(message) = message {
+                            Some(message)
+                        } else {
+                            rx_open = false;
+                            None
                         }
                     }
                     else => break 'listener,
@@ -1586,7 +1591,7 @@ mod tests {
             &self,
             msg: Post<NetworkMessage>,
             _ticket: Option<NetworkActorAdmissionTicket>,
-        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+        ) -> Result<(), Box<NetworkActorAdmissionError<Post<NetworkMessage>>>> {
             if self
                 .backpressure_remaining
                 .fetch_update(
@@ -1596,11 +1601,11 @@ mod tests {
                 )
                 .is_ok()
             {
-                return Err(NetworkActorAdmissionError::Backpressured {
+                return Err(Box::new(NetworkActorAdmissionError::Backpressured {
                     message: msg,
                     ticket: None,
                     rank: 1,
-                });
+                }));
             }
             self.posted.lock().expect("posted mutex").push(msg);
             Ok(())
@@ -1611,8 +1616,10 @@ mod tests {
             msg: Post<NetworkMessage>,
             reply_route: &Self::ReplyRoute,
             ticket: Option<NetworkActorAdmissionTicket>,
-        ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>
-        {
+        ) -> Result<
+            NetworkReplyAdmissionOutcome,
+            Box<NetworkActorAdmissionError<Post<NetworkMessage>>>,
+        > {
             if self
                 .unavailable_reply_peers
                 .lock()
@@ -1628,11 +1635,11 @@ mod tests {
                 .expect("blocked reply peers")
                 .contains(reply_route)
             {
-                return Err(NetworkActorAdmissionError::Backpressured {
+                return Err(Box::new(NetworkActorAdmissionError::Backpressured {
                     message: msg,
                     ticket,
                     rank: 1,
-                });
+                }));
             }
             self.post_recoverable(msg, ticket)
                 .map(|()| NetworkReplyAdmissionOutcome::Admitted)

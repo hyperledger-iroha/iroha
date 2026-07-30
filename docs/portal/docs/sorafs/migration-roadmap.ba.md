@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-roadmap.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 84fdf4ef66efbbf7adef9cfaf41be0817ac656bec010c0a816d1f5a5310f1875
+source_hash: e283957b768bf69ad5c2b8c2773739bf76a8a0db3b603c99e19274dbf0e47c01
 source_last_modified: "2026-01-05T09:28:11.885227+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Migration Roadmap"
@@ -55,7 +55,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
   --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101... \
   --dag-codec=0x71

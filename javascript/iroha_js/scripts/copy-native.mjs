@@ -42,6 +42,7 @@ import {
 } from "./build-dist.mjs";
 import { resolveNativeBuildProfile } from "./native-build-profile.mjs";
 import {
+  readNativeBuildSourceState,
   readNativeBuildProvenance,
   validateNativeBuildProvenance,
 } from "./native-build-provenance.mjs";
@@ -120,15 +121,19 @@ const TRANSACTION_ARTIFACT_NAMES = new Set([
 ]);
 
 export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
+  "connectNoritoBridgeAbiVersion",
   "noritoEncodeInstruction",
   "noritoDecodeInstruction",
   "compileKotodama",
+  "sorafsValidateAppealFinanceCancelAssetLockJson",
   "securePrivateFileAbiVersion",
   "securePrivateDirectoryEnsure",
   "securePrivateFileRead",
   "securePrivateFileWriteAtomic",
 ]);
+export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
 export const REQUIRED_NATIVE_EXPORT_RESULTS = Object.freeze({
+  connectNoritoBridgeAbiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   securePrivateFileAbiVersion: 1,
 });
 
@@ -320,6 +325,7 @@ function defaultSignNative(path, { platform, cwd }) {
 export function probeNativeBindingExports(
   bindingPath,
   requiredExports = REQUIRED_NATIVE_EXPORTS,
+  requiredAbiVersion = REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
 ) {
   if (
     !Array.isArray(requiredExports) ||
@@ -330,12 +336,18 @@ export function probeNativeBindingExports(
   ) {
     throw new TypeError("required native exports must be a non-empty identifier array");
   }
+  if (!Number.isSafeInteger(requiredAbiVersion) || requiredAbiVersion < 0) {
+    throw new TypeError("required native bridge ABI version must be a safe unsigned integer");
+  }
   const requiredResults = Object.fromEntries(
-    requiredExports.flatMap((name) =>
-      Object.hasOwn(REQUIRED_NATIVE_EXPORT_RESULTS, name)
+    requiredExports.flatMap((name) => {
+      if (name === "connectNoritoBridgeAbiVersion") {
+        return [[name, requiredAbiVersion]];
+      }
+      return Object.hasOwn(REQUIRED_NATIVE_EXPORT_RESULTS, name)
         ? [[name, REQUIRED_NATIVE_EXPORT_RESULTS[name]]]
-        : [],
-    ),
+        : [];
+    }),
   );
   const probeSource = String.raw`
 const bindingPath = process.argv[1];
@@ -359,7 +371,21 @@ if (missing.length > 0) {
   process.stderr.write("missing required native exports: " + missing.join(", "));
   process.exitCode = 1;
 }
+if (
+  Object.hasOwn(requiredResults, "connectNoritoBridgeAbiVersion") &&
+  typeof binding.connectNoritoBridgeAbiVersion === "function"
+) {
+  const expectedAbi = requiredResults.connectNoritoBridgeAbiVersion;
+  const actualAbi = binding.connectNoritoBridgeAbiVersion();
+  if (!Number.isSafeInteger(actualAbi) || actualAbi !== expectedAbi) {
+    process.stderr.write(
+      "native bridge ABI mismatch: expected " + expectedAbi + ", found " + String(actualAbi),
+    );
+    process.exitCode = 1;
+  }
+}
 const wrongResult = Object.entries(requiredResults).flatMap(([name, expected]) => {
+  if (name === "connectNoritoBridgeAbiVersion") return [];
   if (typeof binding[name] !== "function") return [];
   try {
     const observed = binding[name]();
@@ -412,6 +438,7 @@ if (wrongResult.length > 0) {
       }`,
     );
   }
+  return requiredAbiVersion;
 }
 
 function triggerFailpoint(failpoint, point) {
@@ -1990,6 +2017,7 @@ export async function publishNativeBinding({
   log = console.log,
   cargoProfile = resolveNativeBuildProfile(),
   readBuildProvenance = readNativeBuildProvenance,
+  readSourceState = readNativeBuildSourceState,
 } = {}) {
   if (typeof source !== "string" || source.length === 0) {
     throw new TypeError("native source must be a non-empty path");
@@ -2014,6 +2042,7 @@ export async function publishNativeBinding({
     typeof verifyBinding !== "function" ||
     typeof probeBinding !== "function" ||
     typeof readBuildProvenance !== "function" ||
+    typeof readSourceState !== "function" ||
     (phaseHook !== undefined && typeof phaseHook !== "function") ||
     typeof log !== "function"
   ) {
@@ -2034,6 +2063,22 @@ export async function publishNativeBinding({
   );
   if (buildProvenance.cargo_profile !== cargoProfile) {
     throw new Error("Native build provenance Cargo profile does not match publication.");
+  }
+  const publicationSource = readSourceState(repoRoot);
+  if (
+    buildProvenance.source_tree_clean !== true ||
+    publicationSource.sourceTreeClean !== true
+  ) {
+    throw new Error(
+      "Native publication requires build provenance and current source to be clean.",
+    );
+  }
+  if (
+    publicationSource.sourceGitRevision !== buildProvenance.source_git_revision
+  ) {
+    throw new Error(
+      "Native build provenance does not match the current source revision.",
+    );
   }
   mkdirSync(destinationDirectory, { recursive: true });
   assertDirectory(destinationDirectory, "Native destination");
@@ -2165,6 +2210,13 @@ export async function publishNativeBinding({
     });
     if (!staged?.ok) throw verificationError("Staged native binding", staged);
     probeBinding(stagedNative, requiredExports);
+    const postProbeSource = readSourceState(repoRoot);
+    if (
+      postProbeSource.sourceTreeClean !== true ||
+      postProbeSource.sourceGitRevision !== publicationSource.sourceGitRevision
+    ) {
+      throw new Error("Native source changed while the staged addon was probed.");
+    }
 
     transaction.next = pairIdentity(stagedNative, stagedManifest);
     if (staged.sha256 !== undefined && staged.sha256 !== transaction.next.nativeSha256) {

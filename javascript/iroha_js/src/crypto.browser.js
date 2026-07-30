@@ -366,10 +366,6 @@ export function buildKaigiRosterJoinProof() {
   return unsupported("buildKaigiRosterJoinProof");
 }
 
-export function buildZkAceTransferAuthorizationV1() {
-  return unsupported("buildZkAceTransferAuthorizationV1");
-}
-
 export function deriveConfidentialKeyset() {
   return unsupported("deriveConfidentialKeyset");
 }

@@ -19,5 +19,3 @@ impls = { workspace = true }
 
 [features]
 default = []
-# Silence norito derive unexpected-cfg checks in tests referencing packed layout
-packed-struct = []

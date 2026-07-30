@@ -4,13 +4,19 @@
 //! coordinates are native R1CS values. ECDSA scalars remain explicitly
 //! bit-constrained below the P-256 group order.
 
+use halo2curves::{
+    ff::{Field as _, PrimeField as _},
+    secp256r1::Fq as P256Scalar,
+};
+
 use super::{
     VEGA_T256_SCALAR_MODULUS_BE_V1, VegaT256ScalarV1 as Scalar,
     circuit::{Bit, CircuitBuilder, CircuitError, LinearCombination},
     sha256::{ByteVar, WordVar, allocate_bytes},
 };
 
-const P256_ORDER_BE: [u8; 32] = [
+/// Big-endian order of the prime P-256 scalar field.
+pub(super) const P256_ORDER_BE: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
 ];
@@ -138,7 +144,15 @@ pub(super) fn private_point_from_be_bytes(
     Ok(point)
 }
 
-pub(super) fn verify_es256(
+/// Verify one canonical low-s ES256 signature from its Figure 9
+/// `(r, s^-1 mod n)` witness.
+///
+/// The unique P1363 `s` scalar is reconstructed over the P-256 group-order
+/// field, allocated into the circuit, and constrained to the low-s half-order.
+/// The circuit-derived recovery point `R = s^-1(H(m)G + rQ)` is then checked
+/// with the independent group equation `sR = H(m)G + rQ`. A caller therefore
+/// cannot substitute the high-s inverse even when bypassing native preflight.
+pub(super) fn verify_es256_low_s_from_inverse(
     builder: &mut CircuitBuilder,
     message_digest: [WordVar; 8],
     public_key: &P256PointVar,
@@ -148,17 +162,19 @@ pub(super) fn verify_es256(
     let digest = digest_scalar_bits(message_digest);
     let r = allocate_scalar_be(builder, r_be)?;
     let s_inverse = allocate_scalar_be(builder, s_inverse_be)?;
+    let s = allocate_low_s_scalar(builder, invert_p256_scalar_be_exact(s_inverse_be)?)?;
     enforce_nonzero_below_order(builder, &r)?;
     enforce_nonzero_below_order(builder, &s_inverse)?;
 
     let generator = constant_generator(builder)?;
     let digest_times_generator = scalar_mul(builder, &generator, &digest.bits_le)?;
     let r_times_key = scalar_mul(builder, public_key, &r.bits_le)?;
-    let linear_combination = add_complete(builder, &digest_times_generator, &r_times_key)?;
-    let result = scalar_mul(builder, &linear_combination, &s_inverse.bits_le)?;
-    builder.enforce_zero(result.infinity.lc())?;
-    enforce_x_mod_order_equals_r(builder, result.x, &r)?;
-    Ok(())
+    let right = add_complete(builder, &digest_times_generator, &r_times_key)?;
+    let recovery = scalar_mul(builder, &right, &s_inverse.bits_le)?;
+    builder.enforce_zero(recovery.infinity.lc())?;
+    enforce_x_mod_order_equals_r(builder, recovery.x.clone(), &r)?;
+    let recomposed = scalar_mul(builder, &recovery, &s.bits_le)?;
+    enforce_points_equal(builder, &recomposed, &right)
 }
 
 /// Verify one canonical low-s ES256 signature without trusting a host-side
@@ -179,11 +195,8 @@ pub(super) fn verify_es256_low_s(
 ) -> Result<(), CircuitError> {
     let digest = digest_scalar_bits(message_digest);
     let r = allocate_scalar_be(builder, r_be)?;
-    let s = allocate_scalar_be(builder, s_be)?;
+    let s = allocate_low_s_scalar(builder, s_be)?;
     enforce_nonzero_below_order(builder, &r)?;
-    enforce_nonzero_below_order(builder, &s)?;
-    let (_, is_low_s) = subtract_constant(builder, &s.bits_le, &P256_HALF_ORDER_PLUS_ONE_BE)?;
-    builder.enforce_equal(is_low_s.lc(), LinearCombination::one())?;
 
     let recovery_x = allocate_bytes(builder, &recovery_x_be)?;
     let recovery_y = allocate_bytes(builder, &recovery_y_be)?;
@@ -195,9 +208,40 @@ pub(super) fn verify_es256_low_s(
     let r_times_key = scalar_mul(builder, public_key, &r.bits_le)?;
     let right = add_complete(builder, &digest_times_generator, &r_times_key)?;
     let left = scalar_mul(builder, &recovery, &s.bits_le)?;
+    enforce_points_equal(builder, &left, &right)
+}
+
+fn allocate_low_s_scalar(
+    builder: &mut CircuitBuilder,
+    s_be: [u8; 32],
+) -> Result<ScalarBits, CircuitError> {
+    let s = allocate_scalar_be(builder, s_be)?;
+    enforce_nonzero_below_order(builder, &s)?;
+    let (_, is_low_s) = subtract_constant(builder, &s.bits_le, &P256_HALF_ORDER_PLUS_ONE_BE)?;
+    builder.enforce_equal(is_low_s.lc(), LinearCombination::one())?;
+    Ok(s)
+}
+
+fn invert_p256_scalar_be_exact(bytes: [u8; 32]) -> Result<[u8; 32], CircuitError> {
+    let mut representation = bytes;
+    representation.reverse();
+    let scalar = Option::<P256Scalar>::from(P256Scalar::from_repr(representation.into()))
+        .ok_or(CircuitError::InvalidAssignment)?;
+    let inverse =
+        Option::<P256Scalar>::from(scalar.invert()).ok_or(CircuitError::InvalidAssignment)?;
+    let mut inverse_bytes: [u8; 32] = inverse.to_repr().into();
+    inverse_bytes.reverse();
+    Ok(inverse_bytes)
+}
+
+fn enforce_points_equal(
+    builder: &mut CircuitBuilder,
+    left: &P256PointVar,
+    right: &P256PointVar,
+) -> Result<(), CircuitError> {
     builder.enforce_equal(left.infinity.lc(), right.infinity.lc())?;
-    builder.enforce_equal(left.x, right.x)?;
-    builder.enforce_equal(left.y, right.y)
+    builder.enforce_equal(left.x.clone(), right.x.clone())?;
+    builder.enforce_equal(left.y.clone(), right.y.clone())
 }
 
 fn enforce_nonidentity_on_curve(
@@ -552,13 +596,30 @@ mod tests {
     }
 
     #[test]
-    fn es256_verifier_accepts_independent_openssl_vector_and_rejects_mutation() {
+    fn es256_verifier_accepts_low_s_and_rejects_r_and_high_s_mutations() {
         let qx = hex32("34c30b0b65edb2cfa5f65b122d53b7e095799a0a3b61c1dda5bcce3bd49aa1a7");
         let qy = hex32("a500bc7ee963713fbc76056b2c7090a3a5b76592af2d6dfcddb7dd2cb35a982e");
         let r = hex32("fd890a23bd79ca4428776a1785a6423203c2620148c096624c2008c191f7c053");
         let s_inverse = hex32("5e5782fe1833e0abeb20dc336de6123cde1ca1a4f51de133a6cb224c1bc071d4");
+        let mut high_s_inverse_representation = s_inverse;
+        high_s_inverse_representation.reverse();
+        let high_s_inverse =
+            Option::<P256Scalar>::from(P256Scalar::from_repr(high_s_inverse_representation.into()))
+                .map(|value| -value)
+                .map(|value| {
+                    let mut bytes: [u8; 32] = value.to_repr().into();
+                    bytes.reverse();
+                    bytes
+                })
+                .expect("nonzero canonical P-256 scalar");
+        let mut changed_r = r;
+        changed_r[31] ^= 1;
 
-        for mutate in [false, true] {
+        for (candidate_r, candidate_s_inverse, accepted) in [
+            (r, s_inverse, true),
+            (changed_r, s_inverse, false),
+            (r, high_s_inverse, false),
+        ] {
             let public = vec![
                 Scalar::from_be_bytes_exact(qx).expect("qx"),
                 Scalar::from_be_bytes_exact(qy).expect("qy"),
@@ -568,12 +629,14 @@ mod tests {
                 allocate_bytes(&mut builder, b"Vega ES256 circuit KAT").expect("message bits");
             let digest = sha256(&mut builder, &message).expect("SHA-256");
             let key = public_point(&mut builder, 0, 1).expect("public key");
-            let mut candidate_r = r;
-            if mutate {
-                candidate_r[31] ^= 1;
-            }
-            verify_es256(&mut builder, digest, &key, candidate_r, s_inverse)
-                .expect("fixed-shape synthesis");
+            verify_es256_low_s_from_inverse(
+                &mut builder,
+                digest,
+                &key,
+                candidate_r,
+                candidate_s_inverse,
+            )
+            .expect("fixed-shape synthesis");
             let assignment = builder.finalize().expect("shape");
             let satisfied = assignment
                 .shape
@@ -584,7 +647,7 @@ mod tests {
                     &vec![Scalar::zero(); assignment.shape.constraint_count()],
                 )
                 .is_ok();
-            assert_eq!(satisfied, !mutate);
+            assert_eq!(satisfied, accepted);
         }
     }
 }

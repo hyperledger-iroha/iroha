@@ -21,3 +21,4 @@
 --max-warm-latency-ms 300000
 --min-providers 3
 --min-receipts 6
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

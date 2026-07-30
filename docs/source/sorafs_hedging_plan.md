@@ -157,11 +157,14 @@ authenticated runtime API, or native bridge release process.
 This is not yet a complete production hedging and billing stack. There is still no
 price-feed collector, concrete production finalized-query/journal-verifier
 adapter, externally administered HSM/KMS signer, immutable publication service,
-acknowledgement authority, sealed epoch-witness store, service-management CLI,
-released native bridge artifacts, deployed instance of the shipped API, or
-captured staged rollout evidence that passes the SFM-5 gate. The supervised
-projector/delivery worker and its authenticated Torii API are shipped as
-`irohad` source modules rather than a separate `hedgingd` or `billingd` binary.
+acknowledgement authority, sealed epoch-witness store, released native bridge
+artifacts, deployed instance of the shipped API, or captured staged rollout
+evidence that passes the SFM-5 gate. The supervised projector/delivery worker,
+its authenticated Torii API, the Rust client, and the standard `iroha_cli`
+commands are shipped as source modules. Lifecycle management remains the
+responsibility of the standard `irohad` supervisor and deployment service
+manager; there is deliberately no separate `hedgingd` or `billingd` binary and
+no process-local daemon-control API.
 The checked-in fixture generator,
 fixture manifest, README, and generated `.to`/`.json` byte suite define the
 canonical SFM-5 feed, reference-price, line-item, statement, and negative
@@ -218,11 +221,13 @@ through an identity-pinned immutable sink, reconciles ambiguous publications
 and authoritative acknowledgements, and emits payload-free readiness, cursor,
 delivery, dead-letter, and hedge-intent metrics. `iroha_config` contains only
 the public policy path/digest, bounded work cadence, private state directory,
-and opaque adapter handles; missing, test-marked, unready, or identity-drifting
-dependencies fail startup. No worker or timer accepts a hedge-execution
-adapter. Every generated intent sets `automatic_execution=false`, and the
-separate explicitly authorized submission helper rejects adapters that claim
-automatic execution.
+and each adapter's opaque handle, non-zero revision, and public-policy digest;
+missing, test-marked, unready, substituted, stale, or identity-drifting
+dependencies fail before durable state opens and are requalified around every
+external operation. No worker or timer accepts a hedge-execution adapter.
+Every generated intent sets `automatic_execution=false`, and the separate
+explicitly authorized submission helper rejects adapters that claim automatic
+execution.
 
 These source boundaries do not supply live market feeds or concrete production
 implementations of the finalized query, journal verifier, signer, publisher,
@@ -315,11 +320,15 @@ wrong-owner cases to the same response. The family exposes no feed-ingestion,
 automatic-execution, or local-authority mutation route.
 
 Implemented local validator CLI: `sorafs-validate hedging` validates Norito
-feed, reference-price decision, billing-line, and statement payloads. Target
-runtime CLI helpers should still mirror the future service routes for
-price/status inspection, statement download, escrow inspection, and
-acknowledgement. They should reuse the existing SoraFS CLI conventions and
-signed client configuration.
+feed, reference-price decision, billing-line, and statement payloads. The
+standard signed-client CLI also mirrors every shipped runtime route:
+`sorafs billing status`, `statements`, `statement`, `acknowledge`, and
+`reconciliation`, plus `sorafs hedging exposure` and `intents`. Exact-checkpoint
+reads require canonical lowercase identifiers and bounded page sizes.
+Acknowledgement reads a bounded direct regular proof file, and statement
+download creates a new canonical Norito output without following a symlink or
+replacing an existing path. No CLI command can ingest a feed, publish a
+statement through local authority, control the daemon, or execute a hedge.
 
 Implemented source SDK/FFI bridge: Rust C FFI, Connect C/JNI, Kotlin/JVM, Java
 Android, and Swift callers can pass the same four hedging/billing payload
@@ -347,7 +356,8 @@ empty, lagging, or stale projection remains unready. The alert pack covers:
 
 Additional public-service metrics, including decision result counters,
 statement latency, venue inventory, and billing line items by category, still
-require the deployment-owned collector, publisher, and service/API adapters.
+require the deployment-owned collector and publisher plus deployed scrape and
+service integration.
 
 The alert pack covers feed divergence, primary feed staleness, exposure drift,
 statement generation failure, acknowledgement backlog, and escrow runway below
@@ -491,14 +501,20 @@ Required before rollout:
   private-key-free external signer/publisher interfaces, and payload-free
   health/alert metrics. Automatic hedge execution is unconditionally disabled
   in the worker.
+- Done locally in source: the Rust client and standard `iroha_cli` expose the
+  seven authenticated billing/reconciliation/exposure/intent routes. They
+  enforce canonical lowercase identifiers, bounded pages and acknowledgement
+  proofs, redact authentication material, use direct identity-bound proof-file
+  reads on Unix and Windows, and create statement outputs without following or
+  replacing existing paths. Focused client/CLI request, validation, filesystem,
+  and exact-byte tests are green.
 - Remaining: run focused Rust verification; deploy the live feed collector and
   genuine finalized-query, journal-verifier, HSM/KMS signer, immutable
   publisher, acknowledgement-authority, sealed-witness, and any manually
-  governed venue adapters; deploy and exercise the shipped authenticated
-  exposure/billing/statement API and add runtime CLI helpers; validate
-  production scrapes and alert routing; release native bridge artifacts;
-  complete governance approval; and capture at least two successful staged
-  billing cycles whose evidence passes the SFM-5 gate.
+  governed venue adapters; deploy and exercise the shipped authenticated API
+  and CLI; validate production scrapes and alert routing; release native bridge
+  artifacts; complete governance approval; and capture at least two successful
+  staged billing cycles whose evidence passes the SFM-5 gate.
 
 The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
 The shared runner plan guard also rejects non-canonical nested required-kind,

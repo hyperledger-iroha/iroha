@@ -248,10 +248,123 @@ class ContractCall:
         object.__setattr__(self, "arguments", arguments)
 
 
-TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
+def _native_instruction_builder(name: str) -> Any:
+    """Return one required native instruction builder without compatibility fallback."""
+
+    builder = getattr(_crypto.Instruction, name, None)
+    if builder is None:
+        raise RuntimeError(
+            f"iroha_python._crypto is missing Instruction.{name}(); "
+            "rebuild the extension"
+        )
+    return builder
+
+
+def _native_issue_replication_order(
+    order_id: str,
+    order_payload: str,
+    issued_epoch: int,
+    deadline_epoch: int,
+) -> Any:
+    return _native_instruction_builder("issue_replication_order")(
+        order_id,
+        order_payload,
+        issued_epoch,
+        deadline_epoch,
+    )
+
+
+def _native_complete_replication_order(
+    order_id: str,
+    provider_id: str,
+    completion_epoch: int,
+    expected_authority: Mapping[str, Any],
+    expected_assignment_revision: int,
+    finalized_anchor: Mapping[str, Any],
+) -> Any:
+    return _native_instruction_builder("complete_replication_order")(
+        order_id,
+        provider_id,
+        completion_epoch,
+        dict(expected_authority),
+        expected_assignment_revision,
+        dict(finalized_anchor),
+    )
+
+
+def _native_expire_replication_order(
+    order_id: str,
+    expiration_epoch: int,
+) -> Any:
+    return _native_instruction_builder("expire_replication_order")(
+        order_id,
+        expiration_epoch,
+    )
+
 
 if TYPE_CHECKING:
-    Instruction: TypeAlias = Any
+    from .sorafs_replication import (
+        ProviderIngestCompletionAuthorityV1,
+        ProviderIngestFinalizedAnchorV1,
+    )
+
+    TransactionExecutableEntry: TypeAlias = Any
+
+    class _InstructionTypingMeta(type):
+        """Expose dynamically forwarded native builders to static analyzers."""
+
+        def __getattr__(cls, name: str) -> Any: ...
+
+    class Instruction(Any, metaclass=_InstructionTypingMeta):
+        """Typed surface of the dynamically forwarded native instruction value."""
+
+        @classmethod
+        def from_json(cls, payload: str) -> Instruction: ...
+
+        @staticmethod
+        def cancel_asset_lock(
+            escrow_id: str,
+            expected_remaining_amount: str,
+        ) -> Instruction:
+            """Build the exact two-argument V1 cancellation instruction."""
+
+            ...
+
+        @staticmethod
+        def issue_replication_order(
+            order_id: str,
+            order_payload: str,
+            issued_epoch: int,
+            deadline_epoch: int,
+        ) -> Instruction:
+            """Build one canonical replication-order issue instruction."""
+
+            ...
+
+        @staticmethod
+        def complete_replication_order(
+            order_id: str,
+            provider_id: str,
+            completion_epoch: int,
+            expected_authority: ProviderIngestCompletionAuthorityV1,
+            expected_assignment_revision: int,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1,
+        ) -> Instruction:
+            """Build the exact six-field provider completion instruction."""
+
+            ...
+
+        @staticmethod
+        def expire_replication_order(
+            order_id: str,
+            expiration_epoch: int,
+        ) -> Instruction:
+            """Build one canonical replication-order expiration instruction."""
+
+            ...
+
+        def to_json(self) -> str: ...
+
     PrivacyBootleLanternPresentationActionBuildResultV1: TypeAlias = Any
     PrivacyJindoActionBuildResultV1: TypeAlias = Any
     PrivacyVeRangeActionBuildResultV1: TypeAlias = Any
@@ -263,6 +376,7 @@ if TYPE_CHECKING:
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
+    TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
     _NativeInstruction = _crypto.Instruction
 
     def _require_cancel_asset_lock_id(value: Any) -> str:
@@ -334,8 +448,11 @@ else:
             order_id: str,
             provider_id: str,
             completion_epoch: int,
+            expected_authority: ProviderIngestCompletionAuthorityV1,
+            expected_assignment_revision: int,
+            finalized_anchor: ProviderIngestFinalizedAnchorV1,
         ) -> Any:
-            """Build the provider-specific completion instruction."""
+            """Build the exact six-field provider completion instruction."""
 
             from .sorafs_replication import build_complete_replication_order_instruction
 
@@ -343,6 +460,9 @@ else:
                 order_id,
                 provider_id,
                 completion_epoch,
+                expected_authority,
+                expected_assignment_revision,
+                finalized_anchor,
             )
 
         @staticmethod

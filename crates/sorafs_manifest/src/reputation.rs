@@ -41,6 +41,8 @@ pub const DEFAULT_CURRENT_SCORE_WEIGHT_BPS: u16 = 7_000;
 pub const DEFAULT_EIGENTRUST_ALPHA_BPS: u16 = 8_500;
 /// Maximum Merkle proof length accepted by the verifier.
 pub const MAX_REPUTATION_MERKLE_PROOF_LEN: usize = 64;
+/// Maximum degradation flags accepted on one provider reputation record.
+pub const MAX_REPUTATION_DEGRADATION_FLAGS: usize = 5;
 /// Maximum provider records accepted in one reputation snapshot.
 ///
 /// The bound applies before any provider-sized allocation. It also keeps leaf
@@ -359,6 +361,13 @@ impl ProviderReputationV1 {
                 score_bps: self.score_bps,
             });
         }
+        if self.degradation_flags.len() > MAX_REPUTATION_DEGRADATION_FLAGS {
+            return Err(ReputationValidationError::TooManyDegradationFlags {
+                provider_id: self.provider_id.clone(),
+                count: self.degradation_flags.len(),
+                max: MAX_REPUTATION_DEGRADATION_FLAGS,
+            });
+        }
         self.raw_metrics.validate()?;
         if self.raw_metrics_hash != hash_norito(&self.raw_metrics)? {
             return Err(ReputationValidationError::RawMetricsHashMismatch {
@@ -454,7 +463,7 @@ pub struct ReputationSnapshotV1 {
     pub providers: Vec<ProviderReputationV1>,
     /// Merkle root over provider entries.
     pub merkle_root: [u8; 32],
-    /// Optional previous snapshot identifier.
+    /// Optional previous snapshot identifier, which must be nonzero when present.
     #[norito(default)]
     pub previous_snapshot_id: Option<[u8; 16]>,
 }
@@ -497,6 +506,12 @@ impl ReputationSnapshotV1 {
         }
         if self.generated_at_unix == 0 {
             return Err(ReputationValidationError::InvalidGeneratedAt);
+        }
+        if self
+            .previous_snapshot_id
+            .is_some_and(|snapshot_id| snapshot_id.iter().all(|&byte| byte == 0))
+        {
+            return Err(ReputationValidationError::InvalidPreviousSnapshotId);
         }
         if self.previous_snapshot_id == Some(self.snapshot_id) {
             return Err(ReputationValidationError::SelfReferentialSnapshot);
@@ -575,7 +590,7 @@ pub struct ReputationSnapshotEventV1 {
     pub merkle_root: [u8; 32],
     /// Number of provider entries in the snapshot.
     pub provider_count: u32,
-    /// Optional previous snapshot identifier.
+    /// Optional previous snapshot identifier, which must be nonzero when present.
     #[norito(default)]
     pub previous_snapshot_id: Option<[u8; 16]>,
 }
@@ -632,6 +647,12 @@ impl ReputationSnapshotEventV1 {
                 count: usize::try_from(self.provider_count).unwrap_or(usize::MAX),
                 max: MAX_REPUTATION_PROVIDERS,
             });
+        }
+        if self
+            .previous_snapshot_id
+            .is_some_and(|snapshot_id| snapshot_id.iter().all(|&byte| byte == 0))
+        {
+            return Err(ReputationValidationError::InvalidPreviousSnapshotId);
         }
         if self.previous_snapshot_id == Some(self.snapshot_id) {
             return Err(ReputationValidationError::SelfReferentialSnapshot);
@@ -1302,7 +1323,7 @@ fn ensure_sorted_unique_flags(
 }
 
 fn validate_provider_id(provider_id: &str) -> Result<(), ReputationValidationError> {
-    if provider_id.trim().is_empty() {
+    if provider_id.trim().is_empty() || matches!(provider_id, "." | "..") {
         return Err(ReputationValidationError::InvalidProviderId);
     }
     if provider_id.len() > 256 {
@@ -1520,9 +1541,22 @@ pub enum ReputationValidationError {
         /// Provider identifier.
         provider_id: String,
     },
+    /// A provider record carries more degradation flags than V1 permits.
+    #[error("reputation flag count {count} for provider `{provider_id}` exceeds maximum {max}")]
+    TooManyDegradationFlags {
+        /// Provider identifier.
+        provider_id: String,
+        /// Observed degradation-flag count.
+        count: usize,
+        /// Maximum degradation-flag count.
+        max: usize,
+    },
     /// Snapshot identifier is all zeros.
     #[error("reputation snapshot id must not be all zeros")]
     InvalidSnapshotId,
+    /// A present previous snapshot identifier is all zeros.
+    #[error("reputation previous snapshot id must not be all zeros")]
+    InvalidPreviousSnapshotId,
     /// Snapshot generation timestamp is zero.
     #[error("reputation snapshot generated_at_unix must not be zero")]
     InvalidGeneratedAt,
@@ -1706,6 +1740,49 @@ mod tests {
     }
 
     #[test]
+    fn provider_validation_rejects_too_many_flags_before_hash_and_order_checks() {
+        let mut provider =
+            score_provider_reputation(&input("provider-a"), &ReputationWeightsV1::default())
+                .expect("valid provider reputation");
+        provider.raw_metrics_hash = [0; 32];
+        provider.degradation_flags = vec![
+            ReputationDegradationFlagV1::LowScore,
+            ReputationDegradationFlagV1::SlashingEvent,
+            ReputationDegradationFlagV1::ActiveDispute,
+            ReputationDegradationFlagV1::ProofSuccessBelow80,
+            ReputationDegradationFlagV1::ReserveDefault,
+            ReputationDegradationFlagV1::ReserveWarning,
+        ];
+
+        assert_eq!(
+            provider.validate(),
+            Err(ReputationValidationError::TooManyDegradationFlags {
+                provider_id: "provider-a".to_owned(),
+                count: 6,
+                max: MAX_REPUTATION_DEGRADATION_FLAGS,
+            })
+        );
+    }
+
+    #[test]
+    fn provider_identifiers_reject_whole_url_dot_segments() {
+        for provider_id in ["", ".", "..", " provider-a", "provider/a", "provider-a "] {
+            assert_eq!(
+                validate_provider_id(provider_id),
+                Err(ReputationValidationError::InvalidProviderId),
+                "{provider_id:?} must not be a canonical provider identifier"
+            );
+        }
+
+        validate_provider_id("provider..a").expect("embedded dots remain canonical");
+        validate_provider_id(&"p".repeat(256)).expect("maximum-length provider id");
+        assert_eq!(
+            validate_provider_id(&"p".repeat(257)),
+            Err(ReputationValidationError::ProviderIdTooLong { len: 257 })
+        );
+    }
+
+    #[test]
     fn scoring_smooths_against_previous_score_and_bounds_result() {
         let mut input = input("provider-a");
         input.metrics.dispute_rate_bps = 10_000;
@@ -1774,6 +1851,62 @@ mod tests {
         assert_eq!(event.provider_count, snapshot.providers.len() as u32);
         assert_eq!(event.previous_snapshot_id, snapshot.previous_snapshot_id);
         event.validate().expect("valid event");
+    }
+
+    #[test]
+    fn snapshot_previous_id_is_absent_for_genesis_and_nonzero_for_successors() {
+        let genesis = build_reputation_snapshot(
+            [0xAD; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input("provider-a")],
+            None,
+        )
+        .expect("genesis snapshot");
+        assert_eq!(genesis.previous_snapshot_id, None);
+        genesis.validate().expect("valid genesis snapshot");
+
+        let predecessor_id = genesis.snapshot_id;
+        let successor = build_reputation_snapshot(
+            [0xAE; 16],
+            1_800_000_001,
+            ReputationWeightsV1::default(),
+            &[input("provider-a")],
+            Some(predecessor_id),
+        )
+        .expect("successor snapshot");
+        assert_eq!(successor.previous_snapshot_id, Some(predecessor_id));
+        successor.validate().expect("valid successor snapshot");
+    }
+
+    #[test]
+    fn snapshot_and_event_reject_zero_previous_id() {
+        assert_eq!(
+            build_reputation_snapshot(
+                [0xAF; 16],
+                1_800_000_000,
+                ReputationWeightsV1::default(),
+                &[input("provider-a")],
+                Some([0; 16]),
+            ),
+            Err(ReputationValidationError::InvalidPreviousSnapshotId)
+        );
+
+        let snapshot = build_reputation_snapshot(
+            [0xB0; 16],
+            1_800_000_000,
+            ReputationWeightsV1::default(),
+            &[input("provider-a")],
+            None,
+        )
+        .expect("snapshot");
+        let mut event =
+            ReputationSnapshotEventV1::from_snapshot(1, &snapshot).expect("snapshot event");
+        event.previous_snapshot_id = Some([0; 16]);
+        assert_eq!(
+            event.validate(),
+            Err(ReputationValidationError::InvalidPreviousSnapshotId)
+        );
     }
 
     #[test]

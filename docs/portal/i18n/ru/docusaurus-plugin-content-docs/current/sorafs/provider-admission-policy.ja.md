@@ -4,7 +4,7 @@ direction: ltr
 source: docs/portal/i18n/ru/docusaurus-plugin-content-docs/current/sorafs/provider-admission-policy.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: cd7500eb355c1f995c23ed8df679572d045483880e2336e078ef655dacb007f6
+source_hash: f97ab1dc5de8262710ef20859b1b356276c3b5114914d435a92349f55ae3f76d
 source_last_modified: "2026-01-03T18:08:02+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -49,7 +49,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## Процесс допуска
 
 1. **Создание предложения**
-   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
+   - CLI: добавить `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      формирующий `ProviderAdmissionProposalV1` + бандл аттестации.
    - Валидация: убедиться в наличии обязательных полей, stake > 0, канонического chunker handle в `profile_id`.
 2. **Одобрение governance**
@@ -78,7 +78,7 @@ CLI поток теперь принимает промежуточные бан
 
 ### Справочник CLI
 
-Запускайте каждую команду через `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+Запускайте каждую команду через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - Обязательные флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -126,7 +126,7 @@ CLI поток теперь принимает промежуточные бан
    увеличив `--retention-epoch` и обновив stake/эндпоинты по необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -147,7 +147,7 @@ CLI поток теперь принимает промежуточные бан
 #### Аварийный отзыв
 1. Определите компрометированный envelope и выпустите отзыв:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

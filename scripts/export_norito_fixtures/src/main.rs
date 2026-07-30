@@ -21,8 +21,8 @@ use iroha_data_model::{
     prelude::*,
     transaction::signed::{TransactionPayload, TransactionSignature},
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, TransactionBuilder,
-        executable::ContractInvocation,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, SignedTransaction,
+        TransactionBuilder, executable::ContractInvocation,
     },
 };
 
@@ -197,7 +197,6 @@ struct WireInstructionPayload {
 
 #[derive(Debug)]
 struct SignedEnvelopeFields {
-    attachments_field: Vec<u8>,
     multisig_field: Vec<u8>,
 }
 
@@ -299,7 +298,7 @@ impl RawFixture {
             .with_context(|| format!("failed to re-encode signed fixture '{}'", self.name))?;
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = format!("{}", Hash::new(&encoded));
-        let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes);
+        let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
         if let Some(hash_hint) = &self.payload_hash_hint
             && hash_hint != &payload_hash_hex
         {
@@ -356,18 +355,17 @@ impl RawFixture {
     }
 }
 
-fn signed_transaction_entrypoint_hash_hex(canonical_bare_signed_transaction: &[u8]) -> String {
-    let mut entrypoint = Vec::with_capacity(
-        4 + norito::core::len_prefix_len(canonical_bare_signed_transaction.len())
-            + canonical_bare_signed_transaction.len(),
-    );
-    entrypoint.extend_from_slice(&0_u32.to_le_bytes());
-    norito::core::write_len_to_vec(
-        &mut entrypoint,
-        canonical_bare_signed_transaction.len() as u64,
-    );
-    entrypoint.extend_from_slice(canonical_bare_signed_transaction);
-    Hash::new(entrypoint).to_string()
+fn signed_transaction_entrypoint_hash_hex(
+    canonical_bare_signed_transaction: &[u8],
+) -> Result<String> {
+    let (signed, used) = SignedTransaction::decode_from_slice(canonical_bare_signed_transaction)
+        .map_err(|err| anyhow::anyhow!("invalid canonical SignedTransaction bytes: {err}"))?;
+    if used != canonical_bare_signed_transaction.len()
+        || signed.encode() != canonical_bare_signed_transaction
+    {
+        bail!("SignedTransaction bytes are not exact canonical bare encoding");
+    }
+    Ok(signed.hash_as_entrypoint().to_string())
 }
 
 fn decode_signed_envelope_fields(bytes: &[u8]) -> Result<SignedEnvelopeFields> {
@@ -375,15 +373,11 @@ fn decode_signed_envelope_fields(bytes: &[u8]) -> Result<SignedEnvelopeFields> {
     let mut cursor = 0usize;
     let _signature_field = read_len_prefixed_field(bytes, &mut cursor, "signature")?;
     let _payload_field = read_len_prefixed_field(bytes, &mut cursor, "payload")?;
-    let attachments_field = read_len_prefixed_field(bytes, &mut cursor, "attachments")?;
     let multisig_field = read_len_prefixed_field(bytes, &mut cursor, "multisig_signatures")?;
     if cursor != bytes.len() {
         bail!("signed transaction payload has trailing bytes");
     }
-    Ok(SignedEnvelopeFields {
-        attachments_field,
-        multisig_field,
-    })
+    Ok(SignedEnvelopeFields { multisig_field })
 }
 
 fn read_len_prefixed_field(bytes: &[u8], cursor: &mut usize, field: &str) -> Result<Vec<u8>> {
@@ -408,7 +402,6 @@ fn read_len_prefixed_field(bytes: &[u8], cursor: &mut usize, field: &str) -> Res
 fn encode_signed_envelope(
     signature_bytes: &[u8],
     payload_bytes: &[u8],
-    attachments_field: Option<&[u8]>,
     multisig_field: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
     let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -416,15 +409,12 @@ fn encode_signed_envelope(
         .context("failed to admit fixture signature bytes")?;
     let signature_of = SignatureOf::<TransactionPayload>::from_signature(signature);
     let signature_field = TransactionSignature(signature_of).encode();
-    let attachments_field = attachments_field.map(Vec::from).unwrap_or_else(|| vec![0]);
     let multisig_field = multisig_field.map(Vec::from).unwrap_or_else(|| vec![0]);
     let mut out = Vec::new();
     norito::core::write_len_to_vec(&mut out, signature_field.len() as u64);
     out.extend_from_slice(&signature_field);
     norito::core::write_len_to_vec(&mut out, payload_bytes.len() as u64);
     out.extend_from_slice(payload_bytes);
-    norito::core::write_len_to_vec(&mut out, attachments_field.len() as u64);
-    out.extend_from_slice(&attachments_field);
     norito::core::write_len_to_vec(&mut out, multisig_field.len() as u64);
     out.extend_from_slice(&multisig_field);
     Ok(out)
@@ -442,7 +432,6 @@ fn reencode_signed_with_payload(
     encode_signed_envelope(
         signature.payload(),
         payload_bytes,
-        Some(&fields.attachments_field),
         Some(&fields.multisig_field),
     )
 }
@@ -1256,18 +1245,28 @@ mod tests {
 
     #[test]
     fn signed_hash_uses_compact_external_entrypoint_domain() {
-        let signed = vec![0x5a; 128];
+        let keypair = signing_keypair().expect("fixture signing key");
+        let signed = TransactionBuilder::new(
+            ChainId::from("fixture-hash-domain"),
+            AccountId::new(keypair.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .try_sign(keypair.private_key())
+        .expect("sign fixture transaction");
+        let signed_bytes = signed.encode();
+        let payload_bytes = signed.payload().encode();
         let mut entrypoint = 0_u32.to_le_bytes().to_vec();
-        norito::core::write_len_to_vec(&mut entrypoint, signed.len() as u64);
-        entrypoint.extend_from_slice(&signed);
-        assert_eq!(&entrypoint[..6], &[0, 0, 0, 0, 0x80, 0x01]);
+        norito::core::write_len_to_vec(&mut entrypoint, payload_bytes.len() as u64);
+        entrypoint.extend_from_slice(&payload_bytes);
         assert_eq!(
-            signed_transaction_entrypoint_hash_hex(&signed),
+            signed_transaction_entrypoint_hash_hex(&signed_bytes)
+                .expect("hash canonical signed transaction"),
             Hash::new(&entrypoint).to_string()
         );
         assert_ne!(
-            signed_transaction_entrypoint_hash_hex(&signed),
-            Hash::new(&signed).to_string()
+            signed_transaction_entrypoint_hash_hex(&signed_bytes)
+                .expect("hash canonical signed transaction"),
+            Hash::new(&signed_bytes).to_string()
         );
     }
 
@@ -1430,15 +1429,11 @@ mod tests {
         let payload_field =
             read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "payload")
                 .expect("payload field");
-        let attachments_field =
-            read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "attachments")
-                .expect("attachments field");
         let multisig_field =
             read_len_prefixed_field(&generated.signed_bytes, &mut cursor, "multisig_signatures")
                 .expect("multisig field");
         assert_eq!(cursor, generated.signed_bytes.len());
         assert_eq!(payload_field, generated.encoded);
-        assert_eq!(attachments_field, vec![0]);
         assert_eq!(multisig_field, vec![0]);
 
         let mut signature_cursor = signature_field.as_slice();
@@ -1453,6 +1448,10 @@ mod tests {
         assert!(
             payload_cursor.is_empty(),
             "payload field must not contain trailing bytes"
+        );
+        assert!(
+            payload.attachments.is_none(),
+            "fixture payload must encode an empty attachments option"
         );
         signature
             .0
@@ -1493,7 +1492,7 @@ mod tests {
 
     #[test]
     fn decode_signed_envelope_fields_rejects_trailing_bytes() {
-        let mut envelope = encode_signed_envelope(&[7; 64], &[1, 2, 3], None, None)
+        let mut envelope = encode_signed_envelope(&[7; 64], &[1, 2, 3], None)
             .expect("nonzero signature fixture envelope");
         envelope.push(0);
 
@@ -1507,7 +1506,7 @@ mod tests {
 
     #[test]
     fn encode_signed_envelope_rejects_all_zero_signature_material() {
-        let err = encode_signed_envelope(&[0u8; 64], &[1, 2, 3], None, None)
+        let err = encode_signed_envelope(&[0u8; 64], &[1, 2, 3], None)
             .expect_err("all-zero fixture signature must be rejected");
         assert!(
             err.to_string()

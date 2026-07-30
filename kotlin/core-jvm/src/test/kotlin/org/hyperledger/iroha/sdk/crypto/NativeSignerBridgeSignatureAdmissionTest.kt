@@ -3,12 +3,14 @@ package org.hyperledger.iroha.sdk.crypto
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-import org.junit.jupiter.api.Assumptions.assumeTrue
 
 class NativeSignerBridgeSignatureAdmissionTest {
     @Test
     fun mldsaVerifyRejectsMalformedSignatureMaterial() {
-        assumeTrue(NativeSignerBridge.isNativeAvailable(), "connect_norito_bridge not available")
+        assertTrue(
+            NativeSignerBridge.isNativeAvailable(),
+            "connect_norito_bridge ABI 21 is required",
+        )
 
         val seed = ByteArray(32) { 0x44.toByte() }
         val (privateKey, publicKey) =

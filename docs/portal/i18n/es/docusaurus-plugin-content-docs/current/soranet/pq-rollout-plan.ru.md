@@ -94,11 +94,11 @@ El asistente `cargo xtask` automatiza la generación de captura y captura de art
 
 ## Matriz de etiquetas SDK y CLI| Superficie | Canarias (Etapa A) | Rampa (Etapa B) | Incumplimiento (Etapa C) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` buscar | `--anonymity-policy stage-a` или опираться на fase | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` buscar | `--anonymity-policy anon-guard-pq` или опираться на fase | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Configuración del orquestador JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Configuración del cliente Rust (`iroha.toml`) | `rollout_phase = "canary"` (predeterminado) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| Comandos firmados `iroha_cli` | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, opcional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, opcional `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, opcional `.ANON_STRICT_PQ` |
+| Comandos firmados `iroha_cli` | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, opcional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, opcional `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, opcional `.ANON_STRICT_PQ` |
 | Ayudantes del orquestador de JavaScript | `rolloutPhase: "canary"` o `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Pitón `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Rápido `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -119,7 +119,7 @@ Este SDK alterna la configuración entre el analizador de escenario, el analizad
 
 3. **Cliente/SDK canario (T más 1 semana)**
 
-   - Cambie `rollout_phase = "ramp"` a las configuraciones del cliente o anule `stage-b` de cohortes de SDK recientes.
+   - Cambie `rollout_phase = "ramp"` a las configuraciones del cliente o anule `anon-majority-pq` de cohortes de SDK recientes.
    - Consulte las diferencias de telemetría (`sorafs_orchestrator_policy_events_total`, agrupadas en `client_id` e `region`) y utilice el registro de incidentes de implementación.
 
 4. **Promoción predeterminada (T más 3 semanas)**
@@ -149,7 +149,7 @@ Para las alertas, las reglas de diseño incluyen la etiqueta `stage`, las fases 
 ### Rampa -> Canarias (Etapa B -> Etapa A)
 
 1. Importe la instantánea del directorio de protección, la descarga previa a la promoción, la descarga de `sorafs_cli guard-directory import --guard-directory guards.json` y la descarga posterior de `sorafs_cli guard-directory verify`, el paquete de degradación incluido. hash.
-2. Instale `rollout_phase = "canary"` (o anule `anonymity_policy stage-a`) en las configuraciones de Orchestrator y Client, coloque el taladro de trinquete PQ en [Runbook de trinquete PQ] (./pq-ratchet-runbook.md), haga clic en доказать tubería de degradación.
+2. Instale `rollout_phase = "canary"` (o anule `anonymity_policy anon-guard-pq`) en las configuraciones de Orchestrator y Client, coloque el taladro de trinquete PQ en [Runbook de trinquete PQ] (./pq-ratchet-runbook.md), haga clic en доказать tubería de degradación.
 3. Utilice capturas de pantalla de telemetría PQ Ratchet y SN16 adicionales y resultados de alerta en el registro de incidentes antes de la gobernanza.
 
 ### Recordatorios de barandillas

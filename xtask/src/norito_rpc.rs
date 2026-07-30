@@ -620,7 +620,7 @@ impl RawPayloadFixture {
         let signed_bytes = signed.encode();
         let signed_base64 = BASE64.encode(&signed_bytes);
         let payload_hash_hex = blake2b256_hex(&payload_bytes);
-        let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes);
+        let signed_hash_hex = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
 
         Ok(Fixture {
             name: self.name.clone(),
@@ -1433,7 +1433,7 @@ impl FixtureEntry {
                 signed_bytes.len()
             );
         }
-        let signed_hash = signed_transaction_entrypoint_hash_hex(&signed_bytes);
+        let signed_hash = signed_transaction_entrypoint_hash_hex(&signed_bytes)?;
         if signed_hash != self.signed_hash {
             bail!(
                 "fixture '{}' signed hash mismatch (manifest={}, computed={})",
@@ -1471,18 +1471,17 @@ fn blake2b256_hex(bytes: &[u8]) -> String {
     hex_encode(out)
 }
 
-fn signed_transaction_entrypoint_hash_hex(canonical_bare_signed_transaction: &[u8]) -> String {
-    let mut entrypoint = Vec::with_capacity(
-        4 + norito::core::len_prefix_len(canonical_bare_signed_transaction.len())
-            + canonical_bare_signed_transaction.len(),
-    );
-    entrypoint.extend_from_slice(&0_u32.to_le_bytes());
-    norito::core::write_len_to_vec(
-        &mut entrypoint,
-        canonical_bare_signed_transaction.len() as u64,
-    );
-    entrypoint.extend_from_slice(canonical_bare_signed_transaction);
-    blake2b256_hex(&entrypoint)
+fn signed_transaction_entrypoint_hash_hex(
+    canonical_bare_signed_transaction: &[u8],
+) -> Result<String> {
+    let (signed, used) = SignedTransaction::decode_from_slice(canonical_bare_signed_transaction)
+        .map_err(|err| eyre!("invalid canonical SignedTransaction bytes: {err}"))?;
+    if used != canonical_bare_signed_transaction.len()
+        || signed.encode() != canonical_bare_signed_transaction
+    {
+        bail!("SignedTransaction bytes are not exact canonical bare encoding");
+    }
+    Ok(hex_encode(signed.hash_as_entrypoint().as_ref()))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1616,18 +1615,28 @@ mod tests {
 
     #[test]
     fn signed_hash_uses_compact_external_entrypoint_domain() {
-        let signed = vec![0x5a; 128];
+        let keypair = signing_keypair().expect("fixture signing key");
+        let signed = TransactionBuilder::new(
+            ChainId::from("fixture-hash-domain"),
+            AccountId::new(keypair.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .try_sign(keypair.private_key())
+        .expect("sign fixture transaction");
+        let signed_bytes = signed.encode();
+        let payload_bytes = signed.payload().encode();
         let mut entrypoint = 0_u32.to_le_bytes().to_vec();
-        norito::core::write_len_to_vec(&mut entrypoint, signed.len() as u64);
-        entrypoint.extend_from_slice(&signed);
-        assert_eq!(&entrypoint[..6], &[0, 0, 0, 0, 0x80, 0x01]);
+        norito::core::write_len_to_vec(&mut entrypoint, payload_bytes.len() as u64);
+        entrypoint.extend_from_slice(&payload_bytes);
         assert_eq!(
-            signed_transaction_entrypoint_hash_hex(&signed),
+            signed_transaction_entrypoint_hash_hex(&signed_bytes)
+                .expect("hash canonical signed transaction"),
             blake2b256_hex(&entrypoint)
         );
         assert_ne!(
-            signed_transaction_entrypoint_hash_hex(&signed),
-            blake2b256_hex(&signed)
+            signed_transaction_entrypoint_hash_hex(&signed_bytes)
+                .expect("hash canonical signed transaction"),
+            blake2b256_hex(&signed_bytes)
         );
     }
 

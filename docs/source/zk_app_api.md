@@ -424,6 +424,6 @@ iroha ledger trigger register \
 For submitting ZK ballots and building transaction skeletons, refer to the Governance App API document. Torii submits the ballot when `private_key` is provided; otherwise it returns a skeleton for clients to sign and submit:
 - POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts `BallotProof` JSON directly (feature `zk-ballot`).
+- POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
 
 See docs/source/governance_api.md for details and examples.

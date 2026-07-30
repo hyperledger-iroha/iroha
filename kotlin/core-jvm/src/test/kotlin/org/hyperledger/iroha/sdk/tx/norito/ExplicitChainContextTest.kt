@@ -304,29 +304,31 @@ class ExplicitChainContextTest {
         }
         assertTrue(register.message.orEmpty().contains("chainDiscriminant"))
 
-        if (NativeSignerBridge.isNativeAvailable()) {
-            val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
-                SigningAlgorithm.ED25519,
-                ByteArray(32) { 0x21.toByte() },
+        assertTrue(
+            NativeSignerBridge.isNativeAvailable(),
+            "connect_norito_bridge ABI 21 is required",
+        )
+        val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
+            SigningAlgorithm.ED25519,
+            ByteArray(32) { 0x21.toByte() },
+        )
+        val tairaAuthority = AccountAddress
+            .fromAccount(publicKey, "ed25519")
+            .toI105(TAIRA)
+        val instruction = RegisterZkAssetInstruction.builder()
+            .setAsset(SBD_ASSET_DEFINITION_ID)
+            .build()
+        assertFailsWith<IllegalArgumentException> {
+            NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
+                algorithm = SigningAlgorithm.ED25519,
+                chainId = "00000042",
+                chainDiscriminant = OTHER,
+                authority = tairaAuthority,
+                creationTimeMs = 1_736_000_000_000,
+                instruction = instruction,
+                privateKey = privateKey,
+                feePayment = feePayment,
             )
-            val tairaAuthority = AccountAddress
-                .fromAccount(publicKey, "ed25519")
-                .toI105(TAIRA)
-            val instruction = RegisterZkAssetInstruction.builder()
-                .setAsset(SBD_ASSET_DEFINITION_ID)
-                .build()
-            assertFailsWith<IllegalArgumentException> {
-                NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-                    algorithm = SigningAlgorithm.ED25519,
-                    chainId = "00000042",
-                    chainDiscriminant = OTHER,
-                    authority = tairaAuthority,
-                    creationTimeMs = 1_736_000_000_000,
-                    instruction = instruction,
-                    privateKey = privateKey,
-                    feePayment = feePayment,
-                )
-            }
         }
     }
 
@@ -342,7 +344,7 @@ class ExplicitChainContextTest {
         SignedTransaction(payload, ByteArray(64) { 0x55.toByte() }, ByteArray(0), schemaName)
 
     private fun swapMetadataEntries(canonicalPayload: ByteArray): ByteArray {
-        val fields = decodeSizedFields(canonicalPayload, 8)
+        val fields = decodeSizedFields(canonicalPayload, 9)
         val metadata = NoritoDecoder(fields[7], NoritoCodec.DEFAULT_FLAGS)
         assertEquals(2L, metadata.readLength(false))
         val first = readSizedField(metadata)
@@ -362,7 +364,7 @@ class ExplicitChainContextTest {
         fieldIndex: Int,
         replacement: ByteArray,
     ): ByteArray {
-        val fields = decodeSizedFields(encoded, 4)
+        val fields = decodeSizedFields(encoded, 3)
         fields[fieldIndex] = replacement.copyOf()
         return encodeSizedFields(fields)
     }

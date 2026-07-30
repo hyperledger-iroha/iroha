@@ -30,13 +30,21 @@ wallet, proof generation, and verification. Every route has a strict
 unknown-field-denying request, a route-specific body ceiling, bounded canonical
 Norito decoding, action/request-bound authentication, payload-free errors, and
 no-store responses. `iroha_config` is the sole source of non-secret policy and
-resource bounds. HSM, KMS, authentication, private issuance/witness, ledger,
-and finalized-time providers are runtime-only dependencies.
+resource bounds, including the independently configured provider-registry
+handle, exact non-zero registry revision and policy digest, issuer HSM public
+identity, enrollment recipient handle, and wallet wrapping-key handle. The
+Torii runtime accepts only a deployment-owned
+`PopCredentialRuntimeProviderRegistryV1`: it qualifies that registry before
+opening issuer or wallet state, resolves one coherent runtime-only provider
+set, and rejects missing, substituted, stale/revoked, test-marked, or drifting
+registries. Qualified HSM, KMS, authentication, private issuance/witness,
+ledger, and finalized-time wrappers recheck the pinned registry before and
+after provider operations and discard provider results on qualification drift.
 
 The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard
-`irohad` entrypoint does not yet construct and inject the governed production
-provider bundle, and the repository has no deployable shared external-runtime
-or sidecar adapter for those providers. Enabling
+`irohad` entrypoint does not yet construct and inject a concrete governed
+production provider registry, and the repository has no deployable shared
+external-runtime or sidecar adapter implementing that registry. Enabling
 `sorafs.storage.pop_credentials` without that injected runtime fails
 startup; no file-key, environment-key, software-signing, or process-clock
 fallback is permitted. The native registry remains available through signed
@@ -208,8 +216,10 @@ registry, juror client, or deployed verifier service.
   public transparency state through the existing generic query API. The
   canonical authenticated fourteen-route PoP Torii family now covers
   enrollment, dual-control approval, issuance, registry reconciliation,
-  revocation, wallet custody, proof generation, and verification. Packaging
-  the external runtime/sidecar provider bundle into the standard daemon remains
+  revocation, wallet custody, proof generation, and verification. Its
+  registry-qualified construction path pins independently configured public
+  provider identity and revalidates provider operations. Packaging a concrete
+  external runtime/sidecar provider registry into the standard daemon remains
   deployment work; there is deliberately no local-key or process-authoritative
   fallback.
 - `prove_pop_membership_v1` creates a zero-knowledge Halo2/IPA proof from the
@@ -339,8 +349,9 @@ reference validator is shipped only for local/CI payload validation.
 `V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion. The standard
 daemon builds `ToriiRuntimeDeps` in `crates/irohad/src/main.rs`, but no
 production caller currently supplies
-`PopCredentialRuntimeSecretsV1`. The missing deployable shared
-external-runtime/sidecar adapter must provide:
+`PopCredentialRuntimeProviderRegistryV1`. The runtime no longer accepts a
+caller-assembled secret bundle directly. The missing deployable shared
+external-runtime/sidecar registry implementation must resolve:
 
 - the runtime-only enrollment and wallet hybrid recipient secrets;
 - the governed issuer HSM signer and KMS/PKCS#11 wallet-key wrapper;
@@ -349,12 +360,15 @@ external-runtime/sidecar adapter must provide:
 - private issuance-draft and wallet-witness providers; and
 - the finalized-chain time provider with an independent clock observation.
 
-The adapter must bind every non-secret handle and public key to the exact
-`iroha_config` policy, use the local queue/state or an authenticated equivalent
-for transaction submission and finalized reads, participate in supervised
-startup/shutdown, and expose only stable payload-free failures. Secret bytes,
-PINs, bearer material, credentials, witnesses, attestations, and PII must not
-come from `iroha_config`, environment overrides, repository files, or logs.
+The adapter must expose a stable production handle and a non-zero public
+qualification revision/digest independently pinned by `iroha_config`. It must
+change that qualification whenever any underlying provider identity or policy
+changes, bind every non-secret handle and public key to the exact configured
+policy, use an authenticated committed-state path for transaction submission
+and finalized reads, participate in supervised startup/shutdown, and expose
+only stable payload-free failures. Secret bytes, PINs, bearer material,
+credentials, witnesses, attestations, and PII must not come from
+`iroha_config`, environment overrides, repository files, or logs.
 
 Closure requires a standard-`irohad` or explicitly packaged reference-daemon
 startup test with PoP enabled, provider-unavailable and config/runtime-mismatch

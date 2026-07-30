@@ -14,7 +14,6 @@ workspace = true
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract_utils/debug"]
 trybuild-tests = ["dep:trybuild"]
-packed-struct = []
 
 [dependencies]
 iroha_smart_contract_derive = { path = "../iroha_smart_contract_derive" }

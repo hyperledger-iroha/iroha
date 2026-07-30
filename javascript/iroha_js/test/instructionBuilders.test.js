@@ -55,9 +55,6 @@ import {
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
   buildRegisterAssetHiddenZkPoolInstruction,
-  buildRegisterZkAceIdentityCommitmentInstruction,
-  buildRotateZkAceIdentityCommitmentInstruction,
-  buildRevokeZkAceIdentityCommitmentInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
@@ -65,15 +62,12 @@ import {
   buildZkTransferInstruction,
   buildAssetHiddenZkTransferInstruction,
   buildUnshieldInstruction,
-  buildZkAceAuthorizedTransferInstruction,
-  buildZkAceAuthorizationProofV1,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
   encodeInstruction,
 } from "../src/instructionBuilders.js";
 import { blake2b256 } from "../src/blake2b.js";
-import { buildZkAceTransferAuthorizationV1 } from "../src/crypto.js";
 import { analyzeEntrypointValueTypeV1 } from "../src/entrypointSchema.js";
 import {
   noritoDecodeInstruction,
@@ -88,9 +82,6 @@ import {
 } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
-const zkAceNativeTest = makeNativeTest(baseTest, {
-  require: [...noritoRequiredMethods, "zkAceBuildTransferAuthorizationV1"],
-});
 const descriptorTest = baseTest;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -636,6 +627,16 @@ baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", 
           expectedRemainingAmount: "1",
         }),
       /surrounding whitespace/,
+    );
+  }
+  for (const lockId of ["\ud800", "\udfff", "merchant\ud800lock"]) {
+    assert.throws(
+      () =>
+        buildCancelAssetLockInstruction({
+          lockId,
+          expectedRemainingAmount: "1",
+        }),
+      /unpaired UTF-16 surrogates/u,
     );
   }
   for (const expectedRemainingAmount of [0n, "0", "-1", "01", "1.0", "+1", 1]) {
@@ -3131,427 +3132,6 @@ test("buildRegisterAssetHiddenZkPoolInstruction rejects adversarial pool registr
     assert.throws(
       () => buildRegisterAssetHiddenZkPoolInstruction(payload),
       /registerAssetHiddenZkPool/,
-    );
-  }
-});
-
-test("ZK-ACE builders encode identity lifecycle and authorized transfers", () => {
-  const identityCommitment = Buffer.alloc(32, 0x11);
-  const rotatedCommitment = Buffer.alloc(32, 0x12);
-  const policyHash = Buffer.alloc(32, 0x22);
-  const txDigest = Buffer.alloc(32, 0x33);
-  const replayNullifier = Buffer.alloc(32, 0x44);
-  const vkCommitment = Buffer.alloc(32, 0x55);
-  const verifierKey = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0";
-  const proofBundle = buildZkAceAuthorizationProofV1({
-    publicInputs: {
-      identityCommitment,
-      txDigest,
-      chainId: "00000000-0000-0000-0000-000000000000",
-      replayNullifier,
-      policyHash,
-      fromAccountId: ACCOUNT_ID_INPUT,
-      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      amount: "17",
-      verifierKeyId: verifierKey,
-    },
-    proofBytes: Buffer.from("zk-ace-proof"),
-    verifyingKeyCommitment: vkCommitment,
-  });
-
-  const register = encodeAndDecode(
-    buildRegisterZkAceIdentityCommitmentInstruction({
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      identityCommitment,
-      policyHash,
-      allowedAccounts: [ACCOUNT_ID_INPUT],
-      verifierKey,
-    }),
-  ).zk.RegisterZkAceIdentityCommitment;
-  assert.deepEqual(register.identity_commitment, Array.from(identityCommitment));
-  assert.deepEqual(register.policy_hash, Array.from(policyHash));
-  assert.deepEqual(register.allowed_accounts, [ACCOUNT_ID_INPUT]);
-  assert.equal(register.action_class, "transparent_asset_transfer");
-  assert.equal(register.domain_tag, "iroha:zk-ace:pq-authorization:v0");
-  assert.deepEqual(register.verifier_key, {
-    backend: "stark/fri/sha256-goldilocks",
-    name: "zk_ace_pq_authorization_v0",
-  });
-
-  const rotate = encodeAndDecode(
-    buildRotateZkAceIdentityCommitmentInstruction({
-      asset: ASSET_DEFINITION_ID,
-      oldIdentityCommitment: identityCommitment,
-      newIdentityCommitment: rotatedCommitment,
-      policyHash,
-      allowedAccounts: [ACCOUNT_ID_INPUT],
-      verifierKey,
-    }),
-  ).zk.RotateZkAceIdentityCommitment;
-  assert.deepEqual(rotate.old_identity_commitment, Array.from(identityCommitment));
-  assert.deepEqual(rotate.new_identity_commitment, Array.from(rotatedCommitment));
-  assert.deepEqual(rotate.allowed_accounts, [ACCOUNT_ID_INPUT]);
-
-  const revoke = encodeAndDecode(
-    buildRevokeZkAceIdentityCommitmentInstruction({
-      asset: ASSET_DEFINITION_ID,
-      identityCommitment: rotatedCommitment,
-      reasonHash: Buffer.alloc(32, 0x66),
-    }),
-  ).zk.RevokeZkAceIdentityCommitment;
-  assert.deepEqual(revoke.identity_commitment, Array.from(rotatedCommitment));
-  assert.deepEqual(revoke.reason_hash, Array.from(Buffer.alloc(32, 0x66)));
-
-  const transfer = encodeAndDecode(
-    buildZkAceAuthorizedTransferInstruction({
-      fromAccountId: ACCOUNT_ID_INPUT,
-      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      amount: "17",
-      identityCommitment,
-      txDigest,
-      chainId: "00000000-0000-0000-0000-000000000000",
-      replayNullifier,
-      policyHash,
-      authorizationProof: proofBundle,
-    }),
-  ).zk.SubmitZkAceAuthorizedTransfer;
-  assert.equal(transfer.amount, "17");
-  assert.deepEqual(transfer.identity_commitment, Array.from(identityCommitment));
-  assert.deepEqual(transfer.tx_digest, Array.from(txDigest));
-  assert.deepEqual(transfer.replay_nullifier, Array.from(replayNullifier));
-  assert.equal(transfer.proof.backend, "stark/fri/sha256-goldilocks");
-  assert.equal(transfer.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
-  assert.deepEqual(transfer.proof.vk_commitment, Array.from(vkCommitment));
-});
-
-test("ZK-ACE verifier-key references reject padded selector metadata", () => {
-  const base = {
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    identityCommitment: Buffer.alloc(32, 0x11),
-    policyHash: Buffer.alloc(32, 0x22),
-    allowedAccounts: [ACCOUNT_ID_INPUT],
-  };
-
-  for (const verifierKey of [
-    " stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-    "stark/fri/sha256-goldilocks :zk_ace_pq_authorization_v0",
-    "stark/fri/sha256-goldilocks: zk_ace_pq_authorization_v0",
-    "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0 ",
-  ]) {
-    assert.throws(
-      () => buildRegisterZkAceIdentityCommitmentInstruction({ ...base, verifierKey }),
-      /registerZkAceIdentityCommitment\.verifierKey must be in clean 'backend:name' format/,
-    );
-  }
-
-  for (const [verifierKey, pattern] of [
-    [
-      { backend: " stark/fri/sha256-goldilocks", name: "zk_ace_pq_authorization_v0" },
-      /registerZkAceIdentityCommitment\.verifierKey\.backend must not contain surrounding whitespace/,
-    ],
-    [
-      { backend: "stark/fri/sha256-goldilocks", name: "zk_ace_pq_authorization_v0 " },
-      /registerZkAceIdentityCommitment\.verifierKey\.name must not contain surrounding whitespace/,
-    ],
-  ]) {
-    assert.throws(
-      () => buildRegisterZkAceIdentityCommitmentInstruction({ ...base, verifierKey }),
-      pattern,
-    );
-  }
-});
-
-zkAceNativeTest("ZK-ACE native transfer authorization feeds authorized transfer builder", () => {
-  const authorization = buildZkAceTransferAuthorizationV1({
-    fromAccountId: ACCOUNT_ID_INPUT,
-    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    amount: "17",
-    chainId: "taira",
-    identityRoot: Buffer.alloc(32, 0x31),
-    identityBlinding: Buffer.alloc(32, 0x32),
-    replaySecret: Buffer.alloc(32, 0x33),
-    policyHash: Buffer.alloc(32, 0x34),
-  });
-
-  assert.equal(
-    authorization.verifierKeyId,
-    "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
-  );
-  assert.ok(authorization.authorizationProofBytes > 0);
-  assert.ok(authorization.authorizationPublicInputBytes > 0);
-  assert.equal(authorization.replayNullifierBytes, 32);
-  assert.equal(authorization.proof.backend, "stark/fri/sha256-goldilocks");
-  assert.equal(authorization.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
-  assert.equal(authorization.public_inputs.chain_id, "taira");
-  assert.deepEqual(
-    authorization.public_inputs.identity_commitment,
-    Array.from(Buffer.from(authorization.identityCommitment, "hex")),
-  );
-  assert.deepEqual(
-    authorization.public_inputs.replay_nullifier,
-    Array.from(Buffer.from(authorization.replayNullifier, "hex")),
-  );
-
-  const transfer = encodeAndDecode(
-    buildZkAceAuthorizedTransferInstruction({
-      fromAccountId: ACCOUNT_ID_INPUT,
-      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      amount: "17",
-      identityCommitment: authorization.identityCommitment,
-      txDigest: authorization.txDigest,
-      chainId: "taira",
-      replayNullifier: authorization.replayNullifier,
-      policyHash: authorization.policyHash,
-      proof: authorization.proof,
-    }),
-  ).zk.SubmitZkAceAuthorizedTransfer;
-
-  assert.equal(transfer.amount, "17");
-  assert.deepEqual(
-    transfer.identity_commitment,
-    Array.from(Buffer.from(authorization.identityCommitment, "hex")),
-  );
-  assert.deepEqual(
-    transfer.tx_digest,
-    Array.from(Buffer.from(authorization.txDigest, "hex")),
-  );
-  assert.deepEqual(
-    transfer.replay_nullifier,
-    Array.from(Buffer.from(authorization.replayNullifier, "hex")),
-  );
-  assert.equal(transfer.proof.backend, "stark/fri/sha256-goldilocks");
-  assert.equal(transfer.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
-});
-
-descriptorTest("ZK-ACE builders reject malformed proof and replay inputs", () => {
-  const verifierKey = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0";
-  const publicInputs = {
-    identityCommitment: Buffer.alloc(32, 0x11),
-    txDigest: Buffer.alloc(32, 0x33),
-    chainId: "00000000-0000-0000-0000-000000000000",
-    replayNullifier: Buffer.alloc(32, 0x44),
-    policyHash: Buffer.alloc(32, 0x22),
-    fromAccountId: ACCOUNT_ID_INPUT,
-    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    amount: "17",
-    verifierKeyId: verifierKey,
-  };
-  const proofBundle = buildZkAceAuthorizationProofV1({
-    publicInputs,
-    proofBytes: Buffer.from("proof"),
-    verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-  });
-
-  assert.throws(
-    () =>
-      buildRegisterZkAceIdentityCommitmentInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        identityCommitment: Buffer.alloc(32),
-        policyHash: Buffer.alloc(32, 0x22),
-        allowedAccounts: [ACCOUNT_ID_INPUT],
-        verifierKey,
-      }),
-    /identityCommitment.*nonzero/,
-  );
-  assert.throws(
-    () =>
-      buildRegisterZkAceIdentityCommitmentInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        identityCommitment: Buffer.alloc(32, 0x11),
-        policyHash: Buffer.alloc(32, 0x22),
-        allowedAccounts: [],
-        verifierKey,
-      }),
-    /allowedAccounts.*non-empty/,
-  );
-  assert.throws(
-    () =>
-      buildRegisterZkAceIdentityCommitmentInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        identityCommitment: Buffer.alloc(32, 0x11),
-        policyHash: Buffer.alloc(32, 0x22),
-        allowedAccounts: [ACCOUNT_ID_INPUT, ACCOUNT_ID_INPUT],
-        verifierKey,
-      }),
-    /allowedAccounts.*duplicates/,
-  );
-  assert.throws(
-    () =>
-      buildRegisterZkAceIdentityCommitmentInstruction({
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        identityCommitment: Buffer.alloc(32, 0x11),
-        policyHash: Buffer.alloc(32, 0x22),
-        allowedAccounts: Array.from({ length: 17 }, () => ACCOUNT_ID_INPUT),
-        verifierKey,
-      }),
-    /allowedAccounts.*at most 16/,
-  );
-  assert.throws(
-    () =>
-      buildZkAceAuthorizationProofV1({
-        publicInputs,
-        proofBytes: Buffer.from("proof"),
-        verifyingKeyRef: "halo2/ipa:wrong_vk",
-        verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-      }),
-    /must be stark\/fri\/sha256-goldilocks|proof verifier must match public inputs|verifyingKeyRef\.backend must match/,
-  );
-  assert.throws(
-    () =>
-      buildZkAceAuthorizationProofV1({
-        publicInputs: { ...publicInputs, version: 2 },
-        proofBytes: Buffer.from("proof"),
-        verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-      }),
-    /publicInputs\.version must be 1/,
-  );
-  for (const amount of [
-    undefined,
-    null,
-    "",
-    " ",
-    "0",
-    "-1",
-    "+1",
-    "1.0",
-    "1.5",
-    "1amt",
-    "1qty",
-    "1e3",
-    0,
-    -1,
-    1.5,
-    Number.NaN,
-    Number.POSITIVE_INFINITY,
-    0n,
-    -1n,
-    Number.MAX_SAFE_INTEGER + 1,
-    true,
-    [],
-    { toString: () => "17" },
-  ]) {
-    assert.throws(
-      () =>
-        buildZkAceAuthorizationProofV1({
-          publicInputs: { ...publicInputs, amount },
-          proofBytes: Buffer.from("proof"),
-          verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-        }),
-      /publicInputs\.amount|must be greater than zero|must be a non-negative integer|maximum JSON-safe integer|non-negative integer string/,
-    );
-    assert.throws(
-      () =>
-        buildZkAceAuthorizedTransferInstruction({
-          fromAccountId: ACCOUNT_ID_INPUT,
-          toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-          assetDefinitionId: ASSET_DEFINITION_ID,
-          amount,
-          identityCommitment: Buffer.alloc(32, 0x11),
-          txDigest: Buffer.alloc(32, 0x33),
-          chainId: "00000000-0000-0000-0000-000000000000",
-          replayNullifier: Buffer.alloc(32, 0x44),
-          policyHash: Buffer.alloc(32, 0x22),
-          proof: {
-            backend: "stark/fri/sha256-goldilocks",
-            proofBytes: Buffer.from("proof"),
-            verifyingKeyRef: verifierKey,
-            verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-          },
-        }),
-      /zkAceAuthorizedTransfer\.amount|canonical|quantity|proof-scalar|invalid_text/,
-    );
-  }
-  assert.throws(
-    () => buildZkAceAuthorizedTransferInstruction({
-      fromAccountId: ACCOUNT_ID_INPUT,
-      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-      assetDefinitionId: ASSET_DEFINITION_ID,
-      amount: "00017",
-      identityCommitment: Buffer.alloc(32, 0x11),
-      txDigest: Buffer.alloc(32, 0x33),
-      chainId: "00000000-0000-0000-0000-000000000000",
-      replayNullifier: Buffer.alloc(32, 0x44),
-      policyHash: Buffer.alloc(32, 0x22),
-      proof: {
-        backend: "stark/fri/sha256-goldilocks",
-        proofBytes: Buffer.from("proof"),
-        verifyingKeyRef: verifierKey,
-        verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-      },
-    }),
-    /canonical|invalid_text|zkAceAuthorizedTransfer\.amount/,
-  );
-  const maximumAmount = ((1n << 128n) - 1n).toString();
-  const maximumTransfer = encodeAndDecode(buildZkAceAuthorizedTransferInstruction({
-    fromAccountId: ACCOUNT_ID_INPUT,
-    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    amount: maximumAmount,
-    identityCommitment: Buffer.alloc(32, 0x11),
-    txDigest: Buffer.alloc(32, 0x33),
-    chainId: "00000000-0000-0000-0000-000000000000",
-    replayNullifier: Buffer.alloc(32, 0x44),
-    policyHash: Buffer.alloc(32, 0x22),
-    proof: {
-      backend: "stark/fri/sha256-goldilocks",
-      proofBytes: Buffer.from("proof"),
-      verifyingKeyRef: verifierKey,
-      verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-    },
-  })).zk.SubmitZkAceAuthorizedTransfer;
-  assert.equal(maximumTransfer.amount, maximumAmount);
-  assert.throws(
-    () =>
-      buildZkAceAuthorizedTransferInstruction({
-        fromAccountId: ACCOUNT_ID_INPUT,
-        toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-        assetDefinitionId: ASSET_DEFINITION_ID,
-        amount: "17",
-        identityCommitment: Buffer.alloc(32, 0x11),
-        txDigest: Buffer.alloc(32, 0x33),
-        chainId: "00000000-0000-0000-0000-000000000000",
-        replayNullifier: Buffer.alloc(32),
-        policyHash: Buffer.alloc(32, 0x22),
-        proof: {
-          backend: "stark/fri/sha256-goldilocks",
-          proofBytes: Buffer.from("proof"),
-          verifyingKeyRef: verifierKey,
-          verifyingKeyCommitment: Buffer.alloc(32, 0x55),
-        },
-      }),
-    /replayNullifier.*nonzero/,
-  );
-  const baseTransfer = {
-    fromAccountId: ACCOUNT_ID_INPUT,
-    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
-    assetDefinitionId: ASSET_DEFINITION_ID,
-    amount: "17",
-    identityCommitment: Buffer.alloc(32, 0x11),
-    txDigest: Buffer.alloc(32, 0x33),
-    chainId: "00000000-0000-0000-0000-000000000000",
-    replayNullifier: Buffer.alloc(32, 0x44),
-    policyHash: Buffer.alloc(32, 0x22),
-    authorizationProof: proofBundle,
-  };
-  for (const [patch, pattern] of [
-    [{ txDigest: Buffer.alloc(32, 0x77) }, /publicInputs\.tx_digest/],
-    [{ chainId: "different-chain" }, /publicInputs\.chain_id/],
-    [{ toAccountId: ACCOUNT_ID_INPUT }, /publicInputs\.to/],
-    [{ amount: "18" }, /publicInputs\.amount/],
-    [{ policyHash: Buffer.alloc(32, 0x88) }, /publicInputs\.policy_hash/],
-  ]) {
-    assert.throws(
-      () =>
-        buildZkAceAuthorizedTransferInstruction({
-          ...baseTransfer,
-          ...patch,
-        }),
-      pattern,
     );
   }
 });

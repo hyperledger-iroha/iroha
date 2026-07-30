@@ -108,6 +108,9 @@ Add or update the following section in the Torii configuration bundle
 ```toml
 [sorafs.gateway.acme]
 enabled = true
+provider_handle = "hsm://gateway/acme/primary"
+provider_revision = 7
+provider_policy_digest_hex = "5151515151515151515151515151515151515151515151515151515151515151"
 account_email = "tls-ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
 hostnames = ["gateway.example.com"]
@@ -124,19 +127,30 @@ tls_alpn_01 = true
 
 - `dns_provider_id` is an opaque selector consumed by the injected adapter; no
   DNS-provider implementation ships in this repository.
+- `provider_handle`, `provider_revision`, and
+  `provider_policy_digest_hex` form one exact, non-secret runtime binding.
+  Replace the example values with the production adapter's reviewed identity;
+  partial, zero, uppercase-digest, test-marked, or dormant bindings fail
+  configuration. Credentials and private keys remain runtime-only.
 - `ech_enabled` sets the controller's expected telemetry state. ECH generation,
   validation, installation, and rollback remain responsibilities of the
   injected adapter.
 - `renewal_window` controls when the controller requests a new order; the
   default is 30 days.
 - Configuration is parsed through `iroha_config`; an enabled ACME policy
-  without an injected runtime adapter fails during startup.
+  without the complete provider binding or an injected runtime adapter fails
+  during startup. Torii also checks the injected identity before and after
+  every certificate order and discards returned key material if the identity
+  changes while the operation is in flight.
 
 ### Configuration Reference
 
 | Key | Default | Production expectation | Compliance tie-in |
 |-----|---------|------------------------|-------------------|
 | `sorafs.gateway.acme.enabled` | `false` | Enable only in a daemon embedding that injects the audited runtime adapter. | Enable/disable changes require an approved deployment record. |
+| `sorafs.gateway.acme.provider_handle` | unset | Pin the exact stable production adapter handle; test/development markers are rejected. | Bind the approved runtime implementation without storing credentials. |
+| `sorafs.gateway.acme.provider_revision` | unset | Pin the non-zero deployed adapter and public-policy revision. | Rotation requires a reviewed configuration revision. |
+| `sorafs.gateway.acme.provider_policy_digest_hex` | unset | Pin the non-zero 64-character lowercase digest reported by the adapter. | Proves the runtime's reviewed public policy matches the deployment envelope. |
 | `sorafs.gateway.acme.directory_url` | Let’s Encrypt v2 | Override only when switching CA environments. | Governance requires publishing the selected CA in GAR manifests. |
 | `sorafs.gateway.acme.dns_provider_id` | unset | Bind the exact reviewed adapter/provider configuration. | Adapter IAM and challenge permissions require periodic review. |
 | `sorafs.gateway.acme.renewal_window` | `30d` | Keep enough headroom to withdraw and recover before expiry. | Window changes require risk-owner approval. |

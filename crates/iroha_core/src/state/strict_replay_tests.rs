@@ -360,6 +360,8 @@ impl StrictReplayFixture {
             Arc::clone(&state),
             queue,
             Arc::clone(&kura),
+            None,
+            None,
             chain_id.clone(),
             Duration::from_secs(1),
             genesis_account.clone(),

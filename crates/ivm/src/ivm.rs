@@ -23,7 +23,9 @@ use std::{
 
 use likely_stable::{likely, unlikely};
 #[cfg(feature = "beep")]
-use rodio::{OutputStream, OutputStreamHandle, Sink, Source, source::SineWave};
+use rodio::{
+    OutputStream, OutputStreamBuilder, Sink, Source, StreamError, mixer::Mixer, source::SineWave,
+};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -73,6 +75,16 @@ const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 /// Approximate byte budget for cached prepared instruction streams.
 const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+#[cfg(feature = "beep")]
+fn with_audio_mixer(
+    open_stream: impl FnOnce() -> Result<OutputStream, StreamError>,
+    play: impl FnOnce(&Mixer),
+) {
+    if let Ok(stream) = open_stream() {
+        play(stream.mixer());
+    }
+}
 
 fn require_registered_syscall_metering(
     number: u32,
@@ -1852,10 +1864,10 @@ impl IVM {
             }
         }
 
-        fn play_element(handle: &OutputStreamHandle, note: Note, beats: f32) {
+        fn play_element(mixer: &Mixer, note: Note, beats: f32) {
             let dur_ms = (BEAT_MS as f32 * beats) as u64;
             if let Some(f) = note.freq() {
-                let sink = Sink::try_new(handle).unwrap();
+                let sink = Sink::connect_new(mixer);
                 let src = SineWave::new(f as f32)
                     .take_duration(Duration::from_millis(dur_ms))
                     .amplify(0.20);
@@ -1867,7 +1879,7 @@ impl IVM {
         }
 
         // Japanese song, Kagome-Kagome
-        fn play_kagome(handle: &OutputStreamHandle) {
+        fn play_kagome(mixer: &Mixer) {
             let score = vec![
                 (Note::A4, 2.0),
                 (Note::A4, 1.0),
@@ -1927,13 +1939,11 @@ impl IVM {
             ];
 
             for (n, b) in score {
-                play_element(handle, n, b);
+                play_element(mixer, n, b);
             }
         }
 
-        if let Ok((_stream, handle)) = OutputStream::try_default() {
-            play_kagome(&handle);
-        }
+        with_audio_mixer(OutputStreamBuilder::open_default_stream, play_kagome);
     }
 
     fn startup_banner(
@@ -8324,6 +8334,21 @@ mod tests {
 
     use super::*;
     use crate::{instruction, ivm_cache, metadata::LITERAL_SECTION_MAGIC};
+
+    #[cfg(feature = "beep")]
+    #[test]
+    fn unavailable_audio_output_is_safe() {
+        let played = Cell::new(false);
+
+        with_audio_mixer(
+            || Err(StreamError::NoDevice),
+            |_| {
+                played.set(true);
+            },
+        );
+
+        assert!(!played.get());
+    }
 
     #[test]
     fn private_memory_ranges_merge_split_and_respect_half_open_boundaries() {

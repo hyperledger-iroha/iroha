@@ -51,6 +51,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     validate_standard_evidence_payload,
     require_maximum_int,
     require_minimum_int,
+    require_non_negative_int,
     require_object,
     required_evidence_kind_names,
     require_passed_status,
@@ -73,6 +74,11 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 
+
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    bind_lane_summary_to_topology,
+)
 
 SUMMARY_SCHEMA = "sorafs.reference_sdk.release_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
@@ -100,6 +106,7 @@ REQUIRED_DOWNSTREAM_PACKAGES = (
 )
 RELEASE_MANIFEST_BOUND_KINDS = (
     "release_archive",
+    "supply_chain",
     "downstream_bindings",
     "cookbook_smoke",
     "ffi_header_contract",
@@ -108,6 +115,22 @@ RELEASE_MANIFEST_BOUND_KINDS = (
 POLICY_BOUND_KINDS = ("governance_approval",)
 RELEASE_KEY_BOUND_KINDS = ("governance_approval",)
 ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519",)
+REQUIRED_SIGNING_PROVIDER = "external_ed25519_hsm"
+SUPPLY_CHAIN_TARGET_RESULT_FIELDS = frozenset(
+    {
+        "target",
+        "binary_smoke_passed",
+        "deterministic_archive_replay_passed",
+        "installation_verified",
+        "rollback_verified",
+        "yank_verified",
+        "sbom_generated",
+        "critical_vulnerability_count",
+        "high_vulnerability_count",
+        "oidc_identity_verified",
+        "cosign_provenance_verified",
+    }
+)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -180,6 +203,7 @@ class EvidenceKind:
 EVIDENCE_KINDS: tuple[EvidenceKind, ...] = (
     EvidenceKind("release_archive", "sorafs.reference_sdk.release_archive_canary.v1"),
     EvidenceKind("signed_manifest", "sorafs.reference_sdk.signed_manifest_canary.v1"),
+    EvidenceKind("supply_chain", "sorafs.reference_sdk.supply_chain_canary.v1"),
     EvidenceKind("downstream_bindings", "sorafs.reference_sdk.downstream_bindings_canary.v1"),
     EvidenceKind("cookbook_smoke", "sorafs.reference_sdk.cookbook_smoke_canary.v1"),
     EvidenceKind("ffi_header_contract", "sorafs.reference_sdk.ffi_header_contract_canary.v1"),
@@ -220,10 +244,25 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "public_key_fingerprint_recorded",
         "private_key_absent",
         "signature_algorithm",
+        "signing_provider",
+        "signing_provider_revision",
+        "hsm_signature_verified",
         "manifest_digest_hex",
         "policy_digest_hex",
         "public_key_fingerprint_hex",
         "raw_manifest_included",
+    ),
+    "supply_chain": COMMON_EVIDENCE_REQUIRED_FIELDS
+    + (
+        "target_count",
+        "target_results",
+        "release_manifest_digest_hex",
+        "sbom_index_digest_hex",
+        "vulnerability_report_digest_hex",
+        "provenance_bundle_digest_hex",
+        "raw_sboms_included",
+        "raw_vulnerability_reports_included",
+        "raw_provenance_included",
     ),
     "downstream_bindings": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -304,6 +343,9 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "release_manifest_digest_hex",
     "public_key_fingerprint_hex",
     "smoke_output_digest_hex",
+    "sbom_index_digest_hex",
+    "vulnerability_report_digest_hex",
+    "provenance_bundle_digest_hex",
     "policy_digest_hex",
 )
 
@@ -357,10 +399,72 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
         ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
         errors,
     )
+    require_string_equal(payload, "signing_provider", REQUIRED_SIGNING_PROVIDER, errors)
+    require_positive_int(payload, "signing_provider_revision", errors)
+    require_bool_true(payload, "hsm_signature_verified", errors)
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
     require_false(payload, "raw_manifest_included", errors)
+
+
+def validate_supply_chain(payload: dict[str, Any], errors: list[str]) -> None:
+    """Require complete per-target release, security, and provenance evidence."""
+
+    require_string_inventory_count_match(
+        payload,
+        "target_results",
+        "target_count",
+        errors,
+        field="target",
+        allow_scalar_items=False,
+    )
+    target_results = payload.get("target_results")
+    if not isinstance(target_results, list):
+        errors.append("target_results must be an array")
+        return
+    if len(target_results) != len(REQUIRED_RELEASE_TARGETS):
+        errors.append("target_results must cover exactly five release targets")
+    observed_targets: list[str] = []
+    for index, result in enumerate(target_results):
+        path = f"target_results[{index}]"
+        if not isinstance(result, dict):
+            errors.append(f"{path} must be an object")
+            continue
+        if set(result) != SUPPLY_CHAIN_TARGET_RESULT_FIELDS:
+            errors.append(f"{path} fields must match the schema-closed contract")
+        target = require_string(result, "target", errors)
+        if target:
+            observed_targets.append(target)
+        for field in (
+            "binary_smoke_passed",
+            "deterministic_archive_replay_passed",
+            "installation_verified",
+            "rollback_verified",
+            "yank_verified",
+            "sbom_generated",
+            "oidc_identity_verified",
+            "cosign_provenance_verified",
+        ):
+            require_bool_true(result, field, errors)
+        for field in (
+            "critical_vulnerability_count",
+            "high_vulnerability_count",
+        ):
+            value = require_non_negative_int(result, field, errors)
+            if value is not None and value != 0:
+                errors.append(f"{field} must be zero")
+    if observed_targets != list(REQUIRED_RELEASE_TARGETS):
+        errors.append(
+            "target_results targets must match the canonical five-target order"
+        )
+    require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
+    require_hex(payload, "sbom_index_digest_hex", HEX64_LEN, errors)
+    require_hex(payload, "vulnerability_report_digest_hex", HEX64_LEN, errors)
+    require_hex(payload, "provenance_bundle_digest_hex", HEX64_LEN, errors)
+    require_false(payload, "raw_sboms_included", errors)
+    require_false(payload, "raw_vulnerability_reports_included", errors)
+    require_false(payload, "raw_provenance_included", errors)
 
 
 def validate_downstream_bindings(
@@ -439,6 +543,10 @@ def validate_kind_specific(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
+    if set(payload) != frozenset(EVIDENCE_REQUIRED_FIELDS[kind.name]):
+        errors.append(
+            f"{kind.name} evidence fields must match the schema-closed contract"
+        )
     require_passed_status(payload, errors)
     require_recent_timestamp(
         payload,
@@ -452,6 +560,8 @@ def validate_kind_specific(
         validate_release_archive(payload, errors, options)
     elif kind.name == "signed_manifest":
         validate_signed_manifest(payload, errors)
+    elif kind.name == "supply_chain":
+        validate_supply_chain(payload, errors)
     elif kind.name == "downstream_bindings":
         validate_downstream_bindings(payload, errors, options)
     elif kind.name == "cookbook_smoke":
@@ -510,8 +620,11 @@ def build_summary(
     valid_ffi_contract_digests: set[str] = set()
     valid_header_digests: set[str] = set()
     valid_package_index_digests: set[str] = set()
+    valid_provenance_bundle_digests: set[str] = set()
     valid_release_key_fingerprints: set[str] = set()
+    valid_sbom_index_digests: set[str] = set()
     valid_smoke_output_digests: set[str] = set()
+    valid_vulnerability_report_digests: set[str] = set()
     signature_algorithms: set[str] = set()
     valid_release_manifest_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
@@ -571,6 +684,22 @@ def build_summary(
                 signature_algorithm = fingerprint.get("signature_algorithm")
                 if isinstance(signature_algorithm, str):
                     signature_algorithms.add(signature_algorithm)
+            elif kind_name == "supply_chain":
+                sbom_index_digest = fingerprint.get("sbom_index_digest_hex")
+                if isinstance(sbom_index_digest, str):
+                    valid_sbom_index_digests.add(sbom_index_digest)
+                vulnerability_report_digest = fingerprint.get(
+                    "vulnerability_report_digest_hex"
+                )
+                if isinstance(vulnerability_report_digest, str):
+                    valid_vulnerability_report_digests.add(
+                        vulnerability_report_digest
+                    )
+                provenance_bundle_digest = fingerprint.get(
+                    "provenance_bundle_digest_hex"
+                )
+                if isinstance(provenance_bundle_digest, str):
+                    valid_provenance_bundle_digests.add(provenance_bundle_digest)
             elif kind_name == "downstream_bindings":
                 package_index_digest = fingerprint.get("package_index_digest_hex")
                 if isinstance(package_index_digest, str):
@@ -694,12 +823,19 @@ def build_summary(
         "valid_ffi_contract_digests": sorted(valid_ffi_contract_digests),
         "valid_header_digests": sorted(valid_header_digests),
         "valid_package_index_digests": sorted(valid_package_index_digests),
+        "valid_provenance_bundle_digests": sorted(
+            valid_provenance_bundle_digests
+        ),
         "valid_release_manifest_digests": sorted(valid_release_manifest_digests),
         "valid_release_manifest_reference_digests": sorted(
             valid_release_manifest_reference_digests
         ),
         "valid_release_key_fingerprints": sorted(valid_release_key_fingerprints),
+        "valid_sbom_index_digests": sorted(valid_sbom_index_digests),
         "valid_smoke_output_digests": sorted(valid_smoke_output_digests),
+        "valid_vulnerability_report_digests": sorted(
+            valid_vulnerability_report_digests
+        ),
         "valid_policy_digests": sorted(valid_policy_digests),
         "signature_algorithms": sorted(signature_algorithms),
         "required": required,
@@ -712,6 +848,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = EvidenceArgumentParser(
         description="Validate SoraFS SF-11 reference SDK release evidence artifacts."
     )
+    add_topology_qualification_argument(parser)
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -795,6 +932,12 @@ def main(argv: list[str] | None = None) -> int:
     summary, errors = build_summary(
         args.evidence_dir, args.evidence, required_kinds, options, args.summary_out
     )
+    errors.extend(
+        bind_lane_summary_to_topology(
+            summary, args.topology_qualification_summary
+        )
+    )
+    summary["status"] = evidence_gate_status(errors)
     rendered_summary, summary_errors = render_and_write_checker_summary(
         args.summary_out, summary
     )

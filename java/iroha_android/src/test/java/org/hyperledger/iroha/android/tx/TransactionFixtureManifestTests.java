@@ -713,13 +713,11 @@ public final class TransactionFixtureManifestTests {
     final NoritoDecoder decoder = canonicalDecoder(signedBytes);
     final byte[] signatureField = readField(decoder, name + ".signed.signature");
     final byte[] payloadField = readField(decoder, name + ".signed.payload");
-    final byte[] attachmentsField = readField(decoder, name + ".signed.attachments");
     final byte[] multisigField = readField(decoder, name + ".signed.multisig_signatures");
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(name + ": signed transaction payload has trailing bytes");
     }
     final byte[] signature = decodeSignature(name, signatureField);
-    decodeOptionField(name + ".signed.attachments", attachmentsField);
     decodeOptionField(name + ".signed.multisig_signatures", multisigField);
     return new SignedParts(signature, payloadField);
   }
@@ -810,6 +808,7 @@ public final class TransactionFixtureManifestTests {
     final byte[] nonceField = readField(decoder, name + ".payload.nonce");
     final byte[] feePaymentField = readField(decoder, name + ".payload.fee_payment");
     final byte[] metadataField = readField(decoder, name + ".payload.metadata");
+    final byte[] attachmentsField = readField(decoder, name + ".payload.attachments");
     if (decoder.remaining() != 0) {
       throw new IllegalStateException(name + ": payload has trailing bytes");
     }
@@ -827,6 +826,7 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(name + ": payload fee_payment must not be empty");
     }
     validateMetadataField(metadataField, name + ".payload.metadata");
+    decodeOptionField(name + ".payload.attachments", attachmentsField);
     return new RawPayload(chainId, authority, creationTimeMs, ttl, nonce, executable);
   }
 

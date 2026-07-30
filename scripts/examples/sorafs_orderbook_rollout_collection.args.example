@@ -37,3 +37,4 @@ artifacts/sorafs/orderbook/staged/observability.json
 artifacts/sorafs/orderbook/staged/reconciliation.json
 --governance-approval-evidence
 artifacts/sorafs/orderbook/staged/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

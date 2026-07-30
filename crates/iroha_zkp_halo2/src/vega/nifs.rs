@@ -30,6 +30,17 @@ pub(super) struct NovaNifs {
     pub(super) cross_term_commitment: Commitment,
 }
 
+/// Complete borrowed input to one Nova NIFS prover invocation.
+pub(super) struct NovaNifsProverInput<'a> {
+    pub(super) key: &'a CommitmentKey,
+    pub(super) shape: &'a Shape,
+    pub(super) relaxed_instance: &'a RelaxedInstance,
+    pub(super) relaxed_witness: &'a RelaxedWitness,
+    pub(super) regular_instance: &'a Instance,
+    pub(super) regular_witness: &'a Witness,
+    pub(super) cross_term_blindings: &'a [Scalar],
+}
+
 impl NovaNifs {
     /// Fold one satisfying relaxed pair with one satisfying regular pair.
     ///
@@ -37,15 +48,18 @@ impl NovaNifs {
     /// deterministic and makes the caller responsible for sourcing fresh,
     /// cryptographically secure blindings.
     pub(super) fn prove(
-        key: &CommitmentKey,
-        shape: &Shape,
-        relaxed_instance: &RelaxedInstance,
-        relaxed_witness: &RelaxedWitness,
-        regular_instance: &Instance,
-        regular_witness: &Witness,
-        cross_term_blindings: &[Scalar],
+        input: NovaNifsProverInput<'_>,
         transcript: &mut VegaTranscriptV1,
     ) -> Result<(Self, RelaxedInstance, RelaxedWitness), NifsError> {
+        let NovaNifsProverInput {
+            key,
+            shape,
+            relaxed_instance,
+            relaxed_witness,
+            regular_instance,
+            regular_witness,
+            cross_term_blindings,
+        } = input;
         validate_prover_inputs(
             key,
             shape,
@@ -269,10 +283,17 @@ fn compute_cross_term(
     if combined_assignment.len() != shape.columns() {
         return Err(NifsError::InvalidDimension);
     }
-    let (a, b, c) = shape.multiply(&combined_assignment)?;
-    Ok(a.into_iter()
-        .zip(b)
-        .zip(c.into_iter().zip(relaxed_witness.error.iter().copied()))
+    let products = shape.multiply(&combined_assignment)?;
+    Ok(products
+        .a
+        .into_iter()
+        .zip(products.b)
+        .zip(
+            products
+                .c
+                .into_iter()
+                .zip(relaxed_witness.error.iter().copied()),
+        )
         .map(|((a, b), (c, error))| a * b - effective_relaxation * c - error)
         .collect())
 }
@@ -429,13 +450,15 @@ mod tests {
         let (key, shape, u1, w1, u2, w2) = fixture();
         let mut prover_transcript = VegaTranscriptV1::new_neutron_nova();
         let (proof, folded_instance, folded_witness) = NovaNifs::prove(
-            &key,
-            &shape,
-            &u1,
-            &w1,
-            &u2,
-            &w2,
-            &[s(19)],
+            NovaNifsProverInput {
+                key: &key,
+                shape: &shape,
+                relaxed_instance: &u1,
+                relaxed_witness: &w1,
+                regular_instance: &u2,
+                regular_witness: &w2,
+                cross_term_blindings: &[s(19)],
+            },
             &mut prover_transcript,
         )
         .expect("valid fold");
@@ -481,7 +504,18 @@ mod tests {
         let (key, shape, u1, w1, u2, w2) = fixture();
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         assert_eq!(
-            NovaNifs::prove(&key, &shape, &u1, &w1, &u2, &w2, &[], &mut transcript),
+            NovaNifs::prove(
+                NovaNifsProverInput {
+                    key: &key,
+                    shape: &shape,
+                    relaxed_instance: &u1,
+                    relaxed_witness: &w1,
+                    regular_instance: &u2,
+                    regular_witness: &w2,
+                    cross_term_blindings: &[],
+                },
+                &mut transcript
+            ),
             Err(NifsError::InvalidDimension)
         );
 
@@ -490,13 +524,15 @@ mod tests {
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         assert!(
             NovaNifs::prove(
-                &key,
-                &shape,
-                &u1,
-                &w1,
-                &bad_u2,
-                &w2,
-                &[s(19)],
+                NovaNifsProverInput {
+                    key: &key,
+                    shape: &shape,
+                    relaxed_instance: &u1,
+                    relaxed_witness: &w1,
+                    regular_instance: &bad_u2,
+                    regular_witness: &w2,
+                    cross_term_blindings: &[s(19)],
+                },
                 &mut transcript
             )
             .is_err()
@@ -507,13 +543,15 @@ mod tests {
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
         assert_eq!(
             NovaNifs::prove(
-                &key,
-                &shape,
-                &u1,
-                &bad_w1,
-                &u2,
-                &w2,
-                &[s(19)],
+                NovaNifsProverInput {
+                    key: &key,
+                    shape: &shape,
+                    relaxed_instance: &u1,
+                    relaxed_witness: &bad_w1,
+                    regular_instance: &u2,
+                    regular_witness: &w2,
+                    cross_term_blindings: &[s(19)],
+                },
                 &mut transcript
             ),
             Err(NifsError::CommitmentMismatch)
@@ -538,13 +576,15 @@ mod tests {
         let (key, shape, u1, w1, u2, w2) = fixture();
         let mut prover_transcript = VegaTranscriptV1::new_neutron_nova();
         let (proof, folded_instance, folded_witness) = NovaNifs::prove(
-            &key,
-            &shape,
-            &u1,
-            &w1,
-            &u2,
-            &w2,
-            &[s(19)],
+            NovaNifsProverInput {
+                key: &key,
+                shape: &shape,
+                relaxed_instance: &u1,
+                relaxed_witness: &w1,
+                regular_instance: &u2,
+                regular_witness: &w2,
+                cross_term_blindings: &[s(19)],
+            },
             &mut prover_transcript,
         )
         .expect("valid fold");

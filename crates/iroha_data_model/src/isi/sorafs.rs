@@ -9,7 +9,10 @@ use crate::sorafs::{
         ModerationLedgerPolicyV1,
     },
     orderbook::OrderbookAdmissionPolicyV1,
-    pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
+    pin_registry::{
+        ManifestAliasBinding, ManifestDigest, ProviderIngestCompletionAuthorityV1,
+        ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
+    },
     pop_registry::PopIssuerPolicyV1,
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
     proof_ledger::ProofOutcomeSignerPolicyV1,
@@ -19,7 +22,7 @@ use crate::sorafs::{
         ReserveProviderTermsV1,
     },
 };
-use sorafs_manifest::deal::XorQuantity;
+use sorafs_manifest::{capacity::ReplicationAssignmentV1, deal::XorQuantity};
 
 isi! {
     /// Register a canonical `SoraFS` manifest with the paid pin registry.
@@ -152,10 +155,32 @@ pub struct CompleteReplicationOrder {
         pub provider_id: ProviderId,
         /// Epoch (inclusive) when replication completed.
         pub completion_epoch: u64,
+        /// Exact chain-authoritative provider owner and signer policy expected at commit.
+        pub expected_authority: ProviderIngestCompletionAuthorityV1,
+        /// Exact order-scoped assignment revision expected at commit.
+        pub expected_assignment_revision: u64,
+        /// Finalized committed-chain prefix on which preparation was based.
+        pub finalized_anchor: ProviderIngestFinalizedAnchorV1,
     }
 }
 
 impl crate::seal::Instruction for CompleteReplicationOrder {}
+
+isi! {
+    /// Replace the provider assignment set of a pending replication order.
+pub struct ReviseReplicationOrderAssignments {
+    /// Identifier of the pending replication order.
+    pub order_id: ReplicationOrderId,
+        /// Current assignment revision required for compare-and-set.
+        pub expected_assignment_revision: u64,
+        /// Strict monotonic successor revision.
+        pub next_assignment_revision: u64,
+        /// Complete canonical replacement assignment set.
+        pub assignments: Vec<ReplicationAssignmentV1>,
+    }
+}
+
+impl crate::seal::Instruction for ReviseReplicationOrderAssignments {}
 
 isi! {
     /// Mark a pending replication order as expired after its deadline.
@@ -190,6 +215,32 @@ pub struct UnregisterProviderOwner {
 }
 
 impl crate::seal::Instruction for UnregisterProviderOwner {}
+
+isi! {
+    /// Compare-and-set the completion authority for a `SoraFS` provider.
+pub struct SetProviderIngestCompletionAuthority {
+    /// Provider whose completion authority is updated.
+    pub provider_id: ProviderId,
+        /// Exact current authority, or `None` for first registration.
+        pub expected_current: Option<ProviderIngestCompletionAuthorityV1>,
+        /// Exact successor owner and governed signer policy.
+        pub next: ProviderIngestCompletionAuthorityV1,
+    }
+}
+
+impl crate::seal::Instruction for SetProviderIngestCompletionAuthority {}
+
+isi! {
+    /// Revoke the exact current completion authority for a `SoraFS` provider.
+pub struct RevokeProviderIngestCompletionAuthority {
+    /// Provider whose completion authority is revoked.
+    pub provider_id: ProviderId,
+        /// Exact current authority required for compare-and-remove.
+        pub expected_current: ProviderIngestCompletionAuthorityV1,
+    }
+}
+
+impl crate::seal::Instruction for RevokeProviderIngestCompletionAuthority {}
 
 isi! {
     /// Update the governance-controlled pricing schedule for `SoraFS`.
@@ -1166,11 +1217,35 @@ impl CompleteReplicationOrder {
         order_id: ReplicationOrderId,
         provider_id: ProviderId,
         completion_epoch: u64,
+        expected_authority: ProviderIngestCompletionAuthorityV1,
+        expected_assignment_revision: u64,
+        finalized_anchor: ProviderIngestFinalizedAnchorV1,
     ) -> Self {
         Self {
             order_id,
             provider_id,
             completion_epoch,
+            expected_authority,
+            expected_assignment_revision,
+            finalized_anchor,
+        }
+    }
+}
+
+impl ReviseReplicationOrderAssignments {
+    /// Create an exact compare-and-set assignment revision.
+    #[must_use]
+    pub fn new(
+        order_id: ReplicationOrderId,
+        expected_assignment_revision: u64,
+        next_assignment_revision: u64,
+        assignments: Vec<ReplicationAssignmentV1>,
+    ) -> Self {
+        Self {
+            order_id,
+            expected_assignment_revision,
+            next_assignment_revision,
+            assignments,
         }
     }
 }
@@ -1736,6 +1811,36 @@ impl UnregisterProviderOwner {
     }
 }
 
+impl SetProviderIngestCompletionAuthority {
+    /// Create an exact compare-and-set provider completion authority update.
+    #[must_use]
+    pub fn new(
+        provider_id: ProviderId,
+        expected_current: Option<ProviderIngestCompletionAuthorityV1>,
+        next: ProviderIngestCompletionAuthorityV1,
+    ) -> Self {
+        Self {
+            provider_id,
+            expected_current,
+            next,
+        }
+    }
+}
+
+impl RevokeProviderIngestCompletionAuthority {
+    /// Create an exact compare-and-remove provider completion authority revocation.
+    #[must_use]
+    pub fn new(
+        provider_id: ProviderId,
+        expected_current: ProviderIngestCompletionAuthorityV1,
+    ) -> Self {
+        Self {
+            provider_id,
+            expected_current,
+        }
+    }
+}
+
 fn sorafs_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -1816,6 +1921,16 @@ impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
     order_id: ReplicationOrderId,
     provider_id: ProviderId,
     completion_epoch: u64,
+    expected_authority: ProviderIngestCompletionAuthorityV1,
+    expected_assignment_revision: u64,
+    finalized_anchor: ProviderIngestFinalizedAnchorV1,
+});
+
+impl_sorafs_decode_from_slice!(ReviseReplicationOrderAssignments {
+    order_id: ReplicationOrderId,
+    expected_assignment_revision: u64,
+    next_assignment_revision: u64,
+    assignments: Vec<ReplicationAssignmentV1>,
 });
 
 impl_sorafs_decode_from_slice!(ExpireReplicationOrder {
@@ -1830,6 +1945,17 @@ impl_sorafs_decode_from_slice!(RegisterProviderOwner {
 
 impl_sorafs_decode_from_slice!(UnregisterProviderOwner {
     provider_id: ProviderId,
+});
+
+impl_sorafs_decode_from_slice!(SetProviderIngestCompletionAuthority {
+    provider_id: ProviderId,
+    expected_current: Option<ProviderIngestCompletionAuthorityV1>,
+    next: ProviderIngestCompletionAuthorityV1,
+});
+
+impl_sorafs_decode_from_slice!(RevokeProviderIngestCompletionAuthority {
+    provider_id: ProviderId,
+    expected_current: ProviderIngestCompletionAuthorityV1,
 });
 
 impl_sorafs_decode_from_slice!(SetPricingSchedule {
@@ -2078,7 +2204,8 @@ mod tests {
         capacity::{CapacityDisputeEvidence, CapacityDisputeId},
         reputation::{
             PorTerminalOutcomeV1, PorTerminalStatusV1, ReputationJournalPayloadV1,
-            StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+            StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
+            StreamTokenValidationStatusV1,
         },
     };
 
@@ -2184,6 +2311,33 @@ mod tests {
         )
     }
 
+    fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
+        ProviderIngestCompletionAuthorityV1::new(
+            owner(),
+            crate::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0x91; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0x92; 32],
+            },
+        )
+    }
+
+    fn provider_ingest_finalized_anchor() -> ProviderIngestFinalizedAnchorV1 {
+        ProviderIngestFinalizedAnchorV1 {
+            height: 87,
+            block_hash: [0x93; 32],
+        }
+    }
+
+    fn replacement_assignments() -> Vec<ReplicationAssignmentV1> {
+        vec![ReplicationAssignmentV1 {
+            provider_id: [0x94; 32],
+            slice_gib: 1,
+            lane: None,
+        }]
+    }
+
     fn reputation_policy() -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {
             version: crate::sorafs::reputation::REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
@@ -2234,8 +2388,11 @@ mod tests {
             1_700_000_002_000,
             None,
             ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
-                validation_id: [0x84; 32],
-                request_digest: [0x85; 32],
+                binding: StreamTokenValidationBindingV1 {
+                    gateway_id: [0x84; 32],
+                    gateway_sequence: 1,
+                    request_context_digest: [0x85; 32],
+                },
                 token_body_digest: Some([0x86; 32]),
                 token_key_version: Some(1),
                 validated_at_unix_ms: 1_700_000_002_000,
@@ -2563,10 +2720,28 @@ mod tests {
             order_id(),
             provider(0x35),
             88,
+            provider_ingest_completion_authority(),
+            1,
+            provider_ingest_finalized_anchor(),
+        ));
+        assert_slice_roundtrip(ReviseReplicationOrderAssignments::new(
+            order_id(),
+            1,
+            2,
+            replacement_assignments(),
         ));
         assert_slice_roundtrip(ExpireReplicationOrder::new(order_id(), 91));
         assert_slice_roundtrip(RegisterProviderOwner::new(provider(0x35), owner()));
         assert_slice_roundtrip(UnregisterProviderOwner::new(provider(0x35)));
+        assert_slice_roundtrip(SetProviderIngestCompletionAuthority::new(
+            provider(0x35),
+            None,
+            provider_ingest_completion_authority(),
+        ));
+        assert_slice_roundtrip(RevokeProviderIngestCompletionAuthority::new(
+            provider(0x35),
+            provider_ingest_completion_authority(),
+        ));
         assert_slice_roundtrip(SetPricingSchedule::new(
             PricingScheduleRecord::launch_default(),
         ));
@@ -2817,7 +2992,18 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            CompleteReplicationOrder::new(order_id(), provider(0x35), 88),
+            CompleteReplicationOrder::new(
+                order_id(),
+                provider(0x35),
+                88,
+                provider_ingest_completion_authority(),
+                1,
+                provider_ingest_finalized_anchor(),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            ReviseReplicationOrderAssignments::new(order_id(), 1, 2, replacement_assignments()),
         );
         assert_registry_decodes(&registry, ExpireReplicationOrder::new(order_id(), 91));
         assert_registry_decodes(
@@ -2825,6 +3011,21 @@ mod tests {
             RegisterProviderOwner::new(provider(0x35), owner()),
         );
         assert_registry_decodes(&registry, UnregisterProviderOwner::new(provider(0x35)));
+        assert_registry_decodes(
+            &registry,
+            SetProviderIngestCompletionAuthority::new(
+                provider(0x35),
+                None,
+                provider_ingest_completion_authority(),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            RevokeProviderIngestCompletionAuthority::new(
+                provider(0x35),
+                provider_ingest_completion_authority(),
+            ),
+        );
         assert_registry_decodes(
             &registry,
             SetSorafsPopIssuerPolicy::new(pop_issuer_policy()),

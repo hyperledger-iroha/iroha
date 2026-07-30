@@ -58,7 +58,7 @@ Para Norito JSON, você pode usar o SDK e o SDK.
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

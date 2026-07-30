@@ -112,7 +112,11 @@ impl RuntimeLifecycleOrdinalSource {
         Ok(())
     }
 
-    fn next_ordinal(&self) -> Result<Option<u128>, String> {
+    /// Read the next unused ordinal without reserving it.
+    ///
+    /// Runtime ingress uses this to initialize its diagnostic mirror from the
+    /// same actor-global source that owns all lifecycle reservations.
+    pub(super) fn next_ordinal(&self) -> Result<Option<u128>, String> {
         self.lock_next().map(|next| *next)
     }
 
@@ -741,6 +745,18 @@ fn runtime_ingress_ownership_projection_hash(
 pub(crate) trait ExactRuntimeCommandIdentity {
     /// Project every command field which can distinguish reducer behavior.
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity;
+}
+
+impl ExactRuntimeCommandIdentity for AuthenticatedConsensusMessage {
+    fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
+        let canonical_bytes = self.canonical_wire_bytes();
+        let canonical_hash = iroha_crypto::Hash::new(&canonical_bytes);
+        RuntimeCommandIdentity {
+            kind: RuntimeCommandKind::Authenticated,
+            canonical_bytes: Arc::from(canonical_bytes),
+            canonical_hash,
+        }
+    }
 }
 
 /// Immutable scheduler-local identity of the first admitted command in one
@@ -2667,10 +2683,9 @@ fn append_validated_receipt_identity(identity: &mut Vec<u8>, receipt: &Validated
 impl ExactRuntimeCommandIdentity for AdapterCommand {
     fn exact_runtime_command_identity(&self) -> RuntimeCommandIdentity {
         let (kind, canonical_bytes) = match self {
-            Self::Authenticated(authenticated) => (
-                RuntimeCommandKind::Authenticated,
-                authenticated.canonical_wire_bytes(),
-            ),
+            Self::Authenticated(authenticated) => {
+                return authenticated.exact_runtime_command_identity();
+            }
             Self::LocalProposalReady {
                 manifest,
                 durable_receipt,
@@ -8726,10 +8741,17 @@ mod tests {
                 fair_runtime_ownership(&message, source.clone(), source),
             )
             .expect("fair ingress yields exact runtime ownership");
+            let authenticated = AuthenticatedConsensusMessage::for_test(message);
+            assert_eq!(
+                authenticated.exact_runtime_command_identity(),
+                AdapterCommand::Authenticated(authenticated.clone())
+                    .exact_runtime_command_identity(),
+                "the authenticated token and adapter wrapper share one exact identity"
+            );
             TaggedCommand::with_ingress_ownership(
                 owner_tag,
                 CommandClass::Progress,
-                AdapterCommand::Authenticated(AuthenticatedConsensusMessage::for_test(message)),
+                authenticated,
                 Instant::now(),
                 ownership,
             )

@@ -29,8 +29,8 @@ cover the entire voting workflow:
 2. **`PolicyJuryBallotCommitV1`** – sealed commitment written before ballots
    are revealed.  It stores the round/proposal/juror identifiers, the
    Blake2b‑256 digest of the juror id + vote choice + nonce tuple, the capture
-   timestamp, and the ballot mode (`plaintext` or `zk-envelope` when the
-   `zk-ballot` feature is active).  `PolicyJuryBallotCommitV1::verify_reveal`
+   timestamp, and the ballot mode (`plaintext` or `zk-envelope`).
+   `PolicyJuryBallotCommitV1::verify_reveal`
    ensures the stored digest matches the reveal payload.
 3. **`PolicyJuryBallotRevealV1`** – the public reveal object containing the
    vote choice, the nonce used at commit time, and optional ZK proof URIs.
@@ -58,7 +58,7 @@ reveal.
 - During the reveal phase, jurors emit `PolicyJuryBallotRevealV1`.  Operators
   feed the payload to `PolicyJuryBallotCommitV1::verify_reveal` before
   accepting the vote, ensuring the reveal was not swapped or tampered with.
-- When the `zk-ballot` feature is enabled, jurors can attach deterministic
+- ZK-envelope ballots attach deterministic
   proof URIs (e.g., `sorafs://proofs/pj-2026-02/juror-5`) so downstream
   auditors can retrieve the zero-knowledge witness bundle referenced by the
   commitment.

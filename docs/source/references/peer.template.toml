@@ -48,7 +48,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # peer_gossip_max_period_ms = 30_000 # clamped to >= peer_gossip_period_ms
 # transaction_gossip_period_ms = 1_000  # clamped to >= 100ms
 # transaction_gossip_resend_ticks = 3   # resend after N gossip periods
-# transaction_gossip_size = 500
+# transaction_gossip_size = 500 # Maximum transactions sent or accepted in one gossip batch.
 # transaction_gossip_public_target_cap = 16        # public-lane fanout cap (null = broadcast)
 # transaction_gossip_restricted_target_cap = null  # restricted-lane fanout cap (null = full commit topology)
 # transaction_gossip_public_target_reshuffle_ms = 1_000     # public target reshuffle cadence (clamped to >= 100ms)
@@ -228,6 +228,9 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # query_store_capacity = 128
 # query_store_capacity_per_user = 128
 # ws_message_timeout_ms = 10_000
+# api_high_load_tx_threshold = 16384           # queued txs that activate high-load API policy
+# api_high_load_stream_threshold = 16384       # reject new SSE/WS stream admissions at this load
+# api_high_load_subscription_threshold = 16384 # override the subscription-WS admission threshold
 
 [torii.peer_geo]
 # enabled = false
@@ -295,8 +298,8 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 
 ## Transactions Queue
 [queue]
-# capacity = 65536
-# capacity_per_user = 65536
+# capacity = 262144
+# capacity_per_user = 16384
 # transaction_time_to_live_ms = 86_400_000 # 1 day
 
 [zk.halo2]

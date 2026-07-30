@@ -27,8 +27,12 @@ and operational requirements.
 | `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
 | `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor`, `manifest`. |
 | `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
+| `ReplicationOrderV1` | Canonical governance order payload for providers to pin one manifest. | `version`, `order_id`, `manifest_cid`, `manifest_digest`, `chunking_profile`, `target_replicas`, `assignments`, `issued_at`, `deadline_at`, `sla`, `metadata`. |
+| `ReplicationOrderRecord` | Chain-authoritative order state. Assignment revision starts at one and changes only through exact compare-and-set reassignment. | `order_id`, `manifest_digest`, `manifest_root_cid`, `issued_by`, `issued_epoch`, `deadline_epoch`, `canonical_order`, `assignment_revision`, `provider_completions`, `status`. |
+| `ProviderIngestCompletionSignerPolicyV1` | Public identity of the governed provider-ingest signer policy. | `policy_id`, `revision`, `predecessor_digest`, `policy_digest`. |
+| `ProviderIngestCompletionAuthorityV1` | Current chain-authoritative completion authority for one provider. | `provider_owner`, `signer_policy`. |
+| `ProviderIngestFinalizedAnchorV1` | Exact committed-chain prefix used to prepare a completion. | `height`, `block_hash`. |
+| `ReplicationOrderCompletionRecord` | Retained provider-scoped completion context accepted by ledger execution. | `provider_id`, `completed_by`, `completion_epoch`, `assignment_revision`, `completion_authority`, `finalized_anchor`. |
 | `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
 Implementation reference: the authoritative manifest lifecycle and finalized
@@ -54,16 +58,18 @@ Status:
 | Task | Owner(s) | Notes |
 |------|----------|-------|
 | Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
-| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. A completion names one assigned provider and must be signed by that provider's current registered owner; relayers are not trusted completion authorities. Exact provider replay is idempotent, and the order becomes terminal only after its canonical redundancy target is reached. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, and deadline-bound expiration; there is no separate local `bind_alias` backlog. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage. Replication records retain the ordered provider-scoped completion evidence; partial completion stays pending, late completion is rejected, and only an incomplete order may expire after its inclusive deadline. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `ReviseReplicationOrderAssignments`, `SetProviderIngestCompletionAuthority`, `RevokeProviderIngestCompletionAuthority`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Issuance and reassignment require every assigned provider to have a registered owner and a valid, owner-matched completion authority. `CompleteReplicationOrder` is the V1 six-field hard cut: order, provider, completion epoch, expected owner/policy authority, expected assignment revision, and finalized height/hash anchor. Relayers are not trusted completion authorities. Core execution revalidates all expected context atomically in the transaction that records completion; there is no three-field compatibility form. Exact retained replay is idempotent, and the order becomes terminal only after its canonical redundancy target is reached. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, signer-policy succession, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage. Provider signer policies start at revision one; a same-identity successor advances exactly one revision and commits the prior policy digest, while a replacement identity restarts at revision one. Assignment replacement is an exact monotonic compare-and-set on a pending order and is forbidden after the first completion. Replication records retain ordered provider-scoped completion evidence including the accepted assignment revision, owner/policy tuple, and finalized anchor. Partial completion stays pending, late completion is rejected, and only an incomplete order may expire after its inclusive deadline. |
 | Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
 | Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
 Coverage:
 - Unit tests cover registration, approval, retirement, alias binding, replication
   order issue, provider-owner completion, partial and target completion,
-  conflicting/surplus replay, owner rotation, deadline expiration, permissions,
-  duplicate rejection, and side-effect-free failure paths.
+  conflicting/surplus replay, owner and signer-policy rotation, assignment
+  revision and reassignment, finalized-anchor substitution, deadline expiration,
+  permissions, duplicate rejection, exact retained replay, and side-effect-free
+  failure paths.
 - Successor tests cover self references, unknown/pending/retired predecessors,
   cycle closure, and malformed existing predecessor cycles.
 - `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
@@ -74,7 +80,7 @@ Coverage:
 
 | Component | Task | Owner(s) |
 |-----------|------|----------|
-| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. Each replication-order projection includes `assignment_revision`; each retained completion includes the accepted revision, nested owner/signer-policy identity, and nested finalized height/hash anchor. | Networking TL / Core Infra |
 | Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
 | CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
 | SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
@@ -86,6 +92,19 @@ Operations:
   native `manifest`. The retired `limit`, attestation, embedded alias/order
   arrays, counts, and truncation fields are absent; callers use
   `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- `GET /v1/sorafs/replication` accepts bounded `limit`/`offset` pagination plus
+  `status` and `manifest_digest` filters. Each order emits
+  `assignment_revision`. Every `provider_completions[]` entry emits
+  `assignment_revision`,
+  `completion_authority.provider_owner`,
+  `completion_authority.signer_policy.{policy_id_hex,revision,predecessor_digest_hex,policy_digest_hex}`,
+  and `finalized_anchor.{height,block_hash_hex}`. These are retained ledger
+  facts, not live substitutions from the provider registry.
+  Selectors are a strict hard cut: `limit` is `1..=500`, `offset` is a
+  canonical `u32`, `status` is exactly lowercase `pending`, `completed`, or
+  `expired`, and `manifest_digest` is a non-zero lowercase 32-byte digest;
+  unknown, duplicate, empty, and alias parameters are rejected. The listing
+  attestation and world data are derived from one full `StateView` generation.
 - Mutating operations go through ISI/governance permissions; REST handling keeps
   the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
@@ -99,11 +118,14 @@ Operations:
   the registered content root and `manifest_digest` must equal the BLAKE3 digest
   of the canonical manifest envelope. They bound payload/assignment/metadata sizes, require sorted distinct providers and
   positive SLA targets, reject alternate Norito layouts, and only complete
-  within their ledger deadline. Completion is authorized by
-  `CanCompleteSorafsReplicationOrder`; it does not require one account to own
-  every provider in a multi-provider order. Exact completion replays are
-  idempotent, conflicting replays fail, and retiring a manifest expires its
-  pending orders.
+  within their ledger deadline. `CanCompleteSorafsReplicationOrder` is necessary
+  but not sufficient: the transaction authority must also equal the provider's
+  current registered owner and the completion's exact expected owner, and the
+  current signer-policy tuple, assignment revision, and committed-chain anchor
+  must still match. One account need not own every provider in a multi-provider
+  order. Exact retained completion replays are idempotent even after a later
+  authority rotation; stale prepared completions and conflicting replays fail,
+  and retiring a manifest expires its pending orders.
 - `ExpireReplicationOrder` closes a still-pending order only when its supplied
   epoch is strictly later than the inclusive completion deadline. It requires
   `CanIssueSorafsReplicationOrder`, accepts only an exact idempotent replay, and

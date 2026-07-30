@@ -160,7 +160,7 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord,
-            ReplicationOrderId, ReplicationOrderRecord,
+            ProviderIngestCompletionAuthorityV1, ReplicationOrderId, ReplicationOrderRecord,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
@@ -716,6 +716,9 @@ macro_rules! build_world_block {
             sorafs_pricing: $state.sorafs_pricing.$method(),
             provider_credit_ledger: $state.provider_credit_ledger.$method(),
             provider_owners: $state.provider_owners.$method(),
+            provider_ingest_completion_authorities: $state
+                .provider_ingest_completion_authorities
+                .$method(),
             da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.$method(),
             da_pin_intents_by_alias: $state.da_pin_intents_by_alias.$method(),
             da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.$method(),
@@ -963,6 +966,9 @@ macro_rules! build_world_transaction {
             sorafs_pricing: $state.sorafs_pricing.transaction(),
             provider_credit_ledger: $state.provider_credit_ledger.transaction(),
             provider_owners: $state.provider_owners.transaction(),
+            provider_ingest_completion_authorities: $state
+                .provider_ingest_completion_authorities
+                .transaction(),
             da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.transaction(),
             da_pin_intents_by_alias: $state.da_pin_intents_by_alias.transaction(),
             da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.transaction(),
@@ -4000,8 +4006,10 @@ pub struct World {
     #[norito(skip)]
     pub(crate) provider_credit_ledger: Storage<ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    #[norito(skip)]
     pub(crate) provider_owners: Storage<ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket: Storage<StorageTicketId, DaPinIntentWithLocation>,
@@ -4599,8 +4607,10 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) provider_credit_ledger: StorageBlock<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    #[norito(skip)]
     pub(crate) provider_owners: StorageBlock<'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket:
@@ -5124,6 +5134,7 @@ impl<'world> WorldBlock<'world> {
             capacity_disputes,
             provider_credit_ledger,
             provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket,
             da_pin_intents_by_alias,
             da_pin_intents_by_manifest,
@@ -5692,6 +5703,9 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
     pub(crate) provider_owners: StorageTransaction<'block, 'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
         StorageTransaction<'block, 'world, StorageTicketId, DaPinIntentWithLocation>,
@@ -7088,42 +7102,6 @@ pub struct WorldView<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
-    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
-    pub(crate) privacy_pgc_accounts: StorageView<
-        'world,
-        crate::privacy_state::PrivacyPgcAccountKeyV1,
-        crate::privacy_state::PrivacyPgcAccountStateV1,
-    >,
-    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
-    pub(crate) privacy_pgc_pool_invariants: StorageView<
-        'world,
-        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
-        crate::privacy_state::PrivacyPgcPoolInvariantV1,
-    >,
-    /// Scoped consumed nullifiers used for deterministic replay prevention.
-    pub(crate) privacy_nullifiers: StorageView<
-        'world,
-        crate::privacy_state::PrivacyNullifierKeyV1,
-        crate::privacy_state::PrivacyStateItemRecordV1,
-    >,
-    /// Scoped commitments admitted by successfully verified privacy actions.
-    pub(crate) privacy_commitments: StorageView<
-        'world,
-        crate::privacy_state::PrivacyCommitmentKeyV1,
-        crate::privacy_state::PrivacyStateItemRecordV1,
-    >,
-    /// Ordered exact root membership retained for privacy proof admission.
-    pub(crate) privacy_roots: StorageView<
-        'world,
-        crate::privacy_state::PrivacyRootKeyV1,
-        crate::privacy_state::PrivacyRootProvenanceV1,
-    >,
-    /// Single current root for each independent namespace and semantic role.
-    pub(crate) privacy_root_heads: StorageView<
-        'world,
-        crate::privacy_state::PrivacyRootHeadKeyV1,
-        crate::privacy_state::PrivacyRootHeadRecordV1,
-    >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         StorageView<'world, iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
@@ -7262,6 +7240,9 @@ pub struct WorldView<'world> {
     pub(crate) provider_credit_ledger: StorageView<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
     pub(crate) provider_owners: StorageView<'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageView<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
         StorageView<'world, StorageTicketId, DaPinIntentWithLocation>,
@@ -11694,6 +11675,13 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_commitments_in_tx: u32,
     /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
     pub(crate) native_anonymous_escrow_transfer_depth: u32,
+    /// Number of synchronously nested trigger entrypoints currently executing.
+    active_trigger_execution_depth: u8,
+    /// Active multisig proposals whose deferred instructions are executing in this transaction.
+    pub(crate) multisig_deferred_execution_stack: Vec<(
+        AccountId,
+        HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+    )>,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -18232,6 +18220,14 @@ impl World {
         &mut self.provider_owners
     }
 
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
+    }
+
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
     pub fn space_directory_manifests_mut_for_testing(
         &mut self,
@@ -18577,6 +18573,7 @@ impl World {
             sorafs_pricing: Cell::default(),
             provider_credit_ledger: Storage::default(),
             provider_owners: Storage::default(),
+            provider_ingest_completion_authorities: Storage::default(),
             da_pin_intents_by_ticket: Storage::default(),
             da_pin_intents_by_alias: Storage::default(),
             da_pin_intents_by_manifest: Storage::default(),
@@ -19401,12 +19398,6 @@ impl World {
             runtime_upgrades: self.runtime_upgrades.view(),
             privacy_consensus_policy: self.privacy_consensus_policy.view(),
             privacy_activations: self.privacy_activations.view(),
-            privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
-            privacy_pgc_pool_invariants: self.privacy_pgc_pool_invariants.view(),
-            privacy_nullifiers: self.privacy_nullifiers.view(),
-            privacy_commitments: self.privacy_commitments.view(),
-            privacy_roots: self.privacy_roots.view(),
-            privacy_root_heads: self.privacy_root_heads.view(),
             proofs: self.proofs.view(),
             proofs_by_status: self.proofs_by_status.view(),
             proof_tags: self.proof_tags.view(),
@@ -19468,6 +19459,9 @@ impl World {
             sorafs_pricing: self.sorafs_pricing.view(),
             provider_credit_ledger: self.provider_credit_ledger.view(),
             provider_owners: self.provider_owners.view(),
+            provider_ingest_completion_authorities: self
+                .provider_ingest_completion_authorities
+                .view(),
             da_pin_intents_by_ticket: self.da_pin_intents_by_ticket.view(),
             da_pin_intents_by_alias: self.da_pin_intents_by_alias.view(),
             da_pin_intents_by_manifest: self.da_pin_intents_by_manifest.view(),
@@ -20305,6 +20299,10 @@ pub trait WorldReadOnly {
     fn provider_credit_ledger(&self) -> &impl StorageReadOnly<ProviderId, ProviderCreditRecord>;
     /// Owner bindings for registered `SoraFS` providers (read-only).
     fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId>;
+    /// Provider-ingest completion-owner and signer-policy bindings (read-only).
+    fn provider_ingest_completion_authorities(
+        &self,
+    ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1>;
     /// DA pin intents keyed by storage ticket (read-only).
     fn da_pin_intents_by_ticket(
         &self,
@@ -21821,6 +21819,11 @@ macro_rules! impl_world_ro {
             fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId> {
                 &self.provider_owners
             }
+            fn provider_ingest_completion_authorities(
+                &self,
+            ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1> {
+                &self.provider_ingest_completion_authorities
+            }
             fn da_pin_intents_by_ticket(
                 &self,
             ) -> &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation> {
@@ -22035,6 +22038,14 @@ impl<'world> WorldBlock<'world> {
         &mut self,
     ) -> &mut StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord> {
         &mut self.replication_orders
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable provider-ingest completion-authority registry accessor for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
     }
 
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
@@ -22271,6 +22282,7 @@ impl<'world> WorldBlock<'world> {
             sorafs_pricing,
             provider_credit_ledger,
             provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket,
             da_pin_intents_by_alias,
             da_pin_intents_by_manifest,
@@ -22390,6 +22402,7 @@ impl<'world> WorldBlock<'world> {
         sorafs_pricing.commit();
         provider_credit_ledger.commit();
         provider_owners.commit();
+        provider_ingest_completion_authorities.commit();
         da_pin_intents_by_ticket.commit();
         da_pin_intents_by_alias.commit();
         da_pin_intents_by_manifest.commit();
@@ -23262,6 +23275,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, ReplicationOrderId, ReplicationOrderRecord> {
         &mut self.replication_orders
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>
+    {
+        &mut self.provider_ingest_completion_authorities
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -48335,6 +48357,8 @@ impl<'state> StateBlock<'state> {
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             native_anonymous_escrow_transfer_depth: 0,
+            active_trigger_execution_depth: 0,
+            multisig_deferred_execution_stack: Vec::new(),
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,
@@ -51201,26 +51225,29 @@ impl<'state> StateBlock<'state> {
         let current_block_height = self._curr_block.height().get();
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
+        let max_time_trigger_invocations_u64 = self
+            .world
+            .parameters
+            .get()
+            .block()
+            .max_transactions()
+            .get()
+            .min(u64::from(u32::MAX));
+        let max_time_trigger_invocations =
+            usize::try_from(max_time_trigger_invocations_u64).unwrap_or(usize::MAX);
 
-        // Match time triggers against the event, but exclude any trigger that was registered during this block.
+        // Match time triggers against the event. The trigger set excludes
+        // current-block registrations and bounds materialisation before any
+        // repeated ids are allocated.
         let matched: Vec<_> = self
             .world
             .triggers
-            .match_time_event(time_event, current_block_height, current_block_time_ms)
-            .filter(|(_id, action)| {
-                // Reserved internal metadata keys set at registration time
-                let key_h = match "__registered_block_height".parse::<Name>() {
-                    Ok(k) => k,
-                    Err(_) => return true,
-                };
-                // Skip triggers registered in the current block (by height).
-                let registered_height = action
-                    .metadata()
-                    .get(&key_h)
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
-            })
-            .map(|(id, _)| id)
+            .match_time_event(
+                time_event,
+                current_block_height,
+                current_block_time_ms,
+                max_time_trigger_invocations,
+            )
             .collect();
         let matched_count = matched.len();
         if matched_count > 0 {
@@ -53622,6 +53649,68 @@ mod tiered_snapshot_diff_tests {
                 "missing required {field} produced unexpected error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn provider_ingest_completion_authority_snapshot_is_required_and_owner_bound() {
+        let owner = AccountId::new(checked_keypair().public_key().clone());
+        let provider_id = ProviderId::new([0xA1; 32]);
+        let authority = ProviderIngestCompletionAuthorityV1::new(
+            owner.clone(),
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0xA2; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0xA3; 32],
+            },
+        );
+        let mut world = World::default();
+        let (owner_id, owner_value) = iroha_data_model::account::Account::new(owner.clone())
+            .build(&owner)
+            .into_key_value();
+        world.accounts.insert(owner_id, owner_value);
+        world.provider_owners.insert(provider_id, owner);
+        world
+            .provider_ingest_completion_authorities
+            .insert(provider_id, authority.clone());
+
+        let decoded =
+            decode_sccp_world_snapshot(world).expect("decode completion-authority snapshot");
+        assert_eq!(
+            decoded
+                .view()
+                .world
+                .provider_ingest_completion_authorities
+                .get(&provider_id),
+            Some(&authority)
+        );
+
+        for field in ["provider_owners", "provider_ingest_completion_authorities"] {
+            let mut snapshot = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
+            state_snapshot_world_mut(&mut snapshot).remove(field);
+            let error = decode_state_snapshot_value(snapshot)
+                .err()
+                .unwrap_or_else(|| panic!("snapshot missing {field} must fail"));
+            assert!(
+                error.to_string().contains(field),
+                "missing required {field} produced unexpected error: {error}"
+            );
+        }
+
+        let mut mismatched = World::default();
+        mismatched
+            .provider_ingest_completion_authorities
+            .insert(provider_id, authority);
+        let error = match decode_sccp_world_snapshot(mismatched) {
+            Ok(_) => panic!("completion authority without its registered owner must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("provider_ingest_completion_authorities"),
+            "owner mismatch produced unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -62745,9 +62834,37 @@ impl StateTransaction<'_, '_> {
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
+    fn execute_trigger(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: EventBox,
+        step_index: u32,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        let max_depth = self.world.parameters.smart_contract().execution_depth();
+        if self.active_trigger_execution_depth >= max_depth {
+            return Err(TriggerExecutionFail::MaxDepthExceeded.into());
+        }
+
+        self.active_trigger_execution_depth += 1;
+        let result = self.execute_trigger_within_depth_budget(
+            id,
+            authority,
+            executable,
+            event,
+            step_index,
+            nft_seq_base_override,
+        );
+        self.active_trigger_execution_depth -= 1;
+        result
+    }
+
+    /// Execute a trigger after the shared synchronous depth budget has been reserved.
     #[allow(clippy::needless_pass_by_value)]
     #[allow(clippy::too_many_lines)]
-    fn execute_trigger(
+    fn execute_trigger_within_depth_budget(
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
@@ -64807,6 +64924,25 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn validate_provider_ingest_completion_authorities(
+        provider_owners: &Storage<ProviderId, AccountId>,
+        authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
+    ) -> Result<(), json::Error> {
+        let owners = provider_owners.view();
+        for (provider_id, authority) in authorities.view().iter() {
+            if !authority.is_valid() || owners.get(provider_id) != Some(&authority.provider_owner) {
+                return Err(json::Error::InvalidField {
+                    field: "provider_ingest_completion_authorities".to_owned(),
+                    message: format!(
+                        "provider {} has a noncanonical or owner-mismatched completion authority",
+                        hex::encode(provider_id.as_bytes())
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_ram_lfe_program_policies(
         policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     ) -> Result<(), json::Error> {
@@ -65350,6 +65486,13 @@ pub(crate) mod deserialize {
             &mut map,
             "soracloud_private_uploaded_model_execution_receipts",
         )?;
+        let provider_owners = take_required(&mut map, "provider_owners")?;
+        let provider_ingest_completion_authorities =
+            take_required(&mut map, "provider_ingest_completion_authorities")?;
+        validate_provider_ingest_completion_authorities(
+            &provider_owners,
+            &provider_ingest_completion_authorities,
+        )?;
         let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
@@ -65534,7 +65677,8 @@ pub(crate) mod deserialize {
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
             capacity_disputes: Storage::default(),
-            provider_owners: Storage::default(),
+            provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket: Storage::default(),
             da_pin_intents_by_alias: Storage::default(),
             da_pin_intents_by_manifest: Storage::default(),
@@ -118994,6 +119138,79 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn self_calling_trigger_stops_at_synchronous_execution_depth() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.smart_contract.execution_depth = 3;
+            parameters.commit();
+        }
+
+        let trigger_id: TriggerId = "bounded_self_call".parse().expect("valid trigger id");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+        ))
+        .execute(&ALICE_ID, &mut transaction)
+        .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register account");
+
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                [InstructionBox::from(ExecuteTrigger::new(
+                    trigger_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            ),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register self-calling trigger");
+
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let error = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("self-call must stop at the configured trigger depth");
+
+        assert!(
+            format!("{error:?}").contains("MaxDepthExceeded"),
+            "unexpected self-call rejection: {error:?}"
+        );
+        assert_eq!(
+            transaction.active_trigger_execution_depth, 0,
+            "the synchronous depth reservation must unwind after rejection"
+        );
+        assert_eq!(
+            transaction
+                .world
+                .triggers
+                .by_call_triggers()
+                .get(&trigger_id)
+                .expect("trigger remains staged")
+                .repeats,
+            Repeats::Exactly(1),
+            "a rejected recursive execution must not consume the repeat budget"
+        );
+    }
+
+    #[test]
     fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -121405,10 +121622,6 @@ seiyaku IdentitylessRawCallback {
         )
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture assembles and signs one complete multi-route admission certificate"
-    )]
     fn queue_plan_admission_certificate_for_state_test(
         state: &State,
         routing_plan: crate::queue::RoutingPlan,
@@ -127681,6 +127894,11 @@ seiyaku IdentitylessRawCallback {
             [],
         );
         let state = State::new(world, kura.clone(), query_handle);
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.block_cadence_ms = nonzero!(1_u64);
+            parameters.commit();
+        }
 
         let block1 = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(1).unwrap());

@@ -28,7 +28,10 @@ pub mod prelude {
             DaProofScheme, KzgCommitment, MerkleDirection, MerklePathItem, RetentionClass,
         },
         confidential_compute::{ConfidentialComputeMechanism, ConfidentialComputePolicy},
-        ingest::{DaIngestReceipt, DaIngestRequest, DaStripeLayout},
+        ingest::{
+            DA_INGEST_REQUEST_SIGNING_DOMAIN_V1, DaIngestReceipt, DaIngestRequest,
+            DaIngestRequestIntentV1, DaStripeLayout,
+        },
         manifest::{ChunkCommitment, ChunkRole, DaManifestV1},
         pin_intent::{DaPinIntent, DaPinIntentBundle, DaPinIntentWithLocation},
         types::{

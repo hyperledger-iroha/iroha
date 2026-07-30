@@ -55,7 +55,7 @@ translation_last_reviewed: 2026-02-07
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

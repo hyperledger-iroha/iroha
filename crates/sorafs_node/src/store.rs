@@ -33,8 +33,9 @@ use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use sorafs_car::{
-    self, CarBuildPlan, CarChunk, ChunkStore, ChunkStoreError, DirectoryPublicationStatus,
-    FilePlan, PayloadSource, PorMerkleTree, PorProof, PorSampleIndices, TaikaiSegmentHint,
+    self, CarBuildPlan, CarChunk, CarStreamingWriter, ChunkStore, ChunkStoreError,
+    DirectoryPublicationStatus, FilePlan, PayloadSource, PorMerkleTree, PorProof, PorSampleIndices,
+    TaikaiSegmentHint, compute_chunk_plan_digest_sha3,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
@@ -228,6 +229,34 @@ pub enum StorageError {
     /// Rebuilt provider PoR root does not match the canonical manifest commitment.
     #[error("provider PoR root does not match the manifest commitment")]
     PorRootMismatch,
+    /// Manifest chunk-plan commitment does not match the exact validated ingestion plan.
+    #[error("manifest chunk-plan digest does not match the ingestion plan")]
+    ManifestChunkPlanDigestMismatch,
+    /// The staged payload could not reconstruct the manifest-pinned canonical CARv2 archive.
+    #[error("failed to reconstruct canonical CARv2 archive from staged payload: {reason}")]
+    CarArchiveReconstruction {
+        /// Stable diagnostic from bounded staged-file validation or CAR emission.
+        reason: String,
+    },
+    /// Reconstructed full CARv2 archive digest does not match the manifest commitment.
+    #[error("manifest CARv2 archive digest does not match the reconstructed archive")]
+    ManifestCarArchiveDigestMismatch,
+    /// Reconstructed full CARv2 archive size does not match the manifest commitment.
+    #[error("manifest CARv2 archive size {expected} does not match reconstructed size {actual}")]
+    ManifestCarSizeMismatch {
+        /// Full archive size committed by the manifest.
+        expected: u64,
+        /// Full archive size reconstructed from the staged payload.
+        actual: u64,
+    },
+    /// Reconstructed CAR DAG codec does not match the manifest commitment.
+    #[error("manifest DAG codec {expected} does not match reconstructed codec {actual}")]
+    ManifestDagCodecMismatch {
+        /// DAG codec committed by the manifest.
+        expected: u64,
+        /// DAG codec reconstructed from the exact CAR plan.
+        actual: u64,
+    },
     /// Requested PoR sample count exceeds the proof-stream protocol ceiling.
     #[error("PoR sample count {requested} exceeds the v1 maximum {maximum}")]
     PorSampleCountTooLarge {
@@ -3198,6 +3227,8 @@ impl StorageBackend {
             pdp_tree,
         } = self.ingest_payload(plan, reader, &chunks_dir)?;
         ensure_manifest_por_root(manifest, &por_tree)?;
+        ensure_manifest_chunk_plan_digest(manifest, plan)?;
+        verify_staged_manifest_car_archive(manifest, plan, &chunk_records, &chunks_dir)?;
 
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
@@ -3859,17 +3890,16 @@ impl StorageBackend {
                         context: "PoR sampled leaf index host width",
                     })
                 })?;
-                let (chunk_idx, segment_idx, leaf_idx) =
-                    por_tree.leaf_path(leaf_index).ok_or_else(|| {
-                        StorageError::ChunkStore(ChunkStoreError::PorInvariant {
-                            context: "canonical PoR sample leaf path",
-                        })
-                    })?;
+                let (chunk_idx, segment_idx, leaf_idx) = por_tree.leaf_path(leaf_index).ok_or({
+                    StorageError::ChunkStore(ChunkStoreError::PorInvariant {
+                        context: "canonical PoR sample leaf path",
+                    })
+                })?;
                 let mut payload = ManifestPayload::new(manifest);
                 let proof = por_tree
                     .prove_leaf_with(chunk_idx, segment_idx, leaf_idx, &mut payload)
                     .map_err(StorageError::ChunkStore)?;
-                let proof = proof.ok_or_else(|| {
+                let proof = proof.ok_or({
                     StorageError::ChunkStore(ChunkStoreError::PorInvariant {
                         context: "canonical PoR sample proof path",
                     })
@@ -4454,6 +4484,296 @@ fn ensure_manifest_por_root(
         return Err(StorageError::PorRootMismatch);
     }
     Ok(())
+}
+
+fn ensure_manifest_chunk_plan_digest(
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+) -> Result<(), StorageError> {
+    if manifest.chunk_digest_sha3_256 != compute_chunk_plan_digest_sha3(&plan.chunks) {
+        return Err(StorageError::ManifestChunkPlanDigestMismatch);
+    }
+    Ok(())
+}
+
+fn verify_staged_manifest_car_archive(
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+    chunk_records: &[StoredChunkRecord],
+    chunks_dir: &Path,
+) -> Result<(), StorageError> {
+    if chunk_records.len() != plan.chunks.len()
+        || chunk_records
+            .iter()
+            .zip(&plan.chunks)
+            .enumerate()
+            .any(|(index, (stored, planned))| {
+                stored.file_name != format!("chunk_{index:05}.bin")
+                    || stored.offset != planned.offset
+                    || stored.length != planned.length
+                    || stored.digest != planned.digest
+            })
+    {
+        return Err(StorageError::CarArchiveReconstruction {
+            reason: "staged chunk inventory does not match the exact CAR build plan".to_owned(),
+        });
+    }
+
+    validate_real_directory(chunks_dir)?;
+    let directory_before = fs::symlink_metadata(chunks_dir)?;
+    let entries_before = staged_directory_entry_count(chunks_dir)?;
+    if entries_before != chunk_records.len() {
+        return Err(StorageError::CarArchiveReconstruction {
+            reason: format!(
+                "staged chunk directory contains {entries_before} entries; expected {}",
+                chunk_records.len()
+            ),
+        });
+    }
+
+    let expected_root = try_clone_bytes(&manifest.root_cid, "manifest CAR expected root")?;
+    let mut reader = StagedChunkPayloadReader::new(chunks_dir, chunk_records);
+    let stats = CarStreamingWriter::with_expected_roots(plan, vec![expected_root])
+        .write_from_reader(&mut reader, io::sink())
+        .map_err(|error| StorageError::CarArchiveReconstruction {
+            reason: error.to_string(),
+        })?;
+    reader.ensure_exhausted()?;
+
+    validate_real_directory(chunks_dir)?;
+    let directory_after = fs::symlink_metadata(chunks_dir)?;
+    if !metadata_stable_during_read(&directory_before, &directory_after) {
+        return Err(StorageError::CarArchiveReconstruction {
+            reason: "staged chunk directory changed during CAR reconstruction".to_owned(),
+        });
+    }
+    let entries_after = staged_directory_entry_count(chunks_dir)?;
+    if entries_after != chunk_records.len() {
+        return Err(StorageError::CarArchiveReconstruction {
+            reason: format!(
+                "staged chunk directory changed to {entries_after} entries during CAR reconstruction"
+            ),
+        });
+    }
+
+    if stats.payload_bytes != manifest.content_length
+        || stats.payload_bytes != plan.content_length
+        || stats.chunk_count != plan.chunks.len()
+        || stats.chunk_profile != plan.chunk_profile
+    {
+        return Err(StorageError::CarArchiveReconstruction {
+            reason: "reconstructed CAR payload geometry does not match the manifest and plan"
+                .to_owned(),
+        });
+    }
+    if stats.dag_codec != manifest.dag_codec.0 {
+        return Err(StorageError::ManifestDagCodecMismatch {
+            expected: manifest.dag_codec.0,
+            actual: stats.dag_codec,
+        });
+    }
+    if stats.car_size != manifest.car_size {
+        return Err(StorageError::ManifestCarSizeMismatch {
+            expected: manifest.car_size,
+            actual: stats.car_size,
+        });
+    }
+    if stats.car_archive_digest.as_bytes() != &manifest.car_digest {
+        return Err(StorageError::ManifestCarArchiveDigestMismatch);
+    }
+    Ok(())
+}
+
+fn staged_directory_entry_count(path: &Path) -> Result<usize, StorageError> {
+    let mut count = 0usize;
+    for entry in fs::read_dir(path)? {
+        entry?;
+        count = count
+            .checked_add(1)
+            .ok_or(StorageError::AllocationGeometryOverflow {
+                context: "staged chunk directory entry count",
+            })?;
+    }
+    Ok(count)
+}
+
+struct StagedChunkPayloadReader<'a> {
+    chunks_dir: &'a Path,
+    chunk_records: &'a [StoredChunkRecord],
+    next_chunk_index: usize,
+    current_chunk: Option<OpenedStagedChunk>,
+}
+
+struct OpenedStagedChunk {
+    record: ChunkFileRecord,
+    file: File,
+    opened_metadata: fs::Metadata,
+    remaining: u64,
+}
+
+impl<'a> StagedChunkPayloadReader<'a> {
+    fn new(chunks_dir: &'a Path, chunk_records: &'a [StoredChunkRecord]) -> Self {
+        Self {
+            chunks_dir,
+            chunk_records,
+            next_chunk_index: 0,
+            current_chunk: None,
+        }
+    }
+
+    fn open_next_chunk(&mut self) -> io::Result<bool> {
+        let Some(record) = self.chunk_records.get(self.next_chunk_index) else {
+            return Ok(false);
+        };
+        let runtime_record = ChunkFileRecord {
+            path: self.chunks_dir.join(&record.file_name),
+            offset: record.offset,
+            length: record.length,
+            digest: record.digest,
+            role: record.role.as_ref().map(|role| role.role),
+            group_id: record.role.as_ref().map(|role| role.group_id),
+        };
+        let before_open = fs::symlink_metadata(&runtime_record.path)?;
+        validate_chunk_file_metadata(&runtime_record, &before_open)
+            .map_err(staged_chunk_io_error)?;
+        let mut options = fs::OpenOptions::new();
+        options.read(true);
+        set_no_follow_flag(&mut options);
+        let file = options.open(&runtime_record.path)?;
+        let opened_metadata = file.metadata()?;
+        validate_chunk_file_metadata(&runtime_record, &opened_metadata)
+            .map_err(staged_chunk_io_error)?;
+        if !metadata_identifies_same_file(&before_open, &opened_metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "staged chunk `{}` changed between inspection and no-follow open",
+                    runtime_record.path.display()
+                ),
+            ));
+        }
+        self.next_chunk_index += 1;
+        self.current_chunk = Some(OpenedStagedChunk {
+            remaining: u64::from(runtime_record.length),
+            record: runtime_record,
+            file,
+            opened_metadata,
+        });
+        Ok(true)
+    }
+
+    fn finish_current_chunk(&mut self) -> io::Result<()> {
+        let Some(mut current) = self.current_chunk.take() else {
+            return Ok(());
+        };
+        if current.remaining != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!(
+                    "staged chunk `{}` ended with {} unread bytes",
+                    current.record.path.display(),
+                    current.remaining
+                ),
+            ));
+        }
+        let mut trailing = [0u8; 1];
+        if current.file.read(&mut trailing)? != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "staged chunk `{}` contains trailing bytes",
+                    current.record.path.display()
+                ),
+            ));
+        }
+        let after_read_file = current.file.metadata()?;
+        let after_read_path = fs::symlink_metadata(&current.record.path)?;
+        validate_chunk_file_metadata(&current.record, &after_read_file)
+            .map_err(staged_chunk_io_error)?;
+        validate_chunk_file_metadata(&current.record, &after_read_path)
+            .map_err(staged_chunk_io_error)?;
+        if !metadata_stable_during_read(&current.opened_metadata, &after_read_file)
+            || !metadata_identifies_same_file(&current.opened_metadata, &after_read_path)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "staged chunk `{}` changed while reconstructing the CAR archive",
+                    current.record.path.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_exhausted(&mut self) -> Result<(), StorageError> {
+        let mut trailing = [0u8; 1];
+        if self
+            .read(&mut trailing)
+            .map_err(|error| StorageError::CarArchiveReconstruction {
+                reason: error.to_string(),
+            })?
+            != 0
+        {
+            return Err(StorageError::CarArchiveReconstruction {
+                reason: "staged payload contains trailing bytes after the exact CAR plan"
+                    .to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Read for StagedChunkPayloadReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if self
+                .current_chunk
+                .as_ref()
+                .is_some_and(|chunk| chunk.remaining == 0)
+            {
+                self.finish_current_chunk()?;
+            }
+            if self.current_chunk.is_none() && !self.open_next_chunk()? {
+                return Ok(0);
+            }
+            let current = self.current_chunk.as_mut().ok_or_else(|| {
+                io::Error::other("staged chunk reader failed to retain the opened chunk")
+            })?;
+            let maximum = usize::try_from(current.remaining).unwrap_or(usize::MAX);
+            let read_limit = buffer.len().min(maximum);
+            let read = current.file.read(&mut buffer[..read_limit])?;
+            if read == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "staged chunk `{}` ended before its declared length",
+                        current.record.path.display()
+                    ),
+                ));
+            }
+            let read_u64 = u64::try_from(read).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "staged chunk read length exceeds u64",
+                )
+            })?;
+            current.remaining = current.remaining.checked_sub(read_u64).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "staged chunk read exceeded its declared length",
+                )
+            })?;
+            return Ok(read);
+        }
+    }
+}
+
+fn staged_chunk_io_error(error: ChunkStoreError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
 
 fn unix_timestamp() -> Result<u64, StorageError> {
@@ -5073,9 +5393,80 @@ fn set_atomic_parent_open_flags(options: &mut fs::OpenOptions) {
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!("SoraFS filesystem flags are not qualified for this Android architecture");
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("SoraFS filesystem flags are not qualified for this Unix target");
+
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    0x400000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -5100,39 +5491,78 @@ fn platform_no_follow_flag() -> i32 {
     0x2000_0000
 }
 
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
+fn platform_directory_only_flag() -> i32 {
+    0x200000
+}
+
 #[cfg(all(
-    unix,
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+fn platform_directory_only_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn platform_directory_only_flag() -> i32 {
+    0x10000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+fn platform_directory_only_flag() -> i32 {
+    0x4000
+}
+
+#[cfg(all(
+    target_os = "linux",
     not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
     ))
 ))]
-fn platform_no_follow_flag() -> i32 {
-    0
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_directory_only_flag() -> i32 {
-    0o200000
+    0x10000
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn platform_directory_only_flag() -> i32 {
     0x0010_0000
 }
 
-#[cfg(all(
-    unix,
-    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
-))]
+#[cfg(target_os = "freebsd")]
 fn platform_directory_only_flag() -> i32 {
-    0
+    0x0002_0000
+}
+
+#[cfg(target_os = "dragonfly")]
+fn platform_directory_only_flag() -> i32 {
+    0x0800_0000
+}
+
+#[cfg(target_os = "openbsd")]
+fn platform_directory_only_flag() -> i32 {
+    0x0002_0000
+}
+
+#[cfg(target_os = "netbsd")]
+fn platform_directory_only_flag() -> i32 {
+    0x0020_0000
 }
 
 fn write_manifest_metadata(
@@ -5407,11 +5837,124 @@ mod tests {
     };
 
     use blake3;
-    use sorafs_car::{CarPlanError, FileEntry, compute_chunk_plan_digest_sha3};
+    use sorafs_car::{CarPlanError, CarWriter, FileEntry, compute_chunk_plan_digest_sha3};
     use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
     use tempfile::TempDir;
 
     use super::*;
+
+    // Keep one target-gated assertion for every ABI branch. Overlapping branches
+    // fail with duplicate definitions; missing branches fail to resolve the flag.
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        )
+    ))]
+    #[test]
+    fn linux_directory_open_flags_match_low_flag_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+        assert_eq!(platform_directory_only_flag(), 0x4000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        ))
+    ))]
+    #[test]
+    fn linux_directory_open_flags_match_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+        assert_eq!(platform_directory_only_flag(), 0x10000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "aarch64", target_arch = "arm")
+    ))]
+    #[test]
+    fn android_arm_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+        assert_eq!(platform_directory_only_flag(), 0x4000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    #[test]
+    fn android_x86_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+        assert_eq!(platform_directory_only_flag(), 0x10000);
+    }
+
+    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
+    #[test]
+    fn android_riscv64_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x400000);
+        assert_eq!(platform_directory_only_flag(), 0x200000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "riscv32", target_arch = "riscv64")
+    ))]
+    #[test]
+    fn linux_riscv_directory_open_flags_remain_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+        assert_eq!(platform_directory_only_flag(), 0x10000);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x2000_0000);
+        assert_eq!(platform_directory_only_flag(), 0x0010_0000);
+    }
+
+    #[cfg(target_os = "ios")]
+    #[test]
+    fn ios_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0010_0000);
+    }
+
+    #[cfg(target_os = "freebsd")]
+    #[test]
+    fn freebsd_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0002_0000);
+    }
+
+    #[cfg(target_os = "dragonfly")]
+    #[test]
+    fn dragonfly_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0800_0000);
+    }
+
+    #[cfg(target_os = "openbsd")]
+    #[test]
+    fn openbsd_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0002_0000);
+    }
+
+    #[cfg(target_os = "netbsd")]
+    #[test]
+    fn netbsd_directory_open_flags_match_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+        assert_eq!(platform_directory_only_flag(), 0x0020_0000);
+    }
 
     fn temp_config(temp_dir: &TempDir) -> StorageConfig {
         let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
@@ -5450,9 +5993,28 @@ mod tests {
         chunk_store
             .ingest_plan(payload, plan)
             .expect("manifest fixture payload matches plan");
+        let car_stats = CarWriter::new(plan, payload)
+            .expect("prepare canonical fixture CAR")
+            .write_to(io::sink())
+            .expect("compute canonical fixture CAR");
         ManifestBuilder::new()
+            .root_cid(
+                car_stats
+                    .root_cids
+                    .first()
+                    .cloned()
+                    .expect("fixture CAR root"),
+            )
+            .dag_codec(DagCodecId(car_stats.dag_codec))
+            .chunking_from_profile(
+                plan.chunk_profile,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(*chunk_store.por_tree().root())
+            .content_length(plan.content_length)
+            .car_digest(*car_stats.car_archive_digest.as_bytes())
+            .car_size(car_stats.car_size)
     }
 
     fn empty_file_plan() -> CarBuildPlan {
@@ -5472,17 +6034,9 @@ mod tests {
         plan
     }
 
-    fn test_manifest(payload: &[u8], plan: &CarBuildPlan, root_byte: u8) -> ManifestV1 {
+    fn test_manifest(payload: &[u8], plan: &CarBuildPlan, fixture_id_byte: u8) -> ManifestV1 {
         manifest_builder_for_plan(payload, plan)
-            .root_cid(vec![root_byte; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
+            .add_metadata("test.fixture_id", fixture_id_byte.to_string())
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest")
@@ -5865,15 +6419,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x01, 0x02, 0x03])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -5958,6 +6503,200 @@ mod tests {
     }
 
     #[test]
+    fn ingest_rejects_raw_and_carv1_payload_digests_without_publication() {
+        let payload = b"manifest archive digest domains must remain nontrivially distinct";
+        let plan = single_file_plan(payload).expect("plan");
+        let canonical_manifest = test_manifest(payload, &plan, 0x92);
+        let car_stats = CarWriter::new(&plan, payload)
+            .expect("prepare canonical CAR")
+            .write_to(io::sink())
+            .expect("compute canonical CAR");
+        let raw_payload_digest = *plan.payload_digest.as_bytes();
+        let car_payload_digest = *car_stats.car_payload_digest.as_bytes();
+
+        assert_eq!(
+            canonical_manifest.car_digest,
+            *car_stats.car_archive_digest.as_bytes()
+        );
+        assert_ne!(raw_payload_digest, car_payload_digest);
+        assert_ne!(raw_payload_digest, canonical_manifest.car_digest);
+        assert_ne!(car_payload_digest, canonical_manifest.car_digest);
+
+        for (label, rejected_digest) in [
+            ("raw-payload", raw_payload_digest),
+            ("carv1-payload-section", car_payload_digest),
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+            let mut manifest = canonical_manifest.clone();
+            manifest.car_digest = rejected_digest;
+            let manifest_id = hex::encode(
+                manifest
+                    .digest()
+                    .expect("rejected manifest digest")
+                    .as_bytes(),
+            );
+            let mut reader = payload.as_slice();
+
+            let error = backend
+                .ingest_manifest(&manifest, &plan, &mut reader)
+                .expect_err("non-archive manifest digest must fail closed");
+
+            assert!(
+                matches!(&error, StorageError::ManifestCarArchiveDigestMismatch),
+                "{label} digest produced unexpected error: {error}"
+            );
+            assert_eq!(backend.manifest_count(), 0);
+            assert_eq!(backend.total_bytes(), 0);
+            assert!(backend.manifest(&manifest_id).is_none());
+            assert!(!backend.manifests_dir.join(manifest_id).exists());
+            assert_staging_empty(&backend);
+        }
+    }
+
+    #[test]
+    fn ingest_rejects_every_archive_binding_mismatch_without_publication() {
+        #[derive(Clone, Copy, Debug)]
+        enum BindingMutation {
+            ChunkPlan,
+            Root,
+            DagCodec,
+            ArchiveSize,
+        }
+
+        let payload = b"every manifest archive binding is independently authoritative";
+        let plan = single_file_plan(payload).expect("plan");
+        let canonical_manifest = test_manifest(payload, &plan, 0x94);
+
+        for mutation in [
+            BindingMutation::ChunkPlan,
+            BindingMutation::Root,
+            BindingMutation::DagCodec,
+            BindingMutation::ArchiveSize,
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+            let mut manifest = canonical_manifest.clone();
+            match mutation {
+                BindingMutation::ChunkPlan => manifest.chunk_digest_sha3_256[0] ^= 0x80,
+                BindingMutation::Root => {
+                    *manifest.root_cid.last_mut().expect("non-empty CAR root") ^= 0x80;
+                }
+                BindingMutation::DagCodec => manifest.dag_codec.0 ^= 0x01,
+                BindingMutation::ArchiveSize => manifest.car_size += 1,
+            }
+            let manifest_id = hex::encode(
+                manifest
+                    .digest()
+                    .expect("mismatched manifest digest")
+                    .as_bytes(),
+            );
+            let mut reader = payload.as_slice();
+
+            let error = backend
+                .ingest_manifest(&manifest, &plan, &mut reader)
+                .expect_err("archive binding mismatch must fail closed");
+            let expected_error = match mutation {
+                BindingMutation::ChunkPlan => {
+                    matches!(&error, StorageError::ManifestChunkPlanDigestMismatch)
+                }
+                BindingMutation::Root => {
+                    matches!(&error, StorageError::CarArchiveReconstruction { .. })
+                }
+                BindingMutation::DagCodec => {
+                    matches!(&error, StorageError::ManifestDagCodecMismatch { .. })
+                }
+                BindingMutation::ArchiveSize => {
+                    matches!(&error, StorageError::ManifestCarSizeMismatch { .. })
+                }
+            };
+
+            assert!(
+                expected_error,
+                "{mutation:?} produced unexpected error: {error}"
+            );
+            assert_eq!(backend.manifest_count(), 0);
+            assert_eq!(backend.total_bytes(), 0);
+            assert!(backend.manifest(&manifest_id).is_none());
+            assert!(!backend.manifests_dir.join(manifest_id).exists());
+            assert_staging_empty(&backend);
+        }
+    }
+
+    #[test]
+    fn staged_car_reconstruction_rejects_short_trailing_and_corrupt_chunks() {
+        let payload = b"bounded staged CAR reconstruction";
+        let plan = single_file_plan(payload).expect("plan");
+        assert_eq!(plan.chunks.len(), 1, "fixture must use one chunk");
+        let manifest = test_manifest(payload, &plan, 0x93);
+        let planned = &plan.chunks[0];
+        let records = vec![StoredChunkRecord {
+            file_name: "chunk_00000.bin".to_owned(),
+            offset: planned.offset,
+            length: planned.length,
+            digest: planned.digest,
+            role: None,
+        }];
+
+        for (label, staged_bytes) in [
+            ("short", payload[..payload.len() - 1].to_vec()),
+            ("trailing", [payload.as_slice(), &[0xA5]].concat()),
+            ("corrupt", {
+                let mut corrupt = payload.to_vec();
+                corrupt[0] ^= 0x80;
+                corrupt
+            }),
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let chunks_dir = temp_dir.path().join("chunks");
+            fs::create_dir(&chunks_dir).expect("create staged chunk directory");
+            fs::write(chunks_dir.join("chunk_00000.bin"), staged_bytes)
+                .expect("write staged chunk");
+
+            let error = verify_staged_manifest_car_archive(&manifest, &plan, &records, &chunks_dir)
+                .expect_err("invalid staged chunk must fail closed");
+
+            assert!(
+                matches!(&error, StorageError::CarArchiveReconstruction { .. }),
+                "{label} staged chunk produced unexpected error: {error}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staged_car_reconstruction_rejects_symlink_chunks() {
+        use std::os::unix::fs::symlink;
+
+        let payload = b"staged CAR reconstruction never follows chunk symlinks";
+        let plan = single_file_plan(payload).expect("plan");
+        assert_eq!(plan.chunks.len(), 1, "fixture must use one chunk");
+        let manifest = test_manifest(payload, &plan, 0x95);
+        let planned = &plan.chunks[0];
+        let records = vec![StoredChunkRecord {
+            file_name: "chunk_00000.bin".to_owned(),
+            offset: planned.offset,
+            length: planned.length,
+            digest: planned.digest,
+            role: None,
+        }];
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let chunks_dir = temp_dir.path().join("chunks");
+        fs::create_dir(&chunks_dir).expect("create staged chunk directory");
+        let target = temp_dir.path().join("symlink-target.bin");
+        fs::write(&target, payload).expect("write symlink target");
+        symlink(&target, chunks_dir.join("chunk_00000.bin")).expect("install staged symlink");
+
+        let error = verify_staged_manifest_car_archive(&manifest, &plan, &records, &chunks_dir)
+            .expect_err("staged symlink must fail closed");
+
+        assert!(matches!(
+            &error,
+            StorageError::CarArchiveReconstruction { .. }
+        ));
+    }
+
+    #[test]
     fn ingest_manifest_preserves_directory_file_layout() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
@@ -5977,15 +6716,6 @@ mod tests {
                 .expect("directory plan");
 
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(vec![0x42; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6033,15 +6763,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x0A, 0x0B])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6067,15 +6788,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xAB; 32])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6100,15 +6812,6 @@ mod tests {
         let plan = single_file_plan(&payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(vec![0x44; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6138,15 +6841,6 @@ mod tests {
         let payload = b"stripe layout payload";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xAA, 0xBB])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6200,15 +6894,6 @@ mod tests {
         let payload = b"role length check";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xFF, 0xEE])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6317,15 +7002,6 @@ mod tests {
         let plan = single_file_plan(&payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(vec![0x55; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6351,15 +7027,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x77; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6385,15 +7052,6 @@ mod tests {
         policy.retention_epoch = 200;
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xFA, 0xCE])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(policy)
             .add_metadata(
                 sorafs_manifest::retention::RETENTION_DEAL_END_EPOCH_KEY,
@@ -6503,15 +7161,6 @@ mod tests {
         let payload = b"last access persistence";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x11, 0x22])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6546,15 +7195,6 @@ mod tests {
         let payload = b"payload for eviction";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0x10, 0x20, 0x30])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6688,15 +7328,6 @@ mod tests {
         let plan = single_file_plan(&payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(vec![0x99; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6746,15 +7377,6 @@ mod tests {
         let plan = single_file_plan(&payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(&payload, &plan)
-            .root_cid(vec![0xCD; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6820,15 +7442,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xEE; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6857,15 +7470,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xAA; 4])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -6898,15 +7502,6 @@ mod tests {
         let plan = single_file_plan(payload).expect("plan");
 
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xBB; 6])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -7759,15 +8354,6 @@ mod tests {
         let payload = b"Persistent storage test payload";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
-            .root_cid(vec![0xEF; 8])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
-            )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");

@@ -21,17 +21,21 @@ teams can embed the same steps in CI.
 ## Step 1 — Generate manifest, CAR, signatures, and fetch plan
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
   --chunk-fetch-plan-out target/sorafs/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101d0cfa9be459f4a4ba4da51990b75aef262ef546270db0e42d37728755d \
   --dag-codec=0x71 \
   --chunker-profile=sorafs.sf1@1.0.0
 ```
+
+The `<expected-full-carv2-blake3-hex>` value is the lowercase BLAKE3-256 digest
+of the complete canonical CARv2 archive (pragma, header, embedded CARv1 payload,
+and index). Do not substitute the separate SF1 chunk-plan SHA3-256 digest.
 
 The command:
 
@@ -83,7 +87,7 @@ Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
 submit the manifest through the CLI:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

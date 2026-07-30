@@ -13,6 +13,14 @@ public sealed class CancelAssetLockInstructionTests
         "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private const string MerchantEscrowId =
         "hash:996264C84790C64086AAB0EF693A1D33EC18FC0B1C1229774C461A00939A6687#F2BD";
+    private const string AppealFinanceCanonicalNoritoHex =
+        "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002d00000000000000"
+        + "d5f0a9bf0af707a1022073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11bdc"
+        + "799dfdb7ea29851f0b0501000000140400000000";
+    private const string AppealFinanceNestedEscrowIdNoritoHex =
+        "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002e00000000000000"
+        + "0e55fb7ed463b87302212073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11b"
+        + "dc799dfdb7ea29851f0b0501000000140400000000";
     private const string JavascriptInstructionBoxV1 =
         "TlJUMAAAhip9dwddTSP/bBJh2wJ4EQC/AAAAAAAAALyd3n7rx0rZADYAAAAAAAAALgAAAAAAAABpcm9oYV9kYXRhX21vZGVsOjppc2k6OmVzY3Jvdzo6Q2FuY2VsQXNzZXRMb2NreQAAAAAAAABxAAAAAAAAAE5SVDAAALXIpmWn3oDi7vdcyyhwePoASQAAAAAAAAAhEI1FZhkcBwAgAAAAAAAAAJliZMhHkMZAhqqw72k6HTPsGPwLHBIpd0xGGgCTmmaHGQAAAAAAAAAFAAAAAAAAAAEAAAB9BAAAAAAAAAACAAAA";
 
@@ -104,6 +112,18 @@ public sealed class CancelAssetLockInstructionTests
             TransactionInstruction.CancelAssetLock(
                 "\uFEFFmerchant-lock-001",
                 "1"));
+        foreach (var malformedUtf16 in new[]
+        {
+            "\uD800",
+            "\uDC00",
+            "lock\uD800id",
+        })
+        {
+            Assert.Throws<ArgumentException>(() =>
+                TransactionInstruction.CancelAssetLock(
+                    malformedUtf16,
+                    "1"));
+        }
 
         Assert.Equal(
             4_096,
@@ -152,7 +172,7 @@ public sealed class CancelAssetLockInstructionTests
             new TransactionEncodingContext(AccountId));
         var payload = new FixedFieldReader(canonicalPayload);
         var escrowField = payload.ReadField().ToArray();
-        _ = payload.ReadField();
+        var quantityField = payload.ReadField().ToArray();
         payload.RequireEnd();
 
         Assert.Throws<ArgumentException>(() =>
@@ -192,6 +212,17 @@ public sealed class CancelAssetLockInstructionTests
         var trailing = canonical.EncodeNorito().Concat(new byte[] { 0 }).ToArray();
         Assert.Throws<ArgumentException>(() =>
             CancelAssetLockInstruction.DecodeNorito(trailing));
+
+        var retiredNestedEscrowId = NoritoCodec.Encode(
+            CancelAssetLockInstruction.NativeTypeName,
+            EncodeCompactFields(
+                EncodeCompactFields(escrowField),
+                quantityField),
+            flags: 0x02);
+        Assert.Equal(86, retiredNestedEscrowId.Length);
+        Assert.Equal(new byte[] { 0x21, 0x20 }, retiredNestedEscrowId[40..42]);
+        Assert.Throws<ArgumentException>(() =>
+            CancelAssetLockInstruction.DecodeNorito(retiredNestedEscrowId));
     }
 
     [Fact]
@@ -211,6 +242,10 @@ public sealed class CancelAssetLockInstructionTests
             CancelAssetLockInstruction.DecodePayloadJson(
                 Encoding.UTF8.GetBytes(
                     $$"""{"escrow_id":"{{MerchantEscrowId}}","escrow_id":"{{MerchantEscrowId}}","expected_remaining_amount":"20"}""")));
+        Assert.Throws<ArgumentException>(() =>
+            CancelAssetLockInstruction.DecodePayloadJson(
+                Encoding.UTF8.GetBytes(
+                    $$"""{"escrow_id":["{{MerchantEscrowId}}"],"expected_remaining_amount":"20"}""")));
         Assert.Throws<ArgumentException>(() =>
             CancelAssetLockInstruction.DecodeInstructionJson(
                 Encoding.UTF8.GetBytes(
@@ -279,6 +314,18 @@ public sealed class CancelAssetLockInstructionTests
         Assert.Equal(
             Read("cancel_asset_lock_v1.to"),
             fromNorito.EncodeNorito());
+        var canonicalNorito = Read("cancel_asset_lock_v1.to");
+        Assert.Equal(85, canonicalNorito.Length);
+        Assert.Equal(
+            Convert.FromHexString(AppealFinanceCanonicalNoritoHex),
+            canonicalNorito);
+        var nestedEscrowIdNorito =
+            Read("negative/cancel_asset_lock_nested_escrow_id_v1.to");
+        Assert.Equal(86, nestedEscrowIdNorito.Length);
+        Assert.Equal(
+            Convert.FromHexString(AppealFinanceNestedEscrowIdNoritoHex),
+            nestedEscrowIdNorito);
+        Assert.Equal(new byte[] { 0x21, 0x20 }, nestedEscrowIdNorito[40..42]);
 
         foreach (var relative in new[]
         {
@@ -293,7 +340,7 @@ public sealed class CancelAssetLockInstructionTests
         foreach (var relative in new[]
         {
             "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
-            "negative/cancel_asset_lock_trailing_bytes_v1.to",
+            "negative/cancel_asset_lock_nested_escrow_id_v1.to",
             "negative/cancel_asset_lock_zero_expected_v1.to",
         })
         {

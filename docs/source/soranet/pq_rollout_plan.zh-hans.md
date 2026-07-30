@@ -117,11 +117,11 @@ capture:
 
 | Surface | Canary (Stage A) | Ramp (Stage B) | Default (Stage C) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` fetch | `--anonymity-policy stage-a` or rely on phase | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` fetch | `--anonymity-policy anon-guard-pq` or rely on phase | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Orchestrator config JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust client config (`iroha.toml`) | `rollout_phase = "canary"` (default) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` signed commands | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optionally `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optionally `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, optionally `.ANON_STRICT_PQ` |
+| `iroha_cli` signed commands | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optionally `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optionally `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, optionally `.ANON_STRICT_PQ` |
 | JavaScript orchestrator helpers | `rolloutPhase: "canary"` or `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -147,7 +147,7 @@ in lock-step with the configured phase.
      for audit storage.
 
 3. **Client/SDK canary (T+1 week)**  
-   - Flip `rollout_phase = "ramp"` in client configs or pass `stage-b` overrides
+   - Flip `rollout_phase = "ramp"` in client configs or pass `anon-majority-pq` overrides
      for the designated SDK cohorts.
    - Capture telemetry diffs (`sorafs_orchestrator_policy_events_total` grouped by
      `client_id` and `region`) and attach them to the rollout incident log.
@@ -161,8 +161,8 @@ in lock-step with the configured phase.
 
 | Wave | Relay action | Client action | Evidence & uploads | Notes |
 |------|--------------|---------------|--------------------|-------|
-| Wave 1 — APAC (T0–T+48 h) | Flip the APAC relay manifests plus the gateway orchestrator to `rollout_phase = "ramp"` and pin the `stage-b` anonymity override for the designated PoPs. Run `cargo xtask soranet-rollout-plan --regions apac --phase ramp --start <UTC> --window 6h` so the artefact bundle records the launch window. | Keep clients inheriting the `canary` phase while the relay fleet burns in; only the APAC SDK preview cohort receives `stage-b` overrides. | `artifacts/soranet_pq_rollout/<stamp>_apac/rollout_plan.{json,md}`, paired `sorafs_cli guard-directory fetch` snapshots, and a `cargo xtask soranet-rollout-capture --label apac-relay` bundle. | Use this wave to validate Argon2 ticket cost and guard cache churn before onboarding end users. |
-| Wave 2 — EU/MEA (T+48 h→T+96 h) | Promote EU/MEA relays to `ramp` once the APAC telemetry stays green. Re-run `soranet-rollout-plan` with `--regions apac,emea` so the Markdown summary documents the completed wave and pending regions. | Enable the EU/MEA SDK cohorts by setting `rollout_phase = "ramp"` in their configs or by passing `stage-b` overrides to the Android/Swift/JS SDK helpers. | Capture per-region policy metrics (`sorafs_orchestrator_policy_events_total{region="emea"}`) and drop a signed `soranet-rollout-capture --label emea-client` bundle alongside governance minutes. | This wave unlocks brownout-free Stage B coverage in two continents, proving the majority-PQ policy before final promotion. |
+| Wave 1 — APAC (T0–T+48 h) | Flip the APAC relay manifests plus the gateway orchestrator to `rollout_phase = "ramp"` and pin the `anon-majority-pq` anonymity override for the designated PoPs. Run `cargo xtask soranet-rollout-plan --regions apac --phase ramp --start <UTC> --window 6h` so the artefact bundle records the launch window. | Keep clients inheriting the `canary` phase while the relay fleet burns in; only the APAC SDK preview cohort receives `anon-majority-pq` overrides. | `artifacts/soranet_pq_rollout/<stamp>_apac/rollout_plan.{json,md}`, paired `sorafs_cli guard-directory fetch` snapshots, and a `cargo xtask soranet-rollout-capture --label apac-relay` bundle. | Use this wave to validate Argon2 ticket cost and guard cache churn before onboarding end users. |
+| Wave 2 — EU/MEA (T+48 h→T+96 h) | Promote EU/MEA relays to `ramp` once the APAC telemetry stays green. Re-run `soranet-rollout-plan` with `--regions apac,emea` so the Markdown summary documents the completed wave and pending regions. | Enable the EU/MEA SDK cohorts by setting `rollout_phase = "ramp"` in their configs or by passing `anon-majority-pq` overrides to the Android/Swift/JS SDK helpers. | Capture per-region policy metrics (`sorafs_orchestrator_policy_events_total{region="emea"}`) and drop a signed `soranet-rollout-capture --label emea-client` bundle alongside governance minutes. | This wave unlocks brownout-free Stage B coverage in two continents, proving the majority-PQ policy before final promotion. |
 | Wave 3 — Americas (T+96 h→T+144 h) | Switch the remaining relays to `ramp` (or directly to `default` if governance approves) and regenerate the rollout plan so all three regions appear in the schedule artefact. | Promote the remaining client cohorts to the next phase and stage the `rollout_phase = "default"` configs that will ship once the burn-in completes. | Signed `soranet-rollout-capture --label americas` bundle (telemetry screenshots + promtool output), plus the guard-directory diffs collected immediately before the Stage C promotion vote. | Treat this wave as the dress rehearsal for the fleet-wide flip; verify that Alertmanager remains silent while the downgrade panels stay flat. |
 
 - Keep every schedule artefact under `artifacts/soranet_pq_rollout_plan.{json,md}`
@@ -234,7 +234,7 @@ default phases trigger separate policy thresholds (`dashboards/alerts/soranet_ha
 1. Import the guard-directory snapshot captured before promotion with
    `sorafs_cli guard-directory import --guard-directory guards.json` and rerun
    `sorafs_cli guard-directory verify` so the demotion packet includes hashes.
-2. Set `rollout_phase = "canary"` (or override with `anonymity_policy stage-a`)
+2. Set `rollout_phase = "canary"` (or override with `anonymity_policy anon-guard-pq`)
    on orchestrator and client configs, then replay the PQ ratchet drill from
    `docs/source/soranet/pq_ratchet_runbook.md` to prove the downgrade pipeline.
 3. Attach the updated PQ Ratchet and SN16 telemetry screenshots plus the alert

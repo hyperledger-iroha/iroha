@@ -2,8 +2,6 @@
 
 use thiserror::Error;
 
-#[cfg(test)]
-use super::VegaT256PointV1;
 use super::{
     VegaCurveError, VegaT256ScalarV1,
     commitment::{Commitment, CommitmentError},
@@ -80,15 +78,6 @@ impl VegaTranscriptV1 {
             self.pending.extend_from_slice(&scalar.to_be_bytes());
         }
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn absorb_point(
-        &mut self,
-        label: &'static [u8],
-        point: VegaT256PointV1,
-    ) -> Result<(), VegaTranscriptError> {
-        self.absorb_raw(label, &point.to_transcript_bytes()?)
     }
 
     pub(super) fn absorb_commitment(
@@ -251,6 +240,7 @@ fn updated_state(input: &[u8]) -> [u8; 64] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vega::VegaT256PointV1;
 
     fn scalar_hex(scalar: VegaT256ScalarV1) -> String {
         hex::encode(scalar.to_le_bytes())
@@ -265,9 +255,12 @@ mod tests {
         let c1 = transcript.squeeze(b"c1").expect("round available");
 
         transcript
-            .absorb_point(
+            .absorb_raw(
                 b"g",
-                VegaT256PointV1::canonical_generator().expect("canonical generator"),
+                &VegaT256PointV1::canonical_generator()
+                    .expect("canonical generator")
+                    .to_transcript_bytes()
+                    .expect("non-identity point"),
             )
             .expect("valid point");
         transcript
@@ -329,14 +322,8 @@ mod tests {
     }
 
     #[test]
-    fn identity_oversize_and_round_overflow_are_rejected() {
+    fn oversize_and_round_overflow_are_rejected() {
         let mut transcript = VegaTranscriptV1::new_neutron_nova();
-        assert_eq!(
-            transcript.absorb_point(b"p", VegaT256PointV1::identity()),
-            Err(VegaTranscriptError::Point(
-                VegaCurveError::IdentityTranscriptPoint
-            ))
-        );
         assert_eq!(
             transcript.absorb_raw(b"x", &vec![0; MAX_PENDING_BYTES]),
             Err(VegaTranscriptError::PendingMaterialTooLarge)
@@ -349,19 +336,23 @@ mod tests {
     }
 
     #[test]
-    fn scalar_and_point_representations_are_fixed_width_and_unambiguous() {
+    fn scalar_and_commitment_representations_are_fixed_width_and_unambiguous() {
         let scalar = VegaT256ScalarV1::from_u64(1);
         let point = VegaT256PointV1::canonical_generator().expect("canonical generator");
+        let commitment = Commitment::from_points(vec![point]).expect("non-identity commitment");
         let mut typed = VegaTranscriptV1::new_raw(b"typed");
         typed.absorb_scalar(b"s", scalar).expect("bounded");
-        typed.absorb_point(b"p", point).expect("bounded");
+        typed.absorb_commitment(b"p", &commitment).expect("bounded");
 
         let mut explicit = VegaTranscriptV1::new_raw(b"typed");
         explicit
             .absorb_raw(b"s", &scalar.to_be_bytes())
             .expect("bounded");
         explicit
-            .absorb_raw(b"p", &point.to_transcript_bytes().expect("affine"))
+            .absorb_raw(
+                b"p",
+                &commitment.transcript_bytes().expect("canonical commitment"),
+            )
             .expect("bounded");
         assert_eq!(
             typed.squeeze(b"r").expect("round available"),

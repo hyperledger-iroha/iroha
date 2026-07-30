@@ -10,7 +10,6 @@
 #![cfg(feature = "app_api")]
 
 use std::{
-    fmt,
     sync::{Arc, LazyLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -26,16 +25,17 @@ use axum::{
 };
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{account::AccountId, role::RoleId};
-use norito::{
-    DecodeLimits, NoritoSerialize,
-    derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize as DeriveNoritoSerialize},
+use iroha_torii_shared::sorafs_hedging_billing_api::{
+    BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,
+    BillingAcknowledgementProofV1 as BillingAcknowledgementProofBodyV1,
 };
+use norito::{DecodeLimits, NoritoSerialize, derive::JsonSerialize};
 use sorafs_node::hedging_billing_service::{
-    BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1, BillingPublishedStatementRequestV1,
-    BillingStatementAcknowledgementRequestV1, BillingStatementListRequestV1,
-    HEDGING_BILLING_RUNTIME_API_MAX_PAGE_ITEMS_V1, HedgingBillingProjectionPageRequestV1,
-    HedgingBillingRuntimeApiErrorV1, HedgingBillingRuntimeApiV1,
-    SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1,
+    BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1 as SERVICE_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,
+    BillingPublishedStatementRequestV1, BillingStatementAcknowledgementRequestV1,
+    BillingStatementListRequestV1, HEDGING_BILLING_RUNTIME_API_MAX_PAGE_ITEMS_V1,
+    HedgingBillingProjectionPageRequestV1, HedgingBillingRuntimeApiErrorV1,
+    HedgingBillingRuntimeApiV1, SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1,
 };
 
 use crate::{JsonBody, SharedAppState};
@@ -66,6 +66,10 @@ const MAX_ACKNOWLEDGEMENT_BODY_BYTES_V1: usize =
 const MAX_PUBLISHED_STATEMENT_RESPONSE_BYTES_V1: usize =
     SIGNED_GOVERNED_BILLING_STATEMENT_MAX_BYTES_V1 + 2 * 1024 * 1024;
 const MAX_BLOCKING_OPERATIONS_V1: usize = 32;
+const _: () = assert!(
+    BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
+        == SERVICE_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
+);
 const CANONICAL_AUTH_VARY_V1: &str =
     "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
 
@@ -86,25 +90,6 @@ static HEDGING_OBSERVER_ROLE_ID_V1: LazyLock<RoleId> = LazyLock::new(|| {
 });
 static HEDGING_BILLING_BLOCKING_PERMITS_V1: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_BLOCKING_OPERATIONS_V1)));
-
-#[derive(Clone, PartialEq, Eq, DeriveNoritoSerialize, NoritoDeserialize)]
-struct BillingAcknowledgementProofBodyV1 {
-    /// Non-zero client-generated idempotency nonce authenticated by the
-    /// canonical Torii request signature and by the external owner proof.
-    request_nonce: [u8; 32],
-    /// Bounded proof over the service's proof-independent request digest.
-    authentication_proof: Vec<u8>,
-}
-
-impl fmt::Debug for BillingAcknowledgementProofBodyV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BillingAcknowledgementProofBodyV1")
-            .field("request_nonce", &self.request_nonce)
-            .field("authentication_proof", &"[REDACTED]")
-            .finish()
-    }
-}
 
 #[derive(Debug, JsonSerialize)]
 struct HedgingBillingApiErrorResponseV1 {

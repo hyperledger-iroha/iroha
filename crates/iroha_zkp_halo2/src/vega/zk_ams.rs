@@ -362,6 +362,7 @@ pub enum ZkAmsAdmissionRelationErrorV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct ZkAmsAdmissionProofWireV1 {
     version: u8,
@@ -767,12 +768,12 @@ fn public_digest_bytes(
     builder: &mut CircuitBuilder,
     start: usize,
 ) -> Result<[ByteVar; 32], CircuitError> {
-    Ok(public_digest_words(builder, start)?
+    public_digest_words(builder, start)?
         .into_iter()
         .flat_map(WordVar::to_be_bytes)
         .collect::<Vec<_>>()
         .try_into()
-        .map_err(|_| CircuitError::InvalidDimension)?)
+        .map_err(|_| CircuitError::InvalidDimension)
 }
 
 fn public_u64_bytes(
@@ -782,13 +783,12 @@ fn public_u64_bytes(
 ) -> Result<[ByteVar; 8], CircuitError> {
     let high = public_word(builder, high_index)?;
     let low = public_word(builder, low_index)?;
-    Ok(high
-        .to_be_bytes()
+    high.to_be_bytes()
         .into_iter()
         .chain(low.to_be_bytes())
         .collect::<Vec<_>>()
         .try_into()
-        .map_err(|_| CircuitError::InvalidDimension)?)
+        .map_err(|_| CircuitError::InvalidDimension)
 }
 
 fn bind_digest_words(
@@ -892,7 +892,86 @@ mod tests {
         VegaPointWireV1, VegaScalarWireV1,
         masked_relaxed::{MASKED_RELAXED_COMMITMENT_COLUMNS_V1, MaskedRelaxedCommitmentWireV1},
     };
+    use hex_literal::hex;
     use norito::NoritoSerialize;
+
+    #[derive(Clone)]
+    struct AdmissionAssignmentFixture {
+        public: ZkAmsAdmissionPublicInputV1,
+        subject_commitment: [u8; 32],
+        credential_nonce: [u8; 32],
+        signature_r: [u8; 32],
+        signature_s: [u8; 32],
+        recovery_x: [u8; 32],
+        recovery_y: [u8; 32],
+    }
+
+    impl AdmissionAssignmentFixture {
+        fn witness(&self) -> ZkAmsAdmissionRelationWitnessV1<'_> {
+            ZkAmsAdmissionRelationWitnessV1::new(
+                &self.subject_commitment,
+                &self.credential_nonce,
+                &self.signature_r,
+                &self.signature_s,
+                &self.recovery_x,
+                &self.recovery_y,
+            )
+            .expect("nonzero fixed witness")
+        }
+    }
+
+    fn admission_assignment_fixture() -> AdmissionAssignmentFixture {
+        AdmissionAssignmentFixture {
+            public: ZkAmsAdmissionPublicInputV1 {
+                issuer_key_x: hex!(
+                    "8e533b6fa0bf7b4625bb30667c01fb607ef9f8b8a80fef5b300628703187b2a3"
+                ),
+                issuer_key_y: hex!(
+                    "73eb1dbde03318366d069f83a6f5900053c73633cb041b21c55e1a86c1f400b4"
+                ),
+                issuer_key_prefix: 0x02,
+                issuer_id: [0x31; 32],
+                policy_id: [0x35; 32],
+                issuer_policy_record_digest: [0x32; 32],
+                registry_id: [0x33; 32],
+                registry_record_digest: [0x34; 32],
+                policy_digest: [0x36; 32],
+                phc_hash: hex!("9383ba61dc82dee66ba0210e99a86d9bc45c6ed62c717a111239991e347a3edd"),
+                seed_public_key: [0x51; 32],
+                prior_registry_root: [0x37; 32],
+                next_registry_root: hex!(
+                    "84e0c6b4ab07ab28b71ad3828e3896e68aa821816c413bba257082df1238a586"
+                ),
+                current_registry_epoch: 9,
+                next_registry_epoch: 10,
+                batch_size: 1,
+                anchor_index: 0,
+            },
+            subject_commitment: [0x41; 32],
+            credential_nonce: [0x61; 32],
+            signature_r: hex!("3ed113b7883b4c590638379db0c21cda16742ed0255048bf433391d374bc21d1"),
+            signature_s: hex!("06d6d7ac6abd44d90dbdf7da0a16796a7228576114ad79a8e8d5ba374fb6a016"),
+            recovery_x: hex!("3ed113b7883b4c590638379db0c21cda16742ed0255048bf433391d374bc21d1"),
+            recovery_y: hex!("9099209accc4c8a224c843afa4f4c68a090d04da5e9889dae2f8eefce82a3740"),
+        }
+    }
+
+    fn synthesize_fixture(fixture: &AdmissionAssignmentFixture) -> CircuitAssignment {
+        synthesize_admission(fixture.public, &fixture.witness())
+            .expect("fixed-shape admission synthesis")
+    }
+
+    fn assignment_is_satisfied(assignment: &CircuitAssignment) -> bool {
+        assignment
+            .shape
+            .validate_relaxed_assignment(
+                &assignment.witness,
+                Scalar::one(),
+                &assignment.public_inputs,
+                &vec![Scalar::zero(); assignment.shape.constraint_count()],
+            )
+            .is_ok()
+    }
 
     fn synthetic_dimensions() -> MaskedRelaxedDimensionsV1 {
         MaskedRelaxedDimensionsV1 {
@@ -1016,5 +1095,56 @@ mod tests {
         }
         assert_ne!(alternate, canonical);
         assert!(decode(&alternate).is_err());
+    }
+
+    #[test]
+    fn admission_assignment_accepts_low_s_and_rejects_malleability_and_rebinding() {
+        // Independent P-256 arithmetic fixture: private key 7, nonce 11. The
+        // high-s signature below is the valid `n-s` counterpart and uses `-R`,
+        // so only the canonical low-s constraint distinguishes the two.
+        let fixture = admission_assignment_fixture();
+        let low_s = synthesize_fixture(&fixture);
+        assert!(
+            assignment_is_satisfied(&low_s),
+            "canonical low-s admission assignment must satisfy every constraint"
+        );
+
+        for public_index in [PHC_HASH_WORD_START, NEXT_ROOT_WORD_START] {
+            let mut rebound_public = low_s.public_inputs.clone();
+            rebound_public[public_index] += Scalar::one();
+            assert!(
+                low_s
+                    .shape
+                    .validate_relaxed_assignment(
+                        &low_s.witness,
+                        Scalar::one(),
+                        &rebound_public,
+                        &vec![Scalar::zero(); low_s.shape.constraint_count()],
+                    )
+                    .is_err(),
+                "mutating a statement-bound public value must fail"
+            );
+        }
+        drop(low_s);
+
+        let mut high_s_fixture = fixture.clone();
+        high_s_fixture.signature_s =
+            hex!("f92928529542bb27f2420825f5e986954abea34c926a24dc0ae4108bacac853b");
+        high_s_fixture.recovery_y =
+            hex!("6f66df64333b375edb37bc505b0b3975f6f2fb26a16776251d07110317d5c8bf");
+        let high_s = synthesize_fixture(&high_s_fixture);
+        assert!(
+            !assignment_is_satisfied(&high_s),
+            "the algebraically valid high-s counterpart must violate the circuit"
+        );
+        drop(high_s);
+
+        let mut changed_witness = fixture;
+        changed_witness.subject_commitment[0] ^= 1;
+        let changed_witness = synthesize_fixture(&changed_witness);
+        assert!(
+            !assignment_is_satisfied(&changed_witness),
+            "a hidden PHC-field mutation must fail its public hash binding"
+        );
     }
 }

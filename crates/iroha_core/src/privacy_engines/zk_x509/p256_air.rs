@@ -125,6 +125,15 @@ pub(crate) enum ZkX509P256ArithmeticKindV1 {
     Subtract,
 }
 
+/// Value-free verifier instruction used to compile arithmetic preprocessing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ZkX509P256ArithmeticTopologyV1 {
+    /// Fixed arithmetic relation.
+    pub(crate) kind: ZkX509P256ArithmeticKindV1,
+    /// Fixed arithmetic modulus.
+    pub(crate) modulus: ZkX509P256ModulusV1,
+}
+
 /// One canonical arithmetic operation before row expansion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509P256ArithmeticOperationV1 {
@@ -275,58 +284,58 @@ impl ZkX509P256ArithmeticTraceV1 {
 /// The complete logical topology is checked once at construction. Numeric
 /// fixed rows, including the canonical suffix through `trace_size`, are then
 /// regenerated on demand without retaining a wide fixed table.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct P256ArithmeticStarkFixedProviderV1<'a> {
-    fixed_rows: &'a [ZkX509P256ArithmeticFixedRowV1],
+#[derive(Clone, Debug)]
+pub(crate) struct P256ArithmeticStarkFixedProviderV1 {
+    operations: Vec<ZkX509P256ArithmeticTopologyV1>,
+    active_rows: usize,
     trace_size: usize,
 }
 
-impl<'a> P256ArithmeticStarkFixedProviderV1<'a> {
+impl P256ArithmeticStarkFixedProviderV1 {
     /// Validate the deterministic topology and establish one padded native
     /// domain.
     pub(crate) fn new_v1(
-        fixed_rows: &'a [ZkX509P256ArithmeticFixedRowV1],
+        operations: &[ZkX509P256ArithmeticTopologyV1],
         trace_size: usize,
     ) -> Result<Self, ZkX509P256AirErrorV1> {
-        if fixed_rows.is_empty()
-            || !fixed_rows
-                .len()
-                .is_multiple_of(P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
-            || !trace_size.is_power_of_two()
-            || fixed_rows.len() > trace_size
-        {
+        let active_rows = operations
+            .len()
+            .checked_mul(P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
+            .ok_or(ZkX509P256AirErrorV1::Allocation)?;
+        if operations.is_empty() || !trace_size.is_power_of_two() || active_rows > trace_size {
             return Err(ZkX509P256AirErrorV1::Topology);
         }
-        for (index, fixed) in fixed_rows.iter().copied().enumerate() {
-            let coefficient = index % P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
-            let operation = index / P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
-            if fixed.operation as usize != operation
-                || fixed.coefficient as usize != coefficient
-                || (coefficient != 0 && fixed_rows[index - coefficient].kind != fixed.kind)
-                || (coefficient != 0 && fixed_rows[index - coefficient].modulus != fixed.modulus)
-            {
-                return Err(ZkX509P256AirErrorV1::Topology);
-            }
-        }
+        let mut owned = Vec::new();
+        owned
+            .try_reserve_exact(operations.len())
+            .map_err(|_| ZkX509P256AirErrorV1::Allocation)?;
+        owned.extend_from_slice(operations);
         Ok(Self {
-            fixed_rows,
+            operations: owned,
+            active_rows,
             trace_size,
         })
     }
 
     /// Regenerate one exact numeric row.
     pub(crate) fn row_v1(
-        self,
+        &self,
         index: usize,
     ) -> Result<[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1], ZkX509P256AirErrorV1> {
         if index >= self.trace_size {
             return Err(ZkX509P256AirErrorV1::Topology);
         }
-        let Some(fixed) = self.fixed_rows.get(index).copied() else {
+        if index >= self.active_rows {
             let mut row = [F::ZERO; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1];
             row[STARK_PADDING] = F::ONE;
             return Ok(row);
-        };
+        }
+        let operation = index / P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
+        let fixed = self
+            .operations
+            .get(operation)
+            .copied()
+            .ok_or(ZkX509P256AirErrorV1::Topology)?;
         let coefficient = index % P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
         let mut row = [F::ZERO; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1];
         row[match fixed.kind {
@@ -358,7 +367,7 @@ impl<'a> P256ArithmeticStarkFixedProviderV1<'a> {
     }
 
     /// Native row count.
-    pub(crate) const fn trace_size_v1(self) -> usize {
+    pub(crate) const fn trace_size_v1(&self) -> usize {
         self.trace_size
     }
 }
@@ -767,14 +776,14 @@ pub(crate) fn evaluate_p256_arithmetic_row_constraints_v1(
 
 /// Compile the exact numeric preprocessing rows used by the aggregate STARK.
 ///
-/// `fixed_rows` must come from the deterministic ECDSA topology compiler, not
-/// from proof bytes. The suffix through `trace_size` is the sole canonical
-/// padding schedule.
+/// `operations` must come from the deterministic ECDSA topology compiler, not
+/// from proof bytes or a witness trace. The suffix through `trace_size` is the
+/// sole canonical padding schedule.
 pub(crate) fn compile_p256_arithmetic_stark_fixed_rows_v1(
-    fixed_rows: &[ZkX509P256ArithmeticFixedRowV1],
+    operations: &[ZkX509P256ArithmeticTopologyV1],
     trace_size: usize,
 ) -> Result<Vec<[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1]>, ZkX509P256AirErrorV1> {
-    let provider = P256ArithmeticStarkFixedProviderV1::new_v1(fixed_rows, trace_size)?;
+    let provider = P256ArithmeticStarkFixedProviderV1::new_v1(operations, trace_size)?;
     let mut rows = Vec::new();
     rows.try_reserve_exact(trace_size)
         .map_err(|_| ZkX509P256AirErrorV1::Allocation)?;
@@ -1376,6 +1385,18 @@ mod tests {
         .collect()
     }
 
+    fn arithmetic_topology(
+        operations: &[ZkX509P256ArithmeticOperationV1],
+    ) -> Vec<ZkX509P256ArithmeticTopologyV1> {
+        operations
+            .iter()
+            .map(|operation| ZkX509P256ArithmeticTopologyV1 {
+                kind: operation.kind,
+                modulus: operation.modulus,
+            })
+            .collect()
+    }
+
     #[test]
     fn exact_base_and_scalar_arithmetic_accepts_boundary_vectors() {
         assert_eq!(
@@ -1405,7 +1426,7 @@ mod tests {
         let expected_b = bytes_be_to_limbs_le_v1(operations[1].b);
         let expected_c = bytes_be_to_limbs_le_v1(operations[1].c);
         let fixed = P256ArithmeticStarkFixedProviderV1::new_v1(
-            &trace.fixed,
+            &arithmetic_topology(&operations),
             trace.rows().next_power_of_two(),
         )
         .expect("numeric fixed provider");
@@ -1736,9 +1757,10 @@ mod tests {
 
     fn validate_numeric_stark_trace(
         trace: &ZkX509P256ArithmeticTraceV1,
+        topology: &[ZkX509P256ArithmeticTopologyV1],
         trace_size: usize,
     ) -> Result<(), ZkX509P256AirErrorV1> {
-        let fixed = compile_p256_arithmetic_stark_fixed_rows_v1(&trace.fixed, trace_size)?;
+        let fixed = compile_p256_arithmetic_stark_fixed_rows_v1(topology, trace_size)?;
         let mut base = trace.base.clone();
         base.resize(trace_size, [F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]);
         let aux = vec![[F::ZERO; P256_ARITHMETIC_STARK_AUX_WIDTH_V1]; trace_size];
@@ -1762,41 +1784,77 @@ mod tests {
 
     #[test]
     fn numeric_fixed_evaluator_matches_every_arithmetic_row_and_padding() {
-        let trace = build_zk_x509_p256_arithmetic_trace_v1(&boundary_operations())
+        let operations = boundary_operations();
+        let topology = arithmetic_topology(&operations);
+        let trace = build_zk_x509_p256_arithmetic_trace_v1(&operations)
             .expect("canonical boundary arithmetic");
         let trace_size = (trace.base.len() + 1).next_power_of_two();
         assert!(trace_size > trace.base.len());
-        validate_numeric_stark_trace(&trace, trace_size)
+        validate_numeric_stark_trace(&trace, &topology, trace_size)
             .expect("numeric fixed evaluator accepts the canonical trace");
     }
 
     #[test]
     fn numeric_fixed_compiler_rejects_topology_substitution_and_bad_padding_shape() {
-        let trace = build_zk_x509_p256_arithmetic_trace_v1(&boundary_operations()[..2])
-            .expect("canonical arithmetic");
+        let operations = boundary_operations()[..3].to_vec();
+        let trace =
+            build_zk_x509_p256_arithmetic_trace_v1(&operations).expect("canonical arithmetic");
+        let topology = arithmetic_topology(&operations);
         let trace_size = trace.base.len().next_power_of_two();
-        assert!(compile_p256_arithmetic_stark_fixed_rows_v1(&trace.fixed, trace_size).is_ok());
-        for mutate in 0..4 {
-            let mut changed = trace.fixed.clone();
-            match mutate {
-                0 => changed[1].operation ^= 1,
-                1 => changed[1].coefficient ^= 1,
-                2 => changed[1].kind = ZkX509P256ArithmeticKindV1::Subtract,
-                3 => changed[1].modulus = ZkX509P256ModulusV1::ScalarField,
-                _ => unreachable!(),
-            }
-            assert_eq!(
-                compile_p256_arithmetic_stark_fixed_rows_v1(&changed, trace_size),
-                Err(ZkX509P256AirErrorV1::Topology)
-            );
-        }
+        assert!(compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size).is_ok());
+
+        let mut omitted = topology.clone();
+        omitted.pop();
+        assert_ne!(
+            compile_p256_arithmetic_stark_fixed_rows_v1(&omitted, trace_size)
+                .expect("internally valid shorter topology"),
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size)
+                .expect("canonical topology"),
+        );
+        let mut reordered = topology.clone();
+        reordered.swap(0, 1);
+        assert_ne!(
+            compile_p256_arithmetic_stark_fixed_rows_v1(&reordered, trace_size)
+                .expect("internally valid reordered topology"),
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size)
+                .expect("canonical topology"),
+        );
+        let mut substituted = topology.clone();
+        substituted[0].kind = ZkX509P256ArithmeticKindV1::Subtract;
+        substituted[1].modulus = ZkX509P256ModulusV1::ScalarField;
+        assert_ne!(
+            compile_p256_arithmetic_stark_fixed_rows_v1(&substituted, trace_size)
+                .expect("internally valid substituted topology"),
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size)
+                .expect("canonical topology"),
+        );
         assert_eq!(
-            compile_p256_arithmetic_stark_fixed_rows_v1(&trace.fixed, trace.base.len() - 1),
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace.base.len() - 1),
             Err(ZkX509P256AirErrorV1::Topology)
         );
         assert_eq!(
-            compile_p256_arithmetic_stark_fixed_rows_v1(&trace.fixed, trace_size + 1),
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size + 1),
             Err(ZkX509P256AirErrorV1::Topology)
+        );
+    }
+
+    #[test]
+    fn numeric_fixed_compiler_is_independent_of_private_operand_bytes() {
+        let operations = boundary_operations();
+        let topology = arithmetic_topology(&operations);
+        let mut different_private_values = operations.clone();
+        for (index, operation) in different_private_values.iter_mut().enumerate() {
+            operation.a = [index as u8; 32];
+            operation.b = [index.wrapping_mul(17) as u8; 32];
+            operation.c = [index.wrapping_mul(31) as u8; 32];
+        }
+        let changed_topology = arithmetic_topology(&different_private_values);
+        assert_eq!(topology, changed_topology);
+        let trace_size =
+            (operations.len() * P256_ARITHMETIC_ROWS_PER_OPERATION_V1).next_power_of_two();
+        assert_eq!(
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size),
+            compile_p256_arithmetic_stark_fixed_rows_v1(&changed_topology, trace_size),
         );
     }
 
@@ -1805,8 +1863,9 @@ mod tests {
         let trace = build_zk_x509_p256_arithmetic_trace_v1(&boundary_operations()[..3])
             .expect("multiply, add, and subtract trace");
         let trace_size = trace.base.len().next_power_of_two();
-        let fixed = compile_p256_arithmetic_stark_fixed_rows_v1(&trace.fixed, trace_size)
-            .expect("fixed rows");
+        let topology = arithmetic_topology(&boundary_operations()[..3]);
+        let fixed =
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size).expect("fixed rows");
         let mut base = trace.base.clone();
         base.resize(trace_size, [F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]);
         let aux = vec![[F::ZERO; P256_ARITHMETIC_STARK_AUX_WIDTH_V1]; trace_size];
@@ -1842,8 +1901,9 @@ mod tests {
         let trace = build_zk_x509_p256_arithmetic_trace_v1(&boundary_operations()[..1])
             .expect("canonical arithmetic");
         let trace_size = trace.base.len().next_power_of_two();
-        let fixed = compile_p256_arithmetic_stark_fixed_rows_v1(&trace.fixed, trace_size)
-            .expect("fixed rows");
+        let topology = arithmetic_topology(&boundary_operations()[..1]);
+        let fixed =
+            compile_p256_arithmetic_stark_fixed_rows_v1(&topology, trace_size).expect("fixed rows");
         let mut base = trace.base.clone();
         base.resize(trace_size, [F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]);
         let zero_aux = [F::ZERO; P256_ARITHMETIC_STARK_AUX_WIDTH_V1];

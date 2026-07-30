@@ -2256,7 +2256,7 @@ mod tests {
             "sis-with-hints",
             "unknown/privacy/backend",
         ] {
-            vk_backend_tag_from_label(label)
+            let _ = vk_backend_tag_from_label(label)
                 .expect_err("protocol names and unknown labels must not map to generic engines");
         }
     }

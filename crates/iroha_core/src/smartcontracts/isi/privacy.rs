@@ -14,18 +14,16 @@ use iroha_data_model::{
             BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
             PublishPrivacyRootV1, RegisterPrivacyBootleLanternIssuerPolicyV1,
             RegisterPrivacyProtocolActivationV1, RegisterPrivacyVegaIssuerV1,
-            RegisterPrivacyZkAcePolicyV1,
-            RegisterPrivacyZkX509CertificatePolicyV1, RegisterPrivacyZkX509CrlV1,
-            RegisterPrivacyZkX509TrustAnchorV1, RevokePrivacyBootleLanternIssuerPolicyV1,
-            RevokePrivacyVegaIssuerV1, RevokePrivacyZkAcePolicyV1,
-            RevokePrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkAcePolicyV1, RegisterPrivacyZkX509CertificatePolicyV1,
+            RegisterPrivacyZkX509CrlV1, RegisterPrivacyZkX509TrustAnchorV1,
+            RevokePrivacyBootleLanternIssuerPolicyV1, RevokePrivacyVegaIssuerV1,
+            RevokePrivacyZkAcePolicyV1, RevokePrivacyZkX509CertificatePolicyV1,
             RevokePrivacyZkX509CrlV1, RevokePrivacyZkX509TrustAnchorV1,
             RotatePrivacyBootleLanternIssuerPolicyV1, RotatePrivacyVegaIssuerV1,
-            RotatePrivacyZkAcePolicyV1,
-            RotatePrivacyZkX509CertificatePolicyV1, RotatePrivacyZkX509CrlV1,
-            RotatePrivacyZkX509TrustAnchorV1, SchedulePrivacyConsensusPolicyTighteningV1,
-            SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
-            TransitionPrivacyProtocolLifecycleV1,
+            RotatePrivacyZkAcePolicyV1, RotatePrivacyZkX509CertificatePolicyV1,
+            RotatePrivacyZkX509CrlV1, RotatePrivacyZkX509TrustAnchorV1,
+            SchedulePrivacyConsensusPolicyTighteningV1, SchedulePrivacyProtocolLimitsTighteningV1,
+            SubmitPrivacyProofV1, TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
@@ -39,17 +37,16 @@ use iroha_data_model::{
         PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
         PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1, PrivacyRootPublicationV1,
         PrivacyRootRoleV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyValueBalanceDirectionV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAmsActionV1,
-        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
-        PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
-        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1, ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1,
+        PrivacyValueBalanceDirectionV1, PrivacyVegaIssuerRecordV1, PrivacyZkAcePolicyLifecycleV1,
+        PrivacyZkAmsActionV1, PrivacyZkX509CrlRecordV1, PrivacyZkX509RecordLifecycleV1,
+        PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         VEGA_MAX_ISSUER_RECORD_REVISIONS_PER_LINEAGE_V1, VEGA_MAX_ISSUER_RECORDS_V1,
-        ZK_X509_MAX_CRL_AGE_SECONDS_V1, ZK_X509_MAX_CRL_LINEAGES_V1,
-        ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1, ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1,
-        validate_zk_ace_policy_revocation_v1, validate_zk_ace_policy_rotation_v1,
-        validate_zk_x509_certificate_policy_revocation_v1,
+        ZK_X509_MAX_CERTIFICATE_POLICY_RECORDS_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
+        ZK_X509_MAX_CRL_LINEAGES_V1, ZK_X509_MAX_RECORD_REVISIONS_PER_LINEAGE_V1,
+        ZK_X509_MAX_TRUST_ANCHOR_RECORDS_V1, validate_vega_issuer_revocation_v1,
+        validate_vega_issuer_rotation_v1, validate_zk_ace_policy_revocation_v1,
+        validate_zk_ace_policy_rotation_v1, validate_zk_x509_certificate_policy_revocation_v1,
         validate_zk_x509_certificate_policy_rotation_v1, validate_zk_x509_crl_revocation_v1,
-        validate_vega_issuer_revocation_v1, validate_vega_issuer_rotation_v1,
         validate_zk_x509_crl_rotation_v1, validate_zk_x509_trust_anchor_revocation_v1,
         validate_zk_x509_trust_anchor_rotation_v1, zk_ams_issuer_policy_record_digest_v1,
         zk_ams_registry_record_digest_v1,
@@ -86,12 +83,11 @@ use crate::{
         PrivacyStateItemRecordV1, compute_privacy_pgc_account_state_root_v1,
         load_privacy_bootle_lantern_issuer_policy_v1, load_privacy_orchard_pool_snapshot_v1,
         load_privacy_pgc_pool_snapshot_v1, load_privacy_proof_managed_pool_snapshot_v1,
-        load_privacy_vega_issuer_v1,
-        load_privacy_zk_ace_policy_v1, load_privacy_zk_ams_registry_snapshot_v1,
-        load_privacy_zk_x509_authoritative_state_v1, load_privacy_zk_x509_certificate_policy_v1,
-        load_privacy_zk_x509_trust_anchor_v1, plan_privacy_root_history_update_v1,
-        privacy_bootle_lantern_issuer_policy_count_v1, privacy_vega_issuer_record_count_v1,
-        privacy_zk_ace_policy_count_v1,
+        load_privacy_vega_issuer_v1, load_privacy_zk_ace_policy_v1,
+        load_privacy_zk_ams_registry_snapshot_v1, load_privacy_zk_x509_authoritative_state_v1,
+        load_privacy_zk_x509_certificate_policy_v1, load_privacy_zk_x509_trust_anchor_v1,
+        plan_privacy_root_history_update_v1, privacy_bootle_lantern_issuer_policy_count_v1,
+        privacy_vega_issuer_record_count_v1, privacy_zk_ace_policy_count_v1,
         privacy_zk_x509_ca_namespace_v1, privacy_zk_x509_crl_lineage_count_v1,
         privacy_zk_x509_governance_record_counts_v1, proof_managed_pool_root_role_v1,
         validate_privacy_zk_x509_policy_revocation_dependencies_v1,
@@ -103,9 +99,9 @@ use crate::{
         PrivacyAnonymousPgcStateFailureCodeV1, PrivacyBootleLanternStateFailureCodeV1,
         PrivacyFcmpStateFailureCodeV1, PrivacyIvmPrivateNoteStateFailureCodeV1,
         PrivacyOrchardStateFailureCodeV1, PrivacyPgcVerificationStateV1,
-        PrivacyPqMaspStateFailureCodeV1, PrivacyVerificationContextFailureCodeV1,
-        PrivacyVerificationContextV1, PrivacyVerificationErrorV1,
-        PrivacyVegaStateFailureCodeV1, PrivacyZkX509StateFailureCodeV1,
+        PrivacyPqMaspStateFailureCodeV1, PrivacyVegaStateFailureCodeV1,
+        PrivacyVerificationContextFailureCodeV1, PrivacyVerificationContextV1,
+        PrivacyVerificationErrorV1, PrivacyZkX509StateFailureCodeV1,
         PrivacyZkX509VerificationStateV1, VerifiedPrivacyLedgerEffectsV1,
         VerifiedProofManagedPoolLedgerEffectV1, VerifiedProofManagedPoolTransitionV1,
         verify_privacy_envelope_v1,
@@ -3314,19 +3310,20 @@ impl Execute for RegisterPrivacyVegaIssuerV1 {
         self.record.validate_initial().map_err(|error| {
             invalid_privacy_parameter(format!("Vega issuer registration rejected: {error}"))
         })?;
-        CompressedPointV1::from_slice(self.record.issuer_public_key.as_bytes()).map_err(|error| {
-            invalid_privacy_parameter(format!(
-                "Vega issuer registration has an invalid P-256 key: {error}"
-            ))
-        })?;
-        let record_count = privacy_vega_issuer_record_count_v1(
-            &state_transaction.world.privacy_commitments,
-        )
-        .map_err(|error| {
-            Error::InvariantViolation(
-                format!("persisted Vega issuer registry is invalid: {error}").into(),
-            )
-        })?;
+        CompressedPointV1::from_slice(self.record.issuer_public_key.as_bytes()).map_err(
+            |error| {
+                invalid_privacy_parameter(format!(
+                    "Vega issuer registration has an invalid P-256 key: {error}"
+                ))
+            },
+        )?;
+        let record_count =
+            privacy_vega_issuer_record_count_v1(&state_transaction.world.privacy_commitments)
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("persisted Vega issuer registry is invalid: {error}").into(),
+                    )
+                })?;
         if record_count >= VEGA_MAX_ISSUER_RECORDS_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "Vega issuer registry is full at {} revisions",
@@ -3379,14 +3376,13 @@ impl Execute for RotatePrivacyVegaIssuerV1 {
                 "Vega expected current issuer-record digest must be non-zero",
             ));
         }
-        let record_count = privacy_vega_issuer_record_count_v1(
-            &state_transaction.world.privacy_commitments,
-        )
-        .map_err(|error| {
-            Error::InvariantViolation(
-                format!("persisted Vega issuer registry is invalid: {error}").into(),
-            )
-        })?;
+        let record_count =
+            privacy_vega_issuer_record_count_v1(&state_transaction.world.privacy_commitments)
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("persisted Vega issuer registry is invalid: {error}").into(),
+                    )
+                })?;
         if record_count >= VEGA_MAX_ISSUER_RECORDS_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "Vega issuer registry is full at {} revisions",
@@ -3464,9 +3460,7 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
             .ok()
             .and_then(|bytes| u64::try_from(bytes.len()).ok())
             .ok_or_else(|| {
-                Error::InvariantViolation(
-                    "Vega issuer revocation canonical encoding failed".into(),
-                )
+                Error::InvariantViolation("Vega issuer revocation canonical encoding failed".into())
             })?;
         let expected_action_index = state_transaction.next_privacy_action_index();
         state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
@@ -3476,14 +3470,13 @@ impl Execute for RevokePrivacyVegaIssuerV1 {
                 "Vega expected current issuer-record digest must be non-zero",
             ));
         }
-        let record_count = privacy_vega_issuer_record_count_v1(
-            &state_transaction.world.privacy_commitments,
-        )
-        .map_err(|error| {
-            Error::InvariantViolation(
-                format!("persisted Vega issuer registry is invalid: {error}").into(),
-            )
-        })?;
+        let record_count =
+            privacy_vega_issuer_record_count_v1(&state_transaction.world.privacy_commitments)
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("persisted Vega issuer registry is invalid: {error}").into(),
+                    )
+                })?;
         if record_count >= VEGA_MAX_ISSUER_RECORDS_V1 {
             return Err(invalid_privacy_parameter(format!(
                 "Vega issuer registry is full at {} revisions",
@@ -5920,6 +5913,7 @@ mod tests {
         block::BlockHeader,
         domain::{Domain, DomainId},
         name::Name,
+        prelude::Mint,
         privacy::{
             AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_ISSUER_MATRIX_DIMENSION_V1,
@@ -5927,30 +5921,28 @@ mod tests {
             BootleLanternIssuerPublicMatrixV1, BootleLanternPolynomialV1, PrivacyActiveLifecycleV1,
             PrivacyBootleLanternIssuerPolicyDigestV1, PrivacyCommitmentV1,
             PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
-            PrivacyIssuerIdV1,
-            PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
-            PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-            PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyPqMaspPoolBootstrapV1,
-            PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
-            PrivacyProofSystemIdV1, PrivacyProofV1, PrivacyProposedLifecycleV1,
-            PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
-            PrivacyProtocolIdV1, PrivacyRootPublicationV1, PrivacyRootV1,
-            PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
+            PrivacyIssuerIdV1, PrivacyIvmPrivateNotePoolBootstrapV1, PrivacyNamespaceScopeV1,
+            PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+            PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+            PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1,
+            PrivacyPqMaspPoolBootstrapV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+            PrivacyProofManagedPoolBootstrapV1, PrivacyProofSystemIdV1, PrivacyProofV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootPublicationV1,
+            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1, PrivacyStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyTrustAnchorNamespaceV1,
             PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVegaIssuerRecordDigestV1,
-            PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509CrlDerDigestV1,
-            PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509ExtendedKeyUsageV1,
-            PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
+            PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaMdlDigestAlgorithmV1,
+            PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
+            PrivacyX509CrlDerDigestV1, PrivacyX509CrlIssuerSpkiDigestV1,
+            PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageV1, PrivacyX509TrustStoreDigestV1,
             PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
-            PrivacyZkX509CertificatePolicyRecordDigestV1,
-            PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordDigestV1,
-            PrivacyZkX509CrlRecordV1, PrivacyZkX509TrustAnchorRecordDigestV1,
-            PrivacyZkX509TrustAnchorRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+            PrivacyZkX509CertificatePolicyRecordDigestV1, PrivacyZkX509CertificatePolicyRecordV1,
+            PrivacyZkX509CrlRecordDigestV1, PrivacyZkX509CrlRecordV1,
+            PrivacyZkX509TrustAnchorRecordDigestV1, PrivacyZkX509TrustAnchorRecordV1,
+            TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         },
-        prelude::Mint,
     };
     use iroha_test_samples::ALICE_ID;
     use mv::storage::Storage;
@@ -5958,6 +5950,8 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
+    #[cfg(feature = "zk-stark")]
+    use crate::privacy_verifier::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
     use crate::{
         kura::Kura,
         privacy_engines::{
@@ -5978,14 +5972,12 @@ mod tests {
         },
         privacy_profiles::compiled_privacy_profile_v1,
         privacy_verifier::{
-            FcmpRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
+            FcmpRuntimeFixtureForTest, ZkAmsRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
             zk_ams_runtime_fixture_for_test,
         },
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    #[cfg(feature = "zk-stark")]
-    use crate::privacy_verifier::zk_ace_runtime_fixture_for_test;
 
     const TEST_CHAIN_ID: &str = "taira-pgc-runtime-test";
     const TEST_GENESIS_HASH: [u8; 32] = [0x91; 32];
@@ -6655,10 +6647,10 @@ mod tests {
             epoch,
             PrivacyPolicyDigestV1::new([policy_byte; 32]),
             PrivacyX509KeyUsageV1 {
-                digital_signature: true,
-                content_commitment: false,
-                key_encipherment: false,
-                key_agreement: false,
+                digital_signature: true.into(),
+                content_commitment: false.into(),
+                key_encipherment: false.into(),
+                key_agreement: false.into(),
             },
             vec![
                 PrivacyX509ExtendedKeyUsageV1::ClientAuthentication,
@@ -8226,11 +8218,8 @@ mod tests {
                 1
             );
             assert_eq!(
-                load_privacy_vega_issuer_v1(
-                    issuer_id,
-                    &transaction.world.privacy_commitments
-                )
-                .expect("registered Vega issuer"),
+                load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                    .expect("registered Vega issuer"),
                 origin
             );
             transaction.apply();
@@ -8306,11 +8295,8 @@ mod tests {
                 "{label} changed the registry"
             );
             assert_eq!(
-                load_privacy_vega_issuer_v1(
-                    issuer_id,
-                    &transaction.world.privacy_commitments
-                )
-                .expect("origin remains current"),
+                load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                    .expect("origin remains current"),
                 origin,
                 "{label} changed the current revision"
             );
@@ -8327,11 +8313,8 @@ mod tests {
                 .execute(&ALICE_ID, &mut transaction)
                 .expect("rotate by exactly one active immutable revision");
             assert_eq!(
-                load_privacy_vega_issuer_v1(
-                    issuer_id,
-                    &transaction.world.privacy_commitments
-                )
-                .expect("rotated Vega issuer"),
+                load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                    .expect("rotated Vega issuer"),
                 rotated
             );
             transaction.apply();
@@ -8347,22 +8330,16 @@ mod tests {
         {
             let mut transaction = block.transaction();
             let budget_before = transaction.privacy_budget_for_testing();
-            let error = RevokePrivacyVegaIssuerV1::new(
-                rotated.record_digest,
-                mutating_revocation,
-            )
-            .execute(&ALICE_ID, &mut transaction)
-            .expect_err("revocation cannot rotate key or policy material");
+            let error = RevokePrivacyVegaIssuerV1::new(rotated.record_digest, mutating_revocation)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("revocation cannot rotate key or policy material");
             assert!(
                 smart_contract_parameter_message(&error).contains("changed"),
                 "{error:?}"
             );
             assert_eq!(
-                load_privacy_vega_issuer_v1(
-                    issuer_id,
-                    &transaction.world.privacy_commitments
-                )
-                .expect("failed revocation preserves current revision"),
+                load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                    .expect("failed revocation preserves current revision"),
                 rotated
             );
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
@@ -8386,11 +8363,8 @@ mod tests {
                 3
             );
             assert_eq!(
-                load_privacy_vega_issuer_v1(
-                    issuer_id,
-                    &transaction.world.privacy_commitments
-                )
-                .expect("terminal Vega issuer"),
+                load_privacy_vega_issuer_v1(issuer_id, &transaction.world.privacy_commitments)
+                    .expect("terminal Vega issuer"),
                 revoked
             );
             transaction.apply();
@@ -8445,11 +8419,8 @@ mod tests {
                 );
             }
             transaction.world.privacy_commitments.insert(
-                PrivacyCommitmentKeyV1::vega_issuer_revision(
-                    issuer_id,
-                    current.record_epoch,
-                )
-                .expect("bounded Vega revision key"),
+                PrivacyCommitmentKeyV1::vega_issuer_revision(issuer_id, current.record_epoch)
+                    .expect("bounded Vega revision key"),
                 PrivacyStateItemRecordV1::vega_issuer_governance(current, 1)
                     .expect("bounded Vega revision"),
             );
@@ -9119,7 +9090,7 @@ mod tests {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_submit_atomically_transfers_and_records_replay_nullifier() {
-        let fixture = zk_ace_runtime_fixture_for_test();
+        let fixture: ZkAceRuntimeFixtureForTest = zk_ace_runtime_fixture_for_test();
         let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &fixture.envelope.statement
         else {
             unreachable!("ZK-ACE runtime fixture")
@@ -9142,11 +9113,7 @@ mod tests {
         .expect("authoritative ZK-ACE runtime policy");
         let policy_key =
             PrivacyCommitmentKeyV1::zk_ace_policy(policy.policy_id).expect("ZK-ACE policy key");
-        let mut world = World::with(
-            [domain],
-            [alice, source, destination],
-            [asset_definition],
-        );
+        let mut world = World::with([domain], [alice, source, destination], [asset_definition]);
         world.privacy_activations.insert(
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0),
             fixture.activation,
@@ -9209,12 +9176,16 @@ mod tests {
                 .map(|value| value.as_ref().clone()),
             Some(Quantity::from(19_u32))
         );
-        let replay_key = PrivacyNullifierKeyV1::zk_ace_replay(
-            statement.policy_id,
-            statement.replay_nullifier,
-        )
-        .expect("ZK-ACE replay key");
-        assert!(transaction.world.privacy_nullifiers.get(&replay_key).is_some());
+        let replay_key =
+            PrivacyNullifierKeyV1::zk_ace_replay(statement.policy_id, statement.replay_nullifier)
+                .expect("ZK-ACE replay key");
+        assert!(
+            transaction
+                .world
+                .privacy_nullifiers
+                .get(&replay_key)
+                .is_some()
+        );
 
         let budget_after_success = transaction.privacy_budget_for_testing();
         bind_submit_privacy_instruction(&mut transaction, &instruction);
@@ -9252,14 +9223,12 @@ mod tests {
 
     #[test]
     fn zk_ams_submit_commits_batch_successor_then_provisions_once() {
-        let fixture = zk_ams_runtime_fixture_for_test();
+        let fixture: ZkAmsRuntimeFixtureForTest = zk_ams_runtime_fixture_for_test();
         let namespace = fixture.bootstrap.namespace();
         let bootstrap_digest = fixture.bootstrap.digest();
-        let bootstrap_provenance = PrivacyRootProvenanceV1::zk_ams_registry_bootstrap(
-            bootstrap_digest,
-            2,
-        )
-        .expect("ZK-AMS bootstrap root provenance");
+        let bootstrap_provenance =
+            PrivacyRootProvenanceV1::zk_ams_registry_bootstrap(bootstrap_digest, 2)
+                .expect("ZK-AMS bootstrap root provenance");
         let prestate_provenance = PrivacyRootProvenanceV1::zk_ams_registry_successor(
             bootstrap_digest,
             fixture.prestate_statement_digest,
@@ -9281,11 +9250,7 @@ mod tests {
             fixture.bootstrap.issuer_policy_record_digest(),
         )
         .expect("ZK-AMS issuer record key");
-        let mut world = World::with(
-            [],
-            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
-            [],
-        );
+        let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
         world.privacy_activations.insert(
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaZkAmsV1),
             fixture.activation,
@@ -9327,9 +9292,8 @@ mod tests {
             .expect("ZK-AMS prestate root key"),
             prestate_provenance,
         );
-        let head_key =
-            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
-                .expect("ZK-AMS root-head key");
+        let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
+            .expect("ZK-AMS root-head key");
         world.privacy_root_heads.insert(
             head_key,
             PrivacyRootHeadRecordV1::new(
@@ -9365,8 +9329,7 @@ mod tests {
         batch_instruction
             .execute(&ALICE_ID, &mut transaction)
             .expect("native ZK-AMS batch state transition");
-        let PrivacyStatementV1::IrohaZkAmsV1(batch_statement) =
-            &fixture.batch_envelope.statement
+        let PrivacyStatementV1::IrohaZkAmsV1(batch_statement) = &fixture.batch_envelope.statement
         else {
             unreachable!("ZK-AMS batch fixture")
         };
@@ -9402,8 +9365,7 @@ mod tests {
             );
         }
 
-        let provision_instruction =
-            SubmitPrivacyProofV1::new(fixture.provision_envelope.clone());
+        let provision_instruction = SubmitPrivacyProofV1::new(fixture.provision_envelope.clone());
         bind_submit_privacy_instruction(&mut transaction, &provision_instruction);
         provision_instruction
             .clone()
@@ -9425,9 +9387,8 @@ mod tests {
                 .is_some(),
             "ZK-AMS provisioning must create the proof-bound account"
         );
-        let key_image_key =
-            PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
-                .expect("ZK-AMS key-image key");
+        let key_image_key = PrivacyNullifierKeyV1::zk_ams_key_image(namespace, provision.key_image)
+            .expect("ZK-AMS key-image key");
         assert!(
             transaction
                 .world

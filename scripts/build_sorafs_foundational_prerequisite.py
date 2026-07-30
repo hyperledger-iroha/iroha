@@ -64,6 +64,11 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_runner_preflight import plan_rendered_path_is_safe  # noqa: E402
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    load_topology_qualification_binding,
+    validate_topology_binding_object,
+)
 
 
 MAX_FOUNDATIONAL_ARTIFACT_BYTES = 64 * 1024
@@ -303,6 +308,8 @@ def _strict_lane_summary_object(
 def parse_lane_summary_specs(
     values: list[str],
     errors: list[str],
+    *,
+    topology_qualification: dict[str, str],
 ) -> list[dict[str, str]]:
     """Read and hash the exact ordered 17 lane summaries approved for signing."""
 
@@ -358,6 +365,13 @@ def parse_lane_summary_specs(
             errors.append(f"{label} schema must match the {gate_name} gate")
         if payload.get("status") != "ready":
             errors.append(f"{label} status must be `ready`")
+        errors.extend(
+            validate_topology_binding_object(
+                payload.get("topology_qualification"),
+                expected=topology_qualification,
+                path=f"{label} topology_qualification",
+            )
+        )
         rows.append(
             {
                 "gate": gate_name,
@@ -718,6 +732,7 @@ def validation_options(
     public_key: bytes,
     release_sequence: int,
     previous_envelope_sha256: str,
+    topology_qualification: dict[str, str] | None,
 ) -> ValidationOptions:
     """Build exact aggregate-gate options for one reviewed envelope."""
 
@@ -729,6 +744,7 @@ def validation_options(
         foundational_signer_public_key=public_key,
         foundational_release_sequence=release_sequence,
         foundational_previous_envelope_sha256=previous_envelope_sha256,
+        topology_qualification=topology_qualification,
     )
 
 
@@ -781,6 +797,7 @@ def build_unsigned_envelope(
     public_key: bytes,
     prerequisites: list[dict[str, Any]],
     lane_summaries: list[dict[str, str]],
+    topology_qualification: dict[str, str],
 ) -> dict[str, Any]:
     """Build the schema-closed body carried by the binary signing payload."""
 
@@ -794,6 +811,7 @@ def build_unsigned_envelope(
         "generated_at_unix": args.generated_at_unix,
         "release_sequence": args.release_sequence,
         "previous_envelope_sha256": args.previous_envelope_sha256,
+        "topology_qualification": topology_qualification,
         "prerequisites": prerequisites,
         "lane_summaries": lane_summaries,
         "signature": {
@@ -809,6 +827,7 @@ def validate_prepare_inputs(
     bytes | None,
     list[dict[str, Any]],
     list[dict[str, str]],
+    dict[str, str] | None,
     list[str],
 ]:
     """Validate all reviewed prepare-phase inputs."""
@@ -854,7 +873,21 @@ def validate_prepare_inputs(
         errors.append("--release-sequence after 1 requires a non-zero predecessor")
     public_key = parse_trusted_public_key(args.trusted_public_key_hex, errors)
     prerequisites = parse_prerequisite_specs(args.prerequisite, errors)
-    lane_summaries = parse_lane_summary_specs(args.lane_summary, errors)
+    topology_qualification, topology_errors = load_topology_qualification_binding(
+        args.topology_qualification_summary,
+        expected_deployment_id=args.deployment_id,
+        expected_environment=args.environment,
+    )
+    errors.extend(topology_errors)
+    lane_summaries = (
+        parse_lane_summary_specs(
+            args.lane_summary,
+            errors,
+            topology_qualification=topology_qualification,
+        )
+        if topology_qualification is not None
+        else []
+    )
     if public_key is not None:
         errors.extend(
             validate_previous_envelope(
@@ -873,14 +906,26 @@ def validate_prepare_inputs(
         label="--signing-payload-out",
         errors=errors,
     )
-    return public_key, prerequisites, lane_summaries, errors
+    return (
+        public_key,
+        prerequisites,
+        lane_summaries,
+        topology_qualification,
+        errors,
+    )
 
 
 def prepare(args: argparse.Namespace) -> int:
     """Write the exact external-HSM signing payload."""
 
-    public_key, prerequisites, lane_summaries, errors = validate_prepare_inputs(args)
-    if errors or public_key is None:
+    (
+        public_key,
+        prerequisites,
+        lane_summaries,
+        topology_qualification,
+        errors,
+    ) = validate_prepare_inputs(args)
+    if errors or public_key is None or topology_qualification is None:
         emit_checker_error_lines(errors)
         return 2
     unsigned = build_unsigned_envelope(
@@ -888,6 +933,7 @@ def prepare(args: argparse.Namespace) -> int:
         public_key,
         prerequisites,
         lane_summaries,
+        topology_qualification,
     )
     options = validation_options(
         now_unix=args.now_unix,
@@ -897,6 +943,7 @@ def prepare(args: argparse.Namespace) -> int:
         public_key=public_key,
         release_sequence=args.release_sequence,
         previous_envelope_sha256=args.previous_envelope_sha256,
+        topology_qualification=topology_qualification,
     )
     errors = validate_unsigned_envelope(unsigned, options)
     if errors:
@@ -1091,6 +1138,7 @@ def validate_previous_envelope(
         public_key=public_key,
         release_sequence=previous_sequence,
         previous_envelope_sha256=previous_predecessor,
+        topology_qualification=None,
     )
     _summary, checker_errors, _context = validate_foundational_prerequisite_summary(
         previous,
@@ -1129,7 +1177,14 @@ def load_unsigned_signing_payload(
 
 def validate_finalize_inputs(
     args: argparse.Namespace,
-) -> tuple[bytes | None, bytes | None, dict[str, Any] | None, bytes | None, list[str]]:
+) -> tuple[
+    bytes | None,
+    bytes | None,
+    dict[str, Any] | None,
+    bytes | None,
+    dict[str, str] | None,
+    list[str],
+]:
     """Validate reviewed finalization inputs and load bounded public artifacts."""
 
     errors: list[str] = []
@@ -1172,13 +1227,19 @@ def validate_finalize_inputs(
             "--expected-release-sequence after 1 requires a non-zero predecessor"
         )
     public_key = parse_trusted_public_key(args.trusted_public_key_hex, errors)
+    topology_qualification, topology_errors = load_topology_qualification_binding(
+        args.topology_qualification_summary,
+        expected_deployment_id=args.expected_deployment_id,
+        expected_environment=args.expected_environment,
+    )
+    errors.extend(topology_errors)
     validate_output_path(
         args.envelope_out,
         label="--envelope-out",
         errors=errors,
     )
     if errors:
-        return None, None, None, public_key, errors
+        return None, None, None, public_key, topology_qualification, errors
 
     signing_payload, unsigned, payload_errors = load_unsigned_signing_payload(
         args.signing_payload
@@ -1214,7 +1275,14 @@ def validate_finalize_inputs(
             errors.append("--signature-file must contain exactly 64 raw bytes")
         elif not any(signature):
             errors.append("--signature-file must not contain an all-zero signature")
-    return signing_payload, signature, unsigned, public_key, errors
+    return (
+        signing_payload,
+        signature,
+        unsigned,
+        public_key,
+        topology_qualification,
+        errors,
+    )
 
 
 def finalize(args: argparse.Namespace) -> int:
@@ -1225,6 +1293,7 @@ def finalize(args: argparse.Namespace) -> int:
         signature,
         unsigned,
         public_key,
+        topology_qualification,
         errors,
     ) = validate_finalize_inputs(args)
     if (
@@ -1233,6 +1302,7 @@ def finalize(args: argparse.Namespace) -> int:
         or signature is None
         or unsigned is None
         or public_key is None
+        or topology_qualification is None
     ):
         emit_checker_error_lines(errors)
         return 2
@@ -1245,6 +1315,7 @@ def finalize(args: argparse.Namespace) -> int:
         public_key=public_key,
         release_sequence=args.expected_release_sequence,
         previous_envelope_sha256=args.expected_previous_envelope_sha256,
+        topology_qualification=topology_qualification,
     )
     errors = validate_unsigned_envelope(unsigned, options)
     if errors:
@@ -1313,6 +1384,7 @@ def build_parser() -> EvidenceArgumentParser:
         "prepare",
         help="Write the exact binary payload for an external Ed25519 signer.",
     )
+    add_topology_qualification_argument(prepare_parser)
     prepare_parser.add_argument("--deployment-id", required=True)
     prepare_parser.add_argument("--environment", required=True)
     prepare_parser.add_argument(
@@ -1378,6 +1450,7 @@ def build_parser() -> EvidenceArgumentParser:
         "finalize",
         help="Verify a raw detached signature and write the final envelope.",
     )
+    add_topology_qualification_argument(finalize_parser)
     finalize_parser.add_argument(
         "--signing-payload",
         required=True,

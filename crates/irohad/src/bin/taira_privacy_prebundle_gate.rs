@@ -14,8 +14,10 @@ const EXACT12_MATRIX: &str = include_str!("../../../../fixtures/privacy/exact12_
 const EXPECTED_PROFILE_COUNT: usize = 12;
 const EXPECTED_REGISTRY_SHA256: &str =
     "734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51";
+// Derived from `privacy_exact12_matrix_bytes_v1`; the checked-in cross-SDK
+// matrix and this deployment pin must be regenerated together.
 const EXPECTED_MATRIX_SHA256: &str =
-    "e62a1fd5e09d9a8eb60ca7b4e327fc1060036287fa069abeabe3c26c1278b728";
+    "1dd3e975d1fd13bcd8a63a8ea216ea7b8220d52c1d8a867bb64009162b8027e1";
 
 fn is_canonical_nonzero_sha256_hex(value: &str) -> bool {
     value.len() == 64

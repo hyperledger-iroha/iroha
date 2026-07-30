@@ -8,6 +8,8 @@ Wants=network-online.target
 Type=simple
 User=iroha
 Group=iroha
+RuntimeDirectory=iroha
+RuntimeDirectoryMode=0700
 WorkingDirectory=/opt/iroha
 Environment=RUST_LOG=info
 Environment=ZK_HALO2_ENABLED=true

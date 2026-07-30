@@ -17,13 +17,9 @@ final class KagemushaNFCTests: XCTestCase {
 
     func testMeasuredReleaseArchivesStayWithinTheSafeNFCChunkBudget() {
         let samples: [(String, Int, Int, Int)] = [
-            ("request", 824, 4, 6),
+            ("receive-offer", 12_363, 57, 59),
             ("acknowledgement", 471, 3, 5),
-            ("payment-depth-1-hop-1", 6_677, 31, 33),
-            ("payment-depth-8-hop-8", 6_848, 32, 34),
-            ("payment-depth-16-hop-8", 7_040, 32, 34),
-            ("payment-depth-32-hop-8", 7_424, 34, 36),
-            ("payment-depth-64-hop-8", 8_192, 38, 40),
+            ("payment-v4-peer-hop-1", 11_854, 54, 56),
         ]
         for (label, archiveBytes, expectedChunks, expectedCommands) in samples {
             let chunks = (archiveBytes + KagemushaNFCProtocol.safeChunkBytes - 1)
@@ -415,6 +411,10 @@ final class KagemushaNFCTests: XCTestCase {
     }
 
     func testCardStateMachineCommitsTypedPaymentAndTracksEveryAckByte() throws {
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "ABI-21 Kagemusha bridge is not linked in this test host"
+        )
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let request = try offer.project(
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
@@ -448,14 +448,6 @@ final class KagemushaNFCTests: XCTestCase {
             XCTAssertNil(machine.handle(duplicate).rejectionReason)
         }
         let commit = machine.handle(commitCommand)
-        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
-            XCTAssertNil(commit.committedPayload)
-            XCTAssertEqual(commit.rejectionReason, .invalidCommittedPayload)
-            XCTAssertEqual(KagemushaNFCProtocol.responseStatus(commit.response), 0x6A80)
-            XCTAssertTrue(machine.isReadable)
-            XCTAssertTrue(machine.hasPendingWrite)
-            return
-        }
         XCTAssertEqual(commit.committedPayload, .payment(payment))
         XCTAssertFalse(machine.isReadable)
         XCTAssertFalse(machine.hasPendingWrite)

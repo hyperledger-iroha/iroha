@@ -35,7 +35,7 @@ Il s'agit d'un produit SoraFS. Et vous avez besoin d'aide pour RFC
 ## سير عمل القبول
 
 1. **إنشاء المقترح**
-   - CLI : إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI : إضافة `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      Pour `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - Titre : Vous avez une mise en jeu > 0 et un chunker pour `profile_id`.
 2. **اعتماد الحوكمة**
@@ -58,7 +58,7 @@ Il s'agit d'un produit SoraFS. Et vous avez besoin d'aide pour RFC
 
 ### CLI
 
-Il s'agit de `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+Il s'agit de `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Nom de l'utilisateur : `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, et `--endpoint=<kind:host>` et `--endpoint=<kind:host>`.
@@ -95,7 +95,7 @@ Il s'agit de `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- prov
 1. أنشئ زوج المقترح/advert اللاحق باستخدام `provider-admission proposal` et `provider-admission sign`, مع زيادة `--retention-epoch` et enjeux/points de terminaison حسب الحاجة.
 2. نفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -111,7 +111,7 @@ Il s'agit de `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- prov
 #### إلغاء طارئ
 1. حدد الـ enveloppe المخترق واصدر إلغاء:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

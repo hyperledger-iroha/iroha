@@ -19,6 +19,14 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def _field(value: bytes) -> bytes:
+    return MODULE.compact_length(len(value)) + value
+
+
+def _signed_transaction(payload: bytes, signature: bytes) -> bytes:
+    return _field(signature) + _field(payload) + _field(b"\x00")
+
+
 def _write_payloads(path: Path, entries: list[dict]) -> Path:
     enriched: list[dict] = []
     for original in entries:
@@ -27,7 +35,9 @@ def _write_payloads(path: Path, entries: list[dict]) -> Path:
         name = entry.get("name")
         if isinstance(encoded, str) and isinstance(name, str):
             payload_bytes = base64.b64decode(encoded, validate=True)
-            signed_bytes = f"{name}-signed".encode()
+            signed_bytes = _signed_transaction(
+                payload_bytes, f"{name}-signed".encode()
+            )
             entry.setdefault("payload_base64", encoded)
             entry.setdefault("payload_hash", MODULE.iroha_hash(payload_bytes))
             entry.setdefault("signed_base64", base64.b64encode(signed_bytes).decode())
@@ -56,6 +66,7 @@ def _fixture_entry(
     time_to_live_ms: Optional[int],
     nonce: Optional[int],
 ) -> dict:
+    signed = _signed_transaction(payload, signed)
     payload_b64 = base64.b64encode(payload).decode()
     signed_b64 = base64.b64encode(signed).decode()
     return {
@@ -286,13 +297,21 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
 
 
 def test_signed_hash_uses_compact_external_entrypoint_domain() -> None:
-    signed = b"x" * 128
+    payload = b"x" * 128
+    signed = _signed_transaction(payload, b"first-signature")
+    differently_signed = _signed_transaction(payload, b"second-signature")
     expected_prefix = b"\x00\x00\x00\x00\x80\x01"
-    assert MODULE.compact_length(len(signed)) == b"\x80\x01"  # type: ignore[attr-defined]
+    assert MODULE.compact_length(len(payload)) == b"\x80\x01"  # type: ignore[attr-defined]
     assert MODULE.signed_transaction_entrypoint_hash(signed) == MODULE.iroha_hash(  # type: ignore[attr-defined]
-        expected_prefix + signed
+        expected_prefix + payload
+    )
+    assert (
+        MODULE.signed_transaction_entrypoint_hash(signed)
+        == MODULE.signed_transaction_entrypoint_hash(differently_signed)
     )
     assert MODULE.signed_transaction_entrypoint_hash(signed) != MODULE.iroha_hash(signed)  # type: ignore[attr-defined]
+    with pytest.raises(ValueError, match="trailing or legacy"):
+        MODULE.signed_transaction_entrypoint_hash(signed + _field(b"\x00"))
 
 
 def test_errors_propagate_into_summary(tmp_path: Path) -> None:

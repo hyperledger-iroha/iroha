@@ -22,7 +22,6 @@ import {
   createValidationError,
   ValidationErrorCode,
 } from "./validationError.js";
-import { getNativeBinding } from "./native.js";
 import { normalizeSccpRouteGovernanceAction } from "./sccp.js";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import {
@@ -42,7 +41,6 @@ import {
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
-const U128_MAX_BIGINT = (1n << 128n) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
@@ -51,18 +49,6 @@ export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 export const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
   4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
-const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
-const ZK_ACE_DOMAIN_TAG = "iroha:zk-ace:pq-authorization:v0";
-const ZK_ACE_ACTION_TRANSFER = "transparent_asset_transfer";
-const ZK_ACE_ALGORITHM_ID = "zk-ace-pq-authorization-v0";
-const ZK_ACE_PRODUCTION_ENTRYPOINT = "buildZkAceAuthorizationProofV1";
-const ZK_ACE_PRODUCTION_VK_REF = "stark-fri:zk_ace_pq_authorization_v0";
-const ZK_ACE_PRODUCTION_DISABLED_MESSAGE =
-  "native ZK-ACE prover returned PRIVACY_FFI_ERROR_PRODUCTION_DISABLED for " +
-  `${ZK_ACE_ALGORITHM_ID} ${ZK_ACE_PRODUCTION_ENTRYPOINT} ` +
-  `${ZK_ACE_PRODUCTION_VK_REF}: ` +
-  "Iroha production allowlist is not enabled for this audited row";
-
 function crc16(tag, body) {
   let crc = 0xffff;
   const processByte = (byte) => {
@@ -176,6 +162,29 @@ function assertExactNonBlankString(value, name) {
   return raw;
 }
 
+function assertWellFormedUtf16(value, name) {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        fail(
+          ValidationErrorCode.INVALID_STRING,
+          `${name} must not contain unpaired UTF-16 surrogates`,
+          name,
+        );
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must not contain unpaired UTF-16 surrogates`,
+        name,
+      );
+    }
+  }
+}
+
 function readSingleAlias(source, aliases, name, description) {
   const present = aliases.filter((key) => Object.prototype.hasOwnProperty.call(source, key));
   if (present.length > 1) {
@@ -232,6 +241,7 @@ function asPositiveQuantity(value, name) {
 
 function normalizeAssetLockId(value, name) {
   const lockId = assertExactNonBlankString(value, name);
+  assertWellFormedUtf16(lockId, name);
   const lockIdBytes = Buffer.from(lockId, "utf8");
   if (lockIdBytes.length > CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1) {
     fail(
@@ -241,19 +251,6 @@ function normalizeAssetLockId(value, name) {
     );
   }
   return canonicalHashLiteral(blake2b256(lockIdBytes));
-}
-
-function asPositiveProofScalarQuantity(value, name) {
-  const canonical = asQuantity(value, name);
-  const quantity = NumericV1.decodeQuantityJson(canonical);
-  if (quantity.scale !== 0 || quantity.mantissa <= 0n || quantity.mantissa > U128_MAX_BIGINT) {
-    fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} must be a positive scale-0 quantity within the u128 proof-scalar range`,
-      name,
-    );
-  }
-  return canonical;
 }
 
 function asU128JsonNumber(value, name) {
@@ -295,14 +292,6 @@ function asU128JsonNumber(value, name) {
     return Number(numeric);
   }
   fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be a non-negative integer`, name);
-}
-
-function asPositiveU128JsonNumber(value, name) {
-  const amount = asU128JsonNumber(value, name);
-  if (amount <= 0) {
-    fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be greater than zero`, name);
-  }
-  return amount;
 }
 
 function asPositiveInteger(value, name) {
@@ -380,6 +369,20 @@ function assertAllowedFields(source, allowed, name) {
         ValidationErrorCode.INVALID_OBJECT,
         `${name}.${label} must be an enumerable data field`,
         `${name}.${label}`,
+      );
+    }
+  }
+}
+
+function assertExactFields(source, fields, name) {
+  const allowed = new Set(fields);
+  assertAllowedFields(source, allowed, name);
+  for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${field} is required`,
+        `${name}.${field}`,
       );
     }
   }
@@ -1441,18 +1444,6 @@ function normalizeProofAttachment(value, name) {
   return payload;
 }
 
-function normalizeNonZeroFixedBytes(value, name, length = 32) {
-  const bytes = normalizeFixedBytes(value, name, length);
-  if (bytes.every((byte) => byte === 0)) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} must be nonzero`,
-      name,
-    );
-  }
-  return bytes;
-}
-
 function normalizeU32(value, name) {
   const numeric = asNonNegativeInteger(value, name);
   if (numeric > UINT32_MAX) {
@@ -1475,234 +1466,6 @@ function normalizePositiveU32(value, name) {
     );
   }
   return numeric;
-}
-
-function normalizeZkAceVerifierKeyId(value, name) {
-  const id = normalizeVerifyingKeyId(value, name);
-  if (id === null) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
-  }
-  if (id.backend !== ZK_ACE_BACKEND) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name}.backend must be ${ZK_ACE_BACKEND}`,
-      `${name}.backend`,
-    );
-  }
-  return id;
-}
-
-function normalizeZkAceAction(value, name) {
-  const action = assertNonBlankString(value ?? ZK_ACE_ACTION_TRANSFER, name);
-  if (action !== ZK_ACE_ACTION_TRANSFER) {
-    fail(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be ${ZK_ACE_ACTION_TRANSFER}`,
-      name,
-    );
-  }
-  return action;
-}
-
-function normalizeZkAceDomainTag(value, name) {
-  const domainTag = assertNonBlankString(value ?? ZK_ACE_DOMAIN_TAG, name);
-  if (domainTag !== ZK_ACE_DOMAIN_TAG) {
-    fail(
-      ValidationErrorCode.INVALID_STRING,
-      `${name} must be ${ZK_ACE_DOMAIN_TAG}`,
-      name,
-    );
-  }
-  return domainTag;
-}
-
-function normalizeZkAceAllowedAccounts(value, name) {
-  if (!Array.isArray(value)) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
-  }
-  if (value.length === 0) {
-    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be non-empty`, name);
-  }
-  if (value.length > 16) {
-    fail(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} must contain at most 16 accounts`,
-      name,
-    );
-  }
-  const accounts = value.map((entry, index) =>
-    normalizeAccountId(entry, `${name}[${index}]`),
-  );
-  const seen = new Set();
-  for (const account of accounts) {
-    if (seen.has(account)) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${name} must not contain duplicates`,
-        name,
-      );
-    }
-    seen.add(account);
-  }
-  return accounts.sort();
-}
-
-function normalizeZkAcePublicInputs(value, name) {
-  const source = assertPlainObject(value, name);
-  const version = asNonNegativeInteger(source.version ?? 1, `${name}.version`);
-  if (version !== 1) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name}.version must be 1`,
-      `${name}.version`,
-    );
-  }
-  return {
-    version,
-    identity_commitment: normalizeNonZeroFixedBytes(
-      source.identityCommitment ?? source.identity_commitment,
-      `${name}.identityCommitment`,
-      32,
-    ),
-    tx_digest: normalizeNonZeroFixedBytes(
-      source.txDigest ?? source.tx_digest,
-      `${name}.txDigest`,
-      32,
-    ),
-    chain_id: assertNonBlankString(source.chainId ?? source.chain_id, `${name}.chainId`),
-    domain_tag: normalizeZkAceDomainTag(source.domainTag ?? source.domain_tag, `${name}.domainTag`),
-    action_class: normalizeZkAceAction(
-      source.actionClass ?? source.action_class,
-      `${name}.actionClass`,
-    ),
-    replay_nullifier: normalizeNonZeroFixedBytes(
-      source.replayNullifier ?? source.replay_nullifier,
-      `${name}.replayNullifier`,
-      32,
-    ),
-    policy_hash: normalizeNonZeroFixedBytes(
-      source.policyHash ?? source.policy_hash,
-      `${name}.policyHash`,
-      32,
-    ),
-    from: normalizeAccountId(source.fromAccountId ?? source.from, `${name}.from`),
-    to: normalizeAccountId(source.toAccountId ?? source.to, `${name}.to`),
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      `${name}.asset`,
-    ),
-    amount: asPositiveU128JsonNumber(source.amount, `${name}.amount`),
-    verifier_key_id: normalizeZkAceVerifierKeyId(
-      source.verifierKeyId ?? source.verifier_key_id ?? source.verifyingKeyRef,
-      `${name}.verifierKeyId`,
-    ),
-  };
-}
-
-function fixedBytesEqual(left, right) {
-  return left.length === right.length && left.every((byte, index) => byte === right[index]);
-}
-
-function startsWithBytes(value, prefix) {
-  return value.length >= prefix.length && prefix.every((byte, index) => value[index] === byte);
-}
-
-function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
-  const byteFields = [
-    ["identity_commitment", "identityCommitment"],
-    ["tx_digest", "txDigest"],
-    ["replay_nullifier", "replayNullifier"],
-    ["policy_hash", "policyHash"],
-  ];
-  for (const [field, transferField] of byteFields) {
-    if (!fixedBytesEqual(publicInputs[field], payload[field])) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${name}.publicInputs.${field} must match zkAceAuthorizedTransfer.${transferField}`,
-        `${name}.publicInputs.${field}`,
-      );
-    }
-  }
-  const scalarFields = [
-    ["chain_id", "chainId"],
-    ["domain_tag", "domainTag"],
-    ["action_class", "actionClass"],
-    ["from", "from"],
-    ["to", "to"],
-    ["asset", "asset"],
-  ];
-  for (const [field, transferField] of scalarFields) {
-    if (publicInputs[field] !== payload[field]) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        `${name}.publicInputs.${field} must match zkAceAuthorizedTransfer.${transferField}`,
-        `${name}.publicInputs.${field}`,
-      );
-    }
-  }
-  if (BigInt(publicInputs.amount) !== NumericV1.decodeQuantityJson(payload.amount).mantissa) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name}.publicInputs.amount must match zkAceAuthorizedTransfer.amount`,
-      `${name}.publicInputs.amount`,
-    );
-  }
-  if (
-    publicInputs.verifier_key_id.backend !== payload.proof.vk_ref.backend ||
-    publicInputs.verifier_key_id.name !== payload.proof.vk_ref.name
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name}.publicInputs.verifier_key_id must match zkAceAuthorizedTransfer.proof.verifyingKeyRef`,
-      `${name}.publicInputs.verifier_key_id`,
-    );
-  }
-}
-
-function normalizeZkAceWitness(value, name) {
-  const source = assertPlainObject(value, name);
-  return {
-    identity_root: normalizeNonZeroFixedBytes(
-      source.identityRoot ?? source.identity_root,
-      `${name}.identityRoot`,
-      32,
-    ),
-    identity_blinding: normalizeNonZeroFixedBytes(
-      source.identityBlinding ?? source.identity_blinding,
-      `${name}.identityBlinding`,
-      32,
-    ),
-    replay_secret: normalizeNonZeroFixedBytes(
-      source.replaySecret ?? source.replay_secret,
-      `${name}.replaySecret`,
-      32,
-    ),
-  };
-}
-
-function normalizeZkAceNativeResult(resultJson, name) {
-  let result;
-  try {
-    result = JSON.parse(resultJson);
-  } catch (error) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${name} native prover returned invalid JSON: ${error.message}`,
-      name,
-    );
-  }
-  return assertPlainObject(result, name);
-}
-
-function sanitizeZkAceNativeAuthorizationProofError(error, name) {
-  const message = error?.message ?? String(error ?? "");
-  const sanitizedMessage =
-    /PRIVACY_FFI_ERROR_PRODUCTION_DISABLED|production[- ]disabled|Iroha production allowlist/i.test(
-      message,
-    )
-      ? ZK_ACE_PRODUCTION_DISABLED_MESSAGE
-      : "native ZK-ACE prover failed";
-  fail(ValidationErrorCode.INVALID_OBJECT, sanitizedMessage, name);
 }
 
 function normalizeAccessSetHints(value, context) {
@@ -3426,6 +3189,96 @@ function normalizeSorafsReplicationIdentifier(value, name) {
   return value;
 }
 
+function normalizeSorafsProviderOwner(value, name) {
+  if (typeof value !== "string" || value.trim() !== value) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be an exact canonical I105 account id`,
+      name,
+    );
+  }
+  const normalized = normalizeAccountId(value, name);
+  if (normalized !== value) {
+    fail(
+      ValidationErrorCode.INVALID_ACCOUNT_ID,
+      `${name} must be an exact canonical I105 account id`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function normalizeProviderIngestCompletionSignerPolicy(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(
+    source,
+    ["policyId", "revision", "predecessorDigest", "policyDigest"],
+    name,
+  );
+  const revision = asPositiveInteger(source.revision, `${name}.revision`);
+  const predecessorDigest = source.predecessorDigest;
+  if (revision === 1) {
+    if (predecessorDigest !== null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.predecessorDigest must be null at revision 1`,
+        `${name}.predecessorDigest`,
+      );
+    }
+  } else if (predecessorDigest === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.predecessorDigest is required after revision 1`,
+      `${name}.predecessorDigest`,
+    );
+  }
+  return {
+    policy_id: normalizeSorafsReplicationIdentifier(
+      source.policyId,
+      `${name}.policyId`,
+    ),
+    revision,
+    predecessor_digest:
+      predecessorDigest === null
+        ? null
+        : normalizeSorafsReplicationIdentifier(
+            predecessorDigest,
+            `${name}.predecessorDigest`,
+          ),
+    policy_digest: normalizeSorafsReplicationIdentifier(
+      source.policyDigest,
+      `${name}.policyDigest`,
+    ),
+  };
+}
+
+function normalizeProviderIngestCompletionAuthority(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(source, ["providerOwner", "signerPolicy"], name);
+  return {
+    provider_owner: normalizeSorafsProviderOwner(
+      source.providerOwner,
+      `${name}.providerOwner`,
+    ),
+    signer_policy: normalizeProviderIngestCompletionSignerPolicy(
+      source.signerPolicy,
+      `${name}.signerPolicy`,
+    ),
+  };
+}
+
+function normalizeProviderIngestFinalizedAnchor(value, name) {
+  const source = assertPlainObject(value, name);
+  assertExactFields(source, ["height", "blockHash"], name);
+  return {
+    height: asPositiveInteger(source.height, `${name}.height`),
+    block_hash: normalizeSorafsReplicationIdentifier(
+      source.blockHash,
+      `${name}.blockHash`,
+    ),
+  };
+}
+
 function normalizeSorafsReplicationPayload(value, name) {
   if (
     typeof value === "string" &&
@@ -3504,14 +3357,25 @@ export function buildIssueReplicationOrderInstruction(options) {
 /**
  * Build the canonical provider-specific `CompleteReplicationOrder` instruction.
  *
- * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint}} options
- * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number}}}
+ * The six top-level fields bind the completion to the exact owner, governed
+ * signer-policy chain, assignment revision, and finalized chain prefix that
+ * were checked before submission.
+ *
+ * @param {{orderId: string, providerId: string, completionEpoch: number|string|bigint, expectedAuthority: {providerOwner: string, signerPolicy: {policyId: string, revision: number|string|bigint, predecessorDigest: string|null, policyDigest: string}}, expectedAssignmentRevision: number|string|bigint, finalizedAnchor: {height: number|string|bigint, blockHash: string}}} options
+ * @returns {{CompleteReplicationOrder: {order_id: string, provider_id: string, completion_epoch: number, expected_authority: {provider_owner: string, signer_policy: {policy_id: string, revision: number, predecessor_digest: string|null, policy_digest: string}}, expected_assignment_revision: number, finalized_anchor: {height: number, block_hash: string}}}}
  */
 export function buildCompleteReplicationOrderInstruction(options) {
   const source = assertPlainObject(options, "completeReplicationOrder");
-  assertAllowedFields(
+  assertExactFields(
     source,
-    new Set(["orderId", "providerId", "completionEpoch"]),
+    [
+      "orderId",
+      "providerId",
+      "completionEpoch",
+      "expectedAuthority",
+      "expectedAssignmentRevision",
+      "finalizedAnchor",
+    ],
     "completeReplicationOrder",
   );
   return {
@@ -3527,6 +3391,18 @@ export function buildCompleteReplicationOrderInstruction(options) {
       completion_epoch: asNonNegativeInteger(
         source.completionEpoch,
         "completeReplicationOrder.completionEpoch",
+      ),
+      expected_authority: normalizeProviderIngestCompletionAuthority(
+        source.expectedAuthority,
+        "completeReplicationOrder.expectedAuthority",
+      ),
+      expected_assignment_revision: asPositiveInteger(
+        source.expectedAssignmentRevision,
+        "completeReplicationOrder.expectedAssignmentRevision",
+      ),
+      finalized_anchor: normalizeProviderIngestFinalizedAnchor(
+        source.finalizedAnchor,
+        "completeReplicationOrder.finalizedAnchor",
       ),
     },
   };
@@ -5770,347 +5646,6 @@ export function buildRegisterAssetHiddenZkPoolInstruction(options) {
   return {
     zk: {
       RegisterAssetHiddenZkPool: payload,
-    },
-  };
-}
-
-/**
- * Build a `zk::RegisterZkAceIdentityCommitment` instruction payload.
- * @param {object} options
- * @returns {{zk: {RegisterZkAceIdentityCommitment: object}}}
- */
-export function buildRegisterZkAceIdentityCommitmentInstruction(options) {
-  const source = assertPlainObject(options, "registerZkAceIdentityCommitment");
-  const payload = {
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      "registerZkAceIdentityCommitment.asset",
-    ),
-    identity_commitment: normalizeNonZeroFixedBytes(
-      source.identityCommitment ?? source.identity_commitment,
-      "registerZkAceIdentityCommitment.identityCommitment",
-      32,
-    ),
-    policy_hash: normalizeNonZeroFixedBytes(
-      source.policyHash ?? source.policy_hash,
-      "registerZkAceIdentityCommitment.policyHash",
-      32,
-    ),
-    allowed_accounts: normalizeZkAceAllowedAccounts(
-      source.allowedAccounts ?? source.allowed_accounts,
-      "registerZkAceIdentityCommitment.allowedAccounts",
-    ),
-    action_class: normalizeZkAceAction(
-      source.actionClass ?? source.action_class,
-      "registerZkAceIdentityCommitment.actionClass",
-    ),
-    domain_tag: normalizeZkAceDomainTag(
-      source.domainTag ?? source.domain_tag,
-      "registerZkAceIdentityCommitment.domainTag",
-    ),
-    verifier_key: normalizeZkAceVerifierKeyId(
-      source.verifierKey ?? source.verifier_key ?? source.verifyingKeyRef,
-      "registerZkAceIdentityCommitment.verifierKey",
-    ),
-  };
-  return {
-    zk: {
-      RegisterZkAceIdentityCommitment: payload,
-    },
-  };
-}
-
-/**
- * Build a `zk::RotateZkAceIdentityCommitment` instruction payload.
- * @param {object} options
- * @returns {{zk: {RotateZkAceIdentityCommitment: object}}}
- */
-export function buildRotateZkAceIdentityCommitmentInstruction(options) {
-  const source = assertPlainObject(options, "rotateZkAceIdentityCommitment");
-  const oldCommitment = normalizeNonZeroFixedBytes(
-    source.oldIdentityCommitment ?? source.old_identity_commitment,
-    "rotateZkAceIdentityCommitment.oldIdentityCommitment",
-    32,
-  );
-  const newCommitment = normalizeNonZeroFixedBytes(
-    source.newIdentityCommitment ?? source.new_identity_commitment,
-    "rotateZkAceIdentityCommitment.newIdentityCommitment",
-    32,
-  );
-  if (Buffer.from(oldCommitment).equals(Buffer.from(newCommitment))) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "rotateZkAceIdentityCommitment replacement commitment must differ from the old commitment",
-      "rotateZkAceIdentityCommitment.newIdentityCommitment",
-    );
-  }
-  const payload = {
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      "rotateZkAceIdentityCommitment.asset",
-    ),
-    old_identity_commitment: oldCommitment,
-    new_identity_commitment: newCommitment,
-    policy_hash: normalizeNonZeroFixedBytes(
-      source.policyHash ?? source.policy_hash,
-      "rotateZkAceIdentityCommitment.policyHash",
-      32,
-    ),
-    allowed_accounts: normalizeZkAceAllowedAccounts(
-      source.allowedAccounts ?? source.allowed_accounts,
-      "rotateZkAceIdentityCommitment.allowedAccounts",
-    ),
-    action_class: normalizeZkAceAction(
-      source.actionClass ?? source.action_class,
-      "rotateZkAceIdentityCommitment.actionClass",
-    ),
-    domain_tag: normalizeZkAceDomainTag(
-      source.domainTag ?? source.domain_tag,
-      "rotateZkAceIdentityCommitment.domainTag",
-    ),
-    verifier_key: normalizeZkAceVerifierKeyId(
-      source.verifierKey ?? source.verifier_key ?? source.verifyingKeyRef,
-      "rotateZkAceIdentityCommitment.verifierKey",
-    ),
-  };
-  return {
-    zk: {
-      RotateZkAceIdentityCommitment: payload,
-    },
-  };
-}
-
-/**
- * Build a `zk::RevokeZkAceIdentityCommitment` instruction payload.
- * @param {object} options
- * @returns {{zk: {RevokeZkAceIdentityCommitment: object}}}
- */
-export function buildRevokeZkAceIdentityCommitmentInstruction(options) {
-  const source = assertPlainObject(options, "revokeZkAceIdentityCommitment");
-  return {
-    zk: {
-      RevokeZkAceIdentityCommitment: {
-        asset: assertString(
-          source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-          "revokeZkAceIdentityCommitment.asset",
-        ),
-        identity_commitment: normalizeNonZeroFixedBytes(
-          source.identityCommitment ?? source.identity_commitment,
-          "revokeZkAceIdentityCommitment.identityCommitment",
-          32,
-        ),
-        reason_hash: normalizeOptionalFixedBytes(
-          source.reasonHash ?? source.reason_hash,
-          "revokeZkAceIdentityCommitment.reasonHash",
-          32,
-        ),
-      },
-    },
-  };
-}
-
-/**
- * Normalize a prepared ZK-ACE authorization proof attachment and its public inputs.
- * The native Rust prover crate produces the STARK/FRI envelope bytes consumed here.
- * @param {object} options
- * @returns {{public_inputs: object, proof: object}}
- */
-export function buildZkAceAuthorizationProofV1(options) {
-  const source = assertPlainObject(options, "zkAceAuthorizationProof");
-  const publicInputs = normalizeZkAcePublicInputs(
-    source.publicInputs ?? source.public_inputs,
-    "zkAceAuthorizationProof.publicInputs",
-  );
-  const witnessSource = source.witness ?? source.privateWitness ?? source.private_witness;
-  const hasPreparedProof =
-    source.proof !== undefined ||
-    source.proofBytes !== undefined ||
-    source.proof_bytes !== undefined ||
-    source.proofAttachment !== undefined ||
-    source.proof_attachment !== undefined ||
-    source.attachment !== undefined;
-  if (witnessSource !== undefined && witnessSource !== null && !hasPreparedProof) {
-    const witness = normalizeZkAceWitness(witnessSource, "zkAceAuthorizationProof.witness");
-    const native = getNativeBinding();
-    if (!native || typeof native.zkAceBuildAuthorizationProofV1 !== "function") {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        "zkAceAuthorizationProof witness proving requires the iroha_js_host native ZK-ACE prover",
-        "zkAceAuthorizationProof.witness",
-      );
-    }
-    const commitment = normalizeOptionalFixedBytes(
-      source.verifyingKeyCommitment ??
-        source.verifying_key_commitment ??
-        source.vkCommitment ??
-        source.vk_commitment,
-      "zkAceAuthorizationProof.verifyingKeyCommitment",
-      32,
-    );
-    let nativeResultJson;
-    let nativeError;
-    try {
-      nativeResultJson = native.zkAceBuildAuthorizationProofV1(
-        JSON.stringify(publicInputs),
-        JSON.stringify(witness),
-        commitment ? Buffer.from(commitment) : undefined,
-      );
-    } catch (error) {
-      nativeError = error;
-    }
-    if (nativeError !== undefined) {
-      sanitizeZkAceNativeAuthorizationProofError(
-        nativeError,
-        "zkAceAuthorizationProof.nativeResult",
-      );
-    }
-    const nativeResult = normalizeZkAceNativeResult(
-      nativeResultJson,
-      "zkAceAuthorizationProof.nativeResult",
-    );
-    const proof = normalizeProofAttachment(
-      nativeResult.proof,
-      "zkAceAuthorizationProof.proof",
-    );
-    const provedPublicInputs = normalizeZkAcePublicInputs(
-      nativeResult.public_inputs ?? nativeResult.publicInputs ?? publicInputs,
-      "zkAceAuthorizationProof.publicInputs",
-    );
-    if (
-      proof.vk_ref.backend !== provedPublicInputs.verifier_key_id.backend ||
-      proof.vk_ref.name !== provedPublicInputs.verifier_key_id.name
-    ) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        "zkAceAuthorizationProof proof verifier must match public inputs",
-        "zkAceAuthorizationProof.proof.verifyingKeyRef",
-      );
-    }
-    return {
-      public_inputs: provedPublicInputs,
-      proof,
-    };
-  }
-  const directProof = source.proof;
-  const directProofIsAttachment =
-    directProof &&
-    typeof directProof === "object" &&
-    !Array.isArray(directProof) &&
-    !Buffer.isBuffer(directProof) &&
-    !ArrayBuffer.isView(directProof) &&
-    !(directProof instanceof ArrayBuffer) &&
-    Object.prototype.hasOwnProperty.call(directProof, "backend");
-  const proofSource =
-    source.proofAttachment ??
-    source.proof_attachment ??
-    source.attachment ??
-    (directProofIsAttachment ? directProof : undefined) ??
-    {
-      backend: ZK_ACE_BACKEND,
-      proofBytes: source.proofBytes ?? source.proof_bytes ?? source.proof,
-      verifyingKeyRef:
-        source.verifyingKeyRef ??
-        source.verifying_key_ref ??
-        publicInputs.verifier_key_id,
-      verifyingKeyCommitment:
-        source.verifyingKeyCommitment ??
-        source.verifying_key_commitment ??
-        source.vkCommitment ??
-        source.vk_commitment,
-      envelopeHash: source.envelopeHash ?? source.envelope_hash,
-    };
-  const proof = normalizeProofAttachment(proofSource, "zkAceAuthorizationProof.proof");
-  if (proof.backend !== ZK_ACE_BACKEND) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      `zkAceAuthorizationProof.proof.backend must be ${ZK_ACE_BACKEND}`,
-      "zkAceAuthorizationProof.proof.backend",
-    );
-  }
-  if (
-    proof.vk_ref.backend !== publicInputs.verifier_key_id.backend ||
-    proof.vk_ref.name !== publicInputs.verifier_key_id.name
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "zkAceAuthorizationProof proof verifier must match public inputs",
-      "zkAceAuthorizationProof.proof.verifyingKeyRef",
-    );
-  }
-  return {
-    public_inputs: publicInputs,
-    proof,
-  };
-}
-
-/**
- * Build a `zk::SubmitZkAceAuthorizedTransfer` instruction payload.
- * @param {object} options
- * @returns {{zk: {SubmitZkAceAuthorizedTransfer: object}}}
- */
-export function buildZkAceAuthorizedTransferInstruction(options) {
-  const source = assertPlainObject(options, "zkAceAuthorizedTransfer");
-  const proofBundle = source.authorizationProof ?? source.authorization_proof;
-  const authorization =
-    proofBundle && typeof proofBundle === "object" && !Array.isArray(proofBundle)
-      ? buildZkAceAuthorizationProofV1(proofBundle)
-      : null;
-  const proof =
-    authorization !== null
-      ? authorization.proof
-      : normalizeProofAttachment(source.proof, "zkAceAuthorizedTransfer.proof");
-  const payload = {
-    from: normalizeAccountId(source.fromAccountId ?? source.from, "zkAceAuthorizedTransfer.from"),
-    to: normalizeAccountId(source.toAccountId ?? source.to, "zkAceAuthorizedTransfer.to"),
-    asset: assertString(
-      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
-      "zkAceAuthorizedTransfer.asset",
-    ),
-    amount: asPositiveProofScalarQuantity(source.amount, "zkAceAuthorizedTransfer.amount"),
-    identity_commitment: normalizeNonZeroFixedBytes(
-      source.identityCommitment ?? source.identity_commitment,
-      "zkAceAuthorizedTransfer.identityCommitment",
-      32,
-    ),
-    tx_digest: normalizeNonZeroFixedBytes(
-      source.txDigest ?? source.tx_digest,
-      "zkAceAuthorizedTransfer.txDigest",
-      32,
-    ),
-    chain_id: assertNonBlankString(
-      source.chainId ?? source.chain_id,
-      "zkAceAuthorizedTransfer.chainId",
-    ),
-    domain_tag: normalizeZkAceDomainTag(
-      source.domainTag ?? source.domain_tag,
-      "zkAceAuthorizedTransfer.domainTag",
-    ),
-    action_class: normalizeZkAceAction(
-      source.actionClass ?? source.action_class,
-      "zkAceAuthorizedTransfer.actionClass",
-    ),
-    replay_nullifier: normalizeNonZeroFixedBytes(
-      source.replayNullifier ?? source.replay_nullifier,
-      "zkAceAuthorizedTransfer.replayNullifier",
-      32,
-    ),
-    policy_hash: normalizeNonZeroFixedBytes(
-      source.policyHash ?? source.policy_hash,
-      "zkAceAuthorizedTransfer.policyHash",
-      32,
-    ),
-    proof,
-  };
-  if (authorization !== null) {
-    ensureZkAceAuthorizationMatchesTransfer(
-      authorization.public_inputs,
-      payload,
-      "zkAceAuthorizedTransfer.authorizationProof",
-    );
-  }
-  return {
-    zk: {
-      SubmitZkAceAuthorizedTransfer: payload,
     },
   };
 }

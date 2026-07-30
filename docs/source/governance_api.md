@@ -378,7 +378,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
 
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
+- POST `/v1/gov/ballots/zk-v1/ballot-proof`
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
   - Request:
     {
@@ -409,7 +409,7 @@ Unlock Sweep (Operator/Audit)
     - Supplying `private_key` is rejected; Torii returns only an unsigned instruction skeleton for local signing.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
-    - This endpoint is only available when the `zk-ballot` feature is enabled.
+    - This endpoint is part of every V1 app API build.
 
 CastZkBallot Verification Path
 - `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).

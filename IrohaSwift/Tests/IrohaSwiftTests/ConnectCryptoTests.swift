@@ -4,8 +4,10 @@ import CryptoKit
 
 final class ConnectCryptoTests: XCTestCase {
     private func requireBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto symbols not linked"
+        )
     }
 
     func testGenerateKeyPairProducesDeterministicLengths() throws {

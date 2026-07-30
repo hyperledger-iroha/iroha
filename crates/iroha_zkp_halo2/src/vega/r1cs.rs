@@ -2,13 +2,7 @@
 
 use thiserror::Error;
 
-#[cfg(test)]
-use super::algebra::{eq_evals, inner_product};
-use super::{
-    VegaT256ScalarV1 as Scalar,
-    algebra::AlgebraError,
-    commitment::{Commitment, CommitmentError},
-};
+use super::{VegaT256ScalarV1 as Scalar, commitment::Commitment};
 
 /// Failure while constructing or evaluating a Vega R1CS object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -19,10 +13,6 @@ pub(super) enum R1csError {
     NonCanonicalMatrix,
     #[error("Vega R1CS assignment does not satisfy the relation")]
     Unsatisfied,
-    #[error(transparent)]
-    Algebra(#[from] AlgebraError),
-    #[error(transparent)]
-    Commitment(#[from] CommitmentError),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -156,6 +146,13 @@ pub(super) struct Shape {
     pub(super) c: SparseMatrix,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MatrixProducts {
+    pub(super) a: Vec<Scalar>,
+    pub(super) b: Vec<Scalar>,
+    pub(super) c: Vec<Scalar>,
+}
+
 impl Shape {
     pub(super) fn new(
         constraint_count: usize,
@@ -205,18 +202,15 @@ impl Shape {
         self.variable_count + 1 + self.public_input_count
     }
 
-    pub(super) fn multiply(
-        &self,
-        assignment: &[Scalar],
-    ) -> Result<(Vec<Scalar>, Vec<Scalar>, Vec<Scalar>), R1csError> {
+    pub(super) fn multiply(&self, assignment: &[Scalar]) -> Result<MatrixProducts, R1csError> {
         if assignment.len() != self.columns() {
             return Err(R1csError::InvalidDimension);
         }
-        Ok((
-            self.a.multiply(assignment)?,
-            self.b.multiply(assignment)?,
-            self.c.multiply(assignment)?,
-        ))
+        Ok(MatrixProducts {
+            a: self.a.multiply(assignment)?,
+            b: self.b.multiply(assignment)?,
+            c: self.c.multiply(assignment)?,
+        })
     }
 
     pub(super) fn validate_relaxed_assignment(
@@ -236,12 +230,13 @@ impl Shape {
         assignment.extend_from_slice(witness);
         assignment.push(relaxation);
         assignment.extend_from_slice(public_inputs);
-        let (az, bz, cz) = self.multiply(&assignment)?;
-        if az
+        let products = self.multiply(&assignment)?;
+        if products
+            .a
             .iter()
             .copied()
-            .zip(bz.iter().copied())
-            .zip(cz.iter().copied().zip(error.iter().copied()))
+            .zip(products.b.iter().copied())
+            .zip(products.c.iter().copied().zip(error.iter().copied()))
             .any(|((a, b), (c, error))| a * b != relaxation * c + error)
         {
             return Err(R1csError::Unsatisfied);
@@ -279,34 +274,9 @@ pub(super) struct RelaxedWitness {
 }
 
 #[cfg(test)]
-pub(super) fn folding_weights(
-    challenges: &[Scalar],
-    count: usize,
-) -> Result<Vec<Scalar>, R1csError> {
-    let expected = 1_usize
-        .checked_shl(u32::try_from(challenges.len()).map_err(|_| R1csError::InvalidDimension)?)
-        .ok_or(R1csError::InvalidDimension)?;
-    if count != expected {
-        return Err(R1csError::InvalidDimension);
-    }
-    let mut weights = Vec::with_capacity(count);
-    for index in 0..count {
-        let mut weight = Scalar::one();
-        for (bit, challenge) in challenges.iter().copied().enumerate() {
-            weight *= if index & (1 << bit) == 0 {
-                Scalar::one() - challenge
-            } else {
-                challenge
-            };
-        }
-        weights.push(weight);
-    }
-    Ok(weights)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vega::algebra::inner_product;
 
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
@@ -355,26 +325,6 @@ mod tests {
         let matrix = SparseMatrix::new(2, 3, &entries).expect("canonical matrix");
         assert_eq!(matrix.entry_count(), entries.len());
         assert_eq!(matrix.canonical_entries().collect::<Vec<_>>(), entries);
-    }
-
-    #[test]
-    fn folding_weights_match_upstream_little_bit_order() {
-        let a = s(3);
-        let b = s(5);
-        assert_eq!(
-            folding_weights(&[a, b], 4).expect("power of two"),
-            vec![
-                (Scalar::one() - a) * (Scalar::one() - b),
-                a * (Scalar::one() - b),
-                (Scalar::one() - a) * b,
-                a * b,
-            ]
-        );
-        assert!(folding_weights(&[a], 3).is_err());
-        assert_eq!(
-            eq_evals(&[a, b]).expect("small table")[1],
-            (Scalar::one() - a) * b
-        );
     }
 
     #[test]

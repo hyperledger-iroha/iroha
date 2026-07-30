@@ -4651,6 +4651,14 @@ pub struct SumeragiStartArgs {
     pub queue: Arc<Queue>,
     /// Persistent block store interface.
     pub kura: Arc<Kura>,
+    /// Optional exact finalized provider-ingest archive captured at every v2
+    /// WSV commit boundary.
+    pub provider_ingest_finalized_archive:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    /// Optional exact finalized reputation archive captured at every v2 WSV
+    /// commit boundary.
+    pub reputation_finalized_archive:
+        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     /// Exact startup replay boundary authenticated before Kura replay and
     /// moved into active-height recovery without a historical rescan.
     pub startup_replay_plan: V2StartupReplayPlan,
@@ -4728,6 +4736,8 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -4825,6 +4835,8 @@ impl SumeragiStartArgs {
             state,
             queue,
             kura,
+            provider_ingest_finalized_archive,
+            reputation_finalized_archive,
             startup_replay_plan,
             startup_replay_inventory_guard,
             network,
@@ -4989,6 +5001,10 @@ struct SumeragiWorker {
     state: Arc<State>,
     queue: Arc<Queue>,
     kura: Arc<Kura>,
+    provider_ingest_finalized_archive:
+        Option<Arc<crate::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveV1>>,
+    reputation_finalized_archive:
+        Option<Arc<crate::query::reputation_finalized::ReputationFinalizedArchive>>,
     startup_replay_plan: V2StartupReplayPlan,
     startup_replay_inventory_guard: V2StartupReplayInventoryGuard,
     network: IrohaNetwork,

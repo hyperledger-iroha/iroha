@@ -36,6 +36,78 @@ struct S {
     b: String,
 }
 
+#[derive(NoritoSerialize)]
+struct NamedByteArrays {
+    tag: u8,
+    digest: [u8; 32],
+    suffix: [u8; 7],
+}
+
+#[derive(NoritoSerialize)]
+struct TupleByteArrays(u8, [u8; 32], [u8; 7]);
+
+fn assert_derived_lengths_match_payload_for_supported_layouts<T: NoritoSerialize>(value: &T) {
+    use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+
+    for flags in [
+        0,
+        COMPACT_LEN,
+        PACKED_SEQ,
+        PACKED_SEQ | COMPACT_LEN,
+        PACKED_STRUCT,
+        PACKED_STRUCT | COMPACT_LEN,
+        PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+    ] {
+        norito::core::reset_decode_state();
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let mut payload = Vec::new();
+        value
+            .serialize(&mut payload)
+            .expect("serialize derived byte-array payload");
+        assert_eq!(
+            value.encoded_len_hint(),
+            Some(payload.len()),
+            "derived hint differs from named/tuple byte-array bytes for flags 0x{flags:02x}"
+        );
+        assert_eq!(
+            value.encoded_len_exact(),
+            Some(payload.len()),
+            "derived exact length differs from named/tuple byte-array bytes for flags 0x{flags:02x}"
+        );
+        let frame = norito::to_bytes(value)
+            .expect("frame derived byte-array payload under every supported layout");
+        let advertised_flags = frame[norito::core::Header::SIZE - 1];
+        norito::core::validate_header_flags(advertised_flags)
+            .expect("encoder must advertise a supported layout combination");
+        if flags & FIELD_BITSET != 0 {
+            let required = FIELD_BITSET | PACKED_STRUCT | COMPACT_LEN;
+            assert_eq!(
+                advertised_flags & required,
+                required,
+                "field-bitset frame dropped a required dependency for flags 0x{flags:02x}"
+            );
+        }
+    }
+    norito::core::reset_decode_state();
+}
+
+#[test]
+fn derive_named_byte_array_lengths_match_every_supported_layout() {
+    assert_derived_lengths_match_payload_for_supported_layouts(&NamedByteArrays {
+        tag: 9,
+        digest: [0xA5; 32],
+        suffix: [0x5A; 7],
+    });
+}
+
+#[test]
+fn derive_tuple_byte_array_lengths_match_every_supported_layout() {
+    assert_derived_lengths_match_payload_for_supported_layouts(&TupleByteArrays(
+        9, [0xA5; 32], [0x5A; 7],
+    ));
+}
+
 #[test]
 fn derive_struct_exact_len() {
     norito::core::reset_decode_state();

@@ -83,6 +83,214 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     return args
 
 
+def write_json(path: Path, payload: dict) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def write_payload(path: Path) -> Path:
+    path.write_bytes(b"runtime fixture")
+    return path
+
+
+def raw_metrics() -> dict:
+    return {
+        "version": 1,
+        "por_success_bps": 9_500,
+        "pdp_success_bps": 9_400,
+        "potr_success_bps": 9_300,
+        "latency_health_bps": 9_200,
+        "dispute_rate_bps": 100,
+        "token_violation_rate_bps": 50,
+        "repair_breach_rate_bps": 25,
+    }
+
+
+def raw_provider(provider_id: str, score_bps: int) -> dict:
+    return {
+        "provider_id": provider_id,
+        "score_bps": score_bps,
+        "degradation_flags": [],
+        "raw_metrics": raw_metrics(),
+        "raw_metrics_hash_hex": "66" * 32,
+    }
+
+
+def raw_latest() -> dict:
+    return {
+        "snapshot_id_hex": SNAPSHOT_ID,
+        "generated_at_unix": GENERATED_AT,
+        "previous_snapshot_id_hex": None,
+        "merkle_root_hex": MERKLE_ROOT,
+        "provider_count": 2,
+        "returned_provider_count": 2,
+        "limit": 100,
+        "truncated_providers": False,
+        "alpha_bps": 1_500,
+        "current_score_weight_bps": 7_500,
+        "weights": {
+            "version": 1,
+            "por_success_bps": 2_200,
+            "pdp_success_bps": 2_000,
+            "potr_success_bps": 1_800,
+            "latency_bps": 1_500,
+            "dispute_bps": 1_000,
+            "token_violation_bps": 500,
+            "repair_breach_bps": 1_000,
+        },
+        "providers": [
+            raw_provider("provider-a", 9_400),
+            raw_provider("provider-b", 8_800),
+        ],
+    }
+
+
+def raw_provider_response() -> dict:
+    return {
+        "snapshot_id_hex": SNAPSHOT_ID,
+        "generated_at_unix": GENERATED_AT,
+        "merkle_root_hex": MERKLE_ROOT,
+        "provider": raw_provider(PROVIDER_ID, 9_400),
+        "proof": {
+            "provider_id": PROVIDER_ID,
+            "leaf_index": 0,
+            "leaf_count": 2,
+            "siblings_hex": [PROOF_SIBLING],
+        },
+    }
+
+
+def raw_events() -> dict:
+    return {
+        "since": 0,
+        "limit": 10,
+        "count": 1,
+        "next_since": 1,
+        "events": [
+            {
+                "version": 1,
+                "sequence": 1,
+                "snapshot_id_hex": SNAPSHOT_ID,
+                "generated_at_unix": GENERATED_AT,
+                "merkle_root_hex": MERKLE_ROOT,
+                "provider_count": 2,
+                "previous_snapshot_id_hex": None,
+            }
+        ],
+    }
+
+
+def raw_verify(snapshot_path: Path, proof_path: Path) -> dict:
+    return {
+        "snapshot_path": str(snapshot_path),
+        "snapshot_id_hex": SNAPSHOT_ID,
+        "generated_at_unix": GENERATED_AT,
+        "provider_count": 2,
+        "merkle_root_hex": MERKLE_ROOT,
+        "alpha_bps": 1_500,
+        "current_score_weight_bps": 7_500,
+        "valid": True,
+        "provider_id": PROVIDER_ID,
+        "provider_score_bps": 9_400,
+        "proof_path": str(proof_path),
+        "proof_leaf_index": 0,
+        "proof_sibling_count": 1,
+        "proof_verified": True,
+    }
+
+
+def source_args(
+    kind: str,
+    *,
+    source: Path,
+    publish: Path,
+    out: Path,
+    latest: Path | None = None,
+    provider: Path | None = None,
+    snapshot: Path | None = None,
+    proof: Path | None = None,
+) -> list[str]:
+    args = [
+        "--kind",
+        kind,
+        "--source-cli-json",
+        str(source),
+        "--publish-evidence",
+        str(publish),
+        "--out",
+        str(out),
+        "--now-unix",
+        str(NOW_UNIX),
+    ]
+    if latest is not None:
+        args.extend(["--latest-evidence", str(latest)])
+    if kind in {"provider", "verify"}:
+        args.extend(["--expected-provider-id", PROVIDER_ID])
+    if kind == "events":
+        args.extend(["--expected-since", "0", "--expected-limit", "10"])
+    if kind == "verify":
+        assert provider is not None and snapshot is not None and proof is not None
+        args.extend(["--provider-evidence", str(provider)])
+        args.extend(["--expected-snapshot-path", str(snapshot)])
+        args.extend(["--expected-proof-path", str(proof)])
+    return args
+
+
+def test_source_bound_kind_inventory_is_exact() -> None:
+    assert MODULE.SOURCE_BOUND_KINDS == frozenset(
+        {"latest", "provider", "events", "verify"}
+    )
+    assert MODULE.MIN_REPUTATION_SCORE_BPS == 500
+    assert MODULE.MAX_REPUTATION_SCORE_BPS == 9_900
+    assert MODULE.MAX_REPUTATION_DEGRADATION_FLAGS == 5
+    assert MODULE.REPUTATION_DEGRADATION_FLAGS == (
+        "reserve_warning",
+        "reserve_grace",
+        "reserve_delinquent",
+        "reserve_default",
+        "proof_success_below90",
+        "proof_success_below80",
+        "active_dispute",
+        "slashing_event",
+        "low_score",
+    )
+
+
+def test_source_bound_mode_rejects_repeated_scalar_options(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    source = write_json(tmp_path / "latest.raw", raw_latest())
+    out = tmp_path / "latest-live.json"
+    args = source_args(
+        "latest",
+        source=source,
+        publish=publish,
+        out=out,
+    )
+    args.extend(["--source-cli-json", str(source)])
+
+    assert MODULE.main(args) == 2
+
+    assert "scalar canary-builder options must not be repeated" in (
+        capsys.readouterr().err
+    )
+    assert not out.exists()
+
+
+def test_manual_mode_preserves_argfile_override_semantics(tmp_path: Path) -> None:
+    args = args_for("metrics", tmp_path)
+    override = tmp_path / "override.json"
+    args.extend(["--out", str(override)])
+
+    assert MODULE.main(args) == 0
+
+    assert override.is_file()
+    assert not canary_path(tmp_path, "metrics").exists()
+
+
 def assert_rejected_without_artifact(
     args: list[str],
     *,
@@ -158,6 +366,314 @@ def test_generated_canaries_pass_full_reputation_gate(tmp_path: Path) -> None:
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
+
+
+def test_source_bound_cli_artifacts_pass_full_reputation_gate(tmp_path: Path) -> None:
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    latest_source = write_json(tmp_path / "latest.raw", raw_latest())
+    latest = tmp_path / "latest-live.json"
+    assert MODULE.main(
+        source_args(
+            "latest",
+            source=latest_source,
+            publish=publish,
+            out=latest,
+        )
+    ) == 0
+
+    provider_source = write_json(tmp_path / "provider.raw", raw_provider_response())
+    provider = tmp_path / "provider-live.json"
+    assert MODULE.main(
+        source_args(
+            "provider",
+            source=provider_source,
+            publish=publish,
+            latest=latest,
+            out=provider,
+        )
+    ) == 0
+
+    events_source = write_json(tmp_path / "events.raw", raw_events())
+    events = tmp_path / "events-live.json"
+    assert MODULE.main(
+        source_args(
+            "events",
+            source=events_source,
+            publish=publish,
+            latest=latest,
+            out=events,
+        )
+    ) == 0
+
+    snapshot = write_payload(tmp_path / "snapshot.to")
+    proof = write_payload(tmp_path / "proof.to")
+    verify_source = write_json(
+        tmp_path / "verify.raw",
+        raw_verify(snapshot, proof),
+    )
+    verify = tmp_path / "verify-live.json"
+    assert MODULE.main(
+        source_args(
+            "verify",
+            source=verify_source,
+            publish=publish,
+            latest=latest,
+            provider=provider,
+            snapshot=snapshot,
+            proof=proof,
+            out=verify,
+        )
+    ) == 0
+
+    external = []
+    for kind in ("metrics", "transport", "consumption"):
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        external.append(canary_path(tmp_path, kind))
+    summary = tmp_path / "source-summary.json"
+    checker_args = [
+        "--now-unix",
+        str(NOW_UNIX),
+        "--require-provider",
+        PROVIDER_ID,
+    ]
+    for kind, path in (
+        ("publish", publish),
+        ("latest", latest),
+        ("provider", provider),
+        ("events", events),
+        ("verify", verify),
+        ("metrics", external[0]),
+        ("transport", external[1]),
+        ("consumption", external[2]),
+    ):
+        checker_args.extend(["--evidence", f"{kind}={path}"])
+    checker_args.extend(["--summary-out", str(summary)])
+
+    assert CHECKER.main(checker_args) == 0
+    assert json.loads(summary.read_text(encoding="utf-8"))["status"] == "ready"
+    assert json.loads(provider.read_text(encoding="utf-8"))["proof"]["leaf_index"] == 0
+
+
+@pytest.mark.parametrize(
+    ("kind", "mutation", "expected_error"),
+    (
+        (
+            "latest",
+            lambda payload: payload.__setitem__("provider_count", 3),
+            "provider_count must match complete provider inventory",
+        ),
+        (
+            "latest",
+            lambda payload: payload.__setitem__("merkle_root_hex", "77" * 32),
+            "merkle_root_hex must match publish",
+        ),
+    ),
+)
+def test_source_bound_latest_rejects_anchor_and_inventory_mismatches(
+    kind: str,
+    mutation,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    del kind
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    source_payload = raw_latest()
+    mutation(source_payload)
+    source = write_json(tmp_path / "latest.raw", source_payload)
+    out = tmp_path / "latest-live.json"
+
+    assert MODULE.main(
+        source_args(
+            "latest",
+            source=source,
+            publish=publish,
+            out=out,
+        )
+    ) == 2
+
+    assert expected_error in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_source_bound_latest_accepts_canonical_degradation_flags(
+    tmp_path: Path,
+) -> None:
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    source_payload = raw_latest()
+    source_payload["providers"][0]["degradation_flags"] = [
+        {"flag": "reserve_warning", "value": None},
+        {"flag": "active_dispute", "value": None},
+    ]
+    source = write_json(tmp_path / "latest.raw", source_payload)
+    out = tmp_path / "latest-live.json"
+
+    assert MODULE.main(
+        source_args(
+            "latest",
+            source=source,
+            publish=publish,
+            out=out,
+        )
+    ) == 0
+
+
+@pytest.mark.parametrize(
+    ("score_bps", "flags", "expected_error"),
+    (
+        (
+            499,
+            [],
+            "score_bps must be a canonical bounded integer",
+        ),
+        (
+            9_901,
+            [],
+            "score_bps must be a canonical bounded integer",
+        ),
+        (
+            9_400,
+            [{"flag": "unknown", "value": None}],
+            "degradation_flags must contain exact V1 flag objects",
+        ),
+        (
+            9_400,
+            [
+                {"flag": "active_dispute", "value": None},
+                {"flag": "reserve_warning", "value": None},
+            ],
+            "degradation_flags must be canonically sorted and unique",
+        ),
+        (
+            9_400,
+            [
+                {"flag": "reserve_warning", "value": None},
+                {"flag": "reserve_grace", "value": None},
+                {"flag": "reserve_delinquent", "value": None},
+                {"flag": "reserve_default", "value": None},
+                {"flag": "proof_success_below90", "value": None},
+                {"flag": "proof_success_below80", "value": None},
+            ],
+            "degradation_flags must contain at most 5 entries",
+        ),
+    ),
+)
+def test_source_bound_latest_rejects_noncanonical_provider_profiles(
+    score_bps: int,
+    flags: list[dict[str, object]],
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    source_payload = raw_latest()
+    source_payload["providers"][0]["score_bps"] = score_bps
+    source_payload["providers"][0]["degradation_flags"] = flags
+    source = write_json(tmp_path / "latest.raw", source_payload)
+    out = tmp_path / "latest-live.json"
+
+    assert MODULE.main(
+        source_args(
+            "latest",
+            source=source,
+            publish=publish,
+            out=out,
+        )
+    ) == 2
+
+    assert expected_error in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_source_bound_provider_rejects_context_and_weight_substitution(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    latest_source = write_json(tmp_path / "latest.raw", raw_latest())
+    latest = tmp_path / "latest-live.json"
+    assert MODULE.main(
+        source_args(
+            "latest",
+            source=latest_source,
+            publish=publish,
+            out=latest,
+        )
+    ) == 0
+    tampered = json.loads(latest.read_text(encoding="utf-8"))
+    tampered["environment"] = "staging"
+    tampered["weights_digest_hex"] = "77" * 32
+    latest.write_text(json.dumps(tampered), encoding="utf-8")
+    provider_source = write_json(tmp_path / "provider.raw", raw_provider_response())
+    provider = tmp_path / "provider-live.json"
+
+    assert MODULE.main(
+        source_args(
+            "provider",
+            source=provider_source,
+            publish=publish,
+            latest=latest,
+            out=provider,
+        )
+    ) == 2
+
+    stderr = capsys.readouterr().err
+    assert "latest.environment must match publish.environment" in stderr
+    assert "latest.weights_digest_hex must match publish.weights_digest_hex" in stderr
+    assert not provider.exists()
+
+
+def test_source_bound_verify_rejects_provider_score_substitution(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    publish = canary_path(tmp_path, "publish")
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+    latest = tmp_path / "latest-live.json"
+    assert MODULE.main(
+        source_args(
+            "latest",
+            source=write_json(tmp_path / "latest.raw", raw_latest()),
+            publish=publish,
+            out=latest,
+        )
+    ) == 0
+    provider = tmp_path / "provider-live.json"
+    assert MODULE.main(
+        source_args(
+            "provider",
+            source=write_json(tmp_path / "provider.raw", raw_provider_response()),
+            publish=publish,
+            latest=latest,
+            out=provider,
+        )
+    ) == 0
+    snapshot = write_payload(tmp_path / "snapshot.to")
+    proof = write_payload(tmp_path / "proof.to")
+    verify_payload = raw_verify(snapshot, proof)
+    verify_payload["provider_score_bps"] = 9_399
+    out = tmp_path / "verify-live.json"
+
+    assert MODULE.main(
+        source_args(
+            "verify",
+            source=write_json(tmp_path / "verify.raw", verify_payload),
+            publish=publish,
+            latest=latest,
+            provider=provider,
+            snapshot=snapshot,
+            proof=proof,
+            out=out,
+        )
+    ) == 2
+
+    assert "provider score must match provider evidence" in capsys.readouterr().err
+    assert not out.exists()
 
 
 def test_publish_anchor_includes_weight_digest(tmp_path: Path) -> None:

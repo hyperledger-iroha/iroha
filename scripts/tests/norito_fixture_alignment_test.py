@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import sys
@@ -17,9 +18,17 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
+def _field(value: bytes) -> bytes:
+    return MODULE._compact_length(len(value)) + value
+
+
+def _signed_transaction(payload: bytes, signature: bytes = b"signature") -> bytes:
+    return _field(signature) + _field(payload) + _field(b"\x00")
+
+
 def _fixture_entry(creation_time_ms: int) -> dict:
     payload = b"\x00"
-    signed = b"\x01"
+    signed = _signed_transaction(payload)
     return {
         "name": "alpha",
         "encoded_file": "alpha.norito",
@@ -27,7 +36,7 @@ def _fixture_entry(creation_time_ms: int) -> dict:
         "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         "payload_base64": "AA==",
         "payload_hash": MODULE._iroha_hash(payload),
-        "signed_base64": "AQ==",
+        "signed_base64": base64.b64encode(signed).decode("ascii"),
         "signed_hash": MODULE._signed_transaction_hash(signed),
         "encoded_len": len(payload),
         "signed_len": len(signed),

@@ -42,6 +42,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    enforce_capabilities = true
    ```
 
+   Storage startup also requires distinct proof-outcome, repair, reserve, and orderbook bindings under `sorafs.storage.native_transaction_signers` plus all four matching live providers, regardless of new-work generation flags.
+
 ## 2. Publish Admission Envelopes
 
 1. Copy the approved provider admission envelopes into the directory referenced by `sorafs.discovery.admission.envelopes_dir`:

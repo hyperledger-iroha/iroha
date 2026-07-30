@@ -55,7 +55,7 @@ SoraFS 多源获取协调器驱动确定性并行
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
 ## የመግቢያ የስራ ፍሰት
 
 1. ** ፕሮፖዛል መፍጠር ***
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` ይጨምሩ
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …` ይጨምሩ
      `ProviderAdmissionProposalV1` + የማረጋገጫ ጥቅል በማዘጋጀት ላይ።
    - ማረጋገጫ፡ አስፈላጊ የሆኑትን መስኮች፣ አክሲዮን> 0፣ ቀኖናዊ ቻንከር እጀታ በ`profile_id`።
 2. **የመንግስት ድጋፍ**
@@ -117,7 +117,7 @@ translation_last_reviewed: 2026-02-07
 1. የተተኪውን ፕሮፖዛል/ማስታወቂያ ጥንድ ከ`provider-admission proposal` እና `provider-admission sign` ጋር ይገንቡ፣ `--retention-epoch` በመጨመር እና እንደአስፈላጊነቱ የአክሲዮን/የመጨረሻ ነጥቦችን ያዘምኑ።
 2. መፈጸም  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ translation_last_reviewed: 2026-02-07
 #### የአደጋ መሻር
 1. የተጠለፈውን ኤንቨሎፕ ይለዩ እና መሻሪያውን ይስጡ፡-
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

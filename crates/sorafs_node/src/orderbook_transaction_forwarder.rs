@@ -1637,9 +1637,11 @@ fn semantic_digest(
     let chain_id = chain_id.as_str();
     // A provider-signed receipt has one semantic identity regardless of which
     // valid relayer wraps it. Matcher operations remain authority-bound.
-    let authority = (operation.kind() != OrderbookTransactionKindV1::SettlementReceipt)
-        .then(|| authority.to_string())
-        .unwrap_or_default();
+    let authority = if operation.kind() == OrderbookTransactionKindV1::SettlementReceipt {
+        String::new()
+    } else {
+        authority.to_string()
+    };
     let operation = norito::to_bytes(operation)
         .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
     let chain_id_len = u64::try_from(chain_id.len())

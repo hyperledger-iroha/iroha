@@ -42,7 +42,9 @@ public final class VerifyingKeyInstructionUtilsTests {
     deprecationHeightMismatchThrows();
     noritoStatusParserRejectsNonExactLabels();
     inlineKeyCommitmentMustMatchSerializationBackend();
-    registerAndUpdateRejectUnknownVerifierLabels();
+    pendingCatalogLabelsRemainFailClosed();
+    adversarialPendingAliasesStayUnsupported();
+    registerAndUpdateRejectUnsupportedProductionBackends();
     registerAndUpdateRejectNoncanonicalRecordFields();
     registerAndUpdateRejectBlankNames();
     System.out.println("[IrohaAndroid] VerifyingKeyInstructionUtilsTests passed.");
@@ -315,9 +317,61 @@ public final class VerifyingKeyInstructionUtilsTests {
         "update builder must reject a record from another engine");
   }
 
-  private static void registerAndUpdateRejectUnknownVerifierLabels() {
+  private static void pendingCatalogLabelsRemainFailClosed() {
+    for (final String label :
+        new String[] {
+          "halo2-ipa-orchard",
+          "groth16-bls12-377",
+          "fcmp-plus-plus-curve-tree",
+          "lattice-pcs-sis",
+          "miden-stark",
+          "aztec-plonkish-private-kernel",
+          "pq-masp-stark-fri",
+          "anonymous-pgc",
+          "verange",
+          "zkat",
+          "recursive-anonymous-admission",
+          "vega-existing-credential-zk",
+          "silent-threshold-anoncred",
+          "zk-x509",
+          "sis-with-hints"
+        }) {
+      assert VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend();
+      assert VerifyingKeyBackendTag.isPendingProductionBackendLabel(label);
+      assert !VerifyingKeyBackendTag.isProductionVerifyBackendLabel(label);
+    }
+  }
+
+  private static void adversarialPendingAliasesStayUnsupported() {
+    for (final String label :
+        new String[] {
+          "halo2/ipa/orchard/dev-fixture",
+          "stark/fri/miden/claimed-production",
+          "anonymous-pgc-k-out-of-n-v1-production",
+          "sis-hints-anoncred-pq-v0-devfixture",
+          "groth16/bls12-377/../../prod",
+          "post-quantum-masp/audit-claimed"
+        }) {
+      assert !VerifyingKeyBackendTag.fromCatalogLabel(label).isPendingProductionBackend();
+      assert !VerifyingKeyBackendTag.isPendingProductionBackendLabel(label);
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> VerifyingKeyBackendTag.parse(label),
+          label + " must not parse as a canonical Norito tag");
+    }
+  }
+
+  private static void registerAndUpdateRejectUnsupportedProductionBackends() {
     final VerifyingKeyRecordDescription record =
         VerifyingKeyInstructionUtils.parseRecord(baseArguments(), "halo2/ipa");
+    final IllegalArgumentException paddedError =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(
+                    " halo2/ipa", "backend"),
+            "surrounding whitespace must fail before unsupported-backend classification");
+    assert paddedError.getMessage().contains("surrounding whitespace");
     for (final String backend : rejectedRegistryBackends()) {
       assertThrows(
           IllegalArgumentException.class,
@@ -472,7 +526,12 @@ public final class VerifyingKeyInstructionUtilsTests {
       "groth16/bls12-377",
       " halo2/ipa",
       "halo2/ipa ",
+      "\thalo2/ipa",
+      "halo2/ipa\n",
       "HALO2/IPA",
+      "stark/FRI",
+      "halo2/ipa::ivm-execution-v1",
+      "stark/fri/sha256..goldilocks",
       "halo2/ipa/orchard",
       "halo2-ipa-orchard",
       "halo2/ipa/penumbra",
@@ -480,15 +539,74 @@ public final class VerifyingKeyInstructionUtilsTests {
       "halo2/ipa/monero",
       "halo2/ipa/curve-tree",
       "halo2/pasta/tiny-add",
+      "halo2/ipa/tiny-add",
       "halo2/ipa:tiny-add",
+      "halo2/pasta/tiny-commit-open",
+      "halo2/pasta/vote-bool-commit",
+      "halo2/ipa/vote-bool-commit",
+      "halo2/ipa:vote-bool-commit",
+      "halo2/pasta/vote-bool-commit-merkle2",
+      "halo2/ipa/vote-bool-commit-merkle8",
+      "halo2/ipa:vote-bool-commit-merkle16",
+      "halo2/pasta/anon-transfer-2x2",
+      "halo2/ipa/anon-transfer-2x2",
+      "halo2/ipa:anon-transfer-2x2",
+      "halo2/pasta/anon-transfer-2x2-merkle2",
+      "halo2/ipa/anon-transfer-2x2-merkle8",
+      "halo2/ipa:anon-transfer-2x2-merkle16",
+      "halo2/pasta/asset-hidden-transfer-public-test",
+      "halo2/ipa/asset-hidden-transfer-public-test",
+      "halo2/ipa:asset-hidden-transfer-public-test",
       "halo2/pasta/ipa-pasta-cycle-v1",
       "stark/fri/miden",
       "stark/fri/latest",
+      "stark/fri/attestation",
+      "stark/fri/contest",
+      "stark/fri/random-profile",
+      "stark/fri/sha512-goldilocks",
+      "stark/fri/audit-proof-v1",
       "stark/fri/sha256 goldilocks",
       "stark/fri/sha256+goldilocks",
       "stark/fri/dev-fixture",
+      "stark/fri/d-e-v-f-i-x-t-u-r-e",
+      "stark/fri/dev",
+      "stark/fri/d-e-v",
+      "stark/fri/test",
+      "stark/fri/t-e-s-t",
+      "stark/fri/todo",
+      "stark/fri/t-o-d-o",
+      "stark/fri/draft-only",
+      "stark/fri/d-r-a-f-t",
+      "stark/fri/pending-audit",
+      "stark/fri/replace-before-mainnet",
+      "stark/fri/not-production-ready",
+      "stark/fri/placeholder",
       "stark/fri/externally-audited",
       "halo2/ipa:production-ready",
+      "halo2/ipa:mainnet-ready",
+      "halo2/ipa:release-ready",
+      "halo2/ipa:certified-mainnet",
+      "halo2/ipa:third-party-audited",
+      "stark/fri/audit-signoff",
+      "stark/fri/boi-audited",
+      "stark/fri/external-security-review",
+      "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+      "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+      "stark/fri/a-u-d-i-t-c-l-a-i-m",
+      "halo2/ipa:dev-fixture",
+      "halo2/ipa:dev",
+      "halo2/ipa:d-e-v",
+      "halo2/ipa:todo-proof",
+      "halo2/ipa:t-o-d-o-proof",
+      "halo2/ipa:draft-proof",
+      "halo2/ipa:d-r-a-f-t-proof",
+      "halo2/ipa:pending-audit",
+      "halo2/ipa:replace-before-production",
+      "halo2/ipa:not-for-production",
+      "halo2/ipa:dummy",
+      "halo2/ipa:f-a-k-e",
+      "halo2/ipa:stub",
+      "halo2/ipa:s-a-m-p-l-e",
       "halo2/ipa:kzg",
       "halo2/kzg",
       "kzg/powersoftau",

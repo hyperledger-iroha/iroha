@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-02-07
 | Punto final توثیق | ہر اعلان شدہ endpoint کو mTLS یا QUIC سرٹیفکیٹ رپورٹ سے سپورٹ کرنا لازم ہے۔ | Norito carga útil `EndpointAttestationV1` کی تعریف کریں اور اسے paquete de admisión کے اندر ہر punto final کے ساتھ اسٹور کریں۔ |
 
 ## قبولیت کا ورک فلو1. **پروپوزل تیار کرنا**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      Paquete de software `ProviderAdmissionProposalV1` + paquete de software بنائے۔
    - ویلیڈیشن: ضروری فیلڈز، apuesta > 0, اور `profile_id` میں mango de fragmentador canónico کو یقینی بنائیں۔
 2. **گورننس کی منظوری**
@@ -53,7 +53,7 @@ bytes canónicos de propuesta/sobre آپریٹرز cuerpos de anuncios براہ 
 
 ### CLI حوالہ
 
-ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔- `proposal`
+ہر کمانڈ کو `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔- `proposal`
   - Número de modelo: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -89,7 +89,7 @@ bytes canónicos de propuesta/sobre آپریٹرز cuerpos de anuncios براہ 
    `--retention-epoch` بڑھائیں اور ضرورت کے مطابق estacas/puntos finales اپڈیٹ کریں۔
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -107,7 +107,7 @@ bytes canónicos de propuesta/sobre آپریٹرز cuerpos de anuncios براہ 
    CI (`ci/check_sorafs_fixtures.sh`) Norito آؤٹ پٹس کی estabilidad چیک کرتا ہے۔#### ہنگامی منسوخی
 1. متاثرہ sobre کی شناخت کریں اور منسوخی جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

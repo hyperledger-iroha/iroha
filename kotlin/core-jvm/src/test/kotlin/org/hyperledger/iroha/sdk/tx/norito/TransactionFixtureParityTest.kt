@@ -474,12 +474,10 @@ class TransactionFixtureParityTest {
         val decoder = canonicalDecoder(signedBytes)
         val signatureField = readField(decoder, "$name.signed.signature")
         val payloadField = readField(decoder, "$name.signed.payload")
-        val attachmentsField = readField(decoder, "$name.signed.attachments")
         val multisigField = readField(decoder, "$name.signed.multisig_signatures")
         require(decoder.remaining() == 0) { "$name: signed transaction has trailing bytes" }
 
         val signature = decodeSignature(name, signatureField)
-        decodeOptionField("$name.signed.attachments", attachmentsField)
         decodeOptionField("$name.signed.multisig_signatures", multisigField)
         return SignedParts(signature = signature, payloadBytes = payloadField)
     }

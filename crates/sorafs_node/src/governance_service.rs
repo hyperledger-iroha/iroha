@@ -2,27 +2,48 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::{OsStr, OsString},
     fmt,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     future::{Future, IntoFuture},
-    io::{self, Read, Write},
+    io::{self, Read},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Component, Path, PathBuf},
     process,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
+pub use crate::governance::{
+    GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1, GovernanceDagHttpRequestReceiverV1,
+    GovernanceDagRequestAuthenticationErrorV1, GovernanceDagRequestAuthenticationPolicyV1,
+    GovernanceDagRequestAuthenticationReplayCacheV1,
+    canonicalize_governance_dag_outbound_http_request_v1,
+    governance_dag_request_authentication_headers_v1,
+    parse_governance_dag_request_authentication_headers_v1,
+    verify_governance_dag_request_authentication_v1,
+};
 use crate::{
-    GovernanceDagAuthenticationScope, GovernanceDagRequestAuthenticator,
-    GovernanceDagSealedCheckpointStore, GovernanceDagSealedStateRecord,
-    GovernanceDagSealedStateSlot,
+    GovernanceDagAuthenticationScope, GovernanceDagCanonicalRequestV1,
+    GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticator,
+    GovernanceDagRuntimeProviderQualificationV1, GovernanceDagSealedCheckpointStore,
+    GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot,
+    governance::{
+        GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1, GovernanceFilesystemRootGuard,
+        RuntimeDagProducerCheckpointV1, runtime_dag_producer_root_digest,
+        validate_runtime_dag_snapshot_authority_lineage,
+    },
+    governance_rooted_fs::{ExpectedFile, FileBinding, FileSnapshot, RetainedFile},
 };
 use axum::{
     Router,
@@ -32,21 +53,29 @@ use axum::{
     response::Response,
     routing::get,
 };
-use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use iroha_config::{
     base::toml::TomlSource,
-    parameters::actual::{SorafsGovernanceDagService, SorafsGovernanceDagServiceView},
+    parameters::{
+        ProductionRuntimeHandleError,
+        actual::{SorafsGovernanceDagService, SorafsGovernanceDagServiceView},
+        validate_production_runtime_handle,
+    },
 };
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
     core::DecodeLimits,
     derive::{NoritoDeserialize, NoritoSerialize},
     json::{self, Map as JsonMap, Value as JsonValue},
 };
 use reqwest::{Client, Method, RequestBuilder, redirect::Policy};
+#[cfg(test)]
+use sorafs_manifest::validate_governance_dag_head_against_chain_v1;
 use sorafs_manifest::{
-    GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
-    GovernanceSignatureAlgorithm, validate_governance_dag_head_against_chain_v1,
+    GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
+    GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+    GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1, GovernanceDagBlockV1,
+    GovernanceDagHeadV1, GovernanceLogPayloadV1, GovernanceSignatureAlgorithm,
+    MAX_REPUTATION_TRUST_EDGES, validate_governance_dag_head_against_rotatable_chain_v1,
 };
 use thiserror::Error;
 use tokio::{net::TcpListener, signal, sync::RwLock, time};
@@ -66,30 +95,14 @@ const MAX_RESPONSE_HEADERS: usize = 64;
 const MAX_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const MAX_IPFS_CID_BYTES: usize = 160;
 const MAX_PUBLIC_TOKEN_BYTES: usize = 512;
-const MAX_RUNTIME_HANDLE_BYTES: usize = 256;
 const SOURCE_ENTRY_HARD_CAP: usize = 131_072;
 const SOURCE_TOTAL_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
+const IPFS_MULTIPART_BOUNDARY_PREFIX: &str = "iroha-sorafs-gdag-v1";
 // Norito temporarily copies nested length-delimited fields while decoding.
 // The governed block/head schemas stay below this amplification, while the
 // finite multiplier still rejects archives that attempt allocation bombs.
 const CANONICAL_DECODE_ALLOCATION_MULTIPLIER: usize = 16;
-const SUPPORTED_RUNTIME_PAYLOAD_KINDS: &[&str] = &[
-    "appeal_finance_report",
-    "appeal_finance_settlement_receipt",
-    "appeal_finance_weekly_rollup",
-    "deal_settlement",
-    "gc_audit",
-    "moderation_ballot_event",
-    "orderbook_settlement_receipt",
-    "pdp_archive",
-    "proof_token_issuance",
-    "reconciliation",
-    "repair_audit",
-    "repair_slash",
-    "reputation_snapshot",
-    "transparency_ledger_publication",
-];
-
+const CANONICAL_DECODE_MAX_TOTAL_ELEMENTS: usize = 4_000_000;
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(unix)]
@@ -126,9 +139,9 @@ pub enum GovernanceDagServiceError {
 #[derive(Clone, Default)]
 /// Deployment-owned runtime providers for the supervised Governance DAG service.
 ///
-/// An empty container is intentionally valid to construct so the packaged
-/// binary can fail closed with an explicit missing-provider error. Production
-/// supervisors attach opaque HSM/credential/checkpoint implementations through
+/// An empty container is intentionally constructible for assembly and negative
+/// tests, but startup rejects it before service state is opened. Production
+/// registries attach opaque HSM/credential/checkpoint implementations through
 /// the builder methods below.
 pub struct GovernanceDagServiceRuntimeProviders {
     ipfs_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
@@ -140,27 +153,9 @@ impl fmt::Debug for GovernanceDagServiceRuntimeProviders {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("GovernanceDagServiceRuntimeProviders")
-            .field(
-                "ipfs_authenticator",
-                &self
-                    .ipfs_authenticator
-                    .as_ref()
-                    .map(|provider| provider.handle()),
-            )
-            .field(
-                "head_authenticator",
-                &self
-                    .head_authenticator
-                    .as_ref()
-                    .map(|provider| provider.handle()),
-            )
-            .field(
-                "checkpoint_store",
-                &self
-                    .checkpoint_store
-                    .as_ref()
-                    .map(|provider| provider.handle()),
-            )
+            .field("ipfs_authenticator", &self.ipfs_authenticator.is_some())
+            .field("head_authenticator", &self.head_authenticator.is_some())
+            .field("checkpoint_store", &self.checkpoint_store.is_some())
             .finish()
     }
 }
@@ -197,10 +192,149 @@ impl GovernanceDagServiceRuntimeProviders {
     }
 }
 
+/// Public stable-handle bindings requested from a deployment runtime registry.
+///
+/// This value contains no credentials, private keys, provider diagnostics, or
+/// endpoint secrets. A deployment registry uses it only to select already
+/// provisioned HSM/authentication/sealed-CAS adapters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
+    ipfs_authenticator_handle: String,
+    ipfs_authenticator_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    ipfs_request_auth_public_key: [u8; 32],
+    head_authenticator_handle: Option<String>,
+    head_authenticator_qualification: Option<GovernanceDagRuntimeProviderQualificationV1>,
+    head_request_auth_public_key: Option<[u8; 32]>,
+    request_auth_max_envelope_lifetime_secs: u64,
+    request_auth_max_future_skew_secs: u64,
+    checkpoint_store_handle: String,
+    checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
+}
+
+impl GovernanceDagServiceRuntimeProviderBindingsV1 {
+    /// Stable handle for the Kubo/IPFS/IPNS authenticator.
+    #[must_use]
+    pub fn ipfs_authenticator_handle(&self) -> &str {
+        &self.ipfs_authenticator_handle
+    }
+
+    /// Exact configured Kubo/IPFS/IPNS authenticator qualification.
+    #[must_use]
+    pub const fn ipfs_authenticator_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.ipfs_authenticator_qualification
+    }
+
+    /// Configured raw Ed25519 key pin for IPFS request authentication.
+    #[must_use]
+    pub const fn ipfs_request_auth_public_key(&self) -> [u8; 32] {
+        self.ipfs_request_auth_public_key
+    }
+
+    /// Stable handle for signed-head authentication, when that mode is active.
+    #[must_use]
+    pub fn head_authenticator_handle(&self) -> Option<&str> {
+        self.head_authenticator_handle.as_deref()
+    }
+
+    /// Exact configured signed-head authenticator qualification, when active.
+    #[must_use]
+    pub const fn head_authenticator_qualification(
+        &self,
+    ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
+        self.head_authenticator_qualification
+    }
+
+    /// Configured raw Ed25519 key pin for signed-head request authentication.
+    #[must_use]
+    pub const fn head_request_auth_public_key(&self) -> Option<[u8; 32]> {
+        self.head_request_auth_public_key
+    }
+
+    /// Maximum accepted signed-envelope lifetime in seconds.
+    #[must_use]
+    pub const fn request_auth_max_envelope_lifetime_secs(&self) -> u64 {
+        self.request_auth_max_envelope_lifetime_secs
+    }
+
+    /// Maximum accepted future issuance skew in seconds.
+    #[must_use]
+    pub const fn request_auth_max_future_skew_secs(&self) -> u64 {
+        self.request_auth_max_future_skew_secs
+    }
+
+    /// Stable handle for the sealed monotonic checkpoint store.
+    #[must_use]
+    pub fn checkpoint_store_handle(&self) -> &str {
+        &self.checkpoint_store_handle
+    }
+
+    /// Exact configured sealed-checkpoint store qualification.
+    #[must_use]
+    pub const fn checkpoint_store_qualification(
+        &self,
+    ) -> GovernanceDagRuntimeProviderQualificationV1 {
+        self.checkpoint_store_qualification
+    }
+}
+
+/// Redacted deployment-registry resolution failure.
+///
+/// Variants deliberately carry no provider diagnostics because HSM, KMS, and
+/// credential-control-plane errors can contain secrets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum GovernanceDagServiceRuntimeProviderRegistryErrorV1 {
+    /// The deployment registry or its control plane is unavailable.
+    #[error("Governance DAG runtime provider registry is unavailable")]
+    Unavailable,
+    /// The deployment registry policy is stale or revoked.
+    #[error("Governance DAG runtime provider registry policy is stale or revoked")]
+    StaleOrRevoked,
+    /// The registry rejected the exact configured stable-handle bindings.
+    #[error("Governance DAG runtime provider registry rejected the configured bindings")]
+    RejectedBindings,
+}
+
+/// Deployment-owned factory for Governance DAG runtime providers.
+///
+/// Implementations resolve only the stable handles in `bindings`. Credentials,
+/// private keys, tokens, and provider diagnostics must stay inside the registry
+/// and returned adapters. The service independently qualifies every returned
+/// adapter and verifies its exact configured handle before touching durable
+/// service state.
+pub trait GovernanceDagServiceRuntimeProviderRegistryV1: Send + Sync {
+    /// Resolve one coherent provider set for the exact configured bindings.
+    fn resolve(
+        &self,
+        bindings: &GovernanceDagServiceRuntimeProviderBindingsV1,
+    ) -> Result<
+        GovernanceDagServiceRuntimeProviders,
+        GovernanceDagServiceRuntimeProviderRegistryErrorV1,
+    >;
+}
+
+/// Typed startup failure for the registry-aware Governance DAG launcher.
+#[derive(Debug, Error)]
+pub enum GovernanceDagServiceLauncherError {
+    /// The packaged launcher was not supplied a deployment runtime registry.
+    #[error("Governance DAG runtime provider registry was not injected")]
+    MissingRuntimeProviderRegistry,
+    /// The injected registry failed without exposing provider diagnostics.
+    #[error(transparent)]
+    RuntimeProviderRegistry(#[from] GovernanceDagServiceRuntimeProviderRegistryErrorV1),
+    /// Configuration or qualified service startup failed.
+    #[error(transparent)]
+    Service(#[from] GovernanceDagServiceError),
+}
+
 #[derive(Clone)]
 struct OpaqueAuthenticator {
     handle: String,
+    qualification: GovernanceDagRuntimeProviderQualificationV1,
+    verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
     provider: Arc<dyn GovernanceDagRequestAuthenticator>,
+    replay_cache: Arc<Mutex<GovernanceDagRequestAuthenticationReplayCacheV1>>,
 }
 
 impl fmt::Debug for OpaqueAuthenticator {
@@ -208,7 +342,19 @@ impl fmt::Debug for OpaqueAuthenticator {
         formatter
             .debug_struct("OpaqueAuthenticator")
             .field("handle", &self.handle)
-            .field("credentials", &"[REDACTED]")
+            .field(
+                "public_key",
+                &hex::encode(self.verification_policy.public_key()),
+            )
+            .field(
+                "max_envelope_lifetime_secs",
+                &self.verification_policy.max_envelope_lifetime_secs(),
+            )
+            .field(
+                "max_future_skew_secs",
+                &self.verification_policy.max_future_skew_secs(),
+            )
+            .field("provider", &"[REDACTED]")
             .finish_non_exhaustive()
     }
 }
@@ -216,39 +362,156 @@ impl fmt::Debug for OpaqueAuthenticator {
 impl OpaqueAuthenticator {
     fn try_new(
         expected_handle: &str,
+        expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
+        expected_public_key: [u8; 32],
+        max_envelope_lifetime_secs: u64,
+        max_future_skew_secs: u64,
         provider: Arc<dyn GovernanceDagRequestAuthenticator>,
         label: &'static str,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, label)?;
-        if provider.handle() != handle {
+        if !expected_qualification.is_valid() {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} configured policy qualification is invalid"
+            )));
+        }
+        let verification_policy = validate_request_auth_policy(
+            expected_public_key,
+            max_envelope_lifetime_secs,
+            max_future_skew_secs,
+            label,
+        )?;
+        let provider_handle = validate_runtime_handle(provider.handle(), label)?;
+        if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(format!(
                 "{label} provider handle does not match configured handle"
             )));
         }
-        Ok(Self { handle, provider })
+        if provider.public_key() != expected_public_key {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} provider public key does not match configuration"
+            )));
+        }
+        let qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(format!(
+                "{label} provider is unavailable, stale, or unqualified"
+            ))
+        })?;
+        if !qualification.is_valid() || qualification != expected_qualification {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} provider qualification does not match configuration"
+            )));
+        }
+        let rechecked_qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(format!(
+                "{label} provider is unavailable, stale, or unqualified"
+            ))
+        })?;
+        if provider.handle() != handle
+            || provider.public_key() != expected_public_key
+            || rechecked_qualification != expected_qualification
+        {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "{label} provider identity, public key, or policy changed during startup qualification"
+            )));
+        }
+        Ok(Self {
+            handle,
+            qualification: expected_qualification,
+            verification_policy,
+            provider,
+            replay_cache: Arc::new(Mutex::new(
+                GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            )),
+        })
     }
 
     fn authenticate(
         &self,
-        scope: GovernanceDagAuthenticationScope,
-        request: RequestBuilder,
-    ) -> Result<RequestBuilder, GovernanceDagServiceError> {
-        if self.provider.handle() != self.handle {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG authenticator identity changed after injection".to_owned(),
-            ));
-        }
-        self.provider.authenticate(scope, request).map_err(|_| {
+        request: &GovernanceDagCanonicalRequestV1,
+    ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagServiceError> {
+        self.assert_identity()?;
+        let result = self.provider.authenticate(request);
+        self.assert_identity()?;
+        let envelope = result.map_err(|_| {
             GovernanceDagServiceError::Network(
                 "Governance DAG authenticator refused the outbound request".to_owned(),
             )
-        })
+        })?;
+        self.validate_envelope(request, &envelope)?;
+        Ok(envelope)
     }
+
+    fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
+        let qualification = self.provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG authenticator is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if self.provider.handle() != self.handle
+            || self.provider.public_key() != self.verification_policy.public_key()
+            || qualification != self.qualification
+        {
+            return Err(GovernanceDagServiceError::Network(
+                "Governance DAG authenticator identity, public key, or policy changed after injection"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_envelope(
+        &self,
+        request: &GovernanceDagCanonicalRequestV1,
+        envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+    ) -> Result<(), GovernanceDagServiceError> {
+        let now = current_unix_timestamp_seconds();
+        let mut replay_cache = self.replay_cache.lock().map_err(|_| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG request-auth replay state is unavailable".to_owned(),
+            )
+        })?;
+        verify_governance_dag_request_authentication_v1(
+            request,
+            envelope,
+            request.scope(),
+            &self.verification_policy,
+            now,
+            &mut replay_cache,
+        )
+        .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))
+    }
+}
+
+fn validate_request_auth_policy(
+    public_key: [u8; 32],
+    max_envelope_lifetime_secs: u64,
+    max_future_skew_secs: u64,
+    label: &str,
+) -> Result<GovernanceDagRequestAuthenticationPolicyV1, GovernanceDagServiceError> {
+    GovernanceDagRequestAuthenticationPolicyV1::try_new(
+        public_key,
+        max_envelope_lifetime_secs,
+        max_future_skew_secs,
+    )
+    .map_err(|error| {
+        let reason = match error {
+            GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyTiming => {
+                "request-auth timing bounds are invalid"
+            }
+            GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyPublicKey => {
+                "request-auth public key is not canonical Ed25519"
+            }
+            _ => "request-auth policy is invalid",
+        };
+        GovernanceDagServiceError::Config(format!("{label} {reason}"))
+    })
 }
 
 #[derive(Clone)]
 struct OpaqueCheckpointStore {
     handle: String,
+    qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
 }
 
@@ -264,22 +527,60 @@ impl fmt::Debug for OpaqueCheckpointStore {
 impl OpaqueCheckpointStore {
     fn try_new(
         expected_handle: &str,
+        expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
         provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
     ) -> Result<Self, GovernanceDagServiceError> {
         let handle = validate_runtime_handle(expected_handle, "sealed checkpoint store")?;
-        if provider.handle() != handle {
+        if !expected_qualification.is_valid() {
+            return Err(GovernanceDagServiceError::Config(
+                "sealed checkpoint store configured policy qualification is invalid".to_owned(),
+            ));
+        }
+        let provider_handle =
+            validate_runtime_handle(provider.handle(), "sealed checkpoint store")?;
+        if provider_handle != handle {
             return Err(GovernanceDagServiceError::Config(
                 "sealed checkpoint store provider handle does not match configured handle"
                     .to_owned(),
             ));
         }
-        Ok(Self { handle, provider })
+        let qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(
+                "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if !qualification.is_valid() || qualification != expected_qualification {
+            return Err(GovernanceDagServiceError::Config(
+                "sealed checkpoint store qualification does not match configuration".to_owned(),
+            ));
+        }
+        let rechecked_qualification = provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::Config(
+                "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if provider.handle() != handle || rechecked_qualification != expected_qualification {
+            return Err(GovernanceDagServiceError::Config(
+                "sealed checkpoint store identity or policy changed during startup qualification"
+                    .to_owned(),
+            ));
+        }
+        Ok(Self {
+            handle,
+            qualification: expected_qualification,
+            provider,
+        })
     }
 
     fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
-        if self.provider.handle() != self.handle {
+        let qualification = self.provider.qualification().map_err(|_| {
+            GovernanceDagServiceError::State(
+                "sealed checkpoint store is unavailable, stale, or unqualified".to_owned(),
+            )
+        })?;
+        if self.provider.handle() != self.handle || qualification != self.qualification {
             return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint store identity changed after injection".to_owned(),
+                "sealed checkpoint store identity or policy changed after injection".to_owned(),
             ));
         }
         Ok(())
@@ -356,10 +657,17 @@ struct SourceSnapshot {
     blocks: Vec<SourceBlock>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProducerCommitGuard {
+    record: GovernanceDagSealedStateRecord,
+    checkpoint: RuntimeDagProducerCheckpointV1,
+}
+
 #[derive(Debug)]
 struct RuntimeConfig {
     source_dir: PathBuf,
-    state_dir: PathBuf,
+    source_root_guard: GovernanceFilesystemRootGuard,
+    state_root_guard: GovernanceFilesystemRootGuard,
     listen_addr: SocketAddr,
     poll_interval: Duration,
     max_response_bytes: u64,
@@ -369,7 +677,28 @@ struct RuntimeConfig {
     max_head_age_secs: u64,
     max_future_skew_secs: u64,
     allow_head_bootstrap: bool,
+    expected_producer_signer_handle: String,
+    expected_producer_signer_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    expected_publisher_peer_id: Vec<u8>,
     expected_public_key: [u8; 32],
+}
+
+impl RuntimeConfig {
+    fn revalidate_source_root(&self) -> Result<(), GovernanceDagServiceError> {
+        self.source_root_guard.revalidate().map_err(|err| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "Governance DAG source root identity changed: {err}"
+            ))
+        })
+    }
+
+    fn revalidate_state_root(&self) -> Result<(), GovernanceDagServiceError> {
+        self.state_root_guard.revalidate().map_err(|err| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "Governance DAG state root identity changed: {err}"
+            ))
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -378,6 +707,7 @@ struct PinnedEndpoint {
     client: Client,
     authentication_scope: GovernanceDagAuthenticationScope,
     authenticator: OpaqueAuthenticator,
+    max_request_bytes: u64,
 }
 
 #[derive(Debug)]
@@ -433,7 +763,7 @@ struct Service {
     ipfs: PinnedEndpoint,
     head_mode: HeadMode,
     api: ApiState,
-    _state_lock: File,
+    state_lock: RetainedFile,
 }
 
 /// Run the supervised Governance DAG publisher using injected runtime providers.
@@ -453,45 +783,367 @@ pub async fn run_governance_dag_service(
     providers: GovernanceDagServiceRuntimeProviders,
 ) -> Result<(), GovernanceDagServiceError> {
     let view = load_service_config(config_path.as_ref())?;
-    let mut service = Service::from_view(view, providers).await?;
+    run_governance_dag_service_from_view(view, once, providers).await
+}
+
+/// Run the supervised Governance DAG publisher through a deployment registry.
+///
+/// The registry receives only validated stable provider handles. The packaged
+/// launcher passes `None` when no supported deployment registry was linked and
+/// therefore fails with a typed error before service state is opened.
+///
+/// # Errors
+///
+/// Returns [`GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry`]
+/// when no registry was injected, a redacted typed registry error when provider
+/// construction fails, or the underlying fail-closed service startup error.
+pub async fn run_governance_dag_service_with_runtime_registry(
+    config_path: impl AsRef<Path>,
+    once: bool,
+    registry: Option<Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1>>,
+) -> Result<(), GovernanceDagServiceLauncherError> {
+    let view = load_service_config(config_path.as_ref())?;
+    let providers = resolve_runtime_registry_providers(&view, registry)?;
+    run_governance_dag_service_from_view(view, once, providers).await?;
+    Ok(())
+}
+
+/// Qualify every runtime-only provider against one resolved service view.
+///
+/// This performs the same exact handle/revision/policy checks as service
+/// construction without opening filesystem state, resolving endpoints, or
+/// starting a listener. Embedding launchers use it before starting any node
+/// subsystem so missing, substituted, stale, or test-marked adapters fail the
+/// launch rather than a later background task.
+///
+/// # Errors
+///
+/// Returns a fail-closed configuration error when a required provider is
+/// missing, its public identity differs from configuration, its qualification
+/// is unavailable or stale, or an unexpected signed-head provider is supplied
+/// in IPNS mode.
+pub fn validate_governance_dag_service_runtime_providers(
+    view: &SorafsGovernanceDagServiceView,
+    providers: &GovernanceDagServiceRuntimeProviders,
+) -> Result<(), GovernanceDagServiceError> {
+    let bindings = runtime_provider_bindings(view)?;
+    OpaqueAuthenticator::try_new(
+        bindings.ipfs_authenticator_handle(),
+        bindings.ipfs_authenticator_qualification(),
+        bindings.ipfs_request_auth_public_key(),
+        bindings.request_auth_max_envelope_lifetime_secs(),
+        bindings.request_auth_max_future_skew_secs(),
+        providers.ipfs_authenticator.clone().ok_or_else(|| {
+            GovernanceDagServiceError::Config(
+                "IPFS authentication is enabled but no runtime provider was injected".to_owned(),
+            )
+        })?,
+        "IPFS authenticator",
+    )?;
+    OpaqueCheckpointStore::try_new(
+        bindings.checkpoint_store_handle(),
+        bindings.checkpoint_store_qualification(),
+        providers.checkpoint_store.clone().ok_or_else(|| {
+            GovernanceDagServiceError::Config(
+                "sealed checkpoint store is enabled but no runtime provider was injected"
+                    .to_owned(),
+            )
+        })?,
+    )?;
+    match (
+        bindings.head_authenticator_handle(),
+        bindings.head_authenticator_qualification(),
+        bindings.head_request_auth_public_key(),
+        providers.head_authenticator.clone(),
+    ) {
+        (Some(handle), Some(qualification), Some(public_key), Some(provider)) => {
+            OpaqueAuthenticator::try_new(
+                handle,
+                qualification,
+                public_key,
+                bindings.request_auth_max_envelope_lifetime_secs(),
+                bindings.request_auth_max_future_skew_secs(),
+                provider,
+                "signed-head authenticator",
+            )?;
+        }
+        (Some(_), Some(_), Some(_), None) => {
+            return Err(GovernanceDagServiceError::Config(
+                "signed-head authentication is enabled but no runtime provider was injected"
+                    .to_owned(),
+            ));
+        }
+        (None, None, None, None) => {}
+        (None, None, None, Some(_)) => {
+            return Err(GovernanceDagServiceError::Config(
+                "signed-head authenticator provider must be absent in IPNS mode".to_owned(),
+            ));
+        }
+        _ => {
+            return Err(GovernanceDagServiceError::Config(
+                "signed-head authenticator binding is incomplete".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_runtime_registry_providers(
+    view: &SorafsGovernanceDagServiceView,
+    registry: Option<Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1>>,
+) -> Result<GovernanceDagServiceRuntimeProviders, GovernanceDagServiceLauncherError> {
+    let bindings = runtime_provider_bindings(view)?;
+    let registry =
+        registry.ok_or(GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry)?;
+    Ok(registry.resolve(&bindings)?)
+}
+
+fn runtime_provider_bindings(
+    view: &SorafsGovernanceDagServiceView,
+) -> Result<GovernanceDagServiceRuntimeProviderBindingsV1, GovernanceDagServiceError> {
+    let service = &view.service;
+    if !service.enabled {
+        return Err(GovernanceDagServiceError::Config(
+            "sorafs.storage.governance_dag_service.enabled must be true".to_owned(),
+        ));
+    }
+    let ipfs_authenticator_handle = validate_runtime_handle(
+        service
+            .ipfs_authenticator_handle
+            .as_deref()
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Config("IPFS authenticator handle is missing".to_owned())
+            })?,
+        "IPFS authenticator",
+    )?;
+    let ipfs_authenticator_qualification = configured_provider_qualification(
+        service.ipfs_authenticator_revision,
+        service.ipfs_authenticator_policy_digest,
+        "IPFS authenticator",
+    )?;
+    let ipfs_request_auth_public_key = service.ipfs_request_auth_public_key.ok_or_else(|| {
+        GovernanceDagServiceError::Config("IPFS request-auth public key is missing".to_owned())
+    })?;
+    validate_request_auth_policy(
+        ipfs_request_auth_public_key,
+        service.request_auth_max_envelope_lifetime_secs,
+        service.request_auth_max_future_skew_secs,
+        "IPFS authenticator",
+    )?;
+    let checkpoint_store_handle = validate_runtime_handle(
+        service.checkpoint_store_handle.as_deref().ok_or_else(|| {
+            GovernanceDagServiceError::Config("checkpoint store handle is missing".to_owned())
+        })?,
+        "sealed checkpoint store",
+    )?;
+    let checkpoint_store_qualification = configured_provider_qualification(
+        service.checkpoint_store_revision,
+        service.checkpoint_store_policy_digest,
+        "sealed checkpoint store",
+    )?;
+    let (head_authenticator_handle, head_authenticator_qualification, head_request_auth_public_key) =
+        match service.head_mode.as_str() {
+            "signed_http" => {
+                let public_key = service.head_request_auth_public_key.ok_or_else(|| {
+                    GovernanceDagServiceError::Config(
+                        "signed-head request-auth public key is missing".to_owned(),
+                    )
+                })?;
+                validate_request_auth_policy(
+                    public_key,
+                    service.request_auth_max_envelope_lifetime_secs,
+                    service.request_auth_max_future_skew_secs,
+                    "signed-head authenticator",
+                )?;
+                (
+                    Some(validate_runtime_handle(
+                        service
+                            .head_authenticator_handle
+                            .as_deref()
+                            .ok_or_else(|| {
+                                GovernanceDagServiceError::Config(
+                                    "signed-head authenticator handle is missing".to_owned(),
+                                )
+                            })?,
+                        "signed-head authenticator",
+                    )?),
+                    Some(configured_provider_qualification(
+                        service.head_authenticator_revision,
+                        service.head_authenticator_policy_digest,
+                        "signed-head authenticator",
+                    )?),
+                    Some(public_key),
+                )
+            }
+            "ipns" => {
+                if service.head_authenticator_handle.is_some()
+                    || service.head_authenticator_revision.is_some()
+                    || service.head_authenticator_policy_digest.is_some()
+                    || service.head_request_auth_public_key.is_some()
+                {
+                    return Err(GovernanceDagServiceError::Config(
+                        "signed-head authenticator binding must be absent in IPNS mode".to_owned(),
+                    ));
+                }
+                (None, None, None)
+            }
+            _ => {
+                return Err(GovernanceDagServiceError::Config(
+                    "head_mode must be signed_http or ipns".to_owned(),
+                ));
+            }
+        };
+    Ok(GovernanceDagServiceRuntimeProviderBindingsV1 {
+        ipfs_authenticator_handle,
+        ipfs_authenticator_qualification,
+        ipfs_request_auth_public_key,
+        head_authenticator_handle,
+        head_authenticator_qualification,
+        head_request_auth_public_key,
+        request_auth_max_envelope_lifetime_secs: service.request_auth_max_envelope_lifetime_secs,
+        request_auth_max_future_skew_secs: service.request_auth_max_future_skew_secs,
+        checkpoint_store_handle,
+        checkpoint_store_qualification,
+    })
+}
+
+fn configured_provider_qualification(
+    revision: Option<u64>,
+    policy_digest: Option<[u8; 32]>,
+    label: &'static str,
+) -> Result<GovernanceDagRuntimeProviderQualificationV1, GovernanceDagServiceError> {
+    let qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+        revision.ok_or_else(|| {
+            GovernanceDagServiceError::Config(format!("{label} revision is missing"))
+        })?,
+        policy_digest.ok_or_else(|| {
+            GovernanceDagServiceError::Config(format!("{label} policy digest is missing"))
+        })?,
+    );
+    if !qualification.is_valid() {
+        return Err(GovernanceDagServiceError::Config(format!(
+            "{label} configured policy qualification is invalid"
+        )));
+    }
+    Ok(qualification)
+}
+
+/// Run the supervised publisher from an already validated standalone view.
+///
+/// Embedding launchers use this entrypoint so they do not need to re-read a
+/// configuration file that may also contain validator-only settings. Runtime
+/// providers are requalified during service construction and around every
+/// authenticated or sealed-store operation.
+///
+/// # Errors
+///
+/// Returns a fail-closed error for provider qualification, source/state
+/// validation, endpoint pinning, publication/readback, public-head continuity,
+/// or listener failures.
+pub async fn run_governance_dag_service_from_view(
+    view: SorafsGovernanceDagServiceView,
+    once: bool,
+    providers: GovernanceDagServiceRuntimeProviders,
+) -> Result<(), GovernanceDagServiceError> {
     if once {
+        let mut service = Service::from_view(view, providers).await?;
         service.reconcile_once().await?;
         return Ok(());
     }
-
-    let listener = TcpListener::bind(service.config.listen_addr)
+    prepare_governance_dag_service_from_view(view, providers)
+        .await?
+        .run()
         .await
-        .map_err(|err| GovernanceDagServiceError::Listener(err.to_string()))?;
-    let router = service_router(service.api.clone());
-    let api = service.api.clone();
-    api.0.write().await.live = true;
-    let server = axum::serve(listener, router.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
-        .into_future();
-    tokio::pin!(server);
+}
 
-    let mut interval = time::interval(service.config.poll_interval);
-    interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            result = &mut server => {
-                return result.map_err(|err| GovernanceDagServiceError::Listener(err.to_string()));
-            }
-            _ = interval.tick() => {
-                if let Err(err) = service.reconcile_once().await {
-                    let mut state = service.api.0.write().await;
-                    state.ready = false;
-                    state.last_error = Some(err.to_string());
-                    state.metrics.publish_failure_total = state.metrics.publish_failure_total.saturating_add(1);
-                    state.metrics.validation_failure_total = state.metrics.validation_failure_total.saturating_add(1);
-                    if matches!(&service.head_mode, HeadMode::Ipns { .. }) {
-                        state.metrics.ipns_update_failure_total = state.metrics.ipns_update_failure_total.saturating_add(1);
+/// Prepared continuous Governance DAG service owned by a supervisor.
+///
+/// Construction completes provider qualification, source/state validation,
+/// endpoint pinning, sealed-state load, and listener binding. A launcher may
+/// therefore finish preparation before reporting successful startup.
+pub struct GovernanceDagServiceRunner {
+    service: Service,
+    listener: TcpListener,
+}
+
+impl GovernanceDagServiceRunner {
+    /// Reconcile continuously until the listener exits or an operating-system
+    /// shutdown signal is received.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fail-closed publication, reconciliation, or listener error.
+    pub async fn run(self) -> Result<(), GovernanceDagServiceError> {
+        self.run_until(shutdown_signal()).await
+    }
+
+    /// Reconcile continuously until the listener exits or the embedding
+    /// supervisor requests shutdown.
+    ///
+    /// Standalone launchers should use [`Self::run`]. Embedded launchers pass
+    /// their existing supervisor signal here so the service does not install a
+    /// competing operating-system signal consumer and can drain its listener
+    /// gracefully during programmatic shutdown.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fail-closed publication, reconciliation, or listener error.
+    pub async fn run_until<F>(mut self, shutdown: F) -> Result<(), GovernanceDagServiceError>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let router = service_router(self.service.api.clone());
+        let api = self.service.api.clone();
+        api.0.write().await.live = true;
+        let server = axum::serve(self.listener, router.into_make_service())
+            .with_graceful_shutdown(shutdown)
+            .into_future();
+        tokio::pin!(server);
+
+        let mut interval = time::interval(self.service.config.poll_interval);
+        interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                result = &mut server => {
+                    return result.map_err(|err| GovernanceDagServiceError::Listener(err.to_string()));
+                }
+                _ = interval.tick() => {
+                    if let Err(err) = self.service.reconcile_once().await {
+                        let mut state = self.service.api.0.write().await;
+                        state.ready = false;
+                        state.last_error = Some(err.to_string());
+                        state.metrics.publish_failure_total = state.metrics.publish_failure_total.saturating_add(1);
+                        state.metrics.validation_failure_total = state.metrics.validation_failure_total.saturating_add(1);
+                        if matches!(&self.service.head_mode, HeadMode::Ipns { .. }) {
+                            state.metrics.ipns_update_failure_total = state.metrics.ipns_update_failure_total.saturating_add(1);
+                        }
+                        eprintln!("governance DAG reconciliation failed; readiness withdrawn: {err}");
                     }
-                    eprintln!("governance DAG reconciliation failed; readiness withdrawn: {err}");
                 }
             }
         }
     }
+}
+
+/// Prepare a continuous Governance DAG service from a resolved view.
+///
+/// The returned runner has already qualified all providers, opened and
+/// reconciled sealed local state, pinned endpoint addresses, and bound its
+/// loopback status listener. It has not yet attempted publication.
+///
+/// # Errors
+///
+/// Returns a fail-closed provider, source/state, endpoint, or listener error.
+pub async fn prepare_governance_dag_service_from_view(
+    view: SorafsGovernanceDagServiceView,
+    providers: GovernanceDagServiceRuntimeProviders,
+) -> Result<GovernanceDagServiceRunner, GovernanceDagServiceError> {
+    let mut service = Service::from_view(view, providers).await?;
+    service.validate_initial_state().await?;
+    let listener = TcpListener::bind(service.config.listen_addr)
+        .await
+        .map_err(|err| GovernanceDagServiceError::Listener(err.to_string()))?;
+    Ok(GovernanceDagServiceRunner { service, listener })
 }
 
 async fn shutdown_signal() {
@@ -516,7 +1168,7 @@ async fn shutdown_signal() {
 fn load_service_config(
     path: &Path,
 ) -> Result<SorafsGovernanceDagServiceView, GovernanceDagServiceError> {
-    let bytes = read_regular_file(path, CONFIG_MAX_BYTES, false)?;
+    let bytes = read_unrooted_regular_file(path, CONFIG_MAX_BYTES, false)?;
     let text = std::str::from_utf8(&bytes).map_err(|_| {
         GovernanceDagServiceError::Config("configuration file is not UTF-8".to_owned())
     })?;
@@ -532,24 +1184,31 @@ impl Service {
         view: SorafsGovernanceDagServiceView,
         providers: GovernanceDagServiceRuntimeProviders,
     ) -> Result<Self, GovernanceDagServiceError> {
-        let service = view.service;
+        let SorafsGovernanceDagServiceView {
+            source_dir,
+            producer_publisher_peer_id,
+            producer_signer_handle,
+            producer_signer_revision,
+            producer_signer_policy_digest,
+            producer_publisher_public_key_hex,
+            service,
+        } = view;
         if !service.enabled {
             return Err(GovernanceDagServiceError::Config(
                 "sorafs.storage.governance_dag_service.enabled must be true".to_owned(),
             ));
         }
-        let source_dir = secure_existing_directory(
-            &view.source_dir.ok_or_else(|| {
-                GovernanceDagServiceError::Config("governance_dag_dir is missing".to_owned())
-            })?,
-            false,
-        )?;
-        let state_dir = service
-            .state_dir
-            .clone()
-            .unwrap_or_else(|| source_dir.join("governance-dag-service"));
-        let state_dir = secure_state_directory(&state_dir)?;
-        let state_lock = acquire_service_lock(&state_dir)?;
+        let canonical_block_max = u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)
+            .map_err(|_| {
+                GovernanceDagServiceError::Config(
+                    "canonical Governance DAG block ceiling exceeds host limits".to_owned(),
+                )
+            })?;
+        if service.max_request_bytes.0 < canonical_block_max {
+            return Err(GovernanceDagServiceError::Config(format!(
+                "max_request_bytes must be at least the canonical Governance DAG block ceiling of {canonical_block_max} bytes"
+            )));
+        }
         let listen_addr = service.listen_addr.parse::<SocketAddr>().map_err(|_| {
             GovernanceDagServiceError::Config("listen_addr is not a socket address".to_owned())
         })?;
@@ -564,34 +1223,81 @@ impl Service {
             })?,
             "publisher public key",
         )?;
+        let expected_producer_public_key = decode_strong_ed25519_public_key_hex(
+            producer_publisher_public_key_hex
+                .as_deref()
+                .ok_or_else(|| {
+                    GovernanceDagServiceError::Config(
+                        "local Governance DAG producer public key is missing".to_owned(),
+                    )
+                })?,
+            "local Governance DAG producer public key",
+        )?;
+        if expected_producer_public_key != expected_public_key {
+            return Err(GovernanceDagServiceError::Config(
+                "public service key does not match the signed local producer key".to_owned(),
+            ));
+        }
+        let expected_producer_signer_handle = validate_runtime_handle(
+            producer_signer_handle.as_deref().ok_or_else(|| {
+                GovernanceDagServiceError::Config(
+                    "local Governance DAG producer signer handle is missing".to_owned(),
+                )
+            })?,
+            "local Governance DAG producer signer",
+        )?;
+        let expected_producer_signer_qualification = configured_provider_qualification(
+            producer_signer_revision,
+            producer_signer_policy_digest,
+            "local Governance DAG producer signer",
+        )?;
+        let expected_publisher_peer_id = producer_publisher_peer_id
+            .ok_or_else(|| {
+                GovernanceDagServiceError::Config(
+                    "local Governance DAG producer peer id is missing".to_owned(),
+                )
+            })?
+            .into_bytes();
+        if expected_publisher_peer_id.is_empty()
+            || expected_publisher_peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1
+            || !expected_publisher_peer_id
+                .iter()
+                .all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(GovernanceDagServiceError::Config(
+                "local Governance DAG producer peer id is invalid".to_owned(),
+            ));
+        }
+        let source_dir_path = source_dir.ok_or_else(|| {
+            GovernanceDagServiceError::Config("governance_dag_dir is missing".to_owned())
+        })?;
+        let ipfs_url = service.ipfs_api_url.clone().ok_or_else(|| {
+            GovernanceDagServiceError::Config("IPFS API URL is missing".to_owned())
+        })?;
+        let GovernanceDagServiceRuntimeProviders {
+            ipfs_authenticator,
+            head_authenticator,
+            checkpoint_store,
+        } = providers;
         let checkpoint_store_handle =
             service.checkpoint_store_handle.as_deref().ok_or_else(|| {
                 GovernanceDagServiceError::Config("checkpoint store handle is missing".to_owned())
             })?;
+        let checkpoint_store_qualification = configured_provider_qualification(
+            service.checkpoint_store_revision,
+            service.checkpoint_store_policy_digest,
+            "sealed checkpoint store",
+        )?;
         let checkpoint_store = OpaqueCheckpointStore::try_new(
             checkpoint_store_handle,
-            providers.checkpoint_store.ok_or_else(|| {
+            checkpoint_store_qualification,
+            checkpoint_store.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "sealed checkpoint store is enabled but no runtime provider was injected"
                         .to_owned(),
                 )
             })?,
         )?;
-
-        let runtime_config = RuntimeConfig {
-            source_dir,
-            state_dir,
-            listen_addr,
-            poll_interval: service.poll_interval,
-            max_response_bytes: service.max_response_bytes.0,
-            max_request_bytes: service.max_request_bytes.0,
-            mirror_max_entries: service.mirror_max_entries,
-            mirror_max_bytes: service.mirror_max_bytes.0,
-            max_head_age_secs: service.max_head_age_secs,
-            max_future_skew_secs: service.max_future_skew_secs,
-            allow_head_bootstrap: service.allow_head_bootstrap,
-            expected_public_key,
-        };
 
         let ipfs_authenticator_handle =
             service
@@ -602,9 +1308,22 @@ impl Service {
                         "IPFS authenticator handle is missing".to_owned(),
                     )
                 })?;
+        let ipfs_authenticator_qualification = configured_provider_qualification(
+            service.ipfs_authenticator_revision,
+            service.ipfs_authenticator_policy_digest,
+            "IPFS authenticator",
+        )?;
         let ipfs_authenticator = OpaqueAuthenticator::try_new(
             ipfs_authenticator_handle,
-            providers.ipfs_authenticator.ok_or_else(|| {
+            ipfs_authenticator_qualification,
+            service.ipfs_request_auth_public_key.ok_or_else(|| {
+                GovernanceDagServiceError::Config(
+                    "IPFS request-auth public key is missing".to_owned(),
+                )
+            })?,
+            service.request_auth_max_envelope_lifetime_secs,
+            service.request_auth_max_future_skew_secs,
+            ipfs_authenticator.ok_or_else(|| {
                 GovernanceDagServiceError::Config(
                     "IPFS authentication is enabled but no runtime provider was injected"
                         .to_owned(),
@@ -612,18 +1331,17 @@ impl Service {
             })?,
             "IPFS authenticator",
         )?;
-        let ipfs_url = service.ipfs_api_url.as_deref().ok_or_else(|| {
-            GovernanceDagServiceError::Config("IPFS API URL is missing".to_owned())
-        })?;
-        let ipfs = build_pinned_endpoint(
-            ipfs_url,
-            ipfs_authenticator,
-            GovernanceDagAuthenticationScope::Ipfs,
-            &service,
-            true,
-        )
-        .await?;
-        let head_mode = match service.head_mode.as_str() {
+        enum QualifiedHeadMode {
+            SignedHttp {
+                url: String,
+                authenticator: OpaqueAuthenticator,
+            },
+            Ipns {
+                name: String,
+                key_name: String,
+            },
+        }
+        let qualified_head_mode = match service.head_mode.as_str() {
             "signed_http" => {
                 let handle = service
                     .head_authenticator_handle
@@ -633,52 +1351,129 @@ impl Service {
                             "signed-head authenticator handle is missing".to_owned(),
                         )
                     })?;
+                let qualification = configured_provider_qualification(
+                    service.head_authenticator_revision,
+                    service.head_authenticator_policy_digest,
+                    "signed-head authenticator",
+                )?;
                 let authenticator = OpaqueAuthenticator::try_new(
-                        handle,
-                        providers.head_authenticator.ok_or_else(|| {
-                            GovernanceDagServiceError::Config(
-                                "signed-head authentication is enabled but no runtime provider was injected"
-                                    .to_owned(),
-                            )
-                        })?,
-                        "signed-head authenticator",
-                    )?;
-                let url = service.signed_head_url.as_deref().ok_or_else(|| {
+                    handle,
+                    qualification,
+                    service.head_request_auth_public_key.ok_or_else(|| {
+                        GovernanceDagServiceError::Config(
+                            "signed-head request-auth public key is missing".to_owned(),
+                        )
+                    })?,
+                    service.request_auth_max_envelope_lifetime_secs,
+                    service.request_auth_max_future_skew_secs,
+                    head_authenticator.ok_or_else(|| {
+                        GovernanceDagServiceError::Config(
+                            "signed-head authentication is enabled but no runtime provider was injected"
+                                .to_owned(),
+                        )
+                    })?,
+                    "signed-head authenticator",
+                )?;
+                let url = service.signed_head_url.clone().ok_or_else(|| {
                     GovernanceDagServiceError::Config("signed head URL is missing".to_owned())
                 })?;
-                HeadMode::SignedHttp(
-                    build_pinned_endpoint(
-                        url,
-                        authenticator,
-                        GovernanceDagAuthenticationScope::SignedHead,
-                        &service,
-                        false,
-                    )
-                    .await?,
-                )
+                QualifiedHeadMode::SignedHttp { url, authenticator }
             }
-            "ipns" => HeadMode::Ipns {
-                name: validate_public_token(
-                    service.ipns_name.as_deref().ok_or_else(|| {
-                        GovernanceDagServiceError::Config("IPNS name is missing".to_owned())
-                    })?,
-                    "IPNS name",
-                )?,
-                key_name: validate_public_token(
-                    service.ipns_key_name.as_deref().ok_or_else(|| {
-                        GovernanceDagServiceError::Config("IPNS key name is missing".to_owned())
-                    })?,
-                    "IPNS key name",
-                )?,
-            },
+            "ipns" => {
+                if service.head_authenticator_handle.is_some()
+                    || service.head_authenticator_revision.is_some()
+                    || service.head_authenticator_policy_digest.is_some()
+                    || service.head_request_auth_public_key.is_some()
+                    || head_authenticator.is_some()
+                {
+                    return Err(GovernanceDagServiceError::Config(
+                        "signed-head authenticator binding must be absent in IPNS mode".to_owned(),
+                    ));
+                }
+                QualifiedHeadMode::Ipns {
+                    name: validate_public_token(
+                        service.ipns_name.as_deref().ok_or_else(|| {
+                            GovernanceDagServiceError::Config("IPNS name is missing".to_owned())
+                        })?,
+                        "IPNS name",
+                    )?,
+                    key_name: validate_public_token(
+                        service.ipns_key_name.as_deref().ok_or_else(|| {
+                            GovernanceDagServiceError::Config("IPNS key name is missing".to_owned())
+                        })?,
+                        "IPNS key name",
+                    )?,
+                }
+            }
             _ => {
                 return Err(GovernanceDagServiceError::Config(
                     "head_mode must be signed_http or ipns".to_owned(),
                 ));
             }
         };
+
+        // Provider qualification above is deliberately complete before any
+        // mutable directory, lock, sealed checkpoint, or publication endpoint
+        // is opened.
+        let (source_dir, source_root_guard) = secure_existing_directory(&source_dir_path, false)?;
+        let (_, state_root_guard) = secure_state_directory(
+            &service
+                .state_dir
+                .clone()
+                .unwrap_or_else(|| source_dir.join("governance-dag-service")),
+        )?;
+        state_root_guard.revalidate().map_err(|err| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "state root identity changed before lock acquisition: {err}"
+            ))
+        })?;
+        let state_lock = acquire_service_lock(&state_root_guard)?;
+        state_root_guard.revalidate().map_err(|err| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "state root identity changed during lock acquisition: {err}"
+            ))
+        })?;
+        let runtime_config = RuntimeConfig {
+            source_dir,
+            source_root_guard,
+            state_root_guard,
+            listen_addr,
+            poll_interval: service.poll_interval,
+            max_response_bytes: service.max_response_bytes.0,
+            max_request_bytes: service.max_request_bytes.0,
+            mirror_max_entries: service.mirror_max_entries,
+            mirror_max_bytes: service.mirror_max_bytes.0,
+            max_head_age_secs: service.max_head_age_secs,
+            max_future_skew_secs: service.max_future_skew_secs,
+            allow_head_bootstrap: service.allow_head_bootstrap,
+            expected_producer_signer_handle,
+            expected_producer_signer_qualification,
+            expected_publisher_peer_id,
+            expected_public_key,
+        };
         let (checkpoint, checkpoint_revision) = load_checkpoint(&checkpoint_store)?;
         let (intent, intent_revision) = load_publish_intent(&checkpoint_store)?;
+        let ipfs = build_pinned_endpoint(
+            &ipfs_url,
+            ipfs_authenticator,
+            GovernanceDagAuthenticationScope::Ipfs,
+            &service,
+            true,
+        )
+        .await?;
+        let head_mode = match qualified_head_mode {
+            QualifiedHeadMode::SignedHttp { url, authenticator } => HeadMode::SignedHttp(
+                build_pinned_endpoint(
+                    &url,
+                    authenticator,
+                    GovernanceDagAuthenticationScope::SignedHead,
+                    &service,
+                    false,
+                )
+                .await?,
+            ),
+            QualifiedHeadMode::Ipns { name, key_name } => HeadMode::Ipns { name, key_name },
+        };
         let checkpoint_generation_floor = checkpoint
             .as_ref()
             .map_or(0, |checkpoint| checkpoint.generation);
@@ -696,7 +1491,7 @@ impl Service {
             ipfs,
             head_mode,
             api,
-            _state_lock: state_lock,
+            state_lock,
         })
     }
 }
@@ -704,7 +1499,7 @@ impl Service {
 fn secure_existing_directory(
     path: &Path,
     secret: bool,
-) -> Result<PathBuf, GovernanceDagServiceError> {
+) -> Result<(PathBuf, GovernanceFilesystemRootGuard), GovernanceDagServiceError> {
     let metadata = fs::symlink_metadata(path).map_err(|err| {
         GovernanceDagServiceError::Filesystem(format!("cannot inspect `{}`: {err}", path.display()))
     })?;
@@ -723,26 +1518,105 @@ fn secure_existing_directory(
             path.display()
         )));
     }
-    path.canonicalize().map_err(|err| {
+    let guard = if secret {
+        GovernanceFilesystemRootGuard::capture_writer(path)
+    } else {
+        GovernanceFilesystemRootGuard::capture_source(path)
+    }
+    .map_err(|err| {
         GovernanceDagServiceError::Filesystem(format!(
-            "cannot canonicalize `{}`: {err}",
+            "cannot fence filesystem root `{}`: {err}",
             path.display()
         ))
-    })
+    })?;
+    let canonical = guard.root().to_path_buf();
+    Ok((canonical, guard))
 }
 
-fn secure_state_directory(path: &Path) -> Result<PathBuf, GovernanceDagServiceError> {
-    if !path.exists() {
-        fs::create_dir_all(path).map_err(|err| {
+fn secure_state_directory(
+    path: &Path,
+) -> Result<(PathBuf, GovernanceFilesystemRootGuard), GovernanceDagServiceError> {
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot resolve current directory for state root: {error}"
+                ))
+            })?
+            .join(path)
+    };
+    let path = absolute_path.as_path();
+    if fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+        let mut ancestor = path.parent().ok_or_else(|| {
             GovernanceDagServiceError::Filesystem(format!(
-                "cannot create state directory `{}`: {err}",
+                "state directory `{}` has no parent",
                 path.display()
             ))
         })?;
-        #[cfg(unix)]
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|err| {
+        loop {
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => break,
+                Ok(_) => {
+                    return Err(GovernanceDagServiceError::Filesystem(format!(
+                        "state ancestor `{}` must be a real directory",
+                        ancestor.display()
+                    )));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    ancestor = ancestor.parent().ok_or_else(|| {
+                        GovernanceDagServiceError::Filesystem(format!(
+                            "state directory `{}` has no existing ancestor",
+                            path.display()
+                        ))
+                    })?;
+                }
+                Err(error) => {
+                    return Err(GovernanceDagServiceError::Filesystem(format!(
+                        "cannot inspect state ancestor `{}`: {error}",
+                        ancestor.display()
+                    )));
+                }
+            }
+        }
+        let relative = path.strip_prefix(ancestor).map_err(|_| {
             GovernanceDagServiceError::Filesystem(format!(
-                "cannot secure state directory `{}`: {err}",
+                "state directory `{}` escaped its retained ancestor",
+                path.display()
+            ))
+        })?;
+        let ancestor_guard =
+            GovernanceFilesystemRootGuard::capture_writer(ancestor).map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot retain writable state ancestor `{}`: {error}",
+                    ancestor.display()
+                ))
+            })?;
+        let mut directory = ancestor_guard.rooted_directory().clone();
+        for component in relative.components() {
+            let Component::Normal(name) = component else {
+                return Err(GovernanceDagServiceError::Filesystem(format!(
+                    "state directory `{}` contains a non-canonical component",
+                    path.display()
+                )));
+            };
+            directory = directory.open_or_create_directory(name).map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "cannot create rooted state directory `{}`: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        directory.sync_all().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot durably create state directory `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        ancestor_guard.revalidate().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "state ancestor changed while creating `{}`: {error}",
                 path.display()
             ))
         })?;
@@ -750,7 +1624,7 @@ fn secure_state_directory(path: &Path) -> Result<PathBuf, GovernanceDagServiceEr
     secure_existing_directory(path, true)
 }
 
-fn read_regular_file(
+fn read_unrooted_regular_file(
     path: &Path,
     max_bytes: u64,
     secret: bool,
@@ -817,6 +1691,77 @@ fn read_regular_file(
     Ok(bytes)
 }
 
+fn rooted_byte_limit(max_bytes: u64, label: &str) -> Result<usize, GovernanceDagServiceError> {
+    usize::try_from(max_bytes).map_err(|_| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "{label} byte limit exceeds host address space"
+        ))
+    })
+}
+
+fn read_rooted_file(
+    root_guard: &GovernanceFilesystemRootGuard,
+    relative: &Path,
+    max_bytes: u64,
+    private: bool,
+) -> Result<FileSnapshot, GovernanceDagServiceError> {
+    root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "root identity changed before reading `{}`: {error}",
+            root_guard.root().join(relative).display()
+        ))
+    })?;
+    let (parent, name) = root_guard
+        .rooted_directory()
+        .resolve_parent(relative, false)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot resolve rooted file `{}`: {error}",
+                root_guard.root().join(relative).display()
+            ))
+        })?;
+    let max_bytes = rooted_byte_limit(max_bytes, "rooted governance file")?;
+    let snapshot = if private {
+        parent.read_private_file(&name, max_bytes)
+    } else {
+        parent.read_file(&name, max_bytes)
+    }
+    .map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "cannot read rooted file `{}`: {error}",
+            root_guard.root().join(relative).display()
+        ))
+    })?;
+    root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "root identity changed after reading `{}`: {error}",
+            root_guard.root().join(relative).display()
+        ))
+    })?;
+    Ok(snapshot)
+}
+
+fn verify_rooted_file_binding(
+    root_guard: &GovernanceFilesystemRootGuard,
+    binding: &FileBinding,
+) -> Result<(), GovernanceDagServiceError> {
+    root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "root identity changed before verifying a retained source file: {error}"
+        ))
+    })?;
+    binding.verify().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "rooted source file was substituted during snapshot loading: {error}"
+        ))
+    })?;
+    root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "root identity changed after verifying a retained source file: {error}"
+        ))
+    })
+}
+
 fn validate_regular_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -867,27 +1812,36 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
 
-fn acquire_service_lock(state_dir: &Path) -> Result<File, GovernanceDagServiceError> {
-    let path = state_dir.join(SERVICE_LOCK_FILE);
-    reject_unsafe_output(&path)?;
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    set_no_follow_flag(&mut options);
-    let file = options.open(&path).map_err(|err| {
-        GovernanceDagServiceError::Filesystem(format!("cannot open service lock: {err}"))
+fn acquire_service_lock(
+    state_root_guard: &GovernanceFilesystemRootGuard,
+) -> Result<RetainedFile, GovernanceDagServiceError> {
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "state root changed before service lock acquisition: {error}"
+        ))
     })?;
-    validate_regular_metadata(
-        &path,
-        &file.metadata().map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!("cannot inspect service lock: {err}"))
-        })?,
-        4096,
-        true,
-    )?;
-    match file.try_lock() {
-        Ok(()) => Ok(file),
+    let file = state_root_guard
+        .rooted_directory()
+        .open_or_create_private_file(OsStr::new(SERVICE_LOCK_FILE), 4096)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot open rooted service lock: {error}"
+            ))
+        })?;
+    match file.handle().try_lock() {
+        Ok(()) => {
+            file.verify().map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "service lock binding changed during acquisition: {error}"
+                ))
+            })?;
+            state_root_guard.revalidate().map_err(|error| {
+                GovernanceDagServiceError::Filesystem(format!(
+                    "state root changed during service lock acquisition: {error}"
+                ))
+            })?;
+            Ok(file)
+        }
         Err(fs::TryLockError::WouldBlock) => Err(GovernanceDagServiceError::Filesystem(
             "another Governance DAG service owns the configured state directory".to_owned(),
         )),
@@ -897,86 +1851,90 @@ fn acquire_service_lock(state_dir: &Path) -> Result<File, GovernanceDagServiceEr
     }
 }
 
-fn write_atomic_secret(path: &Path, bytes: &[u8]) -> Result<(), GovernanceDagServiceError> {
-    let parent = path.parent().ok_or_else(|| {
-        GovernanceDagServiceError::Filesystem("durable output has no parent directory".to_owned())
+fn write_rooted_atomic_secret(
+    state_root_guard: &GovernanceFilesystemRootGuard,
+    relative: &Path,
+    bytes: &[u8],
+) -> Result<(), GovernanceDagServiceError> {
+    if bytes.len() as u64 > MUTABLE_STATE_MAX_BYTES {
+        return Err(GovernanceDagServiceError::Filesystem(format!(
+            "durable state `{}` exceeds its byte bound",
+            state_root_guard.root().join(relative).display()
+        )));
+    }
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "state root changed before writing `{}`: {error}",
+            state_root_guard.root().join(relative).display()
+        ))
     })?;
-    reject_unsafe_output(path)?;
-    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(
-        ".{}.tmp-{}-{counter}",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("governance-state"),
-        process::id()
-    ));
-    let result = (|| {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        set_no_follow_flag(&mut options);
-        let mut file = options.open(&temp).map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!("cannot create durable temp file: {err}"))
-        })?;
-        file.write_all(bytes).map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!("cannot write durable temp file: {err}"))
-        })?;
-        file.sync_all().map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!("cannot sync durable temp file: {err}"))
-        })?;
-        drop(file);
-        reject_unsafe_output(path)?;
-        fs::rename(&temp, path).map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!("cannot install durable state: {err}"))
-        })?;
-        sync_directory(parent)
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
-fn reject_unsafe_output(path: &Path) -> Result<(), GovernanceDagServiceError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            validate_regular_metadata(path, &metadata, MUTABLE_STATE_MAX_BYTES, true)?;
-        }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(GovernanceDagServiceError::Filesystem(format!(
-                "cannot inspect output `{}`: {err}",
-                path.display()
-            )));
-        }
-    }
-    if let Some(parent) = path.parent() {
-        let metadata = fs::symlink_metadata(parent).map_err(|err| {
+    let (parent, name) = state_root_guard
+        .rooted_directory()
+        .resolve_parent(relative, false)
+        .map_err(|error| {
             GovernanceDagServiceError::Filesystem(format!(
-                "cannot inspect output directory `{}`: {err}",
-                parent.display()
+                "cannot resolve durable state `{}`: {error}",
+                state_root_guard.root().join(relative).display()
             ))
         })?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(GovernanceDagServiceError::Filesystem(
-                "durable output parent must be a real directory".to_owned(),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn sync_directory(path: &Path) -> Result<(), GovernanceDagServiceError> {
-    #[cfg(unix)]
-    File::open(path)
-        .and_then(|file| file.sync_all())
-        .map_err(|err| {
-            GovernanceDagServiceError::Filesystem(format!("cannot sync state directory: {err}"))
+    let target_name = name.to_str().ok_or_else(|| {
+        GovernanceDagServiceError::Filesystem(
+            "durable state target name must be canonical UTF-8".to_owned(),
+        )
+    })?;
+    parent
+        .remove_atomic_temps_for(target_name)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot recover durable temporaries for `{}`: {error}",
+                state_root_guard.root().join(relative).display()
+            ))
         })?;
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
+    let expected = parent
+        .private_file_binding(
+            &name,
+            rooted_byte_limit(MUTABLE_STATE_MAX_BYTES, "durable state")?,
+        )
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot inspect durable predecessor `{}`: {error}",
+                state_root_guard.root().join(relative).display()
+            ))
+        })?
+        .map_or(ExpectedFile::Missing, ExpectedFile::Identity);
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary_name = OsString::from(format!(".{target_name}.tmp-{}-{counter}", process::id()));
+    parent
+        .atomic_write(&name, &temporary_name, bytes, expected)
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot install rooted durable state `{}`: {error}",
+                state_root_guard.root().join(relative).display()
+            ))
+        })?;
+    let readback = parent
+        .read_private_file(
+            &name,
+            rooted_byte_limit(MUTABLE_STATE_MAX_BYTES, "durable state")?,
+        )
+        .map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "cannot read back durable state `{}`: {error}",
+                state_root_guard.root().join(relative).display()
+            ))
+        })?;
+    if readback.bytes() != bytes {
+        return Err(GovernanceDagServiceError::Filesystem(format!(
+            "durable state `{}` readback diverged",
+            state_root_guard.root().join(relative).display()
+        )));
+    }
+    state_root_guard.revalidate().map_err(|error| {
+        GovernanceDagServiceError::Filesystem(format!(
+            "state root changed after writing `{}`: {error}",
+            state_root_guard.root().join(relative).display()
+        ))
+    })
 }
 
 #[cfg(unix)]
@@ -987,9 +1945,82 @@ fn set_no_follow_flag(options: &mut OpenOptions) {
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!(
+    "Governance DAG service filesystem flags are not qualified for this Android architecture"
+);
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("Governance DAG service filesystem flags are not qualified for this Unix target");
+
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    0x400000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -1006,23 +2037,6 @@ fn platform_no_follow_flag() -> i32 {
 ))]
 fn platform_no_follow_flag() -> i32 {
     0x100
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 
 fn decode_fixed_hex<const N: usize>(
@@ -1051,10 +2065,17 @@ fn decode_strong_ed25519_public_key_hex(
     label: &str,
 ) -> Result<[u8; 32], GovernanceDagServiceError> {
     let bytes = decode_fixed_hex::<32>(value, label)?;
-    let verifying_key = DalekVerifyingKey::from_bytes(&bytes).map_err(|_| {
-        GovernanceDagServiceError::Config(format!("{label} is not a canonical Ed25519 point"))
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &bytes).map_err(|_| {
+        GovernanceDagServiceError::Config(format!(
+            "{label} must be a canonical strong Ed25519 point"
+        ))
     })?;
-    if verifying_key.to_bytes() != bytes || verifying_key.is_weak() {
+    let (algorithm, canonical_bytes) = public_key.try_to_bytes().map_err(|_| {
+        GovernanceDagServiceError::Config(format!(
+            "{label} must be a canonical strong Ed25519 point"
+        ))
+    })?;
+    if algorithm != Algorithm::Ed25519 || canonical_bytes != bytes.as_slice() {
         return Err(GovernanceDagServiceError::Config(format!(
             "{label} must be a canonical strong Ed25519 point"
         )));
@@ -1079,18 +2100,15 @@ fn validate_public_token(value: &str, label: &str) -> Result<String, GovernanceD
 }
 
 fn validate_runtime_handle(value: &str, label: &str) -> Result<String, GovernanceDagServiceError> {
-    if value.is_empty()
-        || value.len() > MAX_RUNTIME_HANDLE_BYTES
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return Err(GovernanceDagServiceError::Config(format!(
-            "{label} handle must be 1..={MAX_RUNTIME_HANDLE_BYTES} visible ASCII bytes without whitespace"
-        )));
+    match validate_production_runtime_handle(value) {
+        Ok(()) => Ok(value.to_owned()),
+        Err(ProductionRuntimeHandleError::InvalidSyntax) => Err(GovernanceDagServiceError::Config(
+            format!("{label} handle is not a canonical credential-free production runtime handle"),
+        )),
+        Err(ProductionRuntimeHandleError::TestMarked) => Err(GovernanceDagServiceError::Config(
+            format!("{label} handle is test-marked and cannot qualify a production adapter"),
+        )),
     }
-    Ok(value.to_owned())
 }
 
 fn current_unix_timestamp_seconds() -> u64 {
@@ -1272,7 +2290,9 @@ fn load_sealed_record(
     slot: GovernanceDagSealedStateSlot,
 ) -> Result<Option<GovernanceDagSealedStateRecord>, GovernanceDagServiceError> {
     store.assert_identity()?;
-    let record = store.provider.load(slot).map_err(|_| {
+    let record = store.provider.load(slot);
+    store.assert_identity()?;
+    let record = record.map_err(|_| {
         GovernanceDagServiceError::State("sealed checkpoint store read failed".to_owned())
     })?;
     let Some(record) = record else {
@@ -1288,6 +2308,148 @@ fn load_sealed_record(
         ));
     }
     Ok(Some(record))
+}
+
+fn load_producer_commit_guard(
+    config: &RuntimeConfig,
+    store: &OpaqueCheckpointStore,
+) -> Result<ProducerCommitGuard, GovernanceDagServiceError> {
+    if load_sealed_record(store, GovernanceDagSealedStateSlot::ProducerPublishIntent)?.is_some() {
+        return Err(GovernanceDagServiceError::State(
+            "local Governance DAG producer has an active sealed publish intent".to_owned(),
+        ));
+    }
+    let record = load_sealed_record(store, GovernanceDagSealedStateSlot::ProducerCheckpoint)?
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "local Governance DAG producer checkpoint is missing".to_owned(),
+            )
+        })?;
+    if load_sealed_record(store, GovernanceDagSealedStateSlot::ProducerPublishIntent)?.is_some() {
+        return Err(GovernanceDagServiceError::State(
+            "local Governance DAG producer began a transaction during checkpoint read".to_owned(),
+        ));
+    }
+    let checkpoint: RuntimeDagProducerCheckpointV1 = norito::decode_from_bytes_with_limits(
+        &record.payload,
+        durable_decode_limits(MUTABLE_STATE_MAX_BYTES),
+    )
+    .map_err(|err| {
+        GovernanceDagServiceError::State(format!(
+            "local Governance DAG producer checkpoint decode failed: {err}"
+        ))
+    })?;
+    if norito::to_bytes(&checkpoint)
+        .map_err(|err| GovernanceDagServiceError::State(err.to_string()))?
+        != record.payload
+    {
+        return Err(GovernanceDagServiceError::State(
+            "local Governance DAG producer checkpoint encoding is not canonical".to_owned(),
+        ));
+    }
+    let expected_generation = checkpoint
+        .block_count
+        .checked_add(checkpoint.qualification_transition_generation)
+        .and_then(|generation| generation.checked_add(checkpoint.qualification_archive_generation))
+        .and_then(|generation| generation.checked_add(1))
+        .ok_or_else(|| {
+            GovernanceDagServiceError::State(
+                "local Governance DAG producer checkpoint generation exhausted".to_owned(),
+            )
+        })?;
+    let signer_qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+        checkpoint.signer_revision,
+        checkpoint.signer_policy_digest,
+    );
+    let store_qualification = GovernanceDagRuntimeProviderQualificationV1::new(
+        checkpoint.checkpoint_store_revision,
+        checkpoint.checkpoint_store_policy_digest,
+    );
+    if checkpoint.version != GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1
+        || record.generation != expected_generation
+        || validate_runtime_handle(
+            &checkpoint.signer_handle,
+            "local Governance DAG producer signer",
+        )
+        .is_err()
+        || !signer_qualification.is_valid()
+        || checkpoint.signer_handle != config.expected_producer_signer_handle
+        || signer_qualification != config.expected_producer_signer_qualification
+        || checkpoint.publisher_peer_id.is_empty()
+        || checkpoint.publisher_peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1
+        || checkpoint.publisher_peer_id != config.expected_publisher_peer_id
+        || checkpoint.publisher_public_key != config.expected_public_key
+        || checkpoint.checkpoint_store_handle != store.handle
+        || !store_qualification.is_valid()
+        || store_qualification != store.qualification
+    {
+        return Err(GovernanceDagServiceError::State(
+            "local Governance DAG producer checkpoint identity or generation is invalid".to_owned(),
+        ));
+    }
+    Ok(ProducerCommitGuard { record, checkpoint })
+}
+
+fn validate_source_against_producer_guard(
+    config: &RuntimeConfig,
+    source: &SourceSnapshot,
+    guard: &ProducerCommitGuard,
+) -> Result<(), GovernanceDagServiceError> {
+    let checkpoint = &guard.checkpoint;
+    let root_digest = runtime_dag_producer_root_digest(&config.source_dir).map_err(|err| {
+        GovernanceDagServiceError::State(format!(
+            "local Governance DAG producer root binding failed: {err}"
+        ))
+    })?;
+    let source_block_count = u64::try_from(source.blocks.len()).map_err(|_| {
+        GovernanceDagServiceError::State("source block count exceeds u64".to_owned())
+    })?;
+    if checkpoint.root_digest != root_digest
+        || checkpoint.publisher_public_key != config.expected_public_key
+        || checkpoint.block_count != source_block_count
+        || checkpoint.block_count != source.head.block_count
+        || checkpoint.head_block_cid.as_slice() != source.head.head_block_cid.as_slice()
+        || checkpoint.head_bytes_digest != blake3_array(&source.head_bytes)
+        || checkpoint.index_bytes_digest != source.index_blake3
+    {
+        return Err(GovernanceDagServiceError::Conflict(
+            "verified source snapshot does not match the sealed local producer checkpoint"
+                .to_owned(),
+        ));
+    }
+    config.revalidate_source_root()?;
+    validate_runtime_dag_snapshot_authority_lineage(
+        &config.source_dir,
+        checkpoint,
+        source.blocks.iter().map(|block| &block.block),
+        &source.head,
+    )
+    .map_err(|error| {
+        GovernanceDagServiceError::Conflict(format!(
+            "verified source snapshot has an invalid authority-segment lineage: {error}"
+        ))
+    })?;
+    config.revalidate_source_root()?;
+    Ok(())
+}
+
+fn load_committed_source_snapshot(
+    config: &RuntimeConfig,
+    store: &OpaqueCheckpointStore,
+) -> Result<SourceSnapshot, GovernanceDagServiceError> {
+    config.revalidate_source_root()?;
+    let first_guard = load_producer_commit_guard(config, store)?;
+    let source = load_source_snapshot(config)?;
+    config.revalidate_source_root()?;
+    let second_guard = load_producer_commit_guard(config, store)?;
+    if second_guard != first_guard {
+        return Err(GovernanceDagServiceError::Conflict(
+            "local Governance DAG producer checkpoint changed while reading source".to_owned(),
+        ));
+    }
+    validate_source_against_producer_guard(config, &source, &second_guard)?;
+    config.revalidate_source_root()?;
+    Ok(source)
 }
 
 fn save_sealed_record(
@@ -1306,14 +2468,15 @@ fn save_sealed_record(
     store.assert_identity()?;
     let next = GovernanceDagSealedStateRecord::new(slot, generation, payload);
     let revision = next.revision;
-    store
+    let result = store
         .provider
-        .compare_and_swap(slot, expected_revision, next.clone())
-        .map_err(|_| {
-            GovernanceDagServiceError::State(format!(
-                "sealed checkpoint store compare-and-swap failed for {label}"
-            ))
-        })?;
+        .compare_and_swap(slot, expected_revision, next.clone());
+    store.assert_identity()?;
+    result.map_err(|_| {
+        GovernanceDagServiceError::State(format!(
+            "sealed checkpoint store compare-and-swap failed for {label}"
+        ))
+    })?;
     let observed = load_sealed_record(store, slot)?.ok_or_else(|| {
         GovernanceDagServiceError::State(format!(
             "sealed checkpoint store lost {label} after compare-and-swap"
@@ -1337,14 +2500,15 @@ fn delete_publish_intent(
         )
     })?;
     store.assert_identity()?;
-    store
+    let result = store
         .provider
-        .delete(GovernanceDagSealedStateSlot::PublishIntent, revision)
-        .map_err(|_| {
-            GovernanceDagServiceError::State(
-                "sealed checkpoint store publish-intent delete failed".to_owned(),
-            )
-        })?;
+        .delete(GovernanceDagSealedStateSlot::PublishIntent, revision);
+    store.assert_identity()?;
+    result.map_err(|_| {
+        GovernanceDagServiceError::State(
+            "sealed checkpoint store publish-intent delete failed".to_owned(),
+        )
+    })?;
     if load_sealed_record(store, GovernanceDagSealedStateSlot::PublishIntent)?.is_some() {
         return Err(GovernanceDagServiceError::State(
             "sealed checkpoint store retained publish intent after delete".to_owned(),
@@ -1403,7 +2567,7 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
     Ok(())
 }
 
-fn resolve_index_path(root: &Path, raw: &str) -> Result<PathBuf, GovernanceDagServiceError> {
+fn resolve_index_relative_path(raw: &str) -> Result<PathBuf, GovernanceDagServiceError> {
     if raw.is_empty() || raw.contains('\\') {
         return Err(GovernanceDagServiceError::Source(
             "runtime index path is empty or contains a backslash".to_owned(),
@@ -1415,7 +2579,7 @@ fn resolve_index_path(root: &Path, raw: &str) -> Result<PathBuf, GovernanceDagSe
             "runtime index path must be relative".to_owned(),
         ));
     }
-    let mut path = root.to_owned();
+    let mut path = PathBuf::new();
     for component in relative.components() {
         match component {
             Component::Normal(value) => path.push(value),
@@ -1439,19 +2603,26 @@ fn digest_sidecar_path(path: &Path) -> PathBuf {
 }
 
 fn read_verified_sidecar_file(
-    path: &Path,
+    root_guard: &GovernanceFilesystemRootGuard,
+    relative: &Path,
     max_bytes: u64,
+    retained_bindings: Option<&mut Vec<FileBinding>>,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
-    let bytes = read_regular_file(path, max_bytes, false)?;
-    let sidecar = read_regular_file(&digest_sidecar_path(path), 65, false)?;
-    let expected = format!("{}\n", hex::encode(blake3_array(&bytes)));
-    if sidecar != expected.as_bytes() {
+    let file = read_rooted_file(root_guard, relative, max_bytes, false)?;
+    let sidecar_path = digest_sidecar_path(relative);
+    let sidecar = read_rooted_file(root_guard, &sidecar_path, 65, false)?;
+    let expected = format!("{}\n", hex::encode(blake3_array(file.bytes())));
+    if sidecar.bytes() != expected.as_bytes() {
         return Err(GovernanceDagServiceError::Source(format!(
             "digest sidecar does not match `{}`",
-            path.display()
+            root_guard.root().join(relative).display()
         )));
     }
-    Ok(bytes)
+    if let Some(bindings) = retained_bindings {
+        bindings.push(file.binding());
+        bindings.push(sidecar.binding());
+    }
+    Ok(file.into_bytes())
 }
 
 fn decode_canonical<T>(bytes: &[u8], label: &str) -> Result<T, GovernanceDagServiceError>
@@ -1463,9 +2634,9 @@ where
     let value = norito::decode_from_bytes_with_limits(
         bytes,
         DecodeLimits::new(
-            65_536,
+            MAX_REPUTATION_TRUST_EDGES,
             max,
-            1_000_000,
+            CANONICAL_DECODE_MAX_TOTAL_ELEMENTS,
             max.saturating_mul(CANONICAL_DECODE_ALLOCATION_MULTIPLIER),
             128,
         ),
@@ -1532,44 +2703,38 @@ fn canonical_hex_vec(
         .map_err(|_| GovernanceDagServiceError::Source(format!("{label} is invalid hex")))
 }
 
-fn payload_kind(payload: &GovernanceLogPayloadV1) -> String {
-    match payload {
-        GovernanceLogPayloadV1::ProviderAdvert(_) => "provider_advert".to_owned(),
-        GovernanceLogPayloadV1::ReplicationOrder(_) => "replication_order".to_owned(),
-        GovernanceLogPayloadV1::PorProof(_) => "por_proof".to_owned(),
-        GovernanceLogPayloadV1::PdpArchive(_) => "pdp_archive".to_owned(),
-        GovernanceLogPayloadV1::AuditVerdict(_) => "audit_verdict".to_owned(),
-        GovernanceLogPayloadV1::DealSettlement(_) => "deal_settlement".to_owned(),
-        GovernanceLogPayloadV1::SignedReputationSnapshot(_) => "reputation_snapshot".to_owned(),
-        GovernanceLogPayloadV1::ModerationBallotEvent(_) => "moderation_ballot_event".to_owned(),
-        GovernanceLogPayloadV1::AppealFinanceReport(_) => "appeal_finance_report".to_owned(),
-        GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(_) => {
-            "appeal_finance_weekly_rollup".to_owned()
-        }
-        GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(_) => {
-            "appeal_finance_settlement_receipt".to_owned()
-        }
-        GovernanceLogPayloadV1::OrderbookSettlementReceipt(_) => {
-            "orderbook_settlement_receipt".to_owned()
-        }
-        GovernanceLogPayloadV1::ExternalPayload(payload) => payload.payload_kind.clone(),
-        GovernanceLogPayloadV1::PorChallengePublication(_) => {
-            "por_challenge_publication".to_owned()
-        }
-        GovernanceLogPayloadV1::PorWeeklyReport(_) => "por_weekly_report".to_owned(),
-    }
-}
-
 fn canonical_source_payload_bytes(
     payload: &GovernanceLogPayloadV1,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
+    fn encode_bounded<T: norito::NoritoSerialize>(
+        value: &T,
+    ) -> Result<Vec<u8>, GovernanceDagServiceError> {
+        let exact = value.encoded_len_exact().ok_or_else(|| {
+            GovernanceDagServiceError::Source(
+                "canonical governance source payload has no allocation-free exact size".to_owned(),
+            )
+        })?;
+        if exact > GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1 {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "canonical governance source payload exceeds the V1 ceiling of {GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1} bytes"
+            )));
+        }
+        let bytes = norito::to_bytes(value).map_err(|err| {
+            GovernanceDagServiceError::Source(format!(
+                "failed to encode canonical governance source payload: {err}"
+            ))
+        })?;
+        if bytes.len() > GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1 {
+            return Err(GovernanceDagServiceError::Source(format!(
+                "canonical governance source payload exceeds the V1 ceiling of {GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1} bytes"
+            )));
+        }
+        Ok(bytes)
+    }
+
     macro_rules! encode {
         ($value:expr) => {
-            norito::to_bytes($value).map_err(|err| {
-                GovernanceDagServiceError::Source(format!(
-                    "failed to encode canonical governance source payload: {err}"
-                ))
-            })
+            encode_bounded($value)
         };
     }
 
@@ -1579,19 +2744,30 @@ fn canonical_source_payload_bytes(
         GovernanceLogPayloadV1::PorProof(value) => encode!(value),
         GovernanceLogPayloadV1::PdpArchive(value) => encode!(value),
         GovernanceLogPayloadV1::AuditVerdict(value) => encode!(value),
-        GovernanceLogPayloadV1::DealSettlement(value) => encode!(value),
+        GovernanceLogPayloadV1::DealSettlement(value) => encode!(value.as_ref()),
         GovernanceLogPayloadV1::SignedReputationSnapshot(value) => encode!(value),
         GovernanceLogPayloadV1::ModerationBallotEvent(value) => encode!(value),
         GovernanceLogPayloadV1::AppealFinanceReport(value) => encode!(value),
         GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(value) => encode!(value),
         GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(value) => encode!(value),
         GovernanceLogPayloadV1::OrderbookSettlementReceipt(value) => encode!(value),
-        GovernanceLogPayloadV1::ExternalPayload(value) => Ok(value.encoded_payload.clone()),
+        GovernanceLogPayloadV1::ExternalPayload(value) => {
+            if value.encoded_payload.is_empty()
+                || value.encoded_payload.len()
+                    > GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1
+            {
+                return Err(GovernanceDagServiceError::Source(format!(
+                    "canonical governance source payload exceeds the V1 ceiling of {GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1} bytes"
+                )));
+            }
+            Ok(value.encoded_payload.clone())
+        }
         GovernanceLogPayloadV1::PorChallengePublication(value) => encode!(value),
         GovernanceLogPayloadV1::PorWeeklyReport(value) => encode!(value),
     }
 }
 
+#[cfg(test)]
 fn validate_expected_signer(
     block: &GovernanceDagBlockV1,
     expected_public_key: &[u8; 32],
@@ -1619,8 +2795,15 @@ fn validate_expected_signer(
 fn load_source_snapshot(
     config: &RuntimeConfig,
 ) -> Result<SourceSnapshot, GovernanceDagServiceError> {
-    let index_path = config.source_dir.join("runtime-dag-index.json");
-    let index_bytes = read_verified_sidecar_file(&index_path, RUNTIME_INDEX_MAX_BYTES)?;
+    config.revalidate_source_root()?;
+    let mut observed_bindings = Vec::<FileBinding>::new();
+    let index_path = Path::new("runtime-dag-index.json");
+    let index_bytes = read_verified_sidecar_file(
+        &config.source_root_guard,
+        index_path,
+        RUNTIME_INDEX_MAX_BYTES,
+        Some(&mut observed_bindings),
+    )?;
     let index_blake3 = blake3_array(&index_bytes);
     let index: JsonValue = json::from_slice(&index_bytes).map_err(|err| {
         GovernanceDagServiceError::Source(format!("runtime index JSON is invalid: {err}"))
@@ -1651,6 +2834,11 @@ fn load_source_snapshot(
         ));
     }
     let peer_id = canonical_hex_vec(&peer_hex, peer_hex.len() / 2, "publisher peer id")?;
+    if peer_id != config.expected_publisher_peer_id {
+        return Err(GovernanceDagServiceError::Source(
+            "runtime index publisher peer id does not match configuration".to_owned(),
+        ));
+    }
     let block_values = map
         .get("blocks")
         .and_then(JsonValue::as_array)
@@ -1698,8 +2886,17 @@ fn load_source_snapshot(
             )));
         }
         let block_path = required_json_string(entry, "block_path")?;
-        let path = resolve_index_path(&config.source_dir, &block_path)?;
-        let bytes = read_verified_sidecar_file(&path, config.max_request_bytes)?;
+        let path = resolve_index_relative_path(&block_path)?;
+        let bytes = read_verified_sidecar_file(
+            &config.source_root_guard,
+            &path,
+            u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1).map_err(|_| {
+                GovernanceDagServiceError::Source(
+                    "canonical Governance DAG block ceiling exceeds host limits".to_owned(),
+                )
+            })?,
+            None,
+        )?;
         let block_encoded_len = u64::try_from(bytes.len()).map_err(|_| {
             GovernanceDagServiceError::Source(format!(
                 "runtime index block {position} length exceeds u64"
@@ -1722,7 +2919,6 @@ fn load_source_snapshot(
         block.validate().map_err(|err| {
             GovernanceDagServiceError::Source(format!("block {position} is invalid: {err}"))
         })?;
-        validate_expected_signer(&block, &config.expected_public_key, &peer_id)?;
         if block.sequence != position_u64 || block.timestamp > latest_allowed {
             return Err(GovernanceDagServiceError::Source(format!(
                 "block {position} sequence or timestamp is invalid"
@@ -1764,11 +2960,8 @@ fn load_source_snapshot(
                 "runtime index block {position} parent metadata is invalid"
             )));
         }
-        let kind = payload_kind(&block.node.payload);
-        if SUPPORTED_RUNTIME_PAYLOAD_KINDS
-            .binary_search(&kind.as_str())
-            .is_err()
-        {
+        let kind = crate::governance::runtime_dag_payload_kind(&block.node.payload).to_owned();
+        if !crate::governance::runtime_dag_payload_kind_is_supported(&kind) {
             return Err(GovernanceDagServiceError::Source(format!(
                 "runtime index block {position} uses unsupported payload kind `{kind}`"
             )));
@@ -1790,9 +2983,18 @@ fn load_source_snapshot(
             .push(JsonValue::from(position_u64));
 
         let source_payload_path = required_json_string(entry, "encoded_path")?;
-        let source_payload_path = resolve_index_path(&config.source_dir, &source_payload_path)?;
-        let source_payload_bytes =
-            read_verified_sidecar_file(&source_payload_path, config.max_request_bytes)?;
+        let source_payload_path = resolve_index_relative_path(&source_payload_path)?;
+        let source_payload_bytes = read_verified_sidecar_file(
+            &config.source_root_guard,
+            &source_payload_path,
+            u64::try_from(GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1).map_err(|_| {
+                GovernanceDagServiceError::Source(
+                    "canonical Governance DAG source-payload ceiling exceeds host limits"
+                        .to_owned(),
+                )
+            })?,
+            None,
+        )?;
         let source_payload_len = u64::try_from(source_payload_bytes.len()).map_err(|_| {
             GovernanceDagServiceError::Source(format!(
                 "runtime index block {position} source payload length exceeds u64"
@@ -1869,18 +3071,15 @@ fn load_source_snapshot(
             "runtime index head_path is not canonical".to_owned(),
         ));
     }
-    let head_path = resolve_index_path(&config.source_dir, &head_path_label)?;
-    let head_bytes = read_verified_sidecar_file(&head_path, config.max_request_bytes)?;
+    let head_path = resolve_index_relative_path(&head_path_label)?;
+    let head_bytes = read_verified_sidecar_file(
+        &config.source_root_guard,
+        &head_path,
+        MUTABLE_STATE_MAX_BYTES,
+        None,
+    )?;
     let head: GovernanceDagHeadV1 = decode_canonical(&head_bytes, "governance DAG head")?;
     validate_source_head_chain(&head, &decoded_blocks)?;
-    if head.head_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519
-        || head.head_signature.public_key.as_slice() != config.expected_public_key
-        || head.publisher_peer_id != peer_id
-    {
-        return Err(GovernanceDagServiceError::Source(
-            "signed head uses an unexpected key or peer id".to_owned(),
-        ));
-    }
     if head.generated_at > latest_allowed
         || blocks
             .last()
@@ -1898,36 +3097,45 @@ fn load_source_snapshot(
             "runtime index head metadata does not match signed head bytes".to_owned(),
         ));
     }
-    let stable_index = read_verified_sidecar_file(&index_path, RUNTIME_INDEX_MAX_BYTES)?;
+    let stable_index = read_verified_sidecar_file(
+        &config.source_root_guard,
+        index_path,
+        RUNTIME_INDEX_MAX_BYTES,
+        Some(&mut observed_bindings),
+    )?;
     if stable_index != index_bytes {
         return Err(GovernanceDagServiceError::Source(
             "runtime index changed while the source snapshot was being read".to_owned(),
         ));
     }
-    Ok(SourceSnapshot {
+    let source = SourceSnapshot {
         index_blake3,
         head,
         head_bytes,
         blocks,
-    })
+    };
+    for binding in &observed_bindings {
+        verify_rooted_file_binding(&config.source_root_guard, binding)?;
+    }
+    config.revalidate_source_root()?;
+    Ok(source)
 }
 
 fn validate_source_head_chain(
     head: &GovernanceDagHeadV1,
     blocks: &[GovernanceDagBlockV1],
 ) -> Result<(), GovernanceDagServiceError> {
-    validate_governance_dag_head_against_chain_v1(head, blocks).map_err(|err| {
+    validate_governance_dag_head_against_rotatable_chain_v1(head, blocks).map_err(|err| {
         GovernanceDagServiceError::Source(format!("signed head chain is invalid: {err}"))
     })?;
     if blocks.len() > GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 {
         let tail_start = blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1;
-        validate_governance_dag_head_against_chain_v1(head, &blocks[tail_start..]).map_err(
-            |err| {
+        validate_governance_dag_head_against_rotatable_chain_v1(head, &blocks[tail_start..])
+            .map_err(|err| {
                 GovernanceDagServiceError::Source(format!(
                     "signed head checkpoint window is invalid: {err}"
                 ))
-            },
-        )?;
+            })?;
     }
     Ok(())
 }
@@ -2022,6 +3230,7 @@ async fn build_pinned_endpoint(
         client,
         authentication_scope,
         authenticator,
+        max_request_bytes: config.max_request_bytes.0,
     })
 }
 
@@ -2105,12 +3314,38 @@ impl PinnedEndpoint {
         method: Method,
         url: Url,
     ) -> Result<reqwest::RequestBuilder, GovernanceDagServiceError> {
-        let request = self
+        Ok(self
             .client
             .request(method, url)
-            .header(header::ACCEPT_ENCODING.as_str(), "identity");
-        self.authenticator
-            .authenticate(self.authentication_scope, request)
+            .header(header::ACCEPT_ENCODING.as_str(), "identity"))
+    }
+
+    async fn execute(
+        &self,
+        request: RequestBuilder,
+        failure: &'static str,
+    ) -> Result<reqwest::Response, GovernanceDagServiceError> {
+        // Build exactly once after the caller has attached its final byte body
+        // and conditional headers. The runtime adapter receives only the
+        // bounded data-only descriptor and cannot mutate HTTP state.
+        let mut request = request.build().map_err(|_| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG outbound request could not be finalized".to_owned(),
+            )
+        })?;
+        let descriptor = canonical_outbound_request_descriptor(
+            &request,
+            self.authentication_scope,
+            self.max_request_bytes,
+        )?;
+        let envelope = self.authenticator.authenticate(&descriptor)?;
+        attach_request_authentication_headers(&mut request, &envelope)?;
+        let response = self.client.execute(request).await;
+        // A provider may be revoked or substituted while the request is in
+        // flight. Discard the response unless the same qualified identity is
+        // still active after execution.
+        self.authenticator.assert_identity()?;
+        response.map_err(|_| GovernanceDagServiceError::Network(failure.to_owned()))
     }
 
     fn ipfs_url(
@@ -2118,17 +3353,100 @@ impl PinnedEndpoint {
         operation: &str,
         query: &[(&str, &str)],
     ) -> Result<Url, GovernanceDagServiceError> {
+        if operation.is_empty()
+            || operation.len() > 256
+            || operation.starts_with('/')
+            || operation.contains('\\')
+            || operation.split('/').any(|component| {
+                component.is_empty()
+                    || matches!(component, "." | "..")
+                    || !component.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+            })
+        {
+            return Err(GovernanceDagServiceError::Network(
+                "IPFS operation path is not canonical".to_owned(),
+            ));
+        }
         let mut url = self.url.join(operation).map_err(|_| {
             GovernanceDagServiceError::Network("cannot construct configured IPFS URL".to_owned())
         })?;
+        let mut canonical_query = query.to_vec();
+        canonical_query.sort_unstable();
+        if canonical_query
+            .windows(2)
+            .any(|pair| pair[0].0 == pair[1].0)
+            || canonical_query.iter().any(|(key, value)| {
+                key.is_empty()
+                    || key.len() > 128
+                    || value.len() > 1024
+                    || !key.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+                    })
+                    || value.chars().any(char::is_control)
+            })
+        {
+            return Err(GovernanceDagServiceError::Network(
+                "IPFS query is not canonical or bounded".to_owned(),
+            ));
+        }
         {
             let mut pairs = url.query_pairs_mut();
-            for (key, value) in query {
+            for (key, value) in canonical_query {
                 pairs.append_pair(key, value);
             }
         }
         Ok(url)
     }
+}
+
+fn canonical_outbound_request_descriptor(
+    request: &reqwest::Request,
+    scope: GovernanceDagAuthenticationScope,
+    max_request_bytes: u64,
+) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
+    let body = match request.body() {
+        None => &[][..],
+        Some(body) => body.as_bytes().ok_or_else(|| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG outbound request body must be complete in-memory bytes".to_owned(),
+            )
+        })?,
+    };
+    canonicalize_governance_dag_outbound_http_request_v1(
+        scope,
+        request.method().as_str(),
+        request.url().as_str(),
+        request
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_bytes())),
+        body,
+        max_request_bytes,
+    )
+    .map_err(|error| {
+        GovernanceDagServiceError::Network(format!(
+            "Governance DAG outbound request was rejected: {error}"
+        ))
+    })
+}
+
+fn attach_request_authentication_headers(
+    request: &mut reqwest::Request,
+    envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+) -> Result<(), GovernanceDagServiceError> {
+    for (name, value) in governance_dag_request_authentication_headers_v1(envelope) {
+        let value = HeaderValue::from_str(&value).map_err(|_| {
+            GovernanceDagServiceError::Network(
+                "Governance DAG request-auth public header encoding failed".to_owned(),
+            )
+        })?;
+        request
+            .headers_mut()
+            .insert(header::HeaderName::from_static(name), value);
+    }
+    Ok(())
 }
 
 async fn read_bounded_response(
@@ -2203,6 +3521,66 @@ fn validate_ipfs_cid(value: &str) -> Result<String, GovernanceDagServiceError> {
     Ok(value.to_owned())
 }
 
+fn validate_ipfs_cid_for_bytes(
+    value: &str,
+    bytes: &[u8],
+) -> Result<String, GovernanceDagServiceError> {
+    let cid = validate_ipfs_cid(value)?;
+    let expected = canonical_raw_sha256_cid(bytes);
+    if cid != expected {
+        return Err(GovernanceDagServiceError::Network(
+            "IPFS API returned a CID that does not commit to the uploaded bytes".to_owned(),
+        ));
+    }
+    Ok(cid)
+}
+
+fn canonical_raw_sha256_cid(bytes: &[u8]) -> String {
+    const CID_VERSION_V1: u8 = 0x01;
+    const RAW_CODEC: u8 = 0x55;
+    const SHA2_256_MULTIHASH: u8 = 0x12;
+    const SHA2_256_DIGEST_LENGTH: u8 = 32;
+
+    let digest = iroha_crypto::sha256(bytes);
+    let mut cid = Vec::with_capacity(4 + digest.len());
+    cid.extend_from_slice(&[
+        CID_VERSION_V1,
+        RAW_CODEC,
+        SHA2_256_MULTIHASH,
+        SHA2_256_DIGEST_LENGTH,
+    ]);
+    cid.extend_from_slice(&digest);
+    encode_base32_lower_no_pad(&cid)
+}
+
+fn encode_base32_lower_no_pad(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+    let mut accumulator = 0_u32;
+    let mut bits = 0_u32;
+    let mut encoded = String::with_capacity(1 + (bytes.len() * 8).div_ceil(5));
+    encoded.push('b');
+    for byte in bytes {
+        accumulator = (accumulator << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((accumulator >> (bits - 5)) & 0x1f) as usize;
+            encoded.push(char::from(ALPHABET[index]));
+            bits -= 5;
+        }
+        accumulator = if bits == 0 {
+            0
+        } else {
+            accumulator & ((1_u32 << bits) - 1)
+        };
+    }
+    if bits > 0 {
+        let index = ((accumulator << (5 - bits)) & 0x1f) as usize;
+        encoded.push(char::from(ALPHABET[index]));
+    }
+    encoded
+}
+
 fn is_canonical_cid_v1(value: &str) -> bool {
     if value.len() < 2
         || value.len() > MAX_IPFS_CID_BYTES
@@ -2270,6 +3648,11 @@ fn decode_base32_lower_no_pad(value: &str) -> Option<Vec<u8>> {
             bytes.push(((accumulator >> (bits - 8)) & 0xff) as u8);
             bits -= 8;
         }
+        accumulator = if bits == 0 {
+            0
+        } else {
+            accumulator & ((1_u32 << bits) - 1)
+        };
     }
     if bits > 0 {
         let mask = (1_u32 << bits) - 1;
@@ -2315,23 +3698,21 @@ async fn ipfs_add_verified(
         &[
             ("pin", "false"),
             ("cid-version", "1"),
+            ("hash", "sha2-256"),
             ("raw-leaves", "true"),
             ("wrap-with-directory", "false"),
             ("quieter", "true"),
         ],
     )?;
-    let part = reqwest::multipart::Part::bytes(bytes.to_vec())
-        .file_name(name.to_owned())
-        .mime_str("application/vnd.ipld.raw")
-        .map_err(|_| {
-            GovernanceDagServiceError::Network("cannot construct IPFS multipart body".to_owned())
-        })?;
-    let response = endpoint
+    let (boundary, body) = canonical_ipfs_multipart_body(name, bytes)?;
+    let request = endpoint
         .request(Method::POST, url)?
-        .multipart(reqwest::multipart::Form::new().part("file", part))
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("IPFS add request failed".to_owned()))?;
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body);
+    let response = endpoint.execute(request, "IPFS add request failed").await?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, max_response_bytes).await;
@@ -2349,7 +3730,7 @@ async fn ipfs_add_verified(
         .ok_or_else(|| {
             GovernanceDagServiceError::Network("IPFS add response has no Hash".to_owned())
         })?;
-    let cid = validate_ipfs_cid(cid)?;
+    let cid = validate_ipfs_cid_for_bytes(cid, bytes)?;
     ipfs_pin(endpoint, &cid, max_response_bytes).await?;
     ipfs_verify_pin(endpoint, &cid, max_response_bytes).await?;
     let readback = ipfs_cat(endpoint, &cid, bytes.len() as u64, max_request_bytes).await?;
@@ -2361,17 +3742,71 @@ async fn ipfs_add_verified(
     Ok(cid)
 }
 
+fn canonical_ipfs_multipart_body(
+    name: &str,
+    bytes: &[u8],
+) -> Result<(String, Vec<u8>), GovernanceDagServiceError> {
+    if name.is_empty()
+        || name.len() > 160
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return Err(GovernanceDagServiceError::Network(
+            "IPFS multipart filename is not a bounded ASCII token".to_owned(),
+        ));
+    }
+    let digest = hex::encode(blake3_array(bytes));
+    let digest_prefix = &digest[..32];
+    let boundary = (0_u8..=16)
+        .map(|attempt| {
+            if attempt == 0 {
+                format!("{IPFS_MULTIPART_BOUNDARY_PREFIX}-{digest_prefix}")
+            } else {
+                format!("{IPFS_MULTIPART_BOUNDARY_PREFIX}-{digest_prefix}-{attempt}")
+            }
+        })
+        .find(|candidate| {
+            let marker = format!("--{candidate}");
+            !bytes
+                .windows(marker.len())
+                .any(|window| window == marker.as_bytes())
+        })
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Network(
+                "IPFS object conflicts with every deterministic multipart boundary".to_owned(),
+            )
+        })?;
+    let prelude = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n\
+         Content-Type: application/vnd.ipld.raw\r\n\r\n"
+    );
+    let epilogue = format!("\r\n--{boundary}--\r\n");
+    let capacity = prelude
+        .len()
+        .checked_add(bytes.len())
+        .and_then(|length| length.checked_add(epilogue.len()))
+        .ok_or_else(|| {
+            GovernanceDagServiceError::Network(
+                "IPFS multipart body length exceeds host limits".to_owned(),
+            )
+        })?;
+    let mut body = Vec::with_capacity(capacity);
+    body.extend_from_slice(prelude.as_bytes());
+    body.extend_from_slice(bytes);
+    body.extend_from_slice(epilogue.as_bytes());
+    Ok((boundary, body))
+}
+
 async fn ipfs_pin(
     endpoint: &PinnedEndpoint,
     cid: &str,
     max_response_bytes: u64,
 ) -> Result<(), GovernanceDagServiceError> {
     let url = endpoint.ipfs_url("api/v0/pin/add", &[("arg", cid), ("recursive", "true")])?;
-    let response = endpoint
-        .request(Method::POST, url)?
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("IPFS pin request failed".to_owned()))?;
+    let request = endpoint.request(Method::POST, url)?;
+    let response = endpoint.execute(request, "IPFS pin request failed").await?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, max_response_bytes).await;
@@ -2389,13 +3824,10 @@ async fn ipfs_verify_pin(
     max_response_bytes: u64,
 ) -> Result<(), GovernanceDagServiceError> {
     let url = endpoint.ipfs_url("api/v0/pin/ls", &[("arg", cid), ("type", "recursive")])?;
+    let request = endpoint.request(Method::POST, url)?;
     let response = endpoint
-        .request(Method::POST, url)?
-        .send()
-        .await
-        .map_err(|_| {
-            GovernanceDagServiceError::Network("IPFS pin verification failed".to_owned())
-        })?;
+        .execute(request, "IPFS pin verification failed")
+        .await?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, max_response_bytes).await;
@@ -2426,11 +3858,8 @@ async fn ipfs_cat(
     configured_max: u64,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
     let url = endpoint.ipfs_url("api/v0/cat", &[("arg", cid)])?;
-    let response = endpoint
-        .request(Method::POST, url)?
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("IPFS cat request failed".to_owned()))?;
+    let request = endpoint.request(Method::POST, url)?;
+    let response = endpoint.execute(request, "IPFS cat request failed").await?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, configured_max).await;
@@ -2454,22 +3883,27 @@ fn validate_remote_head(
         GovernanceDagServiceError::State("source block count exceeds u64".to_owned())
     })?;
     if head.head_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519
-        || head.head_signature.public_key.as_slice() != config.expected_public_key
         || head.block_count == 0
         || head.block_count > source_block_count
     {
         return Err(GovernanceDagServiceError::Conflict(
-            "public head key or block count is incompatible with the source chain".to_owned(),
+            "public head algorithm or block count is incompatible with the source chain".to_owned(),
         ));
     }
-    let position = usize::try_from(head.block_count - 1).map_err(|_| {
+    let block_count = usize::try_from(head.block_count).map_err(|_| {
         GovernanceDagServiceError::Conflict("public head count exceeds host limits".to_owned())
     })?;
-    let block = &source.blocks[position].block;
-    if block.block_cid != head.head_block_cid
-        || block.publisher_peer_id != head.publisher_peer_id
-        || head.generated_at
-            > current_unix_timestamp_seconds().saturating_add(config.max_future_skew_secs)
+    let blocks = source.blocks[..block_count]
+        .iter()
+        .map(|block| block.block.clone())
+        .collect::<Vec<_>>();
+    validate_source_head_chain(&head, &blocks).map_err(|err| {
+        GovernanceDagServiceError::Conflict(format!(
+            "public head is not a verified prefix of the local chain: {err}"
+        ))
+    })?;
+    if head.generated_at
+        > current_unix_timestamp_seconds().saturating_add(config.max_future_skew_secs)
     {
         return Err(GovernanceDagServiceError::Conflict(
             "public head is not a verified prefix of the local chain".to_owned(),
@@ -2482,13 +3916,10 @@ async fn fetch_signed_http_head(
     endpoint: &PinnedEndpoint,
     max_response_bytes: u64,
 ) -> Result<PublicHead, GovernanceDagServiceError> {
-    let response = endpoint
-        .request(Method::GET, endpoint.url.clone())?
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("signed-head GET failed".to_owned()))?;
+    let request = endpoint.request(Method::GET, endpoint.url.clone())?;
+    let response = endpoint.execute(request, "signed-head GET failed").await?;
     if response.status() == StatusCode::NOT_FOUND {
-        let _ = read_bounded_response(response, max_response_bytes).await;
+        let _ = read_bounded_response(response, max_response_bytes).await?;
         return Ok(PublicHead::Missing);
     }
     if !response.status().is_success() {
@@ -2536,10 +3967,7 @@ async fn put_signed_http_head(
             ));
         }
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("signed-head PUT failed".to_owned()))?;
+    let response = endpoint.execute(request, "signed-head PUT failed").await?;
     if matches!(
         response.status(),
         StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
@@ -2575,14 +4003,17 @@ async fn resolve_ipns_head(
         "api/v0/name/resolve",
         &[("arg", name), ("recursive", "true"), ("nocache", "true")],
     )?;
-    let response = ipfs
-        .request(Method::POST, url)?
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("IPNS resolve failed".to_owned()))?;
+    let request = ipfs.request(Method::POST, url)?;
+    let response = ipfs.execute(request, "IPNS resolve failed").await?;
     if !response.status().is_success() {
-        let _ = read_bounded_response(response, max_response_bytes).await;
-        return Ok(PublicHead::Missing);
+        let status = response.status();
+        let body = read_bounded_response(response, max_response_bytes).await?;
+        if is_authenticated_ipns_absence(status, &body) {
+            return Ok(PublicHead::Missing);
+        }
+        return Err(GovernanceDagServiceError::Network(format!(
+            "IPNS resolve returned HTTP {status}"
+        )));
     }
     let body = read_bounded_response(response, max_response_bytes).await?;
     let value: JsonValue = json::from_slice(&body).map_err(|_| {
@@ -2598,6 +4029,31 @@ async fn resolve_ipns_head(
     let cid = validate_ipfs_cid(path)?;
     let bytes = ipfs_cat(ipfs, &cid, max_response_bytes, max_response_bytes).await?;
     Ok(PublicHead::Present { bytes, token: cid })
+}
+
+fn is_authenticated_ipns_absence(status: StatusCode, body: &[u8]) -> bool {
+    if status == StatusCode::NOT_FOUND {
+        return true;
+    }
+    if status != StatusCode::INTERNAL_SERVER_ERROR {
+        return false;
+    }
+    let Ok(value) = json::from_slice::<JsonValue>(body) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    object.len() == 3
+        && object
+            .get("Message")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|message| message == "could not resolve name")
+        && object.get("Code").and_then(JsonValue::as_u64) == Some(0)
+        && object
+            .get("Type")
+            .and_then(JsonValue::as_str)
+            .is_some_and(|kind| kind == "error")
 }
 
 struct IpnsHeadPublishRequest<'a> {
@@ -2644,11 +4100,8 @@ async fn publish_ipns_head(
             ("lifetime", "24h"),
         ],
     )?;
-    let response = ipfs
-        .request(Method::POST, url)?
-        .send()
-        .await
-        .map_err(|_| GovernanceDagServiceError::Network("IPNS publish failed".to_owned()))?;
+    let request = ipfs.request(Method::POST, url)?;
+    let response = ipfs.execute(request, "IPNS publish failed").await?;
     if !response.status().is_success() {
         let status = response.status();
         let _ = read_bounded_response(response, max_response_bytes).await;
@@ -2682,6 +4135,128 @@ fn public_head_digest(head: &PublicHead) -> Option<[u8; 32]> {
 }
 
 impl Service {
+    fn refresh_durable_state(&mut self) -> Result<(), GovernanceDagServiceError> {
+        let (checkpoint, checkpoint_revision) = load_checkpoint(&self.checkpoint_store)?;
+        if self.checkpoint.is_some() && checkpoint.is_none() {
+            return Err(GovernanceDagServiceError::State(
+                "sealed checkpoint store removed the active checkpoint".to_owned(),
+            ));
+        }
+        if checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.generation < self.checkpoint_generation_floor)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "sealed checkpoint store rolled back below the process generation floor".to_owned(),
+            ));
+        }
+        let (intent, intent_revision) = load_publish_intent(&self.checkpoint_store)?;
+        if self.intent.is_some() && intent.is_none() {
+            return Err(GovernanceDagServiceError::State(
+                "sealed checkpoint store removed the active publish intent".to_owned(),
+            ));
+        }
+        if intent
+            .as_ref()
+            .is_some_and(|intent| intent.generation < self.intent_generation_floor)
+        {
+            return Err(GovernanceDagServiceError::State(
+                "sealed publish-intent store replayed an older generation".to_owned(),
+            ));
+        }
+        self.checkpoint_generation_floor = checkpoint
+            .as_ref()
+            .map_or(self.checkpoint_generation_floor, |checkpoint| {
+                checkpoint.generation
+            });
+        self.intent_generation_floor = intent
+            .as_ref()
+            .map_or(self.intent_generation_floor, |intent| intent.generation);
+        self.checkpoint = checkpoint;
+        self.checkpoint_revision = checkpoint_revision;
+        self.intent = intent;
+        self.intent_revision = intent_revision;
+        Ok(())
+    }
+
+    fn assert_durable_state_unchanged(&self) -> Result<(), GovernanceDagServiceError> {
+        let (_, checkpoint_revision) = load_checkpoint(&self.checkpoint_store)?;
+        let (_, intent_revision) = load_publish_intent(&self.checkpoint_store)?;
+        if checkpoint_revision != self.checkpoint_revision
+            || intent_revision != self.intent_revision
+        {
+            return Err(GovernanceDagServiceError::State(
+                "sealed checkpoint or publish intent changed during initial reconciliation"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    async fn validate_initial_state(&mut self) -> Result<(), GovernanceDagServiceError> {
+        self.refresh_durable_state()?;
+        let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
+        validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
+        if let Some(intent) = &self.intent {
+            validate_intent_against_source(
+                intent,
+                self.checkpoint.as_ref(),
+                &source,
+                &self.config,
+            )?;
+        }
+
+        // Initial reconciliation must not publish. It establishes that the
+        // authenticated public head is one of the durable crash-recovery
+        // states the first reconciliation is permitted to advance.
+        let public = self.fetch_public_head().await?;
+        if let PublicHead::Present { bytes, .. } = &public {
+            validate_remote_head(bytes, &source, &self.config)?;
+        } else if !self.config.allow_head_bootstrap {
+            return Err(GovernanceDagServiceError::Conflict(
+                "no public head exists and bootstrap is disabled".to_owned(),
+            ));
+        }
+        self.assert_durable_state_unchanged()?;
+
+        match (&self.checkpoint, &self.intent) {
+            (Some(checkpoint), Some(intent))
+                if checkpoint.generation == intent.generation
+                    && checkpoint.head_block_cid == intent.target_head_block_cid =>
+            {
+                if checkpoint.head_bytes_blake3 != intent.target_head_blake3 {
+                    return Err(GovernanceDagServiceError::State(
+                        "checkpoint and publish intent disagree on the installed target head"
+                            .to_owned(),
+                    ));
+                }
+                require_public_matches_checkpoint(&public, checkpoint)
+            }
+            (checkpoint, Some(intent)) => {
+                if let Some(checkpoint) = checkpoint
+                    && intent.previous_public_head_blake3 != Some(checkpoint.head_bytes_blake3)
+                {
+                    return Err(GovernanceDagServiceError::State(
+                        "publish intent predecessor does not match the authenticated checkpoint"
+                            .to_owned(),
+                    ));
+                }
+                let observed = public_head_digest(&public);
+                if observed != intent.previous_public_head_blake3
+                    && observed != Some(intent.target_head_blake3)
+                {
+                    return Err(GovernanceDagServiceError::Conflict(
+                        "public head is neither the durable publish-intent predecessor nor target"
+                            .to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+            (Some(checkpoint), None) => require_public_matches_checkpoint(&public, checkpoint),
+            (None, None) => Ok(()),
+        }
+    }
+
     async fn fetch_public_head(&self) -> Result<PublicHead, GovernanceDagServiceError> {
         match &self.head_mode {
             HeadMode::SignedHttp(endpoint) => {
@@ -2729,47 +4304,15 @@ impl Service {
     }
 
     async fn reconcile_once(&mut self) -> Result<(), GovernanceDagServiceError> {
-        let (checkpoint, checkpoint_revision) = load_checkpoint(&self.checkpoint_store)?;
-        if self.checkpoint.is_some() && checkpoint.is_none() {
-            return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint store removed the active checkpoint".to_owned(),
-            ));
-        }
-        if checkpoint
-            .as_ref()
-            .is_some_and(|checkpoint| checkpoint.generation < self.checkpoint_generation_floor)
-        {
-            return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint store rolled back below the process generation floor".to_owned(),
-            ));
-        }
-        let (intent, intent_revision) = load_publish_intent(&self.checkpoint_store)?;
-        if self.intent.is_some() && intent.is_none() {
-            return Err(GovernanceDagServiceError::State(
-                "sealed checkpoint store removed the active publish intent".to_owned(),
-            ));
-        }
-        if intent
-            .as_ref()
-            .is_some_and(|intent| intent.generation < self.intent_generation_floor)
-        {
-            return Err(GovernanceDagServiceError::State(
-                "sealed publish-intent store replayed an older generation".to_owned(),
-            ));
-        }
-        self.checkpoint_generation_floor = checkpoint
-            .as_ref()
-            .map_or(self.checkpoint_generation_floor, |checkpoint| {
-                checkpoint.generation
-            });
-        self.intent_generation_floor = intent
-            .as_ref()
-            .map_or(self.intent_generation_floor, |intent| intent.generation);
-        self.checkpoint = checkpoint;
-        self.checkpoint_revision = checkpoint_revision;
-        self.intent = intent;
-        self.intent_revision = intent_revision;
-        let source = load_source_snapshot(&self.config)?;
+        self.state_lock.verify().map_err(|error| {
+            GovernanceDagServiceError::Filesystem(format!(
+                "service lock binding changed before reconciliation: {error}"
+            ))
+        })?;
+        self.config.revalidate_state_root()?;
+        self.refresh_durable_state()?;
+        let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
+        self.config.revalidate_state_root()?;
         validate_checkpoint_against_source(self.checkpoint.as_ref(), &source)?;
         if let Some(intent) = &self.intent {
             validate_intent_against_source(
@@ -2877,7 +4420,7 @@ impl Service {
         {
             let current = self.fetch_public_head().await?;
             require_public_matches_checkpoint(&current, checkpoint)?;
-            verify_or_recover_mirror_file(&self.config.state_dir, checkpoint, &source)?;
+            verify_or_recover_mirror_file(&self.config, checkpoint, &source)?;
             delete_publish_intent(&self.checkpoint_store, self.intent_revision)?;
             self.intent_revision = None;
             self.intent = None;
@@ -2999,10 +4542,13 @@ impl Service {
                 GovernanceDagServiceError::State(format!("mirror JSON encode failed: {err}"))
             })?
             .into_bytes();
-        write_atomic_secret(
-            &self.config.state_dir.join(MIRROR_INDEX_FILE),
+        self.config.revalidate_state_root()?;
+        write_rooted_atomic_secret(
+            &self.config.state_root_guard,
+            Path::new(MIRROR_INDEX_FILE),
             &mirror_bytes,
         )?;
+        self.config.revalidate_state_root()?;
         let checkpoint = CheckpointBodyV1 {
             version: CHECKPOINT_VERSION_V1,
             generation: intent.generation,
@@ -3081,7 +4627,7 @@ impl Service {
                 "checkpoint head IPFS readback drifted".to_owned(),
             ));
         }
-        verify_or_recover_mirror_file(&self.config.state_dir, checkpoint, source)
+        verify_or_recover_mirror_file(&self.config, checkpoint, source)
     }
 
     async fn publish_api_snapshot(
@@ -3090,11 +4636,15 @@ impl Service {
         checkpoint: &CheckpointBodyV1,
         just_published: bool,
     ) -> Result<(), GovernanceDagServiceError> {
-        let bytes = read_regular_file(
-            &self.config.state_dir.join(MIRROR_INDEX_FILE),
+        self.config.revalidate_state_root()?;
+        let bytes = read_rooted_file(
+            &self.config.state_root_guard,
+            Path::new(MIRROR_INDEX_FILE),
             MUTABLE_STATE_MAX_BYTES,
             true,
-        )?;
+        )?
+        .into_bytes();
+        self.config.revalidate_state_root()?;
         let mirror: JsonValue = json::from_slice(&bytes).map_err(|err| {
             GovernanceDagServiceError::State(format!("mirror JSON decode failed: {err}"))
         })?;
@@ -3131,6 +4681,14 @@ fn validate_checkpoint_against_source(
     if checkpoint.block_count > source_block_count {
         return Err(GovernanceDagServiceError::Conflict(
             "source chain rolled back behind the authenticated checkpoint".to_owned(),
+        ));
+    }
+    if checkpoint.block_count == source_block_count
+        && checkpoint.source_index_blake3 != source.index_blake3
+    {
+        return Err(GovernanceDagServiceError::Conflict(
+            "authenticated checkpoint source-index digest does not match the verified source"
+                .to_owned(),
         ));
     }
     let position = usize::try_from(checkpoint.block_count - 1).map_err(|_| {
@@ -3180,6 +4738,14 @@ fn validate_intent_against_source(
     if intent.target_block_count > source_block_count {
         return Err(GovernanceDagServiceError::Conflict(
             "source rolled back behind the durable publish intent".to_owned(),
+        ));
+    }
+    if intent.target_block_count == source_block_count
+        && intent.target_source_index_blake3 != source.index_blake3
+    {
+        return Err(GovernanceDagServiceError::Conflict(
+            "durable publish-intent source-index digest does not match the verified source"
+                .to_owned(),
         ));
     }
     let target_position = usize::try_from(intent.target_block_count - 1).map_err(|_| {
@@ -3420,14 +4986,18 @@ fn mirror_index_value(
 }
 
 fn verify_mirror_file(
-    state_dir: &Path,
+    config: &RuntimeConfig,
     checkpoint: &CheckpointBodyV1,
 ) -> Result<(), GovernanceDagServiceError> {
-    let bytes = read_regular_file(
-        &state_dir.join(MIRROR_INDEX_FILE),
+    config.revalidate_state_root()?;
+    let bytes = read_rooted_file(
+        &config.state_root_guard,
+        Path::new(MIRROR_INDEX_FILE),
         MUTABLE_STATE_MAX_BYTES,
         true,
-    )?;
+    )?
+    .into_bytes();
+    config.revalidate_state_root()?;
     if blake3_array(&bytes) != checkpoint.mirror_blake3 {
         return Err(GovernanceDagServiceError::State(
             "mirror index digest does not match the authenticated checkpoint".to_owned(),
@@ -3453,20 +5023,25 @@ fn verify_mirror_file(
 }
 
 fn verify_or_recover_mirror_file(
-    state_dir: &Path,
+    config: &RuntimeConfig,
     checkpoint: &CheckpointBodyV1,
     source: &SourceSnapshot,
 ) -> Result<(), GovernanceDagServiceError> {
-    let path = state_dir.join(MIRROR_INDEX_FILE);
-    match fs::symlink_metadata(&path) {
-        Ok(_) => return verify_mirror_file(state_dir, checkpoint),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(err) => {
+    config.revalidate_state_root()?;
+    match config
+        .state_root_guard
+        .rooted_directory()
+        .private_file_identity(OsStr::new(MIRROR_INDEX_FILE))
+    {
+        Ok(Some(_)) => return verify_mirror_file(config, checkpoint),
+        Ok(None) => {}
+        Err(error) => {
             return Err(GovernanceDagServiceError::Filesystem(format!(
-                "cannot inspect mirror index during recovery: {err}"
+                "cannot inspect rooted mirror index during recovery: {error}"
             )));
         }
     }
+    config.revalidate_state_root()?;
     if source.head.head_block_cid != checkpoint.head_block_cid
         || source.head.block_count != checkpoint.block_count
         || blake3_array(&source.head_bytes) != checkpoint.head_bytes_blake3
@@ -3493,8 +5068,14 @@ fn verify_or_recover_mirror_file(
             "deterministic mirror recovery does not match the checkpoint digest".to_owned(),
         ));
     }
-    write_atomic_secret(&path, &bytes)?;
-    verify_mirror_file(state_dir, checkpoint)
+    config.revalidate_state_root()?;
+    write_rooted_atomic_secret(
+        &config.state_root_guard,
+        Path::new(MIRROR_INDEX_FILE),
+        &bytes,
+    )?;
+    config.revalidate_state_root()?;
+    verify_mirror_file(config, checkpoint)
 }
 
 fn service_router(state: ApiState) -> Router {
@@ -3897,17 +5478,24 @@ mod tests {
         process::{Child, Command, Stdio},
         sync::{
             Arc, Mutex as StdMutex,
-            atomic::{AtomicBool, Ordering as AtomicOrdering},
+            atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
         },
     };
 
-    use crate::{FilesystemGovernancePublisher, GovernanceDagRuntimeSigner, GovernancePublisher};
+    use crate::{
+        FilesystemGovernancePublisher, GovernanceDagCanonicalRequestHeaderV1,
+        GovernanceDagRuntimeSigner, GovernancePublisher,
+        governance::{
+            qualify_governance_dag_runtime_checkpoint_store,
+            qualify_governance_dag_runtime_signer_provider,
+        },
+    };
     use axum::{
         body::Bytes,
         extract::{RawQuery, State},
         http::{HeaderName, Request},
         response::Redirect,
-        routing::post,
+        routing::{any, post},
     };
     use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
     use sorafs_manifest::{
@@ -3924,6 +5512,94 @@ mod tests {
     use tower::ServiceExt as _;
 
     use super::*;
+    #[test]
+    fn service_default_request_bound_matches_canonical_governance_block_ceiling() {
+        let service = SorafsGovernanceDagService::default();
+        assert_eq!(
+            service.max_request_bytes.0,
+            u64::try_from(GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1)
+                .expect("canonical block ceiling fits u64")
+        );
+        assert!(CANONICAL_DECODE_MAX_TOTAL_ELEMENTS > MAX_REPUTATION_TRUST_EDGES);
+    }
+
+    // Keep one target-gated assertion for every ABI branch. Overlapping branches
+    // fail with duplicate definitions; missing branches fail to resolve the flag.
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        )
+    ))]
+    #[test]
+    fn linux_no_follow_flag_matches_low_flag_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        ))
+    ))]
+    #[test]
+    fn linux_no_follow_flag_matches_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "aarch64", target_arch = "arm")
+    ))]
+    #[test]
+    fn android_arm_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    #[test]
+    fn android_x86_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+
+    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
+    #[test]
+    fn android_riscv64_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x400000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "riscv32", target_arch = "riscv64")
+    ))]
+    #[test]
+    fn linux_riscv_no_follow_flag_remains_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    #[test]
+    fn apple_and_bsd_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+    }
 
     const TEST_CID_PAYLOAD: &str = "bafkreibdt5m62vphg7dxcr6pkwwqygydbnwx5z2iu5bgsuxzxbjnlkjv4u";
     const TEST_CID_BLOCK: &str = "bafkreicjnlfibzgy6kp3r2gnqfwdv62i2pyqhfylhixocyambdfgomtn5y";
@@ -3938,13 +5614,27 @@ mod tests {
     const KUBO_INTEGRATION_ENV: &str = "SORAFS_RUN_KUBO_INTEGRATION";
     const KUBO_BIN_ENV: &str = "SORAFS_KUBO_BIN";
     const KUBO_IPNS_KEY_ALIAS: &str = "sorafs-gdag-integration";
-    const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:test";
-    const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:test";
-    const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:test";
+    const TEST_IPFS_AUTH_HANDLE: &str = "vault:governance/ipfs:primary";
+    const TEST_HEAD_AUTH_HANDLE: &str = "vault:governance/head:primary";
+    const TEST_CHECKPOINT_STORE_HANDLE: &str = "kms:governance/checkpoint:primary";
+    const TEST_PRODUCER_SIGNER_HANDLE: &str = "hsm:governance/source-signer:primary";
+    const TEST_PRODUCER_PEER_ID: &str = "12D3KooWGovernanceServiceTest";
+    const TEST_AUTH_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x81; 32]);
+    const TEST_STORE_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x82; 32]);
+    const TEST_PRODUCER_SIGNER_QUALIFICATION: GovernanceDagRuntimeProviderQualificationV1 =
+        GovernanceDagRuntimeProviderQualificationV1::new(1, [0x83; 32]);
 
     struct TestAuthenticator {
         handle: String,
-        bearer_token: StdMutex<String>,
+        private_key: PrivateKey,
+        public_key: [u8; 32],
+        provider_secret: StdMutex<String>,
+        nonce_counter: AtomicU64,
+        qualification_revision: AtomicU64,
+        qualification_refuse: AtomicBool,
+        drift_during_authentication: AtomicBool,
         refuse: AtomicBool,
     }
 
@@ -3953,23 +5643,183 @@ mod tests {
             formatter
                 .debug_struct("TestAuthenticator")
                 .field("handle", &self.handle)
-                .field("bearer_token", &"[REDACTED]")
+                .field("hsm", &"[REDACTED]")
                 .finish()
         }
     }
 
     impl TestAuthenticator {
-        fn new(handle: &str, bearer_token: &str) -> Self {
+        fn new(handle: &str, provider_secret: &str) -> Self {
+            let (private_key, public_key) = test_request_auth_keypair(handle);
             Self {
                 handle: handle.to_owned(),
-                bearer_token: StdMutex::new(bearer_token.to_owned()),
+                private_key,
+                public_key,
+                provider_secret: StdMutex::new(provider_secret.to_owned()),
+                nonce_counter: AtomicU64::new(1),
+                qualification_revision: AtomicU64::new(1),
+                qualification_refuse: AtomicBool::new(false),
+                drift_during_authentication: AtomicBool::new(false),
                 refuse: AtomicBool::new(false),
             }
         }
 
-        fn rotate(&self, bearer_token: &str) {
-            *self.bearer_token.lock().expect("lock test bearer token") = bearer_token.to_owned();
+        fn rotate(&self, provider_secret: &str) {
+            *self
+                .provider_secret
+                .lock()
+                .expect("lock test provider diagnostic") = provider_secret.to_owned();
         }
+
+        fn signed_envelope(
+            &self,
+            request: &GovernanceDagCanonicalRequestV1,
+        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
+            let now = current_unix_timestamp_seconds();
+            let counter = self.nonce_counter.fetch_add(1, AtomicOrdering::SeqCst);
+            let mut nonce = blake3_array(self.handle.as_bytes());
+            nonce[..8].copy_from_slice(&counter.to_be_bytes());
+            let payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
+                request,
+                now,
+                now.saturating_add(15),
+                nonce,
+                self.public_key,
+            );
+            let signature =
+                IrohaSignature::try_new(&self.private_key, &payload).map_err(|_| "signing")?;
+            let signature: [u8; 64] = signature
+                .payload()
+                .try_into()
+                .map_err(|_| "signature length")?;
+            GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+                request,
+                now,
+                now.saturating_add(15),
+                nonce,
+                self.public_key,
+                signature,
+            )
+            .map_err(str::to_owned)
+        }
+    }
+
+    fn test_request_auth_keypair(handle: &str) -> (PrivateKey, [u8; 32]) {
+        let seed = blake3_array(handle.as_bytes());
+        let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &seed)
+            .expect("test request-auth Ed25519 seed is valid");
+        let keypair = KeyPair::from_private_key(private_key.clone())
+            .expect("derive test request-auth keypair");
+        let (algorithm, bytes) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("encode test request-auth public key");
+        assert_eq!(algorithm, Algorithm::Ed25519);
+        let public_key = bytes
+            .try_into()
+            .expect("test Ed25519 public key has 32 bytes");
+        (private_key, public_key)
+    }
+
+    fn test_request_auth_public_key(handle: &str) -> [u8; 32] {
+        test_request_auth_keypair(handle).1
+    }
+
+    fn signed_test_request_auth_envelope(
+        handle: &str,
+        request: &GovernanceDagCanonicalRequestV1,
+        issued_at: u64,
+        expires_at: u64,
+        nonce: [u8; 32],
+    ) -> GovernanceDagRequestAuthenticationEnvelopeV1 {
+        let (private_key, public_key) = test_request_auth_keypair(handle);
+        let payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
+            request, issued_at, expires_at, nonce, public_key,
+        );
+        let signature = IrohaSignature::try_new(&private_key, &payload)
+            .expect("sign test request-auth payload");
+        let signature = signature
+            .payload()
+            .try_into()
+            .expect("test Ed25519 signature has 64 bytes");
+        GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+            request, issued_at, expires_at, nonce, public_key, signature,
+        )
+        .expect("construct test request-auth envelope")
+    }
+
+    fn request_auth_header_fields(
+        envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+    ) -> Vec<(String, Vec<u8>)> {
+        governance_dag_request_authentication_headers_v1(envelope)
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.into_bytes()))
+            .collect()
+    }
+
+    fn verify_request_before_test_backend(
+        request: &GovernanceDagCanonicalRequestV1,
+        headers: &[(String, Vec<u8>)],
+        body: &[u8],
+        expected_scope: GovernanceDagAuthenticationScope,
+        policy: &GovernanceDagRequestAuthenticationPolicyV1,
+        now: u64,
+        replay_cache: &mut GovernanceDagRequestAuthenticationReplayCacheV1,
+        backend_calls: &AtomicU64,
+    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+        let mut receiver = GovernanceDagHttpRequestReceiverV1::try_new(
+            expected_scope,
+            1024 * 1024,
+            policy,
+            replay_cache,
+        )?;
+        let verified_request = receiver.verify_http_request(
+            request.method(),
+            request.canonical_url(),
+            request
+                .selected_headers()
+                .iter()
+                .map(|header| (header.name(), header.value().as_bytes()))
+                .chain(
+                    headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                ),
+            body,
+            now,
+        )?;
+        if verified_request != *request {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
+        }
+        backend_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
+    }
+
+    fn canonical_test_request(
+        scope: GovernanceDagAuthenticationScope,
+        method: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+        body: &[u8],
+    ) -> GovernanceDagCanonicalRequestV1 {
+        let mut headers = headers
+            .iter()
+            .map(|(name, value)| {
+                GovernanceDagCanonicalRequestHeaderV1::try_new(name, value)
+                    .expect("canonical test request header")
+            })
+            .collect::<Vec<_>>();
+        headers.sort_unstable();
+        GovernanceDagCanonicalRequestV1::try_new(
+            scope,
+            method,
+            url,
+            headers,
+            body.len() as u64,
+            blake3_array(body),
+            1024 * 1024,
+        )
+        .expect("canonical test request")
     }
 
     impl GovernanceDagRequestAuthenticator for TestAuthenticator {
@@ -3977,19 +5827,119 @@ mod tests {
             &self.handle
         }
 
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
+                return Err("auth_token=must-never-escape".to_owned());
+            }
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                self.qualification_revision.load(AtomicOrdering::SeqCst),
+                [0x81; 32],
+            ))
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.public_key
+        }
+
         fn authenticate(
             &self,
-            _scope: GovernanceDagAuthenticationScope,
-            request: RequestBuilder,
-        ) -> Result<RequestBuilder, String> {
+            request: &GovernanceDagCanonicalRequestV1,
+        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
+            if self
+                .drift_during_authentication
+                .swap(false, AtomicOrdering::SeqCst)
+            {
+                self.qualification_revision
+                    .fetch_add(1, AtomicOrdering::SeqCst);
+            }
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err(format!(
-                    "bearer={}",
-                    self.bearer_token.lock().map_err(|_| "poisoned")?
+                    "hsm_diagnostic={}",
+                    self.provider_secret.lock().map_err(|_| "poisoned")?
                 ));
             }
-            let token = self.bearer_token.lock().map_err(|_| "poisoned")?.clone();
-            Ok(request.bearer_auth(token))
+            self.signed_envelope(request)
+        }
+    }
+
+    struct FinalRequestAuthenticator {
+        signer: TestAuthenticator,
+        expected_body_length: u64,
+        expected_body_blake3: [u8; 32],
+        expected_condition: HeaderName,
+        expected_condition_value: HeaderValue,
+        observed_put: AtomicBool,
+    }
+
+    impl fmt::Debug for FinalRequestAuthenticator {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("FinalRequestAuthenticator")
+                .field("expected_body", &"[REDACTED]")
+                .field("expected_condition", &self.expected_condition)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl FinalRequestAuthenticator {
+        fn new(
+            expected_body: &[u8],
+            expected_condition: HeaderName,
+            expected_condition_value: HeaderValue,
+        ) -> Self {
+            Self {
+                signer: TestAuthenticator::new(TEST_HEAD_AUTH_HANDLE, "final-request-hsm"),
+                expected_body_length: expected_body.len() as u64,
+                expected_body_blake3: blake3_array(expected_body),
+                expected_condition,
+                expected_condition_value,
+                observed_put: AtomicBool::new(false),
+            }
+        }
+    }
+
+    impl GovernanceDagRequestAuthenticator for FinalRequestAuthenticator {
+        fn handle(&self) -> &str {
+            TEST_HEAD_AUTH_HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(TEST_AUTH_QUALIFICATION)
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.signer.public_key()
+        }
+
+        fn authenticate(
+            &self,
+            request: &GovernanceDagCanonicalRequestV1,
+        ) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, String> {
+            if request.method() == Method::PUT.as_str() {
+                let expected_condition = self.expected_condition.as_str();
+                let expected_condition_value = self
+                    .expected_condition_value
+                    .to_str()
+                    .map_err(|_| "noncanonical expected condition")?;
+                let observed = request
+                    .selected_headers()
+                    .iter()
+                    .map(|header| (header.name(), header.value()))
+                    .collect::<BTreeMap<_, _>>();
+                if request.scope() != GovernanceDagAuthenticationScope::SignedHead
+                    || observed.get(header::CONTENT_TYPE.as_str()).copied()
+                        != Some("application/vnd.iroha.norito")
+                    || observed.get(expected_condition).copied() != Some(expected_condition_value)
+                    || request.body_length() != self.expected_body_length
+                    || request.body_blake3() != self.expected_body_blake3
+                {
+                    return Err(
+                        "signed-head authenticator received an incomplete PUT request".to_owned(),
+                    );
+                }
+                self.observed_put.store(true, AtomicOrdering::SeqCst);
+            }
+            self.signer.signed_envelope(request)
         }
     }
 
@@ -3997,13 +5947,20 @@ mod tests {
     struct TestSealedStoreInner {
         checkpoint: Option<GovernanceDagSealedStateRecord>,
         publish_intent: Option<GovernanceDagSealedStateRecord>,
+        producer_checkpoint: Option<GovernanceDagSealedStateRecord>,
+        producer_publish_intent: Option<GovernanceDagSealedStateRecord>,
         checkpoint_generation_floor: u64,
         intent_generation_floor: u64,
+        producer_checkpoint_generation_floor: u64,
+        producer_intent_generation_floor: u64,
     }
 
     struct TestSealedStore {
         handle: String,
         inner: StdMutex<TestSealedStoreInner>,
+        qualification_revision: AtomicU64,
+        qualification_refuse: AtomicBool,
+        drift_during_operation: AtomicBool,
         refuse: AtomicBool,
     }
 
@@ -4021,27 +5978,48 @@ mod tests {
             Self {
                 handle: handle.to_owned(),
                 inner: StdMutex::new(TestSealedStoreInner::default()),
+                qualification_revision: AtomicU64::new(1),
+                qualification_refuse: AtomicBool::new(false),
+                drift_during_operation: AtomicBool::new(false),
                 refuse: AtomicBool::new(false),
             }
         }
 
-        fn slot<'a>(
-            inner: &'a TestSealedStoreInner,
-            slot: GovernanceDagSealedStateSlot,
-        ) -> &'a Option<GovernanceDagSealedStateRecord> {
-            match slot {
-                GovernanceDagSealedStateSlot::Checkpoint => &inner.checkpoint,
-                GovernanceDagSealedStateSlot::PublishIntent => &inner.publish_intent,
+        fn maybe_drift(&self) {
+            if self
+                .drift_during_operation
+                .swap(false, AtomicOrdering::SeqCst)
+            {
+                self.qualification_revision
+                    .fetch_add(1, AtomicOrdering::SeqCst);
             }
         }
 
-        fn slot_mut<'a>(
-            inner: &'a mut TestSealedStoreInner,
+        fn slot(
+            inner: &TestSealedStoreInner,
             slot: GovernanceDagSealedStateSlot,
-        ) -> &'a mut Option<GovernanceDagSealedStateRecord> {
+        ) -> &Option<GovernanceDagSealedStateRecord> {
+            match slot {
+                GovernanceDagSealedStateSlot::Checkpoint => &inner.checkpoint,
+                GovernanceDagSealedStateSlot::PublishIntent => &inner.publish_intent,
+                GovernanceDagSealedStateSlot::ProducerCheckpoint => &inner.producer_checkpoint,
+                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
+                    &inner.producer_publish_intent
+                }
+            }
+        }
+
+        fn slot_mut(
+            inner: &mut TestSealedStoreInner,
+            slot: GovernanceDagSealedStateSlot,
+        ) -> &mut Option<GovernanceDagSealedStateRecord> {
             match slot {
                 GovernanceDagSealedStateSlot::Checkpoint => &mut inner.checkpoint,
                 GovernanceDagSealedStateSlot::PublishIntent => &mut inner.publish_intent,
+                GovernanceDagSealedStateSlot::ProducerCheckpoint => &mut inner.producer_checkpoint,
+                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
+                    &mut inner.producer_publish_intent
+                }
             }
         }
     }
@@ -4051,10 +6029,21 @@ mod tests {
             &self.handle
         }
 
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            if self.qualification_refuse.load(AtomicOrdering::SeqCst) {
+                return Err("kms_access_token=must-never-escape".to_owned());
+            }
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                self.qualification_revision.load(AtomicOrdering::SeqCst),
+                [0x82; 32],
+            ))
+        }
+
         fn load(
             &self,
             slot: GovernanceDagSealedStateSlot,
         ) -> Result<Option<GovernanceDagSealedStateRecord>, String> {
+            self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
@@ -4068,6 +6057,7 @@ mod tests {
             expected_revision: Option<[u8; 32]>,
             next: GovernanceDagSealedStateRecord,
         ) -> Result<(), String> {
+            self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
@@ -4084,6 +6074,12 @@ mod tests {
             let floor = match slot {
                 GovernanceDagSealedStateSlot::Checkpoint => inner.checkpoint_generation_floor,
                 GovernanceDagSealedStateSlot::PublishIntent => inner.intent_generation_floor,
+                GovernanceDagSealedStateSlot::ProducerCheckpoint => {
+                    inner.producer_checkpoint_generation_floor
+                }
+                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
+                    inner.producer_intent_generation_floor
+                }
             };
             let generation_valid = match slot {
                 GovernanceDagSealedStateSlot::Checkpoint => next.generation > floor,
@@ -4093,6 +6089,8 @@ mod tests {
                     next.generation >= floor
                 }
                 GovernanceDagSealedStateSlot::PublishIntent => next.generation > floor,
+                GovernanceDagSealedStateSlot::ProducerCheckpoint
+                | GovernanceDagSealedStateSlot::ProducerPublishIntent => next.generation > floor,
             };
             if !generation_valid {
                 return Err("monotonic generation rollback".to_owned());
@@ -4104,6 +6102,12 @@ mod tests {
                 GovernanceDagSealedStateSlot::PublishIntent => {
                     inner.intent_generation_floor = next.generation;
                 }
+                GovernanceDagSealedStateSlot::ProducerCheckpoint => {
+                    inner.producer_checkpoint_generation_floor = next.generation;
+                }
+                GovernanceDagSealedStateSlot::ProducerPublishIntent => {
+                    inner.producer_intent_generation_floor = next.generation;
+                }
             }
             *Self::slot_mut(&mut inner, slot) = Some(next);
             Ok(())
@@ -4114,6 +6118,7 @@ mod tests {
             slot: GovernanceDagSealedStateSlot,
             expected_revision: [u8; 32],
         ) -> Result<(), String> {
+            self.maybe_drift();
             if self.refuse.load(AtomicOrdering::SeqCst) {
                 return Err("kms_access_token=must-never-escape".to_owned());
             }
@@ -4130,9 +6135,14 @@ mod tests {
     }
 
     fn test_authenticator(handle: &str) -> OpaqueAuthenticator {
+        let provider = Arc::new(TestAuthenticator::new(handle, "test-only-hsm"));
         OpaqueAuthenticator::try_new(
             handle,
-            Arc::new(TestAuthenticator::new(handle, "test-only-bearer")),
+            TEST_AUTH_QUALIFICATION,
+            provider.public_key(),
+            30,
+            5,
+            provider,
             "test authenticator",
         )
         .expect("bind test authenticator")
@@ -4154,26 +6164,95 @@ mod tests {
         }
     }
 
+    struct TestRuntimeProviderRegistry {
+        providers: GovernanceDagServiceRuntimeProviders,
+        failure: Option<GovernanceDagServiceRuntimeProviderRegistryErrorV1>,
+        observed_bindings: StdMutex<Option<GovernanceDagServiceRuntimeProviderBindingsV1>>,
+    }
+
+    impl TestRuntimeProviderRegistry {
+        fn returning(providers: GovernanceDagServiceRuntimeProviders) -> Self {
+            Self {
+                providers,
+                failure: None,
+                observed_bindings: StdMutex::new(None),
+            }
+        }
+
+        fn failing(failure: GovernanceDagServiceRuntimeProviderRegistryErrorV1) -> Self {
+            Self {
+                providers: GovernanceDagServiceRuntimeProviders::default(),
+                failure: Some(failure),
+                observed_bindings: StdMutex::new(None),
+            }
+        }
+    }
+
+    impl GovernanceDagServiceRuntimeProviderRegistryV1 for TestRuntimeProviderRegistry {
+        fn resolve(
+            &self,
+            bindings: &GovernanceDagServiceRuntimeProviderBindingsV1,
+        ) -> Result<
+            GovernanceDagServiceRuntimeProviders,
+            GovernanceDagServiceRuntimeProviderRegistryErrorV1,
+        > {
+            *self
+                .observed_bindings
+                .lock()
+                .expect("lock observed registry bindings") = Some(bindings.clone());
+            if let Some(failure) = self.failure {
+                return Err(failure);
+            }
+            Ok(self.providers.clone())
+        }
+    }
+
     fn test_checkpoint_store(provider: Arc<TestSealedStore>) -> OpaqueCheckpointStore {
-        OpaqueCheckpointStore::try_new(TEST_CHECKPOINT_STORE_HANDLE, provider)
-            .expect("bind test sealed checkpoint store")
+        OpaqueCheckpointStore::try_new(
+            TEST_CHECKPOINT_STORE_HANDLE,
+            TEST_STORE_QUALIFICATION,
+            provider,
+        )
+        .expect("bind test sealed checkpoint store")
     }
 
     fn runtime_boundary_view(root: &Path) -> SorafsGovernanceDagServiceView {
         let source_dir = root.join("source");
         let state_dir = root.join("state");
         fs::create_dir_all(&source_dir).expect("create test source directory");
+        let publisher_public_key_hex = hex::encode(
+            ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
         SorafsGovernanceDagServiceView {
             source_dir: Some(source_dir),
+            producer_publisher_peer_id: Some(TEST_PRODUCER_PEER_ID.to_owned()),
+            producer_signer_handle: Some(TEST_PRODUCER_SIGNER_HANDLE.to_owned()),
+            producer_signer_revision: Some(TEST_PRODUCER_SIGNER_QUALIFICATION.revision),
+            producer_signer_policy_digest: Some(TEST_PRODUCER_SIGNER_QUALIFICATION.policy_digest),
+            producer_publisher_public_key_hex: Some(publisher_public_key_hex.clone()),
             service: SorafsGovernanceDagService {
                 enabled: true,
                 state_dir: Some(state_dir),
                 ipfs_api_url: Some("http://127.0.0.1:5001".to_owned()),
                 signed_head_url: Some("http://127.0.0.1:9099/head".to_owned()),
                 ipfs_authenticator_handle: Some(TEST_IPFS_AUTH_HANDLE.to_owned()),
+                ipfs_authenticator_revision: Some(TEST_AUTH_QUALIFICATION.revision),
+                ipfs_authenticator_policy_digest: Some(TEST_AUTH_QUALIFICATION.policy_digest),
+                ipfs_request_auth_public_key: Some(test_request_auth_public_key(
+                    TEST_IPFS_AUTH_HANDLE,
+                )),
                 head_authenticator_handle: Some(TEST_HEAD_AUTH_HANDLE.to_owned()),
+                head_authenticator_revision: Some(TEST_AUTH_QUALIFICATION.revision),
+                head_authenticator_policy_digest: Some(TEST_AUTH_QUALIFICATION.policy_digest),
+                head_request_auth_public_key: Some(test_request_auth_public_key(
+                    TEST_HEAD_AUTH_HANDLE,
+                )),
                 checkpoint_store_handle: Some(TEST_CHECKPOINT_STORE_HANDLE.to_owned()),
-                publisher_public_key_hex: Some("11".repeat(32)),
+                checkpoint_store_revision: Some(TEST_STORE_QUALIFICATION.revision),
+                checkpoint_store_policy_digest: Some(TEST_STORE_QUALIFICATION.policy_digest),
+                publisher_public_key_hex: Some(publisher_public_key_hex),
                 allow_insecure_http: true,
                 allow_private_ipfs_endpoint: true,
                 allow_private_head_endpoint: true,
@@ -4205,13 +6284,16 @@ mod tests {
                 if message.contains("canonical strong Ed25519")
         ));
 
-        let noncanonical_y = ((1_u128 << 127) - 1).to_le_bytes();
         let mut noncanonical = [0xff_u8; 32];
-        noncanonical[..16].copy_from_slice(&noncanonical_y);
+        noncanonical[0] = 0xed;
         noncanonical[31] = 0x7f;
         assert!(
             decode_strong_ed25519_public_key_hex(&hex::encode(noncanonical), "publisher key")
                 .is_err()
+        );
+        assert!(
+            decode_strong_ed25519_public_key_hex(&"11".repeat(32), "publisher key").is_err(),
+            "mixed-torsion Ed25519 encodings must fail the production subgroup check"
         );
     }
 
@@ -4436,10 +6518,11 @@ mod tests {
                 .expect("construct Kubo version URL");
             let deadline = time::Instant::now() + Duration::from_secs(20);
             loop {
-                if let Ok(response) = endpoint
+                let request = endpoint
                     .request(Method::POST, url.clone())
-                    .expect("construct Kubo readiness request")
-                    .send()
+                    .expect("construct Kubo readiness request");
+                if let Ok(response) = endpoint
+                    .execute(request, "Kubo readiness request failed")
                     .await
                     && response.status().is_success()
                 {
@@ -4476,6 +6559,7 @@ mod tests {
                     .expect("construct isolated Kubo HTTP client"),
                 authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
                 authenticator: test_authenticator(TEST_IPFS_AUTH_HANDLE),
+                max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
             }
         }
 
@@ -4580,6 +6664,12 @@ mod tests {
             &self.handle
         }
 
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(GovernanceDagRuntimeProviderQualificationV1::new(
+                1, [0x83; 32],
+            ))
+        }
+
         fn publisher_peer_id(&self) -> &[u8] {
             &self.peer_id
         }
@@ -4658,7 +6748,7 @@ mod tests {
 
     fn signed_source(count: usize, seed: u8, first_timestamp: u64) -> SourceSnapshot {
         let signer = TestSigner::new(seed);
-        let peer_id = b"12D3KooWGovernanceServiceTest".to_vec();
+        let peer_id = TEST_PRODUCER_PEER_ID.as_bytes().to_vec();
         let mut previous_node_cid = None;
         let mut previous_block_cid = None;
         let mut source_blocks = Vec::new();
@@ -4752,9 +6842,16 @@ mod tests {
     fn test_runtime_config(source: &SourceSnapshot, root: &Path) -> RuntimeConfig {
         let mut expected_public_key = [0_u8; 32];
         expected_public_key.copy_from_slice(&source.head.head_signature.public_key);
+        let source_dir = root.join("source");
+        let state_dir = root.join("state");
+        fs::create_dir_all(&source_dir).expect("create test source root");
+        fs::create_dir_all(&state_dir).expect("create test state root");
         RuntimeConfig {
-            source_dir: root.join("source"),
-            state_dir: root.join("state"),
+            source_root_guard: GovernanceFilesystemRootGuard::capture_source(&source_dir)
+                .expect("fence test source root"),
+            source_dir,
+            state_root_guard: GovernanceFilesystemRootGuard::capture_writer(&state_dir)
+                .expect("fence test state root"),
             listen_addr: "127.0.0.1:0".parse().expect("test address"),
             poll_interval: Duration::from_millis(10),
             max_response_bytes: 1024 * 1024,
@@ -4764,6 +6861,9 @@ mod tests {
             max_head_age_secs: 3600,
             max_future_skew_secs: 60,
             allow_head_bootstrap: true,
+            expected_producer_signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
+            expected_publisher_peer_id: source.head.publisher_peer_id.clone(),
             expected_public_key,
         }
     }
@@ -4828,7 +6928,13 @@ mod tests {
     }
 
     fn secure_temp_dir() -> TempDir {
-        let dir = tempfile::tempdir().expect("create test directory");
+        let temp_root = std::env::temp_dir()
+            .canonicalize()
+            .expect("resolve the physical temporary-directory root");
+        let dir = tempfile::Builder::new()
+            .prefix("sorafs-governance-service-")
+            .tempdir_in(temp_root)
+            .expect("create test directory");
         #[cfg(unix)]
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
             .expect("secure test directory");
@@ -4992,6 +7098,73 @@ mod tests {
         write_test_sidecar_file(&root.join("runtime-dag-index.json"), &index_bytes);
     }
 
+    fn producer_checkpoint_from_source(
+        root: &Path,
+        source: &SourceSnapshot,
+    ) -> RuntimeDagProducerCheckpointV1 {
+        RuntimeDagProducerCheckpointV1 {
+            version: GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1,
+            root_digest: runtime_dag_producer_root_digest(root)
+                .expect("derive canonical test producer root digest"),
+            signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            signer_revision: TEST_PRODUCER_SIGNER_QUALIFICATION.revision,
+            signer_policy_digest: TEST_PRODUCER_SIGNER_QUALIFICATION.policy_digest,
+            checkpoint_store_handle: TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+            checkpoint_store_revision: TEST_STORE_QUALIFICATION.revision,
+            checkpoint_store_policy_digest: TEST_STORE_QUALIFICATION.policy_digest,
+            publisher_peer_id: source.head.publisher_peer_id.clone(),
+            publisher_public_key: source
+                .head
+                .head_signature
+                .public_key
+                .as_slice()
+                .try_into()
+                .expect("test source public key is 32 bytes"),
+            block_count: source.head.block_count,
+            head_block_cid: source
+                .head
+                .head_block_cid
+                .as_slice()
+                .try_into()
+                .expect("test source head CID is 32 bytes"),
+            head_bytes_digest: blake3_array(&source.head_bytes),
+            index_bytes_digest: source.index_blake3,
+            qualification_transition_generation: 0,
+            qualification_transition_digest: [0; 32],
+            qualification_archive_generation: 0,
+            qualification_archive_digest: [0; 32],
+        }
+    }
+
+    fn seed_producer_checkpoint(
+        provider: &TestSealedStore,
+        root: &Path,
+        source: &SourceSnapshot,
+    ) -> GovernanceDagSealedStateRecord {
+        let checkpoint = producer_checkpoint_from_source(root, source);
+        let generation = checkpoint
+            .block_count
+            .checked_add(checkpoint.qualification_transition_generation)
+            .and_then(|generation| {
+                generation.checked_add(checkpoint.qualification_archive_generation)
+            })
+            .and_then(|generation| generation.checked_add(1))
+            .expect("test producer generation");
+        let record = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::ProducerCheckpoint,
+            generation,
+            norito::to_bytes(&checkpoint).expect("encode test producer checkpoint"),
+        );
+        provider
+            .compare_and_swap(
+                GovernanceDagSealedStateSlot::ProducerCheckpoint,
+                None,
+                record.clone(),
+            )
+            .expect("seed test producer checkpoint");
+        record
+    }
+
     async fn kubo_key_generate(endpoint: &PinnedEndpoint, alias: &str) -> String {
         let url = endpoint
             .ipfs_url(
@@ -4999,10 +7172,11 @@ mod tests {
                 &[("arg", alias), ("type", "ed25519"), ("ipns-base", "base36")],
             )
             .expect("construct Kubo key generation URL");
-        let response = endpoint
+        let request = endpoint
             .request(Method::POST, url)
-            .expect("construct Kubo key generation request")
-            .send()
+            .expect("construct Kubo key generation request");
+        let response = endpoint
+            .execute(request, "Kubo key generation request failed")
             .await
             .expect("send Kubo key generation request");
         assert!(response.status().is_success(), "Kubo key generation failed");
@@ -5029,10 +7203,11 @@ mod tests {
         let url = endpoint
             .ipfs_url("api/v0/pin/rm", &[("arg", cid), ("recursive", "true")])
             .expect("construct Kubo unpin URL");
-        let response = endpoint
+        let request = endpoint
             .request(Method::POST, url)
-            .expect("construct Kubo unpin request")
-            .send()
+            .expect("construct Kubo unpin request");
+        let response = endpoint
+            .execute(request, "Kubo unpin request failed")
             .await
             .expect("send Kubo unpin request");
         assert!(response.status().is_success(), "Kubo unpin failed");
@@ -5045,10 +7220,11 @@ mod tests {
         let url = endpoint
             .ipfs_url("api/v0/swarm/peers", &[])
             .expect("construct Kubo swarm peers URL");
-        let response = endpoint
+        let request = endpoint
             .request(Method::POST, url)
-            .expect("construct Kubo swarm peers request")
-            .send()
+            .expect("construct Kubo swarm peers request");
+        let response = endpoint
+            .execute(request, "Kubo swarm-peers request failed")
             .await
             .expect("send Kubo swarm peers request");
         assert!(response.status().is_success());
@@ -5079,6 +7255,11 @@ mod tests {
         let config = format!(
             r#"[sorafs.storage]
 governance_dag_dir = "{}"
+governance_dag_publisher_peer_id = "{TEST_PRODUCER_PEER_ID}"
+governance_dag_signer_handle = "{TEST_PRODUCER_SIGNER_HANDLE}"
+governance_dag_signer_revision = 1
+governance_dag_signer_policy_digest_hex = "{}"
+governance_dag_publisher_public_key_hex = "{}"
 
 [sorafs.storage.governance_dag_service]
 enabled = true
@@ -5088,7 +7269,12 @@ head_mode = "ipns"
 ipns_name = "{}"
 ipns_key_name = "{}"
 ipfs_authenticator_handle = "{TEST_IPFS_AUTH_HANDLE}"
+ipfs_authenticator_revision = 1
+ipfs_authenticator_policy_digest_hex = "{}"
+ipfs_request_auth_public_key_hex = "{}"
 checkpoint_store_handle = "{TEST_CHECKPOINT_STORE_HANDLE}"
+checkpoint_store_revision = 1
+checkpoint_store_policy_digest_hex = "{}"
 publisher_public_key_hex = "{}"
 poll_interval_secs = 1
 connect_timeout_ms = 5000
@@ -5102,10 +7288,15 @@ allow_head_bootstrap = true
 listen_addr = "127.0.0.1:0"
 "#,
             source_dir.display(),
+            "83".repeat(32),
+            hex::encode(&source.head.head_signature.public_key),
             state_dir.display(),
             api_url,
             ipns_name,
             KUBO_IPNS_KEY_ALIAS,
+            "81".repeat(32),
+            hex::encode(test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE)),
+            "82".repeat(32),
             hex::encode(&source.head.head_signature.public_key),
         );
         let config_path = state_dir
@@ -5116,7 +7307,12 @@ listen_addr = "127.0.0.1:0"
         load_service_config(&config_path).expect("parse standalone G-DAG service config")
     }
 
-    async fn spawn_router(router: Router, path: &str) -> (PinnedEndpoint, JoinHandle<()>) {
+    async fn spawn_router_with_authenticator(
+        router: Router,
+        path: &str,
+        authentication_scope: GovernanceDagAuthenticationScope,
+        authenticator: OpaqueAuthenticator,
+    ) -> (PinnedEndpoint, JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind mock service");
@@ -5134,11 +7330,22 @@ listen_addr = "127.0.0.1:0"
             PinnedEndpoint {
                 url,
                 client,
-                authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
-                authenticator: test_authenticator(TEST_IPFS_AUTH_HANDLE),
+                authentication_scope,
+                authenticator,
+                max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
             },
             handle,
         )
+    }
+
+    async fn spawn_router(router: Router, path: &str) -> (PinnedEndpoint, JoinHandle<()>) {
+        spawn_router_with_authenticator(
+            router,
+            path,
+            GovernanceDagAuthenticationScope::Ipfs,
+            test_authenticator(TEST_IPFS_AUTH_HANDLE),
+        )
+        .await
     }
 
     fn test_response(status: StatusCode, body: impl Into<Body>) -> Response {
@@ -5182,6 +7389,13 @@ listen_addr = "127.0.0.1:0"
             .route("/api/v0/pin/ls", post(mock_ipfs_pin_ls))
             .route("/api/v0/cat", post(mock_ipfs_cat))
             .with_state(state)
+    }
+
+    async fn count_unexpected_publication_io(
+        State(request_count): State<Arc<AtomicU64>>,
+    ) -> Response {
+        request_count.fetch_add(1, AtomicOrdering::SeqCst);
+        test_response(StatusCode::INTERNAL_SERVER_ERROR, "unexpected request")
     }
 
     #[derive(Default)]
@@ -5232,11 +7446,24 @@ listen_addr = "127.0.0.1:0"
     async fn spawn_signed_head(
         inner: SignedHeadInner,
     ) -> (PinnedEndpoint, SignedHeadState, JoinHandle<()>) {
+        spawn_signed_head_with_authenticator(inner, test_authenticator(TEST_HEAD_AUTH_HANDLE)).await
+    }
+
+    async fn spawn_signed_head_with_authenticator(
+        inner: SignedHeadInner,
+        authenticator: OpaqueAuthenticator,
+    ) -> (PinnedEndpoint, SignedHeadState, JoinHandle<()>) {
         let state = SignedHeadState(Arc::new(Mutex::new(inner)));
         let router = Router::new()
             .route("/head", get(mock_signed_head_get).put(mock_signed_head_put))
             .with_state(state.clone());
-        let (endpoint, handle) = spawn_router(router, "/head").await;
+        let (endpoint, handle) = spawn_router_with_authenticator(
+            router,
+            "/head",
+            GovernanceDagAuthenticationScope::SignedHead,
+            authenticator,
+        )
+        .await;
         (endpoint, state, handle)
     }
 
@@ -5291,6 +7518,33 @@ listen_addr = "127.0.0.1:0"
             .with_state(state)
     }
 
+    #[derive(Clone)]
+    struct IpnsResolveFailureState {
+        status: StatusCode,
+        publish_count: Arc<AtomicU64>,
+    }
+
+    async fn mock_ipns_resolve_failure(State(state): State<IpnsResolveFailureState>) -> Response {
+        test_response(state.status, "{}")
+    }
+
+    async fn mock_ipns_publish_after_failure(
+        State(state): State<IpnsResolveFailureState>,
+    ) -> Response {
+        state.publish_count.fetch_add(1, Ordering::SeqCst);
+        test_response(StatusCode::OK, "{}")
+    }
+
+    fn mock_ipns_resolve_failure_router(state: IpnsResolveFailureState) -> Router {
+        Router::new()
+            .route("/api/v0/name/resolve", post(mock_ipns_resolve_failure))
+            .route(
+                "/api/v0/name/publish",
+                post(mock_ipns_publish_after_failure),
+            )
+            .with_state(state)
+    }
+
     async fn response_header_bomb() -> Response {
         let mut response = test_response(StatusCode::OK, "ok");
         for index in 0..=MAX_RESPONSE_HEADERS {
@@ -5313,6 +7567,13 @@ listen_addr = "127.0.0.1:0"
             .headers_mut()
             .insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         response
+    }
+
+    async fn mock_authenticator_drift(State(provider): State<Arc<TestAuthenticator>>) -> Response {
+        provider
+            .qualification_revision
+            .fetch_add(1, AtomicOrdering::SeqCst);
+        test_response(StatusCode::OK, "qualified-before-response")
     }
 
     #[test]
@@ -5359,6 +7620,33 @@ listen_addr = "127.0.0.1:0"
         let mut expected_key = [0_u8; 32];
         expected_key.copy_from_slice(&block.block_signature.public_key);
         assert!(validate_expected_signer(block, &expected_key, b"wrong-peer").is_err());
+    }
+
+    #[test]
+    fn runtime_handle_uses_central_production_grammar() {
+        assert_eq!(
+            validate_runtime_handle(
+                "kms://governance/checkpoint.primary-v1_slot-a",
+                "sealed checkpoint store",
+            )
+            .expect("canonical production runtime handle"),
+            "kms://governance/checkpoint.primary-v1_slot-a"
+        );
+        for handle in [
+            "https://operator:secret@checkpoint",
+            "https://checkpoint/path?credential=secret",
+            "https://checkpoint/path#fragment",
+            "kms://governance/%63heckpoint",
+            "kms:\\governance\\checkpoint",
+        ] {
+            let error = validate_runtime_handle(handle, "sealed checkpoint store")
+                .expect_err("forbidden runtime-handle character must fail closed");
+            assert!(error.to_string().contains("canonical credential-free"));
+        }
+        let error =
+            validate_runtime_handle("kms:governance/checkpoint:dummy", "sealed checkpoint store")
+                .expect_err("dummy-marked provider handle must fail closed");
+        assert!(error.to_string().contains("test-marked"));
     }
 
     #[test]
@@ -5457,22 +7745,34 @@ listen_addr = "127.0.0.1:0"
     fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
         let root = secure_temp_dir();
         let source_dir = root.path().join("source");
-        let publisher_peer_id = b"12D3KooWGovernanceServiceTest".to_vec();
+        let publisher_peer_id = TEST_PRODUCER_PEER_ID.as_bytes().to_vec();
+        let producer_signer_handle = "pkcs11:governance-dag:source-primary";
         let signer = Arc::new(PublisherTestSigner {
-            handle: "pkcs11:governance-dag:source-test".to_owned(),
+            handle: producer_signer_handle.to_owned(),
             peer_id: publisher_peer_id.clone(),
             signer: TestSigner::new(0x76),
         });
-        let signer_handle = signer.handle().to_owned();
+        let signer = qualify_governance_dag_runtime_signer_provider(
+            signer.handle().to_owned(),
+            publisher_peer_id,
+            signer.public_key(),
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x83; 32]),
+            signer,
+        )
+        .expect("qualify real runtime DAG signer");
+        let checkpoint_store = Arc::new(TestSealedStore::new(
+            "kms:governance-dag:source-producer-checkpoint",
+        ));
+        let checkpoint_store = qualify_governance_dag_runtime_checkpoint_store(
+            checkpoint_store.handle().to_owned(),
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x82; 32]),
+            checkpoint_store,
+        )
+        .expect("qualify real runtime DAG producer checkpoint store");
         let publisher = FilesystemGovernancePublisher::try_new(source_dir.clone())
             .expect("create real filesystem governance publisher")
-            .with_runtime_dag_signer_provider(
-                signer_handle,
-                publisher_peer_id,
-                signer.public_key(),
-                signer,
-            )
-            .expect("configure real runtime DAG signer");
+            .with_qualified_runtime_dag_providers(signer, checkpoint_store)
+            .expect("configure real runtime DAG providers");
         let timestamp = current_unix_timestamp_seconds();
         for sequence in 0..=GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u64 {
             let settlement = settlement(sequence, timestamp);
@@ -5484,9 +7784,14 @@ listen_addr = "127.0.0.1:0"
         drop(publisher);
 
         let signer = TestSigner::new(0x76);
+        let state_dir = root.path().join("state");
+        fs::create_dir_all(&state_dir).expect("create source-loader state root");
         let config = RuntimeConfig {
+            source_root_guard: GovernanceFilesystemRootGuard::capture_source(&source_dir)
+                .expect("fence real publisher source root"),
             source_dir,
-            state_dir: root.path().join("state"),
+            state_root_guard: GovernanceFilesystemRootGuard::capture_writer(&state_dir)
+                .expect("fence source-loader state root"),
             listen_addr: "127.0.0.1:0".parse().expect("test address"),
             poll_interval: Duration::from_millis(10),
             max_response_bytes: 1024 * 1024,
@@ -5496,6 +7801,9 @@ listen_addr = "127.0.0.1:0"
             max_head_age_secs: 3600,
             max_future_skew_secs: 60,
             allow_head_bootstrap: true,
+            expected_producer_signer_handle: producer_signer_handle.to_owned(),
+            expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
+            expected_publisher_peer_id: TEST_PRODUCER_PEER_ID.as_bytes().to_vec(),
             expected_public_key: signer.public_key,
         };
 
@@ -5563,6 +7871,151 @@ listen_addr = "127.0.0.1:0"
     }
 
     #[test]
+    fn committed_source_loader_authenticates_distinct_signing_key_segments() {
+        let root = secure_temp_dir();
+        let source_dir = root.path().join("source");
+        let publisher_peer_id = TEST_PRODUCER_PEER_ID.as_bytes().to_vec();
+        let checkpoint_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let producer_store = qualify_governance_dag_runtime_checkpoint_store(
+            TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+            TEST_STORE_QUALIFICATION,
+            checkpoint_provider.clone(),
+        )
+        .expect("qualify producer checkpoint store");
+
+        let outgoing_provider = Arc::new(PublisherTestSigner {
+            handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            peer_id: publisher_peer_id.clone(),
+            signer: TestSigner::new(0x76),
+        });
+        let outgoing_public_key = outgoing_provider.public_key();
+        let outgoing_signer = qualify_governance_dag_runtime_signer_provider(
+            TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            publisher_peer_id.clone(),
+            outgoing_public_key,
+            TEST_PRODUCER_SIGNER_QUALIFICATION,
+            outgoing_provider,
+        )
+        .expect("qualify outgoing producer signer");
+        let mut publisher = FilesystemGovernancePublisher::try_new(source_dir.clone())
+            .expect("create segmented filesystem governance publisher")
+            .with_qualified_runtime_dag_providers(outgoing_signer, producer_store)
+            .expect("configure outgoing producer providers");
+        let timestamp = current_unix_timestamp_seconds();
+        let outgoing_settlement = settlement(0, timestamp);
+        let outgoing_encoded =
+            norito::to_bytes(&outgoing_settlement).expect("encode outgoing settlement");
+        publisher
+            .publish_deal_settlement(&outgoing_settlement, &outgoing_encoded)
+            .expect("publish outgoing authority block");
+
+        let incoming_provider = Arc::new(PublisherTestSigner {
+            handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            peer_id: publisher_peer_id.clone(),
+            signer: TestSigner::new(0x77),
+        });
+        let incoming_public_key = incoming_provider.public_key();
+        assert_ne!(outgoing_public_key, incoming_public_key);
+        let incoming_signer = qualify_governance_dag_runtime_signer_provider(
+            TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            publisher_peer_id.clone(),
+            incoming_public_key,
+            TEST_PRODUCER_SIGNER_QUALIFICATION,
+            incoming_provider,
+        )
+        .expect("qualify incoming producer signer");
+        let incoming_store = qualify_governance_dag_runtime_checkpoint_store(
+            TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+            TEST_STORE_QUALIFICATION,
+            checkpoint_provider.clone(),
+        )
+        .expect("qualify incoming producer checkpoint store");
+        publisher
+            .transition_qualified_runtime_dag_providers(incoming_signer, incoming_store)
+            .expect("install dual-signed key transition");
+
+        let state_dir = root.path().join("state");
+        fs::create_dir_all(&state_dir).expect("create segmented source-loader state root");
+        let config = RuntimeConfig {
+            source_root_guard: GovernanceFilesystemRootGuard::capture_source(&source_dir)
+                .expect("fence segmented publisher source root"),
+            source_dir,
+            state_root_guard: GovernanceFilesystemRootGuard::capture_writer(&state_dir)
+                .expect("fence segmented source-loader state root"),
+            listen_addr: "127.0.0.1:0".parse().expect("test address"),
+            poll_interval: Duration::from_millis(10),
+            max_response_bytes: 1024 * 1024,
+            max_request_bytes: 1024 * 1024,
+            mirror_max_entries: 1024,
+            mirror_max_bytes: 1024 * 1024,
+            max_head_age_secs: 3600,
+            max_future_skew_secs: 60,
+            allow_head_bootstrap: true,
+            expected_producer_signer_handle: TEST_PRODUCER_SIGNER_HANDLE.to_owned(),
+            expected_producer_signer_qualification: TEST_PRODUCER_SIGNER_QUALIFICATION,
+            expected_publisher_peer_id: publisher_peer_id,
+            expected_public_key: incoming_public_key,
+        };
+        let service_store = test_checkpoint_store(Arc::clone(&checkpoint_provider));
+        let rotated_without_append = load_committed_source_snapshot(&config, &service_store)
+            .expect("incoming binding authenticates the outgoing-signed retained tip");
+        assert_eq!(rotated_without_append.blocks.len(), 1);
+        assert_eq!(
+            rotated_without_append.head.head_signature.public_key,
+            outgoing_public_key.to_vec()
+        );
+
+        let incoming_settlement = settlement(1, timestamp.saturating_add(1));
+        let incoming_encoded =
+            norito::to_bytes(&incoming_settlement).expect("encode incoming settlement");
+        publisher
+            .publish_deal_settlement(&incoming_settlement, &incoming_encoded)
+            .expect("publish incoming authority block");
+        let segmented = load_committed_source_snapshot(&config, &service_store)
+            .expect("service readback authenticates both signing-key segments");
+        assert_eq!(segmented.blocks.len(), 2);
+        assert_eq!(
+            segmented.blocks[0].block.block_signature.public_key,
+            outgoing_public_key.to_vec()
+        );
+        assert_eq!(
+            segmented.blocks[1].block.block_signature.public_key,
+            incoming_public_key.to_vec()
+        );
+        assert_eq!(
+            segmented.head.head_signature.public_key,
+            incoming_public_key.to_vec()
+        );
+
+        let mut sealed = checkpoint_provider
+            .inner
+            .lock()
+            .expect("lock segmented producer checkpoint");
+        let current_record = sealed
+            .producer_checkpoint
+            .as_ref()
+            .expect("segmented producer checkpoint")
+            .clone();
+        let mut substituted_checkpoint: RuntimeDagProducerCheckpointV1 =
+            norito::decode_from_bytes(&current_record.payload)
+                .expect("decode segmented producer checkpoint");
+        substituted_checkpoint.qualification_transition_digest[0] ^= 0x80;
+        sealed.producer_checkpoint = Some(GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::ProducerCheckpoint,
+            current_record.generation,
+            norito::to_bytes(&substituted_checkpoint)
+                .expect("encode substituted segmented producer checkpoint"),
+        ));
+        drop(sealed);
+        let error = load_committed_source_snapshot(&config, &service_store)
+            .expect_err("sealed key-transition lineage substitution must fail closed");
+        assert!(
+            error.to_string().contains("authority lineage diverges"),
+            "unexpected sealed lineage substitution error: {error}"
+        );
+    }
+
+    #[test]
     fn checkpoint_rejects_rollback_and_fork() {
         let original = signed_source(3, 0x34, 1_800_000_000);
         let checkpoint = checkpoint_from_source(&original);
@@ -5571,6 +8024,61 @@ listen_addr = "127.0.0.1:0"
 
         let fork = signed_source(3, 0x34, 1_800_000_100);
         assert!(validate_checkpoint_against_source(Some(&checkpoint), &fork).is_err());
+    }
+
+    #[test]
+    fn producer_commit_guard_binds_the_exact_verified_source_index() {
+        let root = secure_temp_dir();
+        let source_dir = root.path().join("source");
+        let mut source = signed_source(2, 0x74, 1_800_000_000);
+        materialize_source_snapshot(&source_dir, &mut source);
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        seed_producer_checkpoint(&provider, &source_dir, &source);
+        let store = test_checkpoint_store(provider.clone());
+        let config = test_runtime_config(&source, root.path());
+        let loaded = load_committed_source_snapshot(&config, &store)
+            .expect("stable sealed producer checkpoint admits the exact source snapshot");
+        assert_eq!(loaded.index_blake3, source.index_blake3);
+
+        let mut checkpoint = producer_checkpoint_from_source(&source_dir, &source);
+        checkpoint.index_bytes_digest[0] ^= 0x80;
+        let replacement = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::ProducerCheckpoint,
+            checkpoint.block_count.saturating_add(1),
+            norito::to_bytes(&checkpoint).expect("encode tampered producer checkpoint"),
+        );
+        provider
+            .inner
+            .lock()
+            .expect("lock test producer store")
+            .producer_checkpoint = Some(replacement);
+        let error = load_committed_source_snapshot(&config, &store)
+            .expect_err("mismatched sealed producer index digest must fail closed");
+        assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn service_checkpoint_and_intent_bind_current_source_index_digest() {
+        let source = signed_source(2, 0x75, 1_800_000_000);
+        let mut checkpoint = checkpoint_from_source(&source);
+        checkpoint.source_index_blake3[0] ^= 0x80;
+        assert!(
+            validate_checkpoint_against_source(Some(&checkpoint), &source)
+                .expect_err("current checkpoint must bind the exact source index")
+                .to_string()
+                .contains("source-index digest")
+        );
+
+        let mut intent = intent_from_source(&source);
+        intent.target_source_index_blake3[0] ^= 0x80;
+        let root = secure_temp_dir();
+        let config = test_runtime_config(&source, root.path());
+        assert!(
+            validate_intent_against_source(&intent, None, &source, &config)
+                .expect_err("current publish intent must bind the exact source index")
+                .to_string()
+                .contains("source-index digest")
+        );
     }
 
     #[test]
@@ -5632,7 +8140,73 @@ listen_addr = "127.0.0.1:0"
         let dir = secure_temp_dir();
         let path = dir.path().join("oversize.bin");
         fs::write(&path, [0_u8; 9]).expect("write oversized file");
-        assert!(read_regular_file(&path, 8, false).is_err());
+        assert!(read_unrooted_regular_file(&path, 8, false).is_err());
+    }
+
+    #[test]
+    fn rooted_source_binding_rejects_equal_byte_substitution() {
+        let dir = secure_temp_dir();
+        let path = dir.path().join("source.to");
+        fs::write(&path, b"same-bytes").expect("seed rooted source");
+        let guard =
+            GovernanceFilesystemRootGuard::capture_source(dir.path()).expect("retain source root");
+        let snapshot = read_rooted_file(&guard, Path::new("source.to"), 32, false)
+            .expect("read rooted source");
+
+        fs::remove_file(&path).expect("remove original source");
+        fs::write(&path, b"same-bytes").expect("replace source with equal bytes");
+        let error = verify_rooted_file_binding(&guard, &snapshot.binding())
+            .expect_err("equal-byte identity substitution must fail closed");
+        assert!(error.to_string().contains("substituted"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rooted_source_read_rejects_descendant_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = secure_temp_dir();
+        fs::write(dir.path().join("target.to"), b"target").expect("seed target");
+        symlink(dir.path().join("target.to"), dir.path().join("linked.to"))
+            .expect("create descendant symlink");
+        let guard =
+            GovernanceFilesystemRootGuard::capture_source(dir.path()).expect("retain source root");
+        read_rooted_file(&guard, Path::new("linked.to"), 32, false)
+            .expect_err("rooted source read must reject symlink");
+    }
+
+    #[test]
+    fn rooted_state_recovery_is_deterministic_after_restart() {
+        let dir = secure_temp_dir();
+        let guard =
+            GovernanceFilesystemRootGuard::capture_writer(dir.path()).expect("retain state root");
+        write_rooted_atomic_secret(&guard, Path::new(MIRROR_INDEX_FILE), b"first-generation")
+            .expect("write first state generation");
+        drop(guard);
+
+        let stale = dir.path().join(format!(".{MIRROR_INDEX_FILE}.tmp-42000-9"));
+        fs::write(&stale, b"crash-temporary").expect("seed restart temporary");
+        let restarted = GovernanceFilesystemRootGuard::capture_writer(dir.path())
+            .expect("retain restarted state root");
+        write_rooted_atomic_secret(
+            &restarted,
+            Path::new(MIRROR_INDEX_FILE),
+            b"second-generation",
+        )
+        .expect("recover and write second state generation");
+
+        assert!(!stale.exists());
+        assert_eq!(
+            read_rooted_file(
+                &restarted,
+                Path::new(MIRROR_INDEX_FILE),
+                MUTABLE_STATE_MAX_BYTES,
+                true,
+            )
+            .expect("read restarted state")
+            .bytes(),
+            b"second-generation"
+        );
     }
 
     #[cfg(unix)]
@@ -5647,16 +8221,16 @@ listen_addr = "127.0.0.1:0"
 
         let symlink_path = dir.path().join("symlink.bin");
         symlink(&target, &symlink_path).expect("create symlink");
-        assert!(read_regular_file(&symlink_path, 32, true).is_err());
+        assert!(read_unrooted_regular_file(&symlink_path, 32, true).is_err());
 
         let hardlink_path = dir.path().join("hardlink.bin");
         fs::hard_link(&target, &hardlink_path).expect("create hard link");
-        assert!(read_regular_file(&target, 32, true).is_err());
+        assert!(read_unrooted_regular_file(&target, 32, true).is_err());
         fs::remove_file(&hardlink_path).expect("remove hard link");
 
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644))
             .expect("make secret permissive");
-        assert!(read_regular_file(&target, 32, true).is_err());
+        assert!(read_unrooted_regular_file(&target, 32, true).is_err());
     }
 
     #[cfg(unix)]
@@ -5750,10 +8324,41 @@ enabled = false
             (Some(checkpoint.clone()), Some(revision))
         );
 
-        let mismatch =
-            OpaqueCheckpointStore::try_new("kms:governance/checkpoint:other", provider.clone())
-                .expect_err("mismatched checkpoint provider handle must fail");
+        let mismatch = OpaqueCheckpointStore::try_new(
+            "kms:governance/checkpoint:other",
+            TEST_STORE_QUALIFICATION,
+            provider.clone(),
+        )
+        .expect_err("mismatched checkpoint provider handle must fail");
         assert!(mismatch.to_string().contains("does not match"));
+
+        provider
+            .qualification_revision
+            .store(2, AtomicOrdering::SeqCst);
+        let error =
+            load_checkpoint(&store).expect_err("checkpoint provider policy drift must fail");
+        assert!(error.to_string().contains("policy changed"));
+        provider
+            .qualification_revision
+            .store(1, AtomicOrdering::SeqCst);
+
+        let drifting_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let drifting_store = test_checkpoint_store(drifting_provider.clone());
+        drifting_provider
+            .drift_during_operation
+            .store(true, AtomicOrdering::SeqCst);
+        let error = load_checkpoint(&drifting_store)
+            .expect_err("policy drift during a sealed read must discard its result");
+        assert!(error.to_string().contains("policy changed"));
+
+        let drifting_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let drifting_store = test_checkpoint_store(drifting_provider.clone());
+        drifting_provider
+            .drift_during_operation
+            .store(true, AtomicOrdering::SeqCst);
+        let error = save_checkpoint(&drifting_store, None, &checkpoint)
+            .expect_err("policy drift during sealed CAS must fail closed");
+        assert!(error.to_string().contains("policy changed"));
 
         let mut inner = provider.inner.lock().expect("lock test store");
         let record = inner.checkpoint.as_mut().expect("checkpoint record");
@@ -5801,6 +8406,112 @@ enabled = false
         assert!(error.to_string().contains("read failed"));
         assert!(!error.to_string().contains("must-never-escape"));
         assert_ne!(revision, [0; 32]);
+    }
+
+    #[test]
+    fn producer_and_public_service_sealed_slots_coexist_without_cross_mutation() {
+        let root = secure_temp_dir();
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let service_checkpoint = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::Checkpoint,
+            7,
+            vec![0x71],
+        );
+        let service_intent = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::PublishIntent,
+            8,
+            vec![0x72],
+        );
+        provider
+            .compare_and_swap(
+                GovernanceDagSealedStateSlot::Checkpoint,
+                None,
+                service_checkpoint.clone(),
+            )
+            .expect("seed service checkpoint slot");
+        provider
+            .compare_and_swap(
+                GovernanceDagSealedStateSlot::PublishIntent,
+                None,
+                service_intent.clone(),
+            )
+            .expect("seed service intent slot");
+
+        let publisher_peer_id = b"12D3KooWGovernanceSharedStore".to_vec();
+        let signer = Arc::new(PublisherTestSigner {
+            handle: "pkcs11:governance-dag:shared-store-primary".to_owned(),
+            peer_id: publisher_peer_id.clone(),
+            signer: TestSigner::new(0x77),
+        });
+        let signer = qualify_governance_dag_runtime_signer_provider(
+            signer.handle().to_owned(),
+            publisher_peer_id,
+            signer.public_key(),
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x83; 32]),
+            signer,
+        )
+        .expect("qualify shared-store producer signer");
+        let producer_store = qualify_governance_dag_runtime_checkpoint_store(
+            TEST_CHECKPOINT_STORE_HANDLE.to_owned(),
+            TEST_STORE_QUALIFICATION,
+            provider.clone(),
+        )
+        .expect("qualify shared sealed store for producer slots");
+        let publisher = FilesystemGovernancePublisher::try_new(root.path().join("producer"))
+            .expect("create shared-store publisher")
+            .with_qualified_runtime_dag_providers(signer, producer_store)
+            .expect("bind producer providers to shared sealed store");
+        let settlement = settlement(0, current_unix_timestamp_seconds());
+        let encoded = norito::to_bytes(&settlement).expect("encode shared-store settlement");
+        publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("commit producer transaction through producer-only slots");
+
+        assert_eq!(
+            provider
+                .load(GovernanceDagSealedStateSlot::Checkpoint)
+                .expect("read service checkpoint"),
+            Some(service_checkpoint.clone())
+        );
+        assert_eq!(
+            provider
+                .load(GovernanceDagSealedStateSlot::PublishIntent)
+                .expect("read service intent"),
+            Some(service_intent)
+        );
+        let producer_checkpoint = provider
+            .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
+            .expect("read producer checkpoint")
+            .expect("producer checkpoint exists");
+        let producer_intent = provider
+            .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+            .expect("read producer intent");
+        assert!(producer_intent.is_none());
+
+        let next_service_checkpoint = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::Checkpoint,
+            9,
+            vec![0x73],
+        );
+        provider
+            .compare_and_swap(
+                GovernanceDagSealedStateSlot::Checkpoint,
+                Some(service_checkpoint.revision),
+                next_service_checkpoint,
+            )
+            .expect("advance service-only checkpoint slot");
+        assert_eq!(
+            provider
+                .load(GovernanceDagSealedStateSlot::ProducerCheckpoint)
+                .expect("re-read producer checkpoint"),
+            Some(producer_checkpoint)
+        );
+        assert!(
+            provider
+                .load(GovernanceDagSealedStateSlot::ProducerPublishIntent)
+                .expect("re-read producer intent")
+                .is_none()
+        );
     }
 
     #[test]
@@ -5981,12 +8692,17 @@ enabled = false
 
     #[test]
     fn ipfs_urls_cids_and_secret_debug_output_are_canonical() {
+        let provider = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "never-log-this-token",
+        ));
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
-            Arc::new(TestAuthenticator::new(
-                TEST_IPFS_AUTH_HANDLE,
-                "never-log-this-token",
-            )),
+            TEST_AUTH_QUALIFICATION,
+            provider.public_key(),
+            30,
+            5,
+            provider,
             "IPFS authenticator",
         )
         .expect("bind test authenticator");
@@ -5995,6 +8711,7 @@ enabled = false
             client: Client::builder().no_proxy().build().expect("test client"),
             authentication_scope: GovernanceDagAuthenticationScope::Ipfs,
             authenticator: authenticator.clone(),
+            max_request_bytes: GOVERNANCE_DAG_BLOCK_MAX_CANONICAL_BYTES_V1 as u64,
         };
         let url = endpoint
             .ipfs_url(
@@ -6050,55 +8767,87 @@ enabled = false
         ));
         let authenticator = OpaqueAuthenticator::try_new(
             TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
+            provider.public_key(),
+            30,
+            5,
             provider.clone(),
             "IPFS authenticator",
         )
         .expect("bind runtime authenticator");
         let client = Client::builder().no_proxy().build().expect("test client");
         let url = Url::parse("https://example.invalid/").expect("test URL");
+        let request = client
+            .get(url)
+            .header(header::ACCEPT_ENCODING, "identity")
+            .build()
+            .expect("build test request");
+        let descriptor = canonical_outbound_request_descriptor(
+            &request,
+            GovernanceDagAuthenticationScope::Ipfs,
+            1024,
+        )
+        .expect("canonical test request");
 
         let first = authenticator
-            .authenticate(
-                GovernanceDagAuthenticationScope::Ipfs,
-                client.get(url.clone()),
-            )
-            .expect("authenticate first request")
-            .build()
-            .expect("build first request");
-        assert_eq!(
-            first
-                .headers()
-                .get(header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok()),
-            Some("Bearer first-secret-token")
-        );
+            .authenticate(&descriptor)
+            .expect("authenticate first request");
+        assert_eq!(first.request_digest(), descriptor.request_digest());
+        assert_eq!(first.public_key(), provider.public_key());
 
         provider.rotate("rotated-secret-token");
         let rotated = authenticator
-            .authenticate(GovernanceDagAuthenticationScope::Ipfs, client.get(url))
-            .expect("authenticate rotated request")
-            .build()
-            .expect("build rotated request");
-        assert_eq!(
-            rotated
-                .headers()
-                .get(header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok()),
-            Some("Bearer rotated-secret-token")
-        );
+            .authenticate(&descriptor)
+            .expect("authenticate rotated request");
+        assert_ne!(first.nonce(), rotated.nonce());
+
+        provider
+            .qualification_revision
+            .store(2, AtomicOrdering::SeqCst);
+        let error = authenticator
+            .authenticate(&descriptor)
+            .expect_err("authenticator policy drift must fail closed");
+        assert!(error.to_string().contains("policy changed"));
+        provider
+            .qualification_revision
+            .store(1, AtomicOrdering::SeqCst);
+
+        let drifting_provider = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "must-not-be-returned",
+        ));
+        let drifting_authenticator = OpaqueAuthenticator::try_new(
+            TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
+            drifting_provider.public_key(),
+            30,
+            5,
+            drifting_provider.clone(),
+            "IPFS authenticator",
+        )
+        .expect("bind stable runtime authenticator");
+        drifting_provider
+            .drift_during_authentication
+            .store(true, AtomicOrdering::SeqCst);
+        let error = drifting_authenticator
+            .authenticate(&descriptor)
+            .expect_err("policy drift during authentication must discard the request");
+        assert!(error.to_string().contains("policy changed"));
+        assert!(!error.to_string().contains("must-not-be-returned"));
 
         provider.refuse.store(true, AtomicOrdering::SeqCst);
         let error = authenticator
-            .authenticate(
-                GovernanceDagAuthenticationScope::Ipfs,
-                client.get("https://example.invalid/"),
-            )
+            .authenticate(&descriptor)
             .expect_err("authenticator outage must fail closed");
         assert!(error.to_string().contains("refused"));
         assert!(!error.to_string().contains("rotated-secret-token"));
 
         let mismatch = OpaqueAuthenticator::try_new(
             "vault:governance/ipfs:other",
+            TEST_AUTH_QUALIFICATION,
+            provider.public_key(),
+            30,
+            5,
             provider,
             "IPFS authenticator",
         )
@@ -6106,10 +8855,1573 @@ enabled = false
         assert!(mismatch.to_string().contains("does not match"));
     }
 
+    #[test]
+    fn request_auth_envelope_rejects_tamper_replay_key_and_time_failures() {
+        let provider = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "never-expose-hsm-diagnostic",
+        ));
+        let authenticator = OpaqueAuthenticator::try_new(
+            TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
+            provider.public_key(),
+            30,
+            5,
+            provider,
+            "IPFS authenticator",
+        )
+        .expect("bind request-auth verifier");
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let tampered = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=other&recursive=true",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let now = current_unix_timestamp_seconds();
+        let envelope = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x11; 32],
+        );
+        authenticator
+            .validate_envelope(&request, &envelope)
+            .expect("accept first exact envelope");
+        let replay = authenticator
+            .validate_envelope(&request, &envelope)
+            .expect_err("reject exact nonce replay");
+        assert!(replay.to_string().contains("replay"));
+        let tamper = authenticator
+            .validate_envelope(&tampered, &envelope)
+            .expect_err("reject URL/request-digest tamper");
+        assert!(tamper.to_string().contains("does not match"));
+
+        let wrong_key = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x12; 32],
+        );
+        assert!(
+            authenticator
+                .validate_envelope(&request, &wrong_key)
+                .expect_err("reject wrong public key")
+                .to_string()
+                .contains("does not match")
+        );
+
+        let invalid_signature = GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+            &request,
+            now,
+            now + 15,
+            [0x13; 32],
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            [0x55; 64],
+        )
+        .expect("structurally non-zero envelope");
+        assert!(
+            authenticator
+                .validate_envelope(&request, &invalid_signature)
+                .expect_err("reject invalid signature")
+                .to_string()
+                .contains("signature")
+        );
+
+        for (issued_at, expires_at, nonce, label) in [
+            (now - 20, now - 1, [0x21; 32], "stale"),
+            (now + 6, now + 16, [0x22; 32], "future"),
+            (now, now + 31, [0x23; 32], "overlong"),
+        ] {
+            let envelope = signed_test_request_auth_envelope(
+                TEST_IPFS_AUTH_HANDLE,
+                &request,
+                issued_at,
+                expires_at,
+                nonce,
+            );
+            let error = authenticator
+                .validate_envelope(&request, &envelope)
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(label)
+                    || error.to_string().contains("future")
+                    || error.to_string().contains("overlong"),
+                "{label} envelope returned unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn inbound_request_auth_accepts_canonical_ipfs_and_head_operations() {
+        let now = 1_700_000_000;
+        let ipfs_policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid IPFS receiver policy");
+        let head_policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_HEAD_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid signed-head receiver policy");
+        let cases = vec![
+            (
+                GovernanceDagAuthenticationScope::Ipfs,
+                "GET",
+                "https://example.invalid/api/v0/cat?arg=cid",
+                vec![("accept-encoding", b"identity".as_slice())],
+                b"".as_slice(),
+                TEST_IPFS_AUTH_HANDLE,
+                [0x31; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/api/v0/add?pin=false",
+                vec![
+                    (
+                        "content-type",
+                        b"multipart/form-data;boundary=gdag".as_slice(),
+                    ),
+                    ("accept-encoding", b"identity".as_slice()),
+                ],
+                b"canonical-block".as_slice(),
+                TEST_IPFS_AUTH_HANDLE,
+                [0x32; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::SignedHead,
+                "GET",
+                "https://example.invalid/governance/head",
+                vec![
+                    ("if-none-match", b"\"v7\"".as_slice()),
+                    ("accept-encoding", b"identity".as_slice()),
+                ],
+                b"".as_slice(),
+                TEST_HEAD_AUTH_HANDLE,
+                [0x33; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head",
+                vec![
+                    ("if-match", b"\"v7\"".as_slice()),
+                    ("content-type", b"application/vnd.iroha.norito".as_slice()),
+                    ("accept-encoding", b"identity".as_slice()),
+                ],
+                b"canonical-head".as_slice(),
+                TEST_HEAD_AUTH_HANDLE,
+                [0x34; 32],
+            ),
+        ];
+        let backend_calls = AtomicU64::new(0);
+        let mut ipfs_replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let mut head_replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        for (scope, method, url, headers, body, handle, nonce) in cases {
+            let request = GovernanceDagCanonicalRequestV1::try_from_http_parts(
+                scope,
+                method,
+                url,
+                headers,
+                body,
+                1024 * 1024,
+            )
+            .expect("canonical inbound request");
+            let envelope =
+                signed_test_request_auth_envelope(handle, &request, now, now + 15, nonce);
+            let mut headers = request_auth_header_fields(&envelope);
+            headers.push((
+                "content-length".to_owned(),
+                body.len().to_string().into_bytes(),
+            ));
+            headers.push(("cache-control".to_owned(), b"no-store".to_vec()));
+            headers.push(("x-request-id".to_owned(), b"public-request-id".to_vec()));
+            let (policy, replay_cache) = match scope {
+                GovernanceDagAuthenticationScope::Ipfs => (&ipfs_policy, &mut ipfs_replay_cache),
+                GovernanceDagAuthenticationScope::SignedHead => {
+                    (&head_policy, &mut head_replay_cache)
+                }
+            };
+            verify_request_before_test_backend(
+                &request,
+                &headers,
+                body,
+                scope,
+                policy,
+                now,
+                replay_cache,
+                &backend_calls,
+            )
+            .expect("verified request reaches the test backend");
+        }
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 4);
+    }
+
+    #[test]
+    fn inbound_request_auth_header_mapping_is_an_exact_hard_cut() {
+        let now = 1_700_000_000;
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let envelope = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0xab; 32],
+        );
+        let canonical = request_auth_header_fields(&envelope);
+        let parsed = parse_governance_dag_request_authentication_headers_v1(
+            canonical
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_slice()))
+                .chain(std::iter::once(("accept-encoding", b"identity".as_slice()))),
+        )
+        .expect("ignore ordinary headers and parse the exact auth header set");
+        assert_eq!(parsed, envelope);
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid IPFS receiver policy");
+        let mut zero_bound_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let zero_bound_error = GovernanceDagHttpRequestReceiverV1::try_new(
+            GovernanceDagAuthenticationScope::Ipfs,
+            0,
+            &policy,
+            &mut zero_bound_cache,
+        )
+        .expect_err("receiver must reject a zero body ceiling");
+        assert_eq!(
+            zero_bound_error,
+            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
+        );
+        let backend_calls = AtomicU64::new(0);
+
+        let mut missing = canonical.clone();
+        missing.remove(0);
+        let cases = [
+            (
+                missing,
+                GovernanceDagRequestAuthenticationErrorV1::MissingHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push(canonical[0].clone());
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::DuplicateHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push(("x-sorafs-governance-auth-key".to_owned(), vec![b'a'; 64]));
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::UnknownHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push((
+                        "x-sorafs-governance-auth-extension".to_owned(),
+                        b"1".to_vec(),
+                    ));
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::UnknownHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push(("X-Sorafs-Governance-Auth-Version".to_owned(), b"1".to_vec()));
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader,
+            ),
+        ];
+        for (fields, expected) in cases {
+            let error = verify_request_before_test_backend(
+                &request,
+                &fields,
+                b"",
+                GovernanceDagAuthenticationScope::Ipfs,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("noncanonical header map must stop before backend dispatch");
+            assert_eq!(error, expected);
+        }
+
+        for (index, value) in [
+            (0, b"01".to_vec()),
+            (1, b"IPFS".to_vec()),
+            (2, b"01".to_vec()),
+            (4, "AA".repeat(32).into_bytes()),
+            (5, b"00".to_vec()),
+        ] {
+            let mut fields = canonical.clone();
+            fields[index].1 = value;
+            let error = verify_request_before_test_backend(
+                &request,
+                &fields,
+                b"",
+                GovernanceDagAuthenticationScope::Ipfs,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("noncanonical header value must stop before backend dispatch");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader
+            );
+        }
+        assert_eq!(
+            backend_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "no header-mapping failure may reach the backend"
+        );
+    }
+
+    #[test]
+    fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
+        let now = 1_700_000_000;
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head?revision=7",
+            &[
+                ("accept-encoding", "identity"),
+                ("content-type", "application/vnd.iroha.norito"),
+                ("if-match", "\"v7\""),
+            ],
+            b"head-v7",
+        );
+        let envelope = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x61; 32],
+        );
+        let headers = request_auth_header_fields(&envelope);
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_HEAD_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid signed-head receiver policy");
+        let tampered = [
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "POST",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=8",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v6\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"HEAD-v7",
+            ),
+            GovernanceDagCanonicalRequestV1::try_new(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                request.selected_headers().to_vec(),
+                request.body_length().saturating_add(1),
+                request.body_blake3(),
+                1024 * 1024,
+            )
+            .expect("canonical body-length tamper descriptor"),
+        ];
+        let backend_calls = AtomicU64::new(0);
+        for (index, tampered_request) in tampered.iter().enumerate() {
+            let body = if index == 5 {
+                b"HEAD-v7".as_slice()
+            } else {
+                b"head-v7".as_slice()
+            };
+            let error = verify_request_before_test_backend(
+                tampered_request,
+                &headers,
+                body,
+                GovernanceDagAuthenticationScope::SignedHead,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("tampered request must stop before backend dispatch");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::RequestMismatch
+            );
+        }
+        let error = verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"head-v7",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("wrong receiver scope must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::RequestMismatch
+        );
+        let wrong_key_policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("alternate valid receiver key");
+        let error = verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"head-v7",
+            GovernanceDagAuthenticationScope::SignedHead,
+            &wrong_key_policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("wrong pinned key must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::RequestMismatch
+        );
+        assert_eq!(
+            backend_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "no binding failure may reach the backend"
+        );
+    }
+
+    #[test]
+    fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
+        let now = 1_700_000_000;
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "GET",
+            "https://example.invalid/api/v0/cat?arg=cid",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid IPFS receiver policy");
+        let backend_calls = AtomicU64::new(0);
+        for (issued_at, expires_at, nonce) in [
+            (now - 20, now - 1, [0x71; 32]),
+            (now + 6, now + 16, [0x72; 32]),
+            (now, now + 31, [0x73; 32]),
+        ] {
+            let envelope = signed_test_request_auth_envelope(
+                TEST_IPFS_AUTH_HANDLE,
+                &request,
+                issued_at,
+                expires_at,
+                nonce,
+            );
+            let error = verify_request_before_test_backend(
+                &request,
+                &request_auth_header_fields(&envelope),
+                b"",
+                GovernanceDagAuthenticationScope::Ipfs,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("invalid timing must stop before backend dispatch");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::InvalidTiming
+            );
+        }
+
+        let valid = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x74; 32],
+        );
+        let mut zero_nonce_headers = request_auth_header_fields(&valid);
+        zero_nonce_headers[4].1 = "00".repeat(32).into_bytes();
+        let error = verify_request_before_test_backend(
+            &request,
+            &zero_nonce_headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("zero nonce must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::MalformedEnvelope
+        );
+
+        let mut bad_signature_headers = request_auth_header_fields(&valid);
+        let mut invalid_signature = valid.signature();
+        invalid_signature[32..].fill(0);
+        bad_signature_headers[7].1 = hex::encode(invalid_signature).into_bytes();
+        let error = verify_request_before_test_backend(
+            &request,
+            &bad_signature_headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("invalid signature must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::SignatureVerification
+        );
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 0);
+
+        let headers = request_auth_header_fields(&valid);
+        let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect("first nonce use reaches backend");
+        let error = verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect_err("replayed nonce must stop before backend dispatch");
+        assert_eq!(error, GovernanceDagRequestAuthenticationErrorV1::Replay);
+        assert_eq!(
+            backend_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "replay rejection must not invoke the backend again"
+        );
+
+        let second = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x75; 32],
+        );
+        let mut bounded_cache =
+            GovernanceDagRequestAuthenticationReplayCacheV1::try_with_capacity(1)
+                .expect("one-entry replay cache");
+        let capacity_backend_calls = AtomicU64::new(0);
+        verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut bounded_cache,
+            &capacity_backend_calls,
+        )
+        .expect("first live nonce fits bounded cache");
+        let error = verify_request_before_test_backend(
+            &request,
+            &request_auth_header_fields(&second),
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut bounded_cache,
+            &capacity_backend_calls,
+        )
+        .expect_err("full live replay cache must fail closed");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::ReplayCacheFull
+        );
+        assert_eq!(capacity_backend_calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn inbound_receiver_rejects_framing_before_replay_consumption_or_dispatch() {
+        let now = 1_700_000_000;
+        let body = b"canonical-head";
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            &[
+                ("accept-encoding", "identity"),
+                ("content-type", "application/vnd.iroha.norito"),
+                ("if-match", "\"v7\""),
+            ],
+            body,
+        );
+        let envelope = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x76; 32],
+        );
+        let mut ambiguous_headers = request_auth_header_fields(&envelope);
+        ambiguous_headers.push(("transfer-encoding".to_owned(), b"chunked".to_vec()));
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_HEAD_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid signed-head receiver policy");
+        let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let backend_calls = AtomicU64::new(0);
+        let error = verify_request_before_test_backend(
+            &request,
+            &ambiguous_headers,
+            body,
+            GovernanceDagAuthenticationScope::SignedHead,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect_err("ambiguous framing must stop before verification and dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::InvalidFraming
+        );
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 0);
+
+        verify_request_before_test_backend(
+            &request,
+            &request_auth_header_fields(&envelope),
+            body,
+            GovernanceDagAuthenticationScope::SignedHead,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect("same nonce remains usable after pre-verification framing rejection");
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn canonical_request_hard_cut_rejects_credentials_aliases_and_bounds() {
+        assert!(
+            GovernanceDagCanonicalRequestHeaderV1::try_new(
+                "authorization",
+                "Bearer must-not-escape"
+            )
+            .is_err()
+        );
+        assert!(
+            GovernanceDagCanonicalRequestHeaderV1::try_new("cookie", "session=secret").is_err()
+        );
+        assert!(GovernanceDagCanonicalRequestHeaderV1::try_new("content-type", " value").is_err());
+        let duplicate = vec![
+            GovernanceDagCanonicalRequestHeaderV1::try_new("accept-encoding", "identity")
+                .expect("first header"),
+            GovernanceDagCanonicalRequestHeaderV1::try_new("accept-encoding", "identity")
+                .expect("duplicate header"),
+        ];
+        assert!(
+            GovernanceDagCanonicalRequestV1::try_new(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/api/v0/cat?arg=cid",
+                duplicate,
+                0,
+                blake3_array(b""),
+                1024,
+            )
+            .is_err()
+        );
+        assert!(
+            GovernanceDagCanonicalRequestV1::try_new(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "GET",
+                "https://example.invalid/",
+                Vec::new(),
+                0,
+                [0x55; 32],
+                1024,
+            )
+            .is_err()
+        );
+        assert!(
+            GovernanceDagCanonicalRequestV1::try_new(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "PATCH",
+                "https://example.invalid/",
+                Vec::new(),
+                0,
+                blake3_array(b""),
+                1024,
+            )
+            .is_err()
+        );
+        assert!(
+            GovernanceDagCanonicalRequestV1::try_new(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/",
+                Vec::new(),
+                1025,
+                blake3_array(&[0; 1025]),
+                1024,
+            )
+            .is_err()
+        );
+        for noncanonical_url in [
+            "/api/v0/cat?arg=cid",
+            "https://user@example.invalid/api/v0/cat?arg=cid",
+            "https://example.invalid/api/v0/cat?z=1&a=2",
+            "https://example.invalid/api/v0/cat?arg=%2f",
+            "https://example.invalid/api/%41",
+            "https://example.invalid/api/v0/cat?arg=cid#fragment",
+        ] {
+            assert!(
+                GovernanceDagCanonicalRequestV1::try_new(
+                    GovernanceDagAuthenticationScope::Ipfs,
+                    "GET",
+                    noncanonical_url,
+                    Vec::new(),
+                    0,
+                    blake3_array(b""),
+                    1024,
+                )
+                .is_err(),
+                "{noncanonical_url} must fail the canonical URL hard cut"
+            );
+        }
+        assert!(
+            GovernanceDagRequestAuthenticationEnvelopeV1::try_new(
+                &canonical_test_request(
+                    GovernanceDagAuthenticationScope::Ipfs,
+                    "GET",
+                    "https://example.invalid/",
+                    &[],
+                    b"",
+                ),
+                0,
+                1,
+                [0; 32],
+                [0; 32],
+                [0; 64],
+            )
+            .is_err()
+        );
+
+        let client = Client::builder().no_proxy().build().expect("test client");
+        let credential_request = client
+            .get("https://example.invalid/")
+            .header(header::AUTHORIZATION, "Bearer must-not-escape")
+            .build()
+            .expect("build credential-bearing request");
+        assert!(
+            canonical_outbound_request_descriptor(
+                &credential_request,
+                GovernanceDagAuthenticationScope::Ipfs,
+                1024,
+            )
+            .is_err()
+        );
+        let unsorted_query = client
+            .get("https://example.invalid/?z=1&a=2")
+            .build()
+            .expect("build noncanonical query request");
+        assert!(
+            canonical_outbound_request_descriptor(
+                &unsorted_query,
+                GovernanceDagAuthenticationScope::Ipfs,
+                1024,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn outbound_descriptor_binds_only_selected_public_headers() {
+        let body = b"canonical-body";
+        let baseline_headers = [
+            ("accept-encoding", b"identity".as_slice()),
+            ("content-type", b"application/vnd.iroha.norito".as_slice()),
+        ];
+        let baseline = canonicalize_governance_dag_outbound_http_request_v1(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            baseline_headers,
+            body,
+            1024,
+        )
+        .expect("canonical baseline descriptor");
+        let with_ordinary_headers = [
+            ("accept-encoding", b"identity".as_slice()),
+            ("content-type", b"application/vnd.iroha.norito".as_slice()),
+            ("content-length", b"14".as_slice()),
+            ("cache-control", b"no-cache".as_slice()),
+            ("x-request-id", b"request-7".as_slice()),
+        ];
+        let with_ordinary = canonicalize_governance_dag_outbound_http_request_v1(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            with_ordinary_headers,
+            body,
+            1024,
+        )
+        .expect("ordinary public headers are safely excluded");
+        assert_eq!(with_ordinary, baseline);
+
+        let changed_selected = canonicalize_governance_dag_outbound_http_request_v1(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            [
+                ("accept-encoding", b"gzip".as_slice()),
+                ("content-type", b"application/vnd.iroha.norito".as_slice()),
+                ("content-length", b"14".as_slice()),
+                ("cache-control", b"no-cache".as_slice()),
+                ("x-request-id", b"request-7".as_slice()),
+            ],
+            body,
+            1024,
+        )
+        .expect("alternate selected public header remains canonical");
+        assert_ne!(
+            changed_selected.request_digest(),
+            baseline.request_digest(),
+            "a selected public header must change the signed request digest"
+        );
+    }
+
+    #[test]
+    fn outbound_descriptor_rejects_credentials_auth_prefixes_and_ambiguous_framing() {
+        for forbidden_name in [
+            "authorization",
+            "Proxy-Authorization",
+            "cookie",
+            "x-api-key",
+            "x-auth-token",
+            "x-sorafs-governance-auth-version",
+            "X-Sorafs-Governance-Auth-Extension",
+        ] {
+            let error = canonicalize_governance_dag_outbound_http_request_v1(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "GET",
+                "https://example.invalid/api/v0/cat?arg=cid",
+                [(forbidden_name, b"must-not-pass".as_slice())],
+                b"",
+                1024,
+            )
+            .expect_err("credential and authentication-prefix headers must fail closed");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::ForbiddenHeader,
+                "unexpected rejection for {forbidden_name}"
+            );
+        }
+
+        let framing_cases = [
+            vec![("content-length", b"13".as_slice())],
+            vec![("content-length", b"014".as_slice())],
+            vec![
+                ("content-length", b"14".as_slice()),
+                ("content-length", b"14".as_slice()),
+            ],
+            vec![("content-length", b"14, 14".as_slice())],
+            vec![("Content-Length", b"14".as_slice())],
+            vec![("transfer-encoding", b"chunked".as_slice())],
+            vec![("Transfer-Encoding", b"identity".as_slice())],
+        ];
+        for headers in framing_cases {
+            let error = canonicalize_governance_dag_outbound_http_request_v1(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head",
+                headers,
+                b"canonical-body",
+                1024,
+            )
+            .expect_err("ambiguous HTTP framing must fail closed");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::InvalidFraming
+            );
+        }
+    }
+
+    #[test]
+    fn public_auth_headers_preserve_final_body_and_conditional_headers() {
+        let client = Client::builder().no_proxy().build().expect("test client");
+        let mut request = client
+            .put("https://example.invalid/governance/head")
+            .header(header::ACCEPT_ENCODING, "identity")
+            .header(header::CONTENT_TYPE, "application/vnd.iroha.norito")
+            .header(header::IF_MATCH, "\"v7\"")
+            .body(b"canonical-head".to_vec())
+            .build()
+            .expect("build final signed-head PUT");
+        let descriptor = canonical_outbound_request_descriptor(
+            &request,
+            GovernanceDagAuthenticationScope::SignedHead,
+            1024,
+        )
+        .expect("canonical final signed-head descriptor");
+        let now = current_unix_timestamp_seconds();
+        let envelope = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &descriptor,
+            now,
+            now + 15,
+            [0x44; 32],
+        );
+        attach_request_authentication_headers(&mut request, &envelope)
+            .expect("attach fixed public authentication headers");
+        assert_eq!(
+            request
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .expect("byte body"),
+            b"canonical-head"
+        );
+        assert_eq!(
+            request.headers().get(header::IF_MATCH),
+            Some(&HeaderValue::from_static("\"v7\""))
+        );
+        assert!(request.headers().get(header::AUTHORIZATION).is_none());
+        assert!(request.headers().get(header::COOKIE).is_none());
+        for name in GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1 {
+            assert!(
+                request.headers().contains_key(name),
+                "missing fixed public request-auth header {name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticated_execute_discards_response_after_qualification_drift() {
+        let provider = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "in-flight-secret-token",
+        ));
+        let authenticator = OpaqueAuthenticator::try_new(
+            TEST_IPFS_AUTH_HANDLE,
+            TEST_AUTH_QUALIFICATION,
+            provider.public_key(),
+            30,
+            5,
+            provider.clone(),
+            "IPFS authenticator",
+        )
+        .expect("bind stable runtime authenticator");
+        let router = Router::new()
+            .route("/drift", get(mock_authenticator_drift))
+            .with_state(provider);
+        let (endpoint, task) = spawn_router_with_authenticator(
+            router,
+            "/drift",
+            GovernanceDagAuthenticationScope::Ipfs,
+            authenticator,
+        )
+        .await;
+        let request = endpoint
+            .request(Method::GET, endpoint.url.clone())
+            .expect("construct drift request");
+        let error = endpoint
+            .execute(request, "drift request failed")
+            .await
+            .expect_err("post-execute policy drift must discard the response");
+        assert!(error.to_string().contains("policy changed"));
+        assert!(!error.to_string().contains("in-flight-secret-token"));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn runtime_registry_injection_reaches_startup_with_exact_bindings() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        let registry = Arc::new(TestRuntimeProviderRegistry::returning(
+            test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        ));
+        let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+            registry.clone();
+        let providers = resolve_runtime_registry_providers(&view, Some(runtime_registry))
+            .expect("registry resolves the configured providers");
+        let _service = Service::from_view(view, providers)
+            .await
+            .expect("registry providers reach qualified service startup");
+
+        let observed = registry
+            .observed_bindings
+            .lock()
+            .expect("lock observed registry bindings")
+            .clone()
+            .expect("registry was called");
+        assert_eq!(observed.ipfs_authenticator_handle(), TEST_IPFS_AUTH_HANDLE);
+        assert_eq!(
+            observed.ipfs_authenticator_qualification(),
+            TEST_AUTH_QUALIFICATION
+        );
+        assert_eq!(
+            observed.head_authenticator_handle(),
+            Some(TEST_HEAD_AUTH_HANDLE)
+        );
+        assert_eq!(
+            observed.head_authenticator_qualification(),
+            Some(TEST_AUTH_QUALIFICATION)
+        );
+        assert_eq!(
+            observed.checkpoint_store_handle(),
+            TEST_CHECKPOINT_STORE_HANDLE
+        );
+        assert_eq!(
+            observed.checkpoint_store_qualification(),
+            TEST_STORE_QUALIFICATION
+        );
+        assert!(state_dir.exists());
+    }
+
+    #[test]
+    fn embedding_launcher_preflight_qualifies_adapters_without_opening_state() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        validate_governance_dag_service_runtime_providers(
+            &view,
+            &test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        )
+        .expect("qualify the exact deployment adapter set");
+        assert!(
+            !state_dir.exists(),
+            "provider-only launcher preflight must not open mutable state"
+        );
+
+        let error = validate_governance_dag_service_runtime_providers(
+            &view,
+            &GovernanceDagServiceRuntimeProviders::default(),
+        )
+        .expect_err("missing providers must fail launcher preflight");
+        assert!(error.to_string().contains("no runtime provider"));
+        assert!(!state_dir.exists());
+
+        let error = validate_governance_dag_service_runtime_providers(
+            &view,
+            &test_runtime_providers(Arc::new(TestSealedStore::new(
+                "kms:governance/checkpoint:test",
+            ))),
+        )
+        .expect_err("test-marked provider must fail launcher preflight");
+        assert!(error.to_string().contains("test-marked"));
+        assert!(!state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn prepare_reconciles_initial_state_without_publication() {
+        let root = secure_temp_dir();
+        let mut view = runtime_boundary_view(root.path());
+        let mut source = signed_source(1, 0x6d, current_unix_timestamp_seconds().saturating_sub(1));
+        materialize_source_snapshot(
+            view.source_dir.as_deref().expect("test source directory"),
+            &mut source,
+        );
+        let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+        view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+        view.service.publisher_public_key_hex = Some(publisher_key_hex);
+        view.service.allow_head_bootstrap = true;
+
+        let (head_endpoint, head_state, task) = spawn_signed_head(SignedHeadInner::default()).await;
+        view.service.signed_head_url = Some(head_endpoint.url.to_string());
+        let checkpoint_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        seed_producer_checkpoint(
+            &checkpoint_provider,
+            view.source_dir.as_deref().expect("test source directory"),
+            &source,
+        );
+
+        let runner = prepare_governance_dag_service_from_view(
+            view.clone(),
+            test_runtime_providers(checkpoint_provider.clone()),
+        )
+        .await
+        .expect("empty authenticated state may prepare for an allowed bootstrap");
+        assert!(runner.service.checkpoint.is_none());
+        assert!(runner.service.intent.is_none());
+        assert_eq!(head_state.0.lock().await.put_count, 0);
+        drop(runner);
+
+        let checkpoint = checkpoint_from_source(&source);
+        save_checkpoint(
+            &test_checkpoint_store(checkpoint_provider.clone()),
+            None,
+            &checkpoint,
+        )
+        .expect("seed authenticated checkpoint");
+        let error = prepare_governance_dag_service_from_view(
+            view,
+            test_runtime_providers(checkpoint_provider),
+        )
+        .await
+        .err()
+        .expect("a missing public head cannot satisfy an existing checkpoint");
+        assert!(error.to_string().contains("public head disappeared"));
+        assert_eq!(
+            head_state.0.lock().await.put_count,
+            0,
+            "prepare must not repair or publish the public head"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn prepare_rejects_source_conflicting_publish_intent_before_publication() {
+        let root = secure_temp_dir();
+        let mut view = runtime_boundary_view(root.path());
+        let now = current_unix_timestamp_seconds().saturating_sub(1);
+        let mut source = signed_source(1, 0x6e, now);
+        materialize_source_snapshot(
+            view.source_dir.as_deref().expect("test source directory"),
+            &mut source,
+        );
+        let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+        view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+        view.service.publisher_public_key_hex = Some(publisher_key_hex);
+        view.service.allow_head_bootstrap = true;
+
+        let (head_endpoint, head_state, task) = spawn_signed_head(SignedHeadInner::default()).await;
+        view.service.signed_head_url = Some(head_endpoint.url.to_string());
+        let checkpoint_provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        seed_producer_checkpoint(
+            &checkpoint_provider,
+            view.source_dir.as_deref().expect("test source directory"),
+            &source,
+        );
+        let conflicting_source = signed_source(1, 0x6f, now);
+        save_publish_intent(
+            &test_checkpoint_store(checkpoint_provider.clone()),
+            None,
+            &intent_from_source(&conflicting_source),
+        )
+        .expect("seed independently valid but source-conflicting intent");
+
+        let error = prepare_governance_dag_service_from_view(
+            view,
+            test_runtime_providers(checkpoint_provider),
+        )
+        .await
+        .err()
+        .expect("prepare must reconcile the durable intent against the source");
+        assert!(
+            error.to_string().contains("source forked")
+                || error.to_string().contains("incompatible with the source")
+        );
+        assert_eq!(head_state.0.lock().await.put_count, 0);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn sealed_producer_intent_blocks_all_publication_io_before_checkpoint_commit() {
+        let root = secure_temp_dir();
+        let mut view = runtime_boundary_view(root.path());
+        let now = current_unix_timestamp_seconds().saturating_sub(2);
+        let previous_source = signed_source(1, 0x70, now);
+        let mut visible_uncommitted_source = signed_source(2, 0x70, now);
+        let source_dir = view.source_dir.as_deref().expect("test source directory");
+        materialize_source_snapshot(source_dir, &mut visible_uncommitted_source);
+        let publisher_key_hex =
+            hex::encode(&visible_uncommitted_source.head.head_signature.public_key);
+        view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+        view.service.publisher_public_key_hex = Some(publisher_key_hex);
+
+        let request_count = Arc::new(AtomicU64::new(0));
+        let router = Router::new()
+            .fallback(any(count_unexpected_publication_io))
+            .with_state(request_count.clone());
+        let (endpoint, task) = spawn_router(router, "/").await;
+        view.service.ipfs_api_url = Some(endpoint.url.to_string());
+        view.service.signed_head_url = Some(endpoint.url.to_string());
+
+        let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        let producer_checkpoint = seed_producer_checkpoint(&provider, source_dir, &previous_source);
+        let intent = GovernanceDagSealedStateRecord::new(
+            GovernanceDagSealedStateSlot::ProducerPublishIntent,
+            producer_checkpoint.generation.saturating_add(1),
+            vec![0xA5],
+        );
+        provider
+            .compare_and_swap(
+                GovernanceDagSealedStateSlot::ProducerPublishIntent,
+                None,
+                intent,
+            )
+            .expect("pause producer after sealing its intent");
+
+        let mut service = Service::from_view(view, test_runtime_providers(provider))
+            .await
+            .expect("construct service without performing public I/O");
+        let error = service
+            .reconcile_once()
+            .await
+            .expect_err("uncommitted producer transaction must block reconciliation");
+        assert!(error.to_string().contains("active sealed publish intent"));
+        assert_eq!(
+            request_count.load(AtomicOrdering::SeqCst),
+            0,
+            "service must perform no Kubo or public-head I/O before producer checkpoint commit"
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn substituted_producer_binding_fails_before_all_publication_io() {
+        let request_count = Arc::new(AtomicU64::new(0));
+        let router = Router::new()
+            .fallback(any(count_unexpected_publication_io))
+            .with_state(request_count.clone());
+        let (endpoint, task) = spawn_router(router, "/").await;
+
+        for substitution in ["handle", "revision", "policy", "peer", "key"] {
+            let root = secure_temp_dir();
+            let mut view = runtime_boundary_view(root.path());
+            let mut source =
+                signed_source(1, 0x78, current_unix_timestamp_seconds().saturating_sub(1));
+            let source_dir = view.source_dir.as_deref().expect("test source directory");
+            materialize_source_snapshot(source_dir, &mut source);
+            let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+            view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+            view.service.publisher_public_key_hex = Some(publisher_key_hex);
+            view.service.ipfs_api_url = Some(endpoint.url.to_string());
+            view.service.signed_head_url = Some(endpoint.url.to_string());
+
+            let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+            let mut checkpoint = producer_checkpoint_from_source(source_dir, &source);
+            match substitution {
+                "handle" => {
+                    checkpoint.signer_handle = "hsm:governance/source-signer:alternate".to_owned();
+                }
+                "revision" => checkpoint.signer_revision = 2,
+                "policy" => checkpoint.signer_policy_digest = [0x84; 32],
+                "peer" => checkpoint.publisher_peer_id = b"12D3KooWGovernanceAlternate".to_vec(),
+                "key" => checkpoint.publisher_public_key = [0x55; 32],
+                _ => unreachable!("enumerated producer substitution"),
+            }
+            let record = GovernanceDagSealedStateRecord::new(
+                GovernanceDagSealedStateSlot::ProducerCheckpoint,
+                checkpoint.block_count.saturating_add(1),
+                norito::to_bytes(&checkpoint).expect("encode substituted producer checkpoint"),
+            );
+            provider
+                .compare_and_swap(
+                    GovernanceDagSealedStateSlot::ProducerCheckpoint,
+                    None,
+                    record,
+                )
+                .expect("seed substituted producer checkpoint");
+
+            let mut service = Service::from_view(view, test_runtime_providers(provider))
+                .await
+                .expect("construct service without performing public I/O");
+            let error = service
+                .reconcile_once()
+                .await
+                .expect_err("producer binding substitution must fail closed");
+            assert!(
+                error.to_string().contains("identity or generation"),
+                "unexpected {substitution} substitution error: {error}"
+            );
+            assert_eq!(
+                request_count.load(AtomicOrdering::SeqCst),
+                0,
+                "{substitution} substitution reached Kubo or public-head I/O"
+            );
+        }
+        task.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replaced_source_or_state_root_fails_before_all_publication_io() {
+        let request_count = Arc::new(AtomicU64::new(0));
+        let router = Router::new()
+            .fallback(any(count_unexpected_publication_io))
+            .with_state(request_count.clone());
+        let (endpoint, task) = spawn_router(router, "/").await;
+
+        for replaced_role in ["source", "state"] {
+            let root = secure_temp_dir();
+            let mut view = runtime_boundary_view(root.path());
+            let mut source =
+                signed_source(1, 0x79, current_unix_timestamp_seconds().saturating_sub(1));
+            let source_dir = view
+                .source_dir
+                .clone()
+                .expect("test source directory is configured");
+            let state_dir = view
+                .service
+                .state_dir
+                .clone()
+                .expect("test state directory is configured");
+            materialize_source_snapshot(&source_dir, &mut source);
+            let publisher_key_hex = hex::encode(&source.head.head_signature.public_key);
+            view.producer_publisher_public_key_hex = Some(publisher_key_hex.clone());
+            view.service.publisher_public_key_hex = Some(publisher_key_hex);
+            view.service.ipfs_api_url = Some(endpoint.url.to_string());
+            view.service.signed_head_url = Some(endpoint.url.to_string());
+
+            let provider = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+            seed_producer_checkpoint(&provider, &source_dir, &source);
+            let mut service = Service::from_view(view, test_runtime_providers(provider))
+                .await
+                .expect("construct service with pinned source and state roots");
+            let replaced = if replaced_role == "source" {
+                source_dir
+            } else {
+                state_dir
+            };
+            let detached = root.path().join(format!("{replaced_role}.detached"));
+            fs::rename(&replaced, &detached).expect("detach pinned service root");
+            fs::create_dir(&replaced).expect("create replacement service root");
+            fs::set_permissions(&replaced, fs::Permissions::from_mode(0o700))
+                .expect("secure replacement service root");
+            let marker = replaced.join("must-remain");
+            fs::write(&marker, replaced_role.as_bytes()).expect("seed replacement marker");
+
+            let error = service
+                .reconcile_once()
+                .await
+                .expect_err("root replacement must fail before publication I/O");
+            assert!(
+                error.to_string().contains("root identity changed")
+                    || error.to_string().contains("changed identity")
+                    || error.to_string().contains("changed"),
+                "unexpected {replaced_role} replacement error: {error}"
+            );
+            assert_eq!(
+                fs::read(&marker).expect("replacement marker remains"),
+                replaced_role.as_bytes()
+            );
+            assert_eq!(
+                request_count.load(AtomicOrdering::SeqCst),
+                0,
+                "{replaced_role} replacement reached Kubo or public-head I/O"
+            );
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn service_rejects_configured_provider_qualification_substitution_before_state_access() {
+        let root = secure_temp_dir();
+        let mut view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        view.service.ipfs_authenticator_policy_digest = Some([0x99; 32]);
+
+        let error = Service::from_view(
+            view,
+            test_runtime_providers(Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE))),
+        )
+        .await
+        .err()
+        .expect("substituted configured provider qualification must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("qualification does not match configuration")
+        );
+        assert!(
+            !state_dir.exists(),
+            "qualification substitution must fail before mutable state is opened"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_registry_failures_precede_service_state() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+
+        let missing = resolve_runtime_registry_providers(&view, None)
+            .expect_err("missing registry must fail closed");
+        assert!(matches!(
+            missing,
+            GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry
+        ));
+        assert!(!state_dir.exists());
+
+        let stale_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+            Arc::new(TestRuntimeProviderRegistry::failing(
+                GovernanceDagServiceRuntimeProviderRegistryErrorV1::StaleOrRevoked,
+            ));
+        let stale = resolve_runtime_registry_providers(&view, Some(stale_registry))
+            .expect_err("stale registry must fail closed");
+        assert!(matches!(
+            stale,
+            GovernanceDagServiceLauncherError::RuntimeProviderRegistry(
+                GovernanceDagServiceRuntimeProviderRegistryErrorV1::StaleOrRevoked
+            )
+        ));
+        assert!(!state_dir.exists());
+
+        let default_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> = Arc::new(
+            TestRuntimeProviderRegistry::returning(GovernanceDagServiceRuntimeProviders::default()),
+        );
+        let providers = resolve_runtime_registry_providers(&view, Some(default_registry))
+            .expect("registry may return an incomplete set for service qualification to reject");
+        let error = Service::from_view(view.clone(), providers)
+            .await
+            .err()
+            .expect("empty provider set must fail startup");
+        assert!(error.to_string().contains("no runtime provider"));
+        assert!(!state_dir.exists());
+
+        for provider_handle in [
+            "kms:governance/checkpoint:other",
+            "kms:governance/checkpoint:test",
+        ] {
+            let registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+                Arc::new(TestRuntimeProviderRegistry::returning(
+                    test_runtime_providers(Arc::new(TestSealedStore::new(provider_handle))),
+                ));
+            let providers = resolve_runtime_registry_providers(&view, Some(registry))
+                .expect("registry returns provider for startup qualification");
+            let error = Service::from_view(view.clone(), providers)
+                .await
+                .err()
+                .expect("substituted or test provider must fail startup");
+            if provider_handle.ends_with(":test") {
+                assert!(error.to_string().contains("test-marked"));
+            } else {
+                assert!(error.to_string().contains("does not match"));
+            }
+            assert!(!state_dir.exists());
+        }
+    }
+
     #[tokio::test]
     async fn service_fails_closed_when_runtime_providers_are_missing_or_mismatched() {
         let root = secure_temp_dir();
         let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
 
         let error = Service::from_view(
             view.clone(),
@@ -6119,6 +10431,10 @@ enabled = false
         .err()
         .expect("missing sealed store must fail");
         assert!(error.to_string().contains("no runtime provider"));
+        assert!(
+            !state_dir.exists(),
+            "missing provider must fail before mutable state is opened"
+        );
 
         let mismatched_store = Arc::new(TestSealedStore::new("kms:governance/checkpoint:other"));
         let error = Service::from_view(
@@ -6132,6 +10448,10 @@ enabled = false
         .err()
         .expect("mismatched sealed store handle must fail");
         assert!(error.to_string().contains("does not match"));
+        assert!(
+            !state_dir.exists(),
+            "substituted provider must fail before mutable state is opened"
+        );
 
         let checkpoint_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
         let error = Service::from_view(
@@ -6161,6 +10481,120 @@ enabled = false
         .err()
         .expect("missing signed-head authenticator must fail");
         assert!(error.to_string().contains("signed-head authentication"));
+        assert!(!state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn service_rejects_stale_providers_before_state_access() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        let stale_store = Arc::new(TestSealedStore::new(TEST_CHECKPOINT_STORE_HANDLE));
+        stale_store
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = Service::from_view(view.clone(), test_runtime_providers(stale_store))
+            .await
+            .err()
+            .expect("stale sealed store must fail startup");
+        let rendered = error.to_string();
+        assert!(rendered.contains("stale"));
+        assert!(!rendered.contains("must-never-escape"));
+        assert!(
+            !state_dir.exists(),
+            "stale provider must fail before mutable state is opened"
+        );
+
+        let stale_ipfs = Arc::new(TestAuthenticator::new(
+            TEST_IPFS_AUTH_HANDLE,
+            "test-only-ipfs",
+        ));
+        stale_ipfs
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = Service::from_view(
+            view.clone(),
+            GovernanceDagServiceRuntimeProviders {
+                checkpoint_store: Some(Arc::new(TestSealedStore::new(
+                    TEST_CHECKPOINT_STORE_HANDLE,
+                ))),
+                ipfs_authenticator: Some(stale_ipfs),
+                head_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_HEAD_AUTH_HANDLE,
+                    "test-only-head",
+                ))),
+            },
+        )
+        .await
+        .err()
+        .expect("stale IPFS authenticator must fail startup");
+        assert!(error.to_string().contains("stale"));
+        assert!(!state_dir.exists());
+
+        let stale_head = Arc::new(TestAuthenticator::new(
+            TEST_HEAD_AUTH_HANDLE,
+            "test-only-head",
+        ));
+        stale_head
+            .qualification_refuse
+            .store(true, AtomicOrdering::SeqCst);
+        let error = Service::from_view(
+            view.clone(),
+            GovernanceDagServiceRuntimeProviders {
+                checkpoint_store: Some(Arc::new(TestSealedStore::new(
+                    TEST_CHECKPOINT_STORE_HANDLE,
+                ))),
+                ipfs_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_IPFS_AUTH_HANDLE,
+                    "test-only-ipfs",
+                ))),
+                head_authenticator: Some(stale_head),
+            },
+        )
+        .await
+        .err()
+        .expect("stale signed-head authenticator must fail startup");
+        assert!(error.to_string().contains("stale"));
+        assert!(!state_dir.exists());
+    }
+
+    #[tokio::test]
+    async fn service_rejects_test_marked_provider_before_state_access() {
+        let root = secure_temp_dir();
+        let view = runtime_boundary_view(root.path());
+        let state_dir = view
+            .service
+            .state_dir
+            .clone()
+            .expect("test state directory");
+        let mut test_marked_view = view;
+        test_marked_view.service.checkpoint_store_handle =
+            Some("kms:governance/checkpoint:test".to_owned());
+        let error = Service::from_view(
+            test_marked_view,
+            GovernanceDagServiceRuntimeProviders {
+                checkpoint_store: Some(Arc::new(TestSealedStore::new(
+                    "kms:governance/checkpoint:test",
+                ))),
+                ipfs_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_IPFS_AUTH_HANDLE,
+                    "test-only-ipfs",
+                ))),
+                head_authenticator: Some(Arc::new(TestAuthenticator::new(
+                    TEST_HEAD_AUTH_HANDLE,
+                    "test-only-head",
+                ))),
+            },
+        )
+        .await
+        .err()
+        .expect("test-marked provider handle must fail startup");
+        assert!(error.to_string().contains("test-marked"));
+        assert!(!state_dir.exists());
     }
 
     #[tokio::test]
@@ -6219,10 +10653,11 @@ enabled = false
             )
             .route("/target", get(|| async { "followed" }));
         let (redirect, redirect_task) = spawn_router(redirect_router, "/redirect").await;
-        let response = redirect
+        let request = redirect
             .request(Method::GET, redirect.url.clone())
-            .expect("build redirect request")
-            .send()
+            .expect("build redirect request");
+        let response = redirect
+            .execute(request, "redirect test request failed")
             .await
             .expect("receive redirect response");
         assert!(response.status().is_redirection());
@@ -6233,30 +10668,33 @@ enabled = false
             .route("/body", get(response_body_bomb))
             .route("/gzip", get(response_gzip));
         let (endpoint, task) = spawn_router(router, "/headers").await;
-        let response = endpoint
+        let request = endpoint
             .request(Method::GET, endpoint.url.clone())
-            .expect("build header request")
-            .send()
+            .expect("build header request");
+        let response = endpoint
+            .execute(request, "header-bound test request failed")
             .await
             .expect("receive header response");
         assert!(read_bounded_response(response, 1024).await.is_err());
 
         let mut body_url = endpoint.url.clone();
         body_url.set_path("/body");
-        let response = endpoint
+        let request = endpoint
             .request(Method::GET, body_url)
-            .expect("build body request")
-            .send()
+            .expect("build body request");
+        let response = endpoint
+            .execute(request, "body-bound test request failed")
             .await
             .expect("receive body response");
         assert!(read_bounded_response(response, 16).await.is_err());
 
         let mut gzip_url = endpoint.url.clone();
         gzip_url.set_path("/gzip");
-        let response = endpoint
+        let request = endpoint
             .request(Method::GET, gzip_url)
-            .expect("build gzip request")
-            .send()
+            .expect("build gzip request");
+        let response = endpoint
+            .execute(request, "encoding test request failed")
             .await
             .expect("receive gzip response");
         assert!(read_bounded_response(response, 16).await.is_err());
@@ -6280,6 +10718,11 @@ enabled = false
                 add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_PAYLOAD}"}}"#).into_bytes()),
                 cat_body: Arc::new(b"payload".to_vec()),
                 pin_present: false,
+            },
+            MockIpfsState {
+                add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_BLOCK}"}}"#).into_bytes()),
+                cat_body: Arc::new(b"payload".to_vec()),
+                pin_present: true,
             },
             MockIpfsState {
                 add_body: Arc::new(format!(r#"{{"Hash":"{TEST_CID_PAYLOAD}"}}"#).into_bytes()),
@@ -6307,6 +10750,111 @@ enabled = false
             TEST_CID_PAYLOAD
         );
         task.abort();
+    }
+
+    #[test]
+    fn canonical_ipfs_cid_is_derived_from_exact_payload_bytes() {
+        assert_eq!(canonical_raw_sha256_cid(b"payload"), TEST_CID_PAYLOAD);
+        assert_eq!(
+            validate_ipfs_cid_for_bytes(TEST_CID_PAYLOAD, b"payload")
+                .expect("canonical CID commits to the exact bytes"),
+            TEST_CID_PAYLOAD
+        );
+        assert!(
+            validate_ipfs_cid_for_bytes(TEST_CID_PAYLOAD, b"payload-tampered").is_err(),
+            "a canonical but substituted CID must not authenticate different bytes"
+        );
+    }
+
+    #[test]
+    fn ipfs_multipart_body_is_deterministic_bounded_and_cloneable() {
+        let (boundary, body) =
+            canonical_ipfs_multipart_body("governance-head.to", b"\0payload\r\n")
+                .expect("construct canonical multipart body");
+        let (replayed_boundary, replayed_body) =
+            canonical_ipfs_multipart_body("governance-head.to", b"\0payload\r\n")
+                .expect("replay canonical multipart body");
+        assert_eq!(boundary, replayed_boundary);
+        assert_eq!(body, replayed_body);
+        assert!(boundary.len() <= 70);
+        assert!(body.starts_with(format!("--{boundary}\r\n").as_bytes()));
+        assert!(body.ends_with(format!("\r\n--{boundary}--\r\n").as_bytes()));
+        assert!(
+            body.windows(b"\0payload\r\n".len())
+                .any(|window| window == b"\0payload\r\n")
+        );
+        assert!(canonical_ipfs_multipart_body("../escape", b"payload").is_err());
+
+        let request = Client::new()
+            .post("https://example.invalid/api/v0/add")
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body);
+        assert!(
+            request.try_clone().is_some(),
+            "the final multipart request must remain inspectable by the authenticator"
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_head_authenticator_receives_final_body_and_cas_headers() {
+        let cases = [
+            (
+                SignedHeadInner {
+                    bytes: Some(b"old".to_vec()),
+                    etag: "\"v1\"".to_owned(),
+                    ..SignedHeadInner::default()
+                },
+                PublicHead::Present {
+                    bytes: b"old".to_vec(),
+                    token: "\"v1\"".to_owned(),
+                },
+                header::IF_MATCH,
+                HeaderValue::from_static("\"v1\""),
+                false,
+            ),
+            (
+                SignedHeadInner::default(),
+                PublicHead::Missing,
+                header::IF_NONE_MATCH,
+                HeaderValue::from_static("*"),
+                true,
+            ),
+        ];
+        for (inner, current, condition, condition_value, allow_bootstrap) in cases {
+            let provider = Arc::new(FinalRequestAuthenticator::new(
+                b"new",
+                condition,
+                condition_value,
+            ));
+            let authenticator = OpaqueAuthenticator::try_new(
+                TEST_HEAD_AUTH_HANDLE,
+                TEST_AUTH_QUALIFICATION,
+                provider.public_key(),
+                30,
+                5,
+                provider.clone(),
+                "signed-head authenticator",
+            )
+            .expect("bind final-request authenticator");
+            let (endpoint, _state, task) =
+                spawn_signed_head_with_authenticator(inner, authenticator).await;
+            let installed =
+                put_signed_http_head(&endpoint, b"new", &current, allow_bootstrap, 1024)
+                    .await
+                    .expect("authenticate and install the final conditional request");
+            assert!(matches!(
+                installed,
+                PublicHead::Present { bytes, .. } if bytes == b"new"
+            ));
+            assert!(
+                provider.observed_put.load(AtomicOrdering::SeqCst),
+                "authenticator must observe the body and conditional headers before execution"
+            );
+            task.abort();
+        }
     }
 
     #[tokio::test]
@@ -6413,9 +10961,70 @@ enabled = false
     }
 
     #[test]
+    fn ipns_absence_profile_is_narrow_and_exact() {
+        assert!(is_authenticated_ipns_absence(StatusCode::NOT_FOUND, b"{}"));
+        assert!(is_authenticated_ipns_absence(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            br#"{"Message":"could not resolve name","Code":0,"Type":"error"}"#
+        ));
+        assert!(!is_authenticated_ipns_absence(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            br#"{"Message":"routing unavailable","Code":0,"Type":"error"}"#
+        ));
+        assert!(!is_authenticated_ipns_absence(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            br#"{"Message":"could not resolve name","Code":0,"Type":"error","Retry":true}"#
+        ));
+        assert!(!is_authenticated_ipns_absence(
+            StatusCode::TOO_MANY_REQUESTS,
+            br#"{"Message":"could not resolve name","Code":0,"Type":"error"}"#
+        ));
+    }
+
+    #[tokio::test]
+    async fn ipns_resolution_errors_never_authorize_bootstrap_publication() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let publish_count = Arc::new(AtomicU64::new(0));
+            let state = IpnsResolveFailureState {
+                status,
+                publish_count: publish_count.clone(),
+            };
+            let (endpoint, task) = spawn_router(mock_ipns_resolve_failure_router(state), "/").await;
+            let error = publish_ipns_head(
+                &endpoint,
+                IpnsHeadPublishRequest {
+                    name: "test-name",
+                    key_name: "test-key",
+                    head_cid: TEST_CID_NEW,
+                    bytes: b"new",
+                    initial: &PublicHead::Missing,
+                    allow_bootstrap: true,
+                    max_response_bytes: 1024,
+                },
+            )
+            .await
+            .expect_err("authenticated resolver failure must fail closed");
+            assert!(error.to_string().contains(status.as_str()));
+            assert_eq!(
+                publish_count.load(AtomicOrdering::SeqCst),
+                0,
+                "resolver failure must not be reclassified as authenticated absence"
+            );
+            task.abort();
+        }
+    }
+
+    #[test]
     fn mirror_file_rejects_truncation_metadata_drift_and_recovers_when_missing() {
         let dir = secure_temp_dir();
         let source = signed_source(2, 0x3a, 1_800_000_000);
+        let config = test_runtime_config(&source, dir.path());
         let mut checkpoint = checkpoint_from_source(&source);
         let mirror = mirror_index_value(
             &source,
@@ -6430,17 +11039,22 @@ enabled = false
             .expect("encode test mirror")
             .into_bytes();
         checkpoint.mirror_blake3 = blake3_array(&canonical);
-        let path = dir.path().join(MIRROR_INDEX_FILE);
-        write_atomic_secret(&path, &canonical).expect("write test mirror");
-        verify_mirror_file(dir.path(), &checkpoint).expect("valid mirror accepted");
+        let path = config.state_root_guard.root().join(MIRROR_INDEX_FILE);
+        write_rooted_atomic_secret(
+            &config.state_root_guard,
+            Path::new(MIRROR_INDEX_FILE),
+            &canonical,
+        )
+        .expect("write test mirror");
+        verify_mirror_file(&config, &checkpoint).expect("valid mirror accepted");
 
         fs::remove_file(&path).expect("remove mirror for recovery");
-        verify_or_recover_mirror_file(dir.path(), &checkpoint, &source)
+        verify_or_recover_mirror_file(&config, &checkpoint, &source)
             .expect("missing mirror rebuilt deterministically");
         assert_eq!(fs::read(&path).expect("read rebuilt mirror"), canonical);
 
         fs::write(&path, &canonical[..canonical.len() / 2]).expect("truncate mirror");
-        assert!(verify_mirror_file(dir.path(), &checkpoint).is_err());
+        assert!(verify_mirror_file(&config, &checkpoint).is_err());
 
         for field in ["schema", "generation", "head"] {
             let mut value = mirror.clone();
@@ -6475,7 +11089,7 @@ enabled = false
             let mut matching_digest_checkpoint = checkpoint.clone();
             matching_digest_checkpoint.mirror_blake3 = blake3_array(&bytes);
             fs::write(&path, bytes).expect("write drifted mirror");
-            assert!(verify_mirror_file(dir.path(), &matching_digest_checkpoint).is_err());
+            assert!(verify_mirror_file(&config, &matching_digest_checkpoint).is_err());
         }
     }
 
@@ -6675,6 +11289,7 @@ enabled = false
         let first_timestamp = current_unix_timestamp_seconds().saturating_sub(5);
         let mut source = signed_source(3, 0x72, first_timestamp);
         materialize_source_snapshot(&source_dir, &mut source);
+        seed_producer_checkpoint(&checkpoint_store, &source_dir, &source);
         let view =
             real_kubo_service_view(&source, &source_dir, &state_dir, &kubo.api_url, &ipns_name);
 
@@ -6869,10 +11484,33 @@ enabled = false
     }
 
     #[test]
+    fn remote_head_validates_complete_prefix_and_rejects_checkpoint_tamper() {
+        let source = signed_source(2, 0x39, current_unix_timestamp_seconds().saturating_sub(1));
+        let dir = secure_temp_dir();
+        let config = test_runtime_config(&source, dir.path());
+        validate_remote_head(&source.head_bytes, &source, &config)
+            .expect("canonical public head binds the complete source prefix");
+
+        let signer = TestSigner::new(0x39);
+        let mut tampered = source.head.clone();
+        tampered.checkpoint_cid = Some(source.blocks[0].block.block_cid.clone());
+        tampered.head_signature = signer.sign(
+            &tampered
+                .signature_payload_bytes()
+                .expect("encode checkpoint-tampered head"),
+        );
+        let tampered_bytes = norito::to_bytes(&tampered).expect("encode checkpoint-tampered head");
+        assert!(
+            validate_remote_head(&tampered_bytes, &source, &config).is_err(),
+            "a validly signed head with a noncanonical checkpoint must fail"
+        );
+    }
+
+    #[test]
     fn remote_head_rejects_future_timestamp() {
         let now = current_unix_timestamp_seconds();
-        let signer = TestSigner::new(0x39);
-        let mut source = signed_source(1, 0x39, now);
+        let signer = TestSigner::new(0x3c);
+        let mut source = signed_source(1, 0x3c, now);
         source.head.generated_at = now + 120;
         source.head.head_signature = signer.sign(
             &source

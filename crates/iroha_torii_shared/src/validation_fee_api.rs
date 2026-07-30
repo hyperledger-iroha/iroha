@@ -249,10 +249,6 @@ pub struct ValidationFeeVerifiedPlainElectorateSnapshotV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the canonical V1 JSON/Norito field names intentionally share the `_at_height` suffix"
-)]
 pub struct ValidationFeeVerifiedEnactmentWindowV1 {
     /// Inclusive referendum opening height.
     pub opens_at_height: String,

@@ -84,9 +84,9 @@ function assertRunnerRejectsPythonMajor(script, envName, label) {
       env: { ...process.env, [envName]: fakePython },
     });
 
-    assert.notEqual(result.status, 0, `${label} must reject non-Python-3.11 overrides`);
+    assert.notEqual(result.status, 0, `${label} must reject non-Python-3.12 overrides`);
     assert.match(result.stdout, /^Python 3\.9\.6$/m, `${label} must print the selected Python version`);
-    assert.match(result.stderr, /require Python 3\.11/u, `${label} must explain the Python 3.11 gate`);
+    assert.match(result.stderr, /require Python 3\.12/u, `${label} must explain the Python 3.12 gate`);
     assert.doesNotMatch(
       result.stderr,
       /unexpected fake python invocation/u,
@@ -353,7 +353,7 @@ test("SoraFS pin-register SDK guard locks required workflow lanes", () => {
   );
   assert.match(
     read("ci/check_sorafs_pin_register_python_sdk.sh"),
-    /PYTHON_OVERRIDE="\$\{SORAFS_PIN_REGISTER_PYTHON_BIN:-\}"[\s\S]*resolve_python_311_bin\(\)[\s\S]*python3\.11[\s\S]*PYTHON_BIN="\$\(resolve_python_311_bin\)"/,
+    /PYTHON_OVERRIDE="\$\{SORAFS_PIN_REGISTER_PYTHON_BIN:-\}"[\s\S]*resolve_python_312_bin\(\)[\s\S]*python3\.12[\s\S]*PYTHON_BIN="\$\(resolve_python_312_bin\)"/,
     "SoraFS Python SDK runner must keep the documented Python override variable",
   );
   assert.match(
@@ -386,7 +386,7 @@ test("SoraFS JavaScript SDK runner rejects non-Node-24 overrides before tests", 
   );
 });
 
-test("SoraFS Python SDK runner rejects non-3.11 overrides before tests", () => {
+test("SoraFS Python SDK runner rejects non-3.12 overrides before tests", () => {
   assertRunnerRejectsPythonMajor(
     "ci/check_sorafs_pin_register_python_sdk.sh",
     "SORAFS_PIN_REGISTER_PYTHON_BIN",

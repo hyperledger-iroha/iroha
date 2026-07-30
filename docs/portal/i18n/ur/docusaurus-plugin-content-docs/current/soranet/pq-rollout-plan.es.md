@@ -99,11 +99,11 @@ rollout_phase = "default"
 
 | سطح | کینری (اسٹیج اے) | ریمپ (اسٹیج بی) | ڈیفالٹ (اسٹیج سی) |
 | --------- | ------------------- | ------------------ | ------------------- |
-| `sorafs_cli` بازیافت | `--anonymity-policy stage-a` یا ٹرسٹ مرحلہ | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` بازیافت | `--anonymity-policy anon-guard-pq` یا ٹرسٹ مرحلہ | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | آرکسٹریٹر کنفیگ JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | مورچا کلائنٹ کنفیگ (`iroha.toml`) | `rollout_phase = "canary"` (پہلے سے طے شدہ) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` دستخط شدہ کمانڈز | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| جاوا/اینڈروئیڈ `GatewayFetchOptions` | `setRolloutPhase("canary")` ، اختیاری `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")` ، اختیاری `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")` ، اختیاری `.ANON_STRICT_PQ` |
+| `iroha_cli` دستخط شدہ کمانڈز | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| جاوا/اینڈروئیڈ `GatewayFetchOptions` | `setRolloutPhase("canary")` ، اختیاری `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")` ، اختیاری `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")` ، اختیاری `.ANON_STRICT_PQ` |
 | جاوا اسکرپٹ آرکیسٹریٹر مددگار | `rolloutPhase: "canary"` یا `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | ازگر `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | سوئفٹ `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ rollout_phase = "default"
 
 3. ** کلائنٹ/ایس ڈی کے کینری (ٹی پلس 1 ہفتہ) **
 
-   - کلائنٹ کی تشکیل میں `rollout_phase = "ramp"` میں تبدیل کریں یا نامزد SDK COHORTS کے لئے `stage-b` اوور رائڈس کو پاس کریں۔
+   - کلائنٹ کی تشکیل میں `rollout_phase = "ramp"` میں تبدیل کریں یا نامزد SDK COHORTS کے لئے `anon-majority-pq` اوور رائڈس کو پاس کریں۔
    - ٹیلی میٹری میں فرق (`sorafs_orchestrator_policy_events_total` `client_id` اور `region` کے ذریعہ گروپ کردہ) پر قبضہ کریں اور انہیں رول آؤٹ واقعہ لاگ سے منسلک کریں۔
 
 4. ** پہلے سے طے شدہ تشہیر (T پلس 3 ہفتوں) **- ایک بار گورننس پر دستخط ہونے کے بعد ، آرکسٹریٹر اور کلائنٹ دونوں کو `rollout_phase = "default"` میں تبدیل کریں اور دستخط شدہ تیاری چیک لسٹ کو ریلیز نمونے میں گھمائیں۔
@@ -166,7 +166,7 @@ rollout_phase = "default"
 ### ریمپ -> کینری (اسٹیج بی -> اسٹیج اے)
 
 1. `sorafs_cli guard-directory import --guard-directory guards.json` کے ساتھ پروموشن سے پہلے پکڑے گئے گارڈ ڈائرکٹری اسنیپ شاٹ کو درآمد کریں اور `sorafs_cli guard-directory verify` کو دوبارہ چلائیں تاکہ ڈیمو پیکیج میں ہیش شامل ہو۔
-2. سیٹ `rollout_phase = "canary"` (یا `anonymity_policy stage-a` کے ساتھ اوور رائڈ) آرکیسٹریٹر اور کلائنٹ کی تشکیل میں سیٹ کریں ، اور پھر پی کیو رچٹ ڈرل کو [PQ Ratchet Runbook] (./pq-ratchet-runbook.md) سے دہرائیں تاکہ نیچے کی پائپ لائن کو جانچنے کے لئے۔
+2. سیٹ `rollout_phase = "canary"` (یا `anonymity_policy anon-guard-pq` کے ساتھ اوور رائڈ) آرکیسٹریٹر اور کلائنٹ کی تشکیل میں سیٹ کریں ، اور پھر پی کیو رچٹ ڈرل کو [PQ Ratchet Runbook] (./pq-ratchet-runbook.md) سے دہرائیں تاکہ نیچے کی پائپ لائن کو جانچنے کے لئے۔
 3. گورننس کو مطلع کرنے سے پہلے پی کیو رچیٹ اور SN16 ٹیلی میٹری کے علاوہ انتباہ کے نتائج کے تازہ ترین اسکرین شاٹس منسلک کریں۔
 
 ### گارڈریل یاد دہانیاں

@@ -136,7 +136,10 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   verify the reconstructed payload against manifest expectations during the run.
 - `--manifest-report=report.json` lets the CLI consume the JSON emitted by
   `sorafs_manifest_builder`; it will reuse `chunk_fetch_specs`, `payload_digest_hex`,
-  and `payload_len` so you don’t have to pass those values manually.
+  and `payload_len` so you don’t have to pass those values manually. The
+  whole-payload `payload_digest_hex` is mandatory: the fetch path never treats
+  `manifest.car_digest_hex` as a fallback because that field commits the entire
+  canonical CARv2 archive.
 - `--manifest=manifest.to` feeds the Norito-encoded manifest to the CLI so it can
   invoke the trustless `CarVerifier` after assembly and attach verification
   results to the JSON report.

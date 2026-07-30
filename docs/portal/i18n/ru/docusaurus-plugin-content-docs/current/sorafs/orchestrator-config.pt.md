@@ -60,7 +60,7 @@ Paralelos a partir do conjunto deprovores publicado em respaldados respaldados
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

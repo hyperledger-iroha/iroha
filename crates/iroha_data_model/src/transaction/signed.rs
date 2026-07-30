@@ -1,6 +1,6 @@
 //! Transaction structures and related implementations.
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     convert::TryFrom,
     iter::IntoIterator,
     num::{NonZeroU32, NonZeroU64},
@@ -184,6 +184,14 @@ mod model {
         pub fee_payment: FeePaymentIntent,
         /// Store for additional information.
         pub metadata: Metadata,
+        /// Proof attachments whose exact contents affect transaction execution.
+        ///
+        /// Attachments are part of the signed intent. Relays cannot add,
+        /// remove, or replace them without invalidating every authorization
+        /// signature and changing the transaction identifier.
+        #[norito(skip_serializing_if = "Option::is_none")]
+        #[norito(default)]
+        pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
 
     /// Signature of transaction
@@ -230,9 +238,27 @@ mod model {
     }
 
     impl MultisigSignatures {
-        /// Construct a new bundle of multisig signatures.
-        pub fn new(signatures: Vec<MultisigSignature>) -> Self {
+        /// Construct a bundle in canonical signer order.
+        pub fn new(mut signatures: Vec<MultisigSignature>) -> Self {
+            signatures.sort_by(|left, right| left.signer.cmp(&right.signer));
             Self { signatures }
+        }
+
+        /// Validate the unique canonical signer ordering required on the wire.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error when a signer occurs more than once or entries are
+        /// not strictly ordered by public key.
+        pub fn validate_canonical(&self) -> Result<(), TransactionSignatureError> {
+            if self
+                .signatures
+                .windows(2)
+                .any(|pair| pair[0].signer >= pair[1].signer)
+            {
+                return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
+            }
+            Ok(())
         }
     }
 
@@ -293,7 +319,7 @@ mod model {
         pub salt: [u8; 32],
     }
 
-    /// Transaction containing a payload, signature, and optional proof attachments.
+    /// Transaction containing a signed intent and its authorization proof.
     ///
     /// `Iroha` and its clients use [`Self`] to send transactions over the network.
     /// After a transaction is signed and before it can be processed any further,
@@ -311,8 +337,6 @@ mod model {
         pub(super) signature: TransactionSignature,
         /// Payload of the transaction.
         pub(super) payload: TransactionPayload,
-        /// Optional proof attachments associated with this transaction.
-        pub(super) attachments: Option<crate::proof::ProofAttachmentList>,
         /// Optional bundle of multisig signatures when the authority uses a multisig controller.
         pub(super) multisig_signatures: Option<MultisigSignatures>,
     }
@@ -323,8 +347,6 @@ mod model {
     pub struct TransactionBuilder {
         /// [`Transaction`] payload.
         pub(super) payload: TransactionPayload,
-        /// Optional proof attachments to include upon signing.
-        pub(super) attachments: Option<crate::proof::ProofAttachmentList>,
         /// Optional multisig signature bundle to include upon signing.
         pub(super) multisig_signatures: Option<MultisigSignatures>,
     }
@@ -502,6 +524,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
         )?;
         let metadata =
             decode_canonical_field::<Metadata>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -516,6 +542,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
                 nonce,
                 fee_payment,
                 metadata,
+                attachments,
             },
             offset,
         ))
@@ -537,10 +564,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
-            read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
         let multisig_signatures = decode_slice_field::<Option<MultisigSignatures>>(
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
@@ -553,7 +576,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
             Self {
                 signature,
                 payload,
-                attachments,
                 multisig_signatures,
             },
             offset,
@@ -618,9 +640,15 @@ pub enum TransactionSignatureError {
     /// Multisig signature bundle is missing.
     #[error("missing multisig signatures for multisig authority")]
     MissingMultisigSignatures,
+    /// A single-controller transaction carried an unrelated multisig proof.
+    #[error("single-controller transaction must not carry multisig signatures")]
+    UnexpectedMultisigSignatures,
     /// Transaction contains a signature from a non-member.
     #[error("multisig signature from unknown member")]
     UnknownMultisigSigner,
+    /// Multisig signatures are duplicated or not ordered by signer.
+    #[error("multisig signatures are not in canonical distinct signer order")]
+    NonCanonicalMultisigSignatures,
     /// The signature-bound fee payment intent is malformed or ambiguous.
     #[error("invalid fee payment intent: {0}")]
     InvalidFeePaymentIntent(String),
@@ -1233,11 +1261,15 @@ impl TransactionPayload {
 }
 
 impl SignedTransaction {
-    /// Derive the privacy intent from the canonical unsigned payload.
+    /// Derive the privacy intent from the canonical signed payload.
     ///
-    /// Signatures, multisig bundles, and proof attachments are deliberately not
-    /// part of the intent preimage; the complete signed transaction hash remains
-    /// independently bound by ordinary transaction admission.
+    /// Authorization signatures are excluded from the intent preimage, while
+    /// execution-affecting proof attachments are included.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyTransactionIntentErrorV1`] if instruction inspection
+    /// or canonical intent encoding fails.
     pub fn privacy_transaction_intent_digest_v1(
         &self,
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
@@ -1245,6 +1277,12 @@ impl SignedTransaction {
     }
 
     /// Validate and borrow the optional direct privacy submission in this signed transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PrivacyTransactionIntentErrorV1`] if the transaction contains
+    /// an invalid privacy-instruction combination or its canonical intent
+    /// cannot be derived.
     pub fn privacy_transaction_intent_binding_if_present_v1(
         &self,
     ) -> Result<
@@ -1364,7 +1402,7 @@ impl SignedTransaction {
     /// Optional proof attachments carried alongside the payload.
     #[inline]
     pub fn attachments(&self) -> Option<&crate::proof::ProofAttachmentList> {
-        self.attachments.as_ref()
+        self.payload.attachments.as_ref()
     }
 
     /// Height-based TTL advertised via transaction metadata.
@@ -1395,11 +1433,11 @@ impl SignedTransaction {
             .transpose()
     }
 
-    /// Canonical hash for this external transaction.
+    /// Canonical identifier for this external transaction.
     ///
-    /// The canonical hash is defined as the hash of the corresponding
-    /// `TransactionEntrypoint::External` wrapper so it matches the entrypoint
-    /// hash used in blocks and proofs.
+    /// The identifier commits to the exact signed intent and excludes the
+    /// authorization proof. Adding or replacing a signature therefore cannot
+    /// create a second identity for the same authorized action.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
         let entry_hash = self.hash_as_entrypoint();
@@ -1488,6 +1526,9 @@ impl SignedTransaction {
         let TransactionSignature(signature) = &self.signature;
         match self.payload.authority.controller() {
             AccountController::Single(signatory) => {
+                if self.multisig_signatures.is_some() {
+                    return Err(TransactionSignatureError::UnexpectedMultisigSignatures);
+                }
                 verify_typed_signature_for_signer(signature, signatory, &self.payload)
                     .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))
             }
@@ -1676,21 +1717,22 @@ impl SignedTransaction {
         if bundle.signatures.is_empty() {
             return Err(TransactionSignatureError::NoSignatures);
         }
+        bundle.validate_canonical()?;
+        let TransactionSignature(primary_signature) = &self.signature;
+        if &bundle.signatures[0].signature != primary_signature {
+            return Err(TransactionSignatureError::NonCanonicalMultisigSignatures);
+        }
 
         let mut weights = BTreeMap::new();
         for member in policy.members() {
             weights.insert(member.public_key().clone(), member.weight());
         }
 
-        let mut seen = BTreeSet::new();
         let mut collected: u32 = 0;
         for entry in &bundle.signatures {
             let Some(weight) = weights.get(&entry.signer) else {
                 return Err(TransactionSignatureError::UnknownMultisigSigner);
             };
-            if !seen.insert(entry.signer.clone()) {
-                continue;
-            }
             verify_typed_signature_for_signer(&entry.signature, &entry.signer, &self.payload)
                 .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
             collected = collected.saturating_add(u32::from(*weight));
@@ -1989,18 +2031,19 @@ impl norito::core::NoritoSerialize for ExternalEntrypointRef<'_> {
     fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&0_u32, &mut writer)?;
         let mut tmp = norito::core::DeriveSmallBuf::new();
-        norito::core::write_len_prefixed(&mut writer, self.0, &mut tmp)?;
+        norito::core::write_len_prefixed(&mut writer, self.0.payload(), &mut tmp)?;
         Ok(())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0
+            .payload()
             .encoded_len_hint()
             .map(|len| 4_usize.saturating_add(8).saturating_add(len))
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        let len = self.0.encoded_len_exact()?;
+        let len = self.0.payload().encoded_len_exact()?;
         Some(
             4_usize
                 .saturating_add(norito::core::len_prefix_len(len))
@@ -2026,8 +2069,8 @@ impl TransactionBuilder {
                 instructions: Vec::<InstructionBox>::new().into(),
                 fee_payment,
                 metadata: Metadata::default(),
+                attachments: None,
             },
-            attachments: None,
             multisig_signatures: None,
         }
     }
@@ -2070,8 +2113,8 @@ impl TransactionBuilder {
 
     /// Reconstruct a transaction builder from one exact unsigned payload.
     ///
-    /// Envelope-only proof attachments and multisig signatures are initially
-    /// empty and may be added explicitly before signing.
+    /// The payload retains its signature-bound proof attachments. Only the
+    /// authorization-proof bundle starts empty.
     ///
     /// # Errors
     ///
@@ -2081,15 +2124,14 @@ impl TransactionBuilder {
         Self::validate_payload_fee_payment(&payload)?;
         Ok(Self {
             payload,
-            attachments: None,
             multisig_signatures: None,
         })
     }
 
     /// Consume the builder and return its exact unsigned payload.
     ///
-    /// Proof attachments and multisig signatures are envelope data and are not
-    /// part of the returned signature preimage.
+    /// Proof attachments are part of the returned signature preimage.
+    /// Multisig authorization proofs remain outside it.
     ///
     /// # Errors
     ///
@@ -2163,7 +2205,7 @@ impl TransactionBuilder {
 
     /// Attach proof payloads to this transaction before signing.
     pub fn with_attachments(mut self, attachments: crate::proof::ProofAttachmentList) -> Self {
-        self.attachments = Some(attachments);
+        self.payload.attachments = Some(attachments);
         self
     }
 
@@ -2231,7 +2273,6 @@ impl TransactionBuilder {
         }
         let builder = Self {
             payload,
-            attachments: None,
             multisig_signatures: None,
         };
         if builder.encode_payload() != bytes {
@@ -2262,7 +2303,6 @@ impl TransactionBuilder {
         SignedTransaction {
             signature: TransactionSignature(SignatureOf::from_signature(signature)),
             payload: self.payload,
-            attachments: self.attachments,
             multisig_signatures: self.multisig_signatures,
         }
     }
@@ -2300,7 +2340,6 @@ impl TransactionBuilder {
         Ok(SignedTransaction {
             signature,
             payload,
-            attachments: self.attachments,
             multisig_signatures: self.multisig_signatures,
         })
     }
@@ -2314,9 +2353,8 @@ impl TransactionBuilder {
 
     /// Try to sign a transaction whose authority uses a multisig controller.
     ///
-    /// The provided signer keys are used to produce a multisig signature bundle;
-    /// duplicate signers are retained here and later deduplicated during
-    /// verification.
+    /// The provided signer keys are used to produce a canonical multisig
+    /// signature bundle. Duplicate signers are rejected.
     ///
     /// # Errors
     ///
@@ -2335,6 +2373,8 @@ impl TransactionBuilder {
 
         let produced = MultisigSignatures::from_signers(&payload, signers)?;
         bundle.signatures.extend(produced.signatures);
+        bundle = MultisigSignatures::new(bundle.signatures);
+        bundle.validate_canonical()?;
 
         let primary_signature = bundle
             .signatures
@@ -2346,16 +2386,14 @@ impl TransactionBuilder {
         Ok(SignedTransaction {
             signature: TransactionSignature(primary_signature),
             payload,
-            attachments: self.attachments,
             multisig_signatures: Some(bundle),
         })
     }
 
     /// Sign a transaction whose authority uses a multisig controller.
     ///
-    /// The provided signer keys are used to produce a multisig signature bundle;
-    /// duplicate signers are retained here and later deduplicated during
-    /// verification.
+    /// The provided signer keys are used to produce a canonical multisig
+    /// signature bundle. Duplicate signers are rejected.
     ///
     /// # Panics
     ///
@@ -2687,6 +2725,318 @@ mod tests {
         PrivacyTransactionIntentDigestV1::new(*hasher.finalize().as_bytes())
     }
 
+    fn assert_privacy_binding_absent(payload: &TransactionPayload, message: &str) {
+        assert!(
+            payload
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect(message)
+                .is_none()
+        );
+    }
+
+    fn assert_privacy_digest_rejects_path(
+        payload: &TransactionPayload,
+        path: PrivacyTransactionIntentUnsupportedPathV1,
+        message: &str,
+    ) {
+        assert_eq!(
+            payload
+                .privacy_transaction_intent_digest_v1()
+                .expect_err(message),
+            PrivacyTransactionIntentErrorV1::UnsupportedPath { path }
+        );
+    }
+
+    fn assert_privacy_binding_rejects_path(
+        payload: &TransactionPayload,
+        path: PrivacyTransactionIntentUnsupportedPathV1,
+        message: &str,
+    ) {
+        assert_eq!(
+            payload
+                .privacy_transaction_intent_binding_if_present_v1()
+                .expect_err(message),
+            PrivacyTransactionIntentErrorV1::UnsupportedPath { path }
+        );
+    }
+
+    fn assert_privacy_ivm_paths_rejected() {
+        let raw_ivm =
+            privacy_payload_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![1])));
+        assert_privacy_digest_rejects_path(
+            &raw_ivm,
+            PrivacyTransactionIntentUnsupportedPathV1::Ivm,
+            "raw IVM is not a direct typed submission",
+        );
+        assert_privacy_binding_absent(
+            &raw_ivm,
+            "an ordinary IVM transaction has no privacy binding",
+        );
+
+        let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![2]),
+            overlay: vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "ordinary proved overlay".into(),
+            ))]
+            .into(),
+            events_commitment: Hash::new(b"ordinary events"),
+            gas_policy_commitment: Hash::new(b"ordinary gas"),
+        }));
+        assert_privacy_binding_absent(
+            &ordinary_proved,
+            "an ordinary proved transaction has no privacy binding",
+        );
+
+        let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![2]),
+            overlay: vec![InstructionBox::from(draft_privacy_submission())].into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }));
+        assert_privacy_binding_rejects_path(
+            &proved,
+            PrivacyTransactionIntentUnsupportedPathV1::IvmProved,
+            "proved overlays cannot carry a V1 privacy submission",
+        );
+    }
+
+    fn assert_privacy_dynamic_dispatch_paths_rejected() {
+        let contract =
+            privacy_payload_with_executable(Executable::ContractCall(privacy_test_contract_call()));
+        assert_privacy_digest_rejects_path(
+            &contract,
+            PrivacyTransactionIntentUnsupportedPathV1::ContractCall,
+            "contract call is opaque to the V1 projection",
+        );
+        assert_privacy_binding_absent(
+            &contract,
+            "an ordinary contract transaction has no privacy binding",
+        );
+
+        let mixed_batch = privacy_payload_with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(draft_privacy_submission().into()),
+                ExecutableBatchItem::ContractCall(privacy_test_contract_call()),
+            ]
+            .into(),
+        ));
+        assert_privacy_binding_rejects_path(
+            &mixed_batch,
+            PrivacyTransactionIntentUnsupportedPathV1::BatchContractCall,
+            "a mixed contract batch can enqueue unsigned instructions",
+        );
+        let ordinary_contract_batch = privacy_payload_with_executable(Executable::Batch(
+            vec![ExecutableBatchItem::ContractCall(
+                privacy_test_contract_call(),
+            )]
+            .into(),
+        ));
+        assert_privacy_binding_absent(
+            &ordinary_contract_batch,
+            "an ordinary contract batch has no privacy binding",
+        );
+
+        let custom = privacy_payload_with_executable(
+            vec![
+                InstructionBox::from(draft_privacy_submission()),
+                InstructionBox::from(CustomInstruction::new(Json::new("opaque executor"))),
+            ]
+            .into(),
+        );
+        assert_privacy_binding_rejects_path(
+            &custom,
+            PrivacyTransactionIntentUnsupportedPathV1::CustomInstruction,
+            "custom executor path",
+        );
+        let ordinary_custom = privacy_payload_with_executable(
+            vec![InstructionBox::from(CustomInstruction::new(Json::new(
+                "ordinary executor",
+            )))]
+            .into(),
+        );
+        assert_privacy_binding_absent(
+            &ordinary_custom,
+            "an ordinary custom instruction has no privacy binding",
+        );
+
+        let trigger = privacy_payload_with_executable(
+            vec![
+                InstructionBox::from(draft_privacy_submission()),
+                InstructionBox::from(ExecuteTrigger::new(
+                    TriggerId::from_str("privacy_dynamic").expect("trigger id"),
+                )),
+            ]
+            .into(),
+        );
+        assert_privacy_binding_rejects_path(
+            &trigger,
+            PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger,
+            "by-call trigger path",
+        );
+        let ordinary_trigger = privacy_payload_with_executable(
+            vec![InstructionBox::from(ExecuteTrigger::new(
+                TriggerId::from_str("ordinary_dynamic").expect("trigger id"),
+            ))]
+            .into(),
+        );
+        assert_privacy_binding_absent(
+            &ordinary_trigger,
+            "an ordinary trigger instruction has no privacy binding",
+        );
+    }
+
+    fn assert_opaque_privacy_instruction_rejected() {
+        let submission = draft_privacy_submission();
+        let framed = norito::to_bytes(&submission).expect("framed privacy instruction");
+        let opaque = OpaqueInstruction::from_framed(SubmitPrivacyProofV1::WIRE_ID, &framed)
+            .expect("opaque privacy instruction fixture");
+        let payload = privacy_payload_with_executable(vec![InstructionBox::from(opaque)].into());
+        assert_privacy_binding_rejects_path(
+            &payload,
+            PrivacyTransactionIntentUnsupportedPathV1::OpaqueInstruction,
+            "opaque privacy wire id must fail closed",
+        );
+    }
+
+    fn assert_canonical_privacy_intent_kat(
+        payload: &TransactionPayload,
+        expected: PrivacyTransactionIntentDigestV1,
+    ) {
+        let mut normalized = payload.clone();
+        normalized.instructions =
+            normalize_privacy_executable_for_intent_v1(&normalized.instructions)
+                .expect("canonical normalized executable");
+        let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
+        assert_eq!(
+            normalized_bytes.len(),
+            14_176,
+            "the canonical fixture wire length is part of the cross-SDK KAT"
+        );
+        assert_eq!(
+            hex::encode(expected.as_bytes()),
+            "a9dac5175c7e527acd53f8f71a735afaae89cb5b9cb865c4523c03e2fc1710d8",
+            "canonical privacy transaction-intent V1 digest"
+        );
+    }
+
+    fn assert_privacy_proof_bytes_are_projected_out(
+        payload: &TransactionPayload,
+        expected: PrivacyTransactionIntentDigestV1,
+    ) {
+        let mut changed_proof = payload.clone();
+        mutate_direct_privacy_submission(&mut changed_proof, |submission| {
+            submission.envelope.proof.bytes_mut().bytes = vec![9, 8, 7, 6, 5];
+        });
+        assert_eq!(
+            changed_proof
+                .privacy_transaction_intent_digest_v1()
+                .expect("proof bytes are projected out"),
+            expected
+        );
+        changed_proof
+            .validate_privacy_transaction_intent_binding_v1()
+            .expect("proof bytes do not alter either derived digest");
+    }
+
+    fn assert_stored_privacy_digests_are_checked(
+        payload: &TransactionPayload,
+        expected: PrivacyTransactionIntentDigestV1,
+    ) {
+        let mut stale_intent = payload.clone();
+        mutate_direct_privacy_submission(&mut stale_intent, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest =
+                PrivacyTransactionIntentDigestV1::new(privacy_test_bytes(0xD1));
+        });
+        assert_eq!(
+            stale_intent
+                .privacy_transaction_intent_digest_v1()
+                .expect("the derived intent field is projected out"),
+            expected
+        );
+        assert!(matches!(
+            stale_intent
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("stored intent is independently checked"),
+            PrivacyTransactionIntentErrorV1::IntentDigestMismatch { .. }
+        ));
+        let mut zero_intent = payload.clone();
+        mutate_direct_privacy_submission(&mut zero_intent, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+        });
+        assert_eq!(
+            zero_intent
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("zero stored intent"),
+            PrivacyTransactionIntentErrorV1::ZeroIntentDigest
+        );
+
+        let mut stale_statement = payload.clone();
+        mutate_direct_privacy_submission(&mut stale_statement, |submission| {
+            submission.envelope.statement_digest =
+                PrivacyStatementDigestV1::new(privacy_test_bytes(0xD2));
+        });
+        assert_eq!(
+            stale_statement
+                .privacy_transaction_intent_digest_v1()
+                .expect("the derived statement digest is projected out"),
+            expected
+        );
+        assert!(matches!(
+            stale_statement
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("stored statement digest is independently checked"),
+            PrivacyTransactionIntentErrorV1::StatementDigestMismatch { .. }
+        ));
+        let mut zero_statement = payload.clone();
+        mutate_direct_privacy_submission(&mut zero_statement, |submission| {
+            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+        });
+        assert_eq!(
+            zero_statement
+                .validate_privacy_transaction_intent_binding_v1()
+                .expect_err("zero stored statement digest"),
+            PrivacyTransactionIntentErrorV1::ZeroStatementDigest
+        );
+    }
+
+    fn assert_legacy_privacy_digest_cycle_is_broken(expected: PrivacyTransactionIntentDigestV1) {
+        let draft = draft_privacy_payload();
+        let first_legacy = legacy_proof_only_privacy_intent_digest(&draft);
+        let mut inserted = draft;
+        mutate_direct_privacy_submission(&mut inserted, |submission| {
+            submission
+                .envelope
+                .statement
+                .context_mut()
+                .transaction_intent_digest = first_legacy;
+            submission.envelope.statement_digest = submission
+                .envelope
+                .statement
+                .digest()
+                .expect("legacy-cycle statement digest");
+        });
+        let second_legacy = legacy_proof_only_privacy_intent_digest(&inserted);
+        assert_ne!(
+            first_legacy, second_legacy,
+            "the old proof-only projection changes after inserting its own result and cannot construct the stored value"
+        );
+        assert_eq!(
+            inserted
+                .privacy_transaction_intent_digest_v1()
+                .expect("canonical projection removes both derived fields"),
+            expected
+        );
+    }
+
     #[test]
     fn transaction_payload_exposes_execution_identity_ttl_and_chain() {
         let chain: ChainId = "payload-accessors".parse().expect("chain id");
@@ -2762,172 +3112,9 @@ mod tests {
 
     #[test]
     fn privacy_transaction_intent_rejects_dynamic_and_opaque_paths() {
-        let raw_ivm =
-            privacy_payload_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![1])));
-        assert_eq!(
-            raw_ivm
-                .privacy_transaction_intent_digest_v1()
-                .expect_err("raw IVM is not a direct typed submission"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::Ivm,
-            }
-        );
-        assert!(
-            raw_ivm
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary IVM transaction has no privacy binding")
-                .is_none()
-        );
-
-        let contract =
-            privacy_payload_with_executable(Executable::ContractCall(privacy_test_contract_call()));
-        assert_eq!(
-            contract
-                .privacy_transaction_intent_digest_v1()
-                .expect_err("contract call is opaque to the V1 projection"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::ContractCall,
-            }
-        );
-        assert!(
-            contract
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary contract transaction has no privacy binding")
-                .is_none()
-        );
-
-        let ordinary_proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![2]),
-            overlay: vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "ordinary proved overlay".into(),
-            ))]
-            .into(),
-            events_commitment: Hash::new(b"ordinary events"),
-            gas_policy_commitment: Hash::new(b"ordinary gas"),
-        }));
-        assert!(
-            ordinary_proved
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary proved transaction has no privacy binding")
-                .is_none()
-        );
-
-        let proved = privacy_payload_with_executable(Executable::IvmProved(IvmProved {
-            bytecode: IvmBytecode::from_compiled(vec![2]),
-            overlay: vec![InstructionBox::from(draft_privacy_submission())].into(),
-            events_commitment: Hash::new(b"events"),
-            gas_policy_commitment: Hash::new(b"gas"),
-        }));
-        assert_eq!(
-            proved
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("proved overlays cannot carry a V1 privacy submission"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::IvmProved,
-            }
-        );
-
-        let mixed_batch = privacy_payload_with_executable(Executable::Batch(
-            vec![
-                ExecutableBatchItem::Instruction(draft_privacy_submission().into()),
-                ExecutableBatchItem::ContractCall(privacy_test_contract_call()),
-            ]
-            .into(),
-        ));
-        assert_eq!(
-            mixed_batch
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("a mixed contract batch can enqueue unsigned instructions"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::BatchContractCall,
-            }
-        );
-        let ordinary_contract_batch = privacy_payload_with_executable(Executable::Batch(
-            vec![ExecutableBatchItem::ContractCall(
-                privacy_test_contract_call(),
-            )]
-            .into(),
-        ));
-        assert!(
-            ordinary_contract_batch
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary contract batch has no privacy binding")
-                .is_none()
-        );
-
-        let custom = privacy_payload_with_executable(
-            vec![
-                InstructionBox::from(draft_privacy_submission()),
-                InstructionBox::from(CustomInstruction::new(Json::new("opaque executor"))),
-            ]
-            .into(),
-        );
-        assert_eq!(
-            custom
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("custom executor path"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::CustomInstruction,
-            }
-        );
-        let ordinary_custom = privacy_payload_with_executable(
-            vec![InstructionBox::from(CustomInstruction::new(Json::new(
-                "ordinary executor",
-            )))]
-            .into(),
-        );
-        assert!(
-            ordinary_custom
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary custom instruction has no privacy binding")
-                .is_none()
-        );
-
-        let trigger = privacy_payload_with_executable(
-            vec![
-                InstructionBox::from(draft_privacy_submission()),
-                InstructionBox::from(ExecuteTrigger::new(
-                    TriggerId::from_str("privacy_dynamic").expect("trigger id"),
-                )),
-            ]
-            .into(),
-        );
-        assert_eq!(
-            trigger
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("by-call trigger path"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::ExecuteTrigger,
-            }
-        );
-        let ordinary_trigger = privacy_payload_with_executable(
-            vec![InstructionBox::from(ExecuteTrigger::new(
-                TriggerId::from_str("ordinary_dynamic").expect("trigger id"),
-            ))]
-            .into(),
-        );
-        assert!(
-            ordinary_trigger
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect("an ordinary trigger instruction has no privacy binding")
-                .is_none()
-        );
-
-        let submission = draft_privacy_submission();
-        let framed = norito::to_bytes(&submission).expect("framed privacy instruction");
-        let opaque = OpaqueInstruction::from_framed(SubmitPrivacyProofV1::WIRE_ID, &framed)
-            .expect("opaque privacy instruction fixture");
-        let opaque_payload =
-            privacy_payload_with_executable(vec![InstructionBox::from(opaque)].into());
-        assert_eq!(
-            opaque_payload
-                .privacy_transaction_intent_binding_if_present_v1()
-                .expect_err("opaque privacy wire id must fail closed"),
-            PrivacyTransactionIntentErrorV1::UnsupportedPath {
-                path: PrivacyTransactionIntentUnsupportedPathV1::OpaqueInstruction,
-            }
-        );
+        assert_privacy_ivm_paths_rejected();
+        assert_privacy_dynamic_dispatch_paths_rejected();
+        assert_opaque_privacy_instruction_rejected();
     }
 
     #[test]
@@ -2936,126 +3123,10 @@ mod tests {
         let expected = payload
             .privacy_transaction_intent_digest_v1()
             .expect("canonical finalized projection");
-        let mut normalized = payload.clone();
-        normalized.instructions =
-            normalize_privacy_executable_for_intent_v1(&normalized.instructions)
-                .expect("canonical normalized executable");
-        let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
-        assert_eq!(
-            normalized_bytes.len(),
-            14_176,
-            "the canonical fixture wire length is part of the cross-SDK KAT"
-        );
-        assert_eq!(
-            hex::encode(expected.as_bytes()),
-            "a9dac5175c7e527acd53f8f71a735afaae89cb5b9cb865c4523c03e2fc1710d8",
-            "canonical privacy transaction-intent V1 digest"
-        );
-
-        let mut changed_proof = payload.clone();
-        mutate_direct_privacy_submission(&mut changed_proof, |submission| {
-            submission.envelope.proof.bytes_mut().bytes = vec![9, 8, 7, 6, 5];
-        });
-        assert_eq!(
-            changed_proof
-                .privacy_transaction_intent_digest_v1()
-                .expect("proof bytes are projected out"),
-            expected
-        );
-        changed_proof
-            .validate_privacy_transaction_intent_binding_v1()
-            .expect("proof bytes do not alter either derived digest");
-
-        let mut stale_intent = payload.clone();
-        mutate_direct_privacy_submission(&mut stale_intent, |submission| {
-            submission
-                .envelope
-                .statement
-                .context_mut()
-                .transaction_intent_digest =
-                PrivacyTransactionIntentDigestV1::new(privacy_test_bytes(0xD1));
-        });
-        assert_eq!(
-            stale_intent
-                .privacy_transaction_intent_digest_v1()
-                .expect("the derived intent field is projected out"),
-            expected
-        );
-        assert!(matches!(
-            stale_intent
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("stored intent is independently checked"),
-            PrivacyTransactionIntentErrorV1::IntentDigestMismatch { .. }
-        ));
-        let mut zero_intent = payload.clone();
-        mutate_direct_privacy_submission(&mut zero_intent, |submission| {
-            submission
-                .envelope
-                .statement
-                .context_mut()
-                .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
-        });
-        assert_eq!(
-            zero_intent
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("zero stored intent"),
-            PrivacyTransactionIntentErrorV1::ZeroIntentDigest
-        );
-
-        let mut stale_statement = payload.clone();
-        mutate_direct_privacy_submission(&mut stale_statement, |submission| {
-            submission.envelope.statement_digest =
-                PrivacyStatementDigestV1::new(privacy_test_bytes(0xD2));
-        });
-        assert_eq!(
-            stale_statement
-                .privacy_transaction_intent_digest_v1()
-                .expect("the derived statement digest is projected out"),
-            expected
-        );
-        assert!(matches!(
-            stale_statement
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("stored statement digest is independently checked"),
-            PrivacyTransactionIntentErrorV1::StatementDigestMismatch { .. }
-        ));
-        let mut zero_statement = payload.clone();
-        mutate_direct_privacy_submission(&mut zero_statement, |submission| {
-            submission.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
-        });
-        assert_eq!(
-            zero_statement
-                .validate_privacy_transaction_intent_binding_v1()
-                .expect_err("zero stored statement digest"),
-            PrivacyTransactionIntentErrorV1::ZeroStatementDigest
-        );
-
-        let draft = draft_privacy_payload();
-        let first_legacy = legacy_proof_only_privacy_intent_digest(&draft);
-        let mut inserted = draft;
-        mutate_direct_privacy_submission(&mut inserted, |submission| {
-            submission
-                .envelope
-                .statement
-                .context_mut()
-                .transaction_intent_digest = first_legacy;
-            submission.envelope.statement_digest = submission
-                .envelope
-                .statement
-                .digest()
-                .expect("legacy-cycle statement digest");
-        });
-        let second_legacy = legacy_proof_only_privacy_intent_digest(&inserted);
-        assert_ne!(
-            first_legacy, second_legacy,
-            "the old proof-only projection changes after inserting its own result and cannot construct the stored value"
-        );
-        assert_eq!(
-            inserted
-                .privacy_transaction_intent_digest_v1()
-                .expect("canonical projection removes both derived fields"),
-            expected
-        );
+        assert_canonical_privacy_intent_kat(&payload, expected);
+        assert_privacy_proof_bytes_are_projected_out(&payload, expected);
+        assert_stored_privacy_digests_are_checked(&payload, expected);
+        assert_legacy_privacy_digest_cycle_is_broken(expected);
     }
 
     #[test]
@@ -3433,10 +3504,10 @@ mod tests {
 
         let mut altered_signature = transaction.clone();
         altered_signature.signature = sample_signed_transaction().signature().clone();
-        assert_ne!(
+        assert_eq!(
             altered_signature.hash(),
             transaction.hash(),
-            "the full signed hash commits to the signature envelope"
+            "transaction identity must exclude replaceable authorization proof"
         );
         assert_eq!(
             altered_signature
@@ -4403,7 +4474,11 @@ mod tests {
         )
         .sign(&private_key);
         let entry = TransactionEntrypoint::External(tx.clone());
-        assert_eq!(HashOf::new(&entry), entry.hash());
+        assert_ne!(
+            HashOf::new(&entry),
+            entry.hash(),
+            "raw envelope hashing must not define external transaction identity"
+        );
         assert_eq!(tx.hash_as_entrypoint(), entry.hash());
         assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
 
@@ -4437,6 +4512,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             signer.private_key(),
@@ -4445,7 +4521,6 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: None,
         };
 
@@ -4483,6 +4558,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let member_sig = checked_transaction_payload_signature(signer.private_key(), &payload);
         let signature = TransactionSignature(member_sig.clone());
@@ -4493,16 +4569,28 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
         tx.verify_signature()
             .expect("multisig with quorum must verify");
+
+        let mut noncanonical = tx;
+        let unrelated = checked_random_keypair();
+        noncanonical.signature = TransactionSignature(checked_transaction_payload_signature(
+            unrelated.private_key(),
+            noncanonical.payload(),
+        ));
+        assert_eq!(
+            noncanonical
+                .verify_signature()
+                .expect_err("the primary signature must duplicate the first canonical bundle item"),
+            TransactionSignatureError::NonCanonicalMultisigSignatures
+        );
     }
 
     #[test]
-    fn verify_signature_ignores_multisig_bundle_for_single_controller() {
+    fn verify_signature_rejects_multisig_bundle_for_single_controller() {
         let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = checked_random_keypair();
@@ -4515,8 +4603,8 @@ mod tests {
         .with_instructions([Log::new(Level::INFO, "single authority".into())])
         .sign(keypair.private_key());
 
-        // Attach a multisig bundle that does not correspond to the authority; single controllers
-        // should ignore these entries during verification.
+        // A proof bundle for a different controller shape must not create an
+        // alternate accepted envelope for the same signed intent.
         let payload = tx.payload().clone();
         let extraneous_signer = checked_random_keypair();
         let stray_signature =
@@ -4531,8 +4619,11 @@ mod tests {
             1,
             "single controller counts only its own signature"
         );
-        tx.verify_signature()
-            .expect("single authority verification should ignore multisig bundle");
+        assert_eq!(
+            tx.verify_signature()
+                .expect_err("single authority must reject multisig proof data"),
+            TransactionSignatureError::UnexpectedMultisigSignatures
+        );
     }
 
     #[test]
@@ -4577,6 +4668,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             signer.private_key(),
@@ -4585,7 +4677,6 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(MultisigSignatures::new(Vec::new())),
         };
 
@@ -4619,6 +4710,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             member_key.private_key(),
@@ -4632,7 +4724,6 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
@@ -4668,6 +4759,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = TransactionSignature(checked_transaction_payload_signature(
             signer.private_key(),
@@ -4683,20 +4775,13 @@ mod tests {
         let tx = SignedTransaction {
             signature,
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
-        let err = tx
-            .verify_signature()
-            .expect_err("duplicate signatures should not satisfy threshold");
-        assert!(
-            matches!(
-                err,
-                TransactionSignatureError::InsufficientMultisigWeight { collected, required }
-                if collected == 1 && required == 2
-            ),
-            "expected InsufficientMultisigWeight, got {err:?}"
+        assert_eq!(
+            tx.verify_signature()
+                .expect_err("duplicate signatures are a non-canonical proof"),
+            TransactionSignatureError::NonCanonicalMultisigSignatures
         );
     }
 
@@ -4746,6 +4831,7 @@ mod tests {
             nonce: None,
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
             metadata: Metadata::default(),
+            attachments: None,
         };
         let signature = checked_transaction_payload_signature(signer.private_key(), &payload);
         let multisig_signatures = MultisigSignatures::new(vec![
@@ -4757,13 +4843,15 @@ mod tests {
         let tx = SignedTransaction {
             signature: TransactionSignature(signature),
             payload,
-            attachments: None,
             multisig_signatures: Some(multisig_signatures),
         };
 
         assert_eq!(tx.signature_count(), 3);
-        tx.verify_signature()
-            .expect("duplicate multisig entries still satisfy threshold");
+        assert_eq!(
+            tx.verify_signature()
+                .expect_err("duplicate multisig entries must fail closed"),
+            TransactionSignatureError::NonCanonicalMultisigSignatures
+        );
     }
 
     #[test]
@@ -5160,6 +5248,27 @@ mod attachments_tests {
         let archived = norito::from_bytes::<SignedTransaction>(&bytes).expect("archived");
         let decoded: SignedTransaction = norito::core::NoritoDeserialize::deserialize(archived);
         assert!(decoded.attachments().is_some());
+        decoded
+            .verify_signature()
+            .expect("round-tripped attachment remains signature-bound");
+
+        let original_hash = decoded.hash();
+        let mut tampered = decoded;
+        tampered.payload.attachments = Some(crate::proof::ProofAttachmentList(vec![
+            crate::proof::ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                crate::proof::ProofBox::new("halo2/ipa".into(), vec![9, 9, 9]),
+                crate::proof::VerifyingKeyId::new("halo2/ipa", "vk_1"),
+            ),
+        ]));
+        assert_ne!(
+            tampered.hash(),
+            original_hash,
+            "execution-affecting attachments must change transaction identity"
+        );
+        tampered
+            .verify_signature()
+            .expect_err("an attachment mutation must invalidate authorization");
     }
 }
 
@@ -5230,7 +5339,13 @@ impl TransactionEntrypoint {
     /// Hash for this transaction entrypoint.
     #[inline]
     pub fn hash(&self) -> HashOf<Self> {
-        HashOf::new(self)
+        match self {
+            Self::External(transaction) => transaction.hash_as_entrypoint(),
+            Self::SealedCommitment(_)
+            | Self::SealedReveal(_)
+            | Self::PrivateKaigi(_)
+            | Self::Time(_) => HashOf::new(self),
+        }
     }
 }
 
@@ -5535,24 +5650,17 @@ mod norito_rpc_fixture_tests {
                 "{name}: payload_hash mismatch"
             );
 
-            let mut signed_entrypoint = Vec::with_capacity(
-                4 + norito::core::len_prefix_len(signed_bytes.len()) + signed_bytes.len(),
-            );
-            signed_entrypoint.extend_from_slice(&0_u32.to_le_bytes());
-            norito::core::write_len_to_vec(&mut signed_entrypoint, signed_bytes.len() as u64);
-            signed_entrypoint.extend_from_slice(&signed_bytes);
-            let computed_signed_hash = Hash::new(signed_entrypoint).to_string();
-            assert_eq!(
-                computed_signed_hash, signed_hash,
-                "{name}: signed_hash mismatch"
-            );
-
             let (signed_tx, used) = SignedTransaction::decode_from_slice(&signed_bytes)
                 .unwrap_or_else(|err| panic!("{name}: signed transaction decode failed: {err}"));
             assert_eq!(
                 used,
                 signed_bytes.len(),
                 "{name}: signed transaction has trailing bytes"
+            );
+            assert_eq!(
+                signed_tx.hash_as_entrypoint().to_string(),
+                signed_hash,
+                "{name}: signed_hash mismatch"
             );
             assert_eq!(signed_tx.chain().as_str(), chain, "{name}: chain mismatch");
             let expected_authority = AccountId::parse_encoded(authority).map_or_else(

@@ -2065,6 +2065,63 @@ mod parliament_tests {
         .expect("policy hash")
     }
 
+    struct PayoutLifecyclePolicyFixture {
+        policy: ValidationFeePolicyV1,
+        plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
+        lifecycle_seal: [u8; 32],
+    }
+
+    fn payout_lifecycle_policy_fixture() -> PayoutLifecyclePolicyFixture {
+        let binding = payout_binding();
+        let plain_electorate_rules = plain_electorate_rules();
+        let lifecycle_seal = binding.lifecycle_seal().expect("lifecycle seal");
+        let mut policy = policy(1, None);
+        policy.effective_from_height = authorization([1; 32], 10)
+            .enacted_at_height
+            .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
+            .expect("payout policy effective height");
+        policy.exemption_classes = vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()];
+        policy.treasury_account_id = binding.treasury_account_id.clone();
+        policy.treasury_payout_binding = Some(binding);
+
+        PayoutLifecyclePolicyFixture {
+            policy,
+            plain_electorate_rules,
+            lifecycle_seal,
+        }
+    }
+
+    fn assert_invalid_payout_lifecycle_reference(registry: &ValidationFeePolicyRegistryV1) {
+        assert!(matches!(
+            registry.validate(),
+            Err(
+                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
+                    policy_version: 1
+                }
+            )
+        ));
+    }
+
+    fn assert_invalid_policy_authorization(registry: &ValidationFeePolicyRegistryV1) {
+        assert!(matches!(
+            registry.validate(),
+            Err(
+                ValidationFeePolicyRegistryError::InvalidParliamentAuthorization {
+                    policy_version: 1
+                }
+            )
+        ));
+    }
+
+    fn rebind_authorization(
+        authorization: &mut ValidationFeeParliamentAuthorizationV1,
+        proposal_id: [u8; 32],
+    ) {
+        authorization.proposal_id = proposal_id;
+        authorization.proposal_fingerprint = proposal_id;
+        authorization.finalization.referendum_id = proposal_id;
+    }
+
     #[test]
     fn validation_fee_identity_hashes_ignore_and_restore_ambient_flags() {
         let policy = policy(1, None);
@@ -2561,18 +2618,11 @@ mod parliament_tests {
 
     #[test]
     fn payout_policy_requires_matching_enacted_lifecycle_reference() {
-        let binding = payout_binding();
-        let plain_electorate_rules = plain_electorate_rules();
-        let seal = binding.lifecycle_seal().expect("lifecycle seal");
-        let mut payout_policy = policy(1, None);
-        payout_policy.effective_from_height = authorization([1; 32], 10)
-            .enacted_at_height
-            .checked_add(VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS)
-            .expect("payout policy effective height");
-        payout_policy.exemption_classes =
-            vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()];
-        payout_policy.treasury_account_id = binding.treasury_account_id.clone();
-        payout_policy.treasury_payout_binding = Some(binding);
+        let PayoutLifecyclePolicyFixture {
+            policy: payout_policy,
+            plain_electorate_rules,
+            lifecycle_seal: seal,
+        } = payout_lifecycle_policy_fixture();
 
         let missing = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![
@@ -2585,14 +2635,7 @@ mod parliament_tests {
                 .expect("registry entry"),
             ],
         };
-        assert!(matches!(
-            missing.validate(),
-            Err(
-                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
-                    policy_version: 1
-                }
-            )
-        ));
+        assert_invalid_payout_lifecycle_reference(&missing);
 
         let mut bad_seal = seal;
         bad_seal[0] ^= 1;
@@ -2611,14 +2654,7 @@ mod parliament_tests {
                 .expect("registry entry"),
             ],
         };
-        assert!(matches!(
-            mismatched.validate(),
-            Err(
-                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
-                    policy_version: 1
-                }
-            )
-        ));
+        assert_invalid_payout_lifecycle_reference(&mismatched);
 
         let binding = payout_policy
             .treasury_payout_binding
@@ -2654,32 +2690,14 @@ mod parliament_tests {
             .as_mut()
             .expect("lifecycle")
             .parliament_authorization;
-        lifecycle_authorization.proposal_id = [0xA1; 32];
-        lifecycle_authorization.proposal_fingerprint = [0xA1; 32];
-        lifecycle_authorization.finalization.referendum_id = [0xA1; 32];
-        assert!(matches!(
-            rebound_lifecycle.validate(),
-            Err(
-                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
-                    policy_version: 1
-                }
-            )
-        ));
+        rebind_authorization(lifecycle_authorization, [0xA1; 32]);
+        assert_invalid_payout_lifecycle_reference(&rebound_lifecycle);
 
         let mut rebound_policy = valid;
         let policy_authorization =
             &mut rebound_policy.registered_policies[0].parliament_authorization;
-        policy_authorization.proposal_id = [0xA2; 32];
-        policy_authorization.proposal_fingerprint = [0xA2; 32];
-        policy_authorization.finalization.referendum_id = [0xA2; 32];
-        assert!(matches!(
-            rebound_policy.validate(),
-            Err(
-                ValidationFeePolicyRegistryError::InvalidParliamentAuthorization {
-                    policy_version: 1
-                }
-            )
-        ));
+        rebind_authorization(policy_authorization, [0xA2; 32]);
+        assert_invalid_policy_authorization(&rebound_policy);
     }
 
     #[test]

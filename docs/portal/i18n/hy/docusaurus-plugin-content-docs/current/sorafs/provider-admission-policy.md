@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
 ## Ընդունելության աշխատանքային հոսք
 
 1. **Առաջարկի ստեղծում**
-   - CLI՝ ավելացնել `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …`
+   - CLI՝ ավելացնել `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …`
      արտադրում է `ProviderAdmissionProposalV1` + ատեստավորման փաթեթ:
    - Վավերացում. ապահովել պահանջվող դաշտերը, խաղադրույքը > 0, կանոնական բլոկների բռնակ `profile_id`-ում:
 2. **Կառավարման հաստատում**
@@ -70,7 +70,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
 
 ### CLI հղում
 
-Գործարկեք յուրաքանչյուր հրաման `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …`-ի միջոցով:
+Գործարկեք յուրաքանչյուր հրաման `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …`-ի միջոցով:
 
 - `proposal`
   - Պահանջվող դրոշներ՝ `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -117,7 +117,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
 1. Կառուցեք իրավահաջորդի առաջարկի/գովազդի զույգը `provider-admission proposal`-ի և `provider-admission sign`-ի հետ՝ ավելացնելով `--retention-epoch`-ը և թարմացնելով ցցերի/վերջնական կետերը, ըստ անհրաժեշտության:
 2. Կատարել  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
 #### Արտակարգ իրավիճակի չեղարկում
 1. Բացահայտեք վնասված ծրարը և չեղարկեք.
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

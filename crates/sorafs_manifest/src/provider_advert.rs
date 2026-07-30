@@ -31,6 +31,38 @@ pub const MAX_ADVERT_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// Recommended refresh interval (seconds) == 12 hours.
 pub const REFRESH_RECOMMENDATION_SECS: u64 = 12 * 60 * 60;
+/// Maximum exact canonical size of one V1 provider advertisement.
+pub const PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1: usize = 1024 * 1024;
+/// Maximum UTF-8 byte length of a chunker profile handle or alias.
+pub const PROVIDER_ADVERT_PROFILE_HANDLE_MAX_BYTES_V1: usize = 128;
+/// Maximum chunker profile aliases in one V1 advertisement.
+pub const PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1: usize = 16;
+/// Maximum capability TLVs in one V1 advertisement.
+pub const PROVIDER_ADVERT_CAPABILITIES_MAX_V1: usize = 32;
+/// Maximum raw bytes in one capability TLV.
+pub const PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1: usize = 64 * 1024;
+/// Maximum aggregate raw capability bytes in one advertisement.
+pub const PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1: usize = 256 * 1024;
+/// Maximum service endpoints in one V1 advertisement.
+pub const PROVIDER_ADVERT_ENDPOINTS_MAX_V1: usize = 32;
+/// Maximum UTF-8 byte length of one endpoint host pattern.
+pub const PROVIDER_ADVERT_ENDPOINT_HOST_MAX_BYTES_V1: usize = 512;
+/// Maximum metadata rows attached to one endpoint.
+pub const PROVIDER_ADVERT_ENDPOINT_METADATA_MAX_V1: usize = 16;
+/// Maximum raw bytes in one endpoint metadata value.
+pub const PROVIDER_ADVERT_ENDPOINT_METADATA_VALUE_MAX_BYTES_V1: usize = 4 * 1024;
+/// Maximum aggregate endpoint metadata bytes in one advertisement.
+pub const PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1: usize = 64 * 1024;
+/// Maximum rendezvous topics in one V1 advertisement.
+pub const PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1: usize = 32;
+/// Maximum UTF-8 byte length of one rendezvous topic.
+pub const PROVIDER_ADVERT_RENDEZVOUS_TOPIC_MAX_BYTES_V1: usize = 256;
+/// Maximum UTF-8 byte length of one rendezvous region.
+pub const PROVIDER_ADVERT_RENDEZVOUS_REGION_MAX_BYTES_V1: usize = 32;
+/// Maximum UTF-8 byte length of operator notes.
+pub const PROVIDER_ADVERT_NOTES_MAX_BYTES_V1: usize = 4 * 1024;
+/// Maximum transport hints, equal to the V1 protocol enum cardinality.
+pub const PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1: usize = 4;
 
 /// Norito payload advertised by storage providers.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
@@ -73,6 +105,99 @@ pub struct ProviderAdvertSignaturePayloadV1 {
     pub allow_unknown_capabilities: bool,
 }
 
+mod borrowed_norito {
+    use norito::core::NoritoSerialize;
+
+    /// Borrowed value that delegates canonical Norito serialization.
+    pub(super) struct Value<'a, T>(pub(super) &'a T);
+
+    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            T::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
+    pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
+
+    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            <std::vec::Vec<T>>::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
+    version: u8,
+    issued_at: u64,
+    expires_at: u64,
+    body: borrowed_norito::Value<'a, ProviderAdvertBodyV1>,
+    signature_algorithm: SignatureAlgorithm,
+    signature_public_key: borrowed_norito::Vec<'a, u8>,
+    signature_strict: bool,
+    allow_unknown_capabilities: bool,
+}
+
+struct ProviderAdvertSignaturePayloadViewV1<'a>(ProviderAdvertSignaturePayloadViewWireV1<'a>);
+
+impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a> {
+    fn from(advert: &'a ProviderAdvertV1) -> Self {
+        Self(ProviderAdvertSignaturePayloadViewWireV1 {
+            version: advert.version,
+            issued_at: advert.issued_at,
+            expires_at: advert.expires_at,
+            body: borrowed_norito::Value(&advert.body),
+            signature_algorithm: advert.signature.algorithm,
+            signature_public_key: borrowed_norito::Vec(&advert.signature.public_key),
+            signature_strict: advert.signature_strict,
+            allow_unknown_capabilities: advert.allow_unknown_capabilities,
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        ProviderAdvertSignaturePayloadV1::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
 impl ProviderAdvertV1 {
     /// Returns the advert TTL in seconds.
     #[must_use]
@@ -91,8 +216,31 @@ impl ProviderAdvertV1 {
 
     /// Validates timestamps, TTL, and required body fields.
     pub fn validate(&self, now: u64) -> Result<(), AdvertValidationError> {
+        preflight_provider_advert_len(self, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
         if self.version != PROVIDER_ADVERT_VERSION_V1 {
             return Err(AdvertValidationError::UnsupportedVersion(self.version));
+        }
+        if self.signature.algorithm != SignatureAlgorithm::Ed25519 {
+            return Err(AdvertValidationError::UnsupportedSignatureAlgorithm {
+                algorithm: self.signature.algorithm,
+            });
+        }
+        if self.signature.public_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(AdvertValidationError::InvalidSignaturePublicKeyLength {
+                found: self.signature.public_key.len(),
+                expected: PUBLIC_KEY_LENGTH,
+            });
+        }
+        if self.signature.signature.len() != SIGNATURE_LENGTH {
+            return Err(AdvertValidationError::InvalidSignatureLength {
+                found: self.signature.signature.len(),
+                expected: SIGNATURE_LENGTH,
+            });
+        }
+        if crate::inert_bytes(&self.signature.public_key)
+            || crate::inert_bytes(&self.signature.signature)
+        {
+            return Err(AdvertValidationError::InvalidSignatureMaterial);
         }
         if self.expires_at <= self.issued_at {
             return Err(AdvertValidationError::InvalidTimestamps);
@@ -1056,8 +1204,20 @@ impl ProviderAdvertV1 {
 /// Errors raised while validating a provider advert.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AdvertValidationError {
+    #[error("provider advert does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    #[error("provider advert has {found} canonical bytes; maximum is {maximum}")]
+    AdvertTooLarge { found: usize, maximum: usize },
     #[error("unsupported provider advert version: {0}")]
     UnsupportedVersion(u8),
+    #[error("unsupported first-release provider advert signature algorithm: {algorithm:?}")]
+    UnsupportedSignatureAlgorithm { algorithm: SignatureAlgorithm },
+    #[error("provider advert public key has {found} bytes; expected {expected}")]
+    InvalidSignaturePublicKeyLength { found: usize, expected: usize },
+    #[error("provider advert signature has {found} bytes; expected {expected}")]
+    InvalidSignatureLength { found: usize, expected: usize },
+    #[error("provider advert signature material must not be inert")]
+    InvalidSignatureMaterial,
     #[error("expires_at must be greater than issued_at")]
     InvalidTimestamps,
     #[error("advert issued in the future (now={now}, issued_at={issued_at})")]
@@ -1080,6 +1240,16 @@ pub enum AdvertValidationError {
     MissingProfileAliases,
     #[error("profile_aliases may not contain empty or whitespace-only entries")]
     InvalidProfileAlias,
+    #[error("chunker profile handle has {found} bytes; maximum is {maximum}")]
+    ProfileHandleTooLong { found: usize, maximum: usize },
+    #[error("profile alias #{index} has {found} bytes; maximum is {maximum}")]
+    ProfileAliasTooLong {
+        index: usize,
+        found: usize,
+        maximum: usize,
+    },
+    #[error("profile_aliases has {found} rows; maximum is {maximum}")]
+    TooManyProfileAliases { found: usize, maximum: usize },
     #[error("profile_aliases must include required alias {alias}")]
     MissingRequiredAlias { alias: String },
     #[error("unknown chunker profile handle advertised: {handle}")]
@@ -1094,6 +1264,18 @@ pub enum AdvertValidationError {
     DuplicateRangeCapability,
     #[error("duplicate PoTR ML-DSA capability TLV detected")]
     DuplicatePotrMldsaCapability,
+    #[error("advert has {found} capability TLVs; maximum is {maximum}")]
+    TooManyCapabilities { found: usize, maximum: usize },
+    #[error("capability #{index} has {found} payload bytes; maximum is {maximum}")]
+    CapabilityPayloadTooLarge {
+        index: usize,
+        found: usize,
+        maximum: usize,
+    },
+    #[error("capability payloads have {found} aggregate bytes; maximum is {maximum}")]
+    CapabilityPayloadAggregateTooLarge { found: usize, maximum: usize },
+    #[error("capability payload aggregate length overflow")]
+    CapabilityPayloadLengthOverflow,
     #[error("PoTR ML-DSA capability invalid: {0}")]
     InvalidPotrMldsaCapability(#[source] PotrMldsaCapabilityError),
     #[error("stream budget or transport hints require chunk_range_fetch capability")]
@@ -1102,12 +1284,102 @@ pub enum AdvertValidationError {
     InvalidStreamBudget(StreamBudgetError),
     #[error("transport hints must not be empty when provided")]
     EmptyTransportHints,
+    #[error("advert has {found} transport hints; maximum is {maximum}")]
+    TooManyTransportHints { found: usize, maximum: usize },
     #[error("transport hints must have unique protocols")]
     DuplicateTransportProtocol,
     #[error("transport hint invalid: {0}")]
     InvalidTransportHint(TransportHintError),
     #[error("soranet transport hints require a soranet capability")]
     SoranetTransportWithoutCapability,
+    #[error("advert has {found} endpoints; maximum is {maximum}")]
+    TooManyEndpoints { found: usize, maximum: usize },
+    #[error("endpoint #{index} host pattern is noncanonical or exceeds {maximum} bytes")]
+    InvalidEndpointHost { index: usize, maximum: usize },
+    #[error("endpoint #{index} has {found} metadata rows; maximum is {maximum}")]
+    TooManyEndpointMetadata {
+        index: usize,
+        found: usize,
+        maximum: usize,
+    },
+    #[error(
+        "endpoint #{endpoint_index} metadata #{metadata_index} has {found} bytes; maximum is {maximum}"
+    )]
+    EndpointMetadataValueTooLarge {
+        endpoint_index: usize,
+        metadata_index: usize,
+        found: usize,
+        maximum: usize,
+    },
+    #[error("endpoint metadata has {found} aggregate bytes; maximum is {maximum}")]
+    EndpointMetadataAggregateTooLarge { found: usize, maximum: usize },
+    #[error("endpoint metadata aggregate length overflow")]
+    EndpointMetadataLengthOverflow,
+    #[error("advert has {found} rendezvous topics; maximum is {maximum}")]
+    TooManyRendezvousTopics { found: usize, maximum: usize },
+    #[error("rendezvous topic #{index} is noncanonical or exceeds {maximum} bytes")]
+    InvalidRendezvousTopic { index: usize, maximum: usize },
+    #[error("rendezvous region #{index} is noncanonical or exceeds {maximum} bytes")]
+    InvalidRendezvousRegion { index: usize, maximum: usize },
+    #[error("operator notes are noncanonical or exceed {maximum} bytes")]
+    InvalidNotes { maximum: usize },
+}
+
+fn preflight_provider_advert_len(
+    advert: &ProviderAdvertV1,
+    maximum: usize,
+) -> Result<usize, AdvertValidationError> {
+    if let Some(found) = norito::core::NoritoSerialize::encoded_len_exact(advert)
+        && found > maximum
+    {
+        return Err(AdvertValidationError::AdvertTooLarge { found, maximum });
+    }
+    let found = norito::core::encoded_payload_len(advert)
+        .map_err(|_| AdvertValidationError::CanonicalLengthUnavailable)?;
+    if found > maximum {
+        return Err(AdvertValidationError::AdvertTooLarge { found, maximum });
+    }
+    Ok(found)
+}
+
+/// Decode one bounded, canonically encoded V1 provider advertisement.
+///
+/// Structural and signature-policy validation remains the caller's
+/// responsibility because it requires an admission timestamp.
+///
+/// # Errors
+///
+/// Returns a Norito error for oversized, malformed, or noncanonical bytes.
+pub fn decode_provider_advert_v1(bytes: &[u8]) -> Result<ProviderAdvertV1, norito::core::Error> {
+    if bytes.len() > PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 {
+        return Err(norito::core::Error::Message(format!(
+            "provider advert has {} canonical bytes; maximum is {PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1}",
+            bytes.len()
+        )));
+    }
+    let advert: ProviderAdvertV1 = norito::decode_from_bytes_with_limits(
+        bytes,
+        norito::DecodeLimits::new(
+            PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1,
+            PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1,
+            400_000,
+            PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 * 4,
+            64,
+        ),
+    )?;
+    let exact = norito::core::encoded_payload_len(&advert)?;
+    if exact > PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 {
+        return Err(norito::core::Error::Message(format!(
+            "provider advert has {exact} canonical bytes; maximum is {PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1}"
+        )));
+    }
+    let canonical = norito::to_bytes(&advert)?;
+    if canonical != bytes {
+        return Err(norito::core::Error::Message(
+            "provider advert is not canonically encoded".to_owned(),
+        ));
+    }
+    Ok(advert)
 }
 
 impl ProviderAdvertBodyV1 {
@@ -1117,6 +1389,12 @@ impl ProviderAdvertBodyV1 {
             return Err(AdvertValidationError::InvalidQos);
         }
         self.qos.validate()?;
+        if self.profile_id.len() > PROVIDER_ADVERT_PROFILE_HANDLE_MAX_BYTES_V1 {
+            return Err(AdvertValidationError::ProfileHandleTooLong {
+                found: self.profile_id.len(),
+                maximum: PROVIDER_ADVERT_PROFILE_HANDLE_MAX_BYTES_V1,
+            });
+        }
         let descriptor = chunker_registry::lookup_by_handle(&self.profile_id).ok_or_else(|| {
             AdvertValidationError::UnknownProfileHandle {
                 handle: self.profile_id.clone(),
@@ -1129,13 +1407,26 @@ impl ProviderAdvertBodyV1 {
         if aliases.is_empty() {
             return Err(AdvertValidationError::MissingProfileAliases);
         }
+        if aliases.len() > PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1 {
+            return Err(AdvertValidationError::TooManyProfileAliases {
+                found: aliases.len(),
+                maximum: PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1,
+            });
+        }
         let mut seen = std::collections::HashSet::new();
-        for alias in aliases {
+        for (index, alias) in aliases.iter().enumerate() {
+            if alias.len() > PROVIDER_ADVERT_PROFILE_HANDLE_MAX_BYTES_V1 {
+                return Err(AdvertValidationError::ProfileAliasTooLong {
+                    index,
+                    found: alias.len(),
+                    maximum: PROVIDER_ADVERT_PROFILE_HANDLE_MAX_BYTES_V1,
+                });
+            }
             let trimmed = alias.trim();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() || trimmed != alias || alias.chars().any(char::is_control) {
                 return Err(AdvertValidationError::InvalidProfileAlias);
             }
-            if !seen.insert(trimmed.to_owned()) {
+            if !seen.insert(trimmed) {
                 return Err(AdvertValidationError::DuplicateProfileAlias {
                     alias: trimmed.to_owned(),
                 });
@@ -1145,6 +1436,32 @@ impl ProviderAdvertBodyV1 {
             if !seen.contains(*required) {
                 return Err(AdvertValidationError::MissingRequiredAlias {
                     alias: (*required).to_owned(),
+                });
+            }
+        }
+
+        if self.capabilities.len() > PROVIDER_ADVERT_CAPABILITIES_MAX_V1 {
+            return Err(AdvertValidationError::TooManyCapabilities {
+                found: self.capabilities.len(),
+                maximum: PROVIDER_ADVERT_CAPABILITIES_MAX_V1,
+            });
+        }
+        let mut capability_payload_bytes = 0_usize;
+        for (index, capability) in self.capabilities.iter().enumerate() {
+            if capability.payload.len() > PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1 {
+                return Err(AdvertValidationError::CapabilityPayloadTooLarge {
+                    index,
+                    found: capability.payload.len(),
+                    maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1,
+                });
+            }
+            capability_payload_bytes = capability_payload_bytes
+                .checked_add(capability.payload.len())
+                .ok_or(AdvertValidationError::CapabilityPayloadLengthOverflow)?;
+            if capability_payload_bytes > PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1 {
+                return Err(AdvertValidationError::CapabilityPayloadAggregateTooLarge {
+                    found: capability_payload_bytes,
+                    maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1,
                 });
             }
         }
@@ -1174,6 +1491,86 @@ impl ProviderAdvertBodyV1 {
             }
         }
 
+        if self.endpoints.len() > PROVIDER_ADVERT_ENDPOINTS_MAX_V1 {
+            return Err(AdvertValidationError::TooManyEndpoints {
+                found: self.endpoints.len(),
+                maximum: PROVIDER_ADVERT_ENDPOINTS_MAX_V1,
+            });
+        }
+        let mut endpoint_metadata_bytes = 0_usize;
+        for (endpoint_index, endpoint) in self.endpoints.iter().enumerate() {
+            if !is_canonical_bounded_text(
+                &endpoint.host_pattern,
+                PROVIDER_ADVERT_ENDPOINT_HOST_MAX_BYTES_V1,
+            ) {
+                return Err(AdvertValidationError::InvalidEndpointHost {
+                    index: endpoint_index,
+                    maximum: PROVIDER_ADVERT_ENDPOINT_HOST_MAX_BYTES_V1,
+                });
+            }
+            if endpoint.metadata.len() > PROVIDER_ADVERT_ENDPOINT_METADATA_MAX_V1 {
+                return Err(AdvertValidationError::TooManyEndpointMetadata {
+                    index: endpoint_index,
+                    found: endpoint.metadata.len(),
+                    maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_MAX_V1,
+                });
+            }
+            for (metadata_index, metadata) in endpoint.metadata.iter().enumerate() {
+                if metadata.value.len() > PROVIDER_ADVERT_ENDPOINT_METADATA_VALUE_MAX_BYTES_V1 {
+                    return Err(AdvertValidationError::EndpointMetadataValueTooLarge {
+                        endpoint_index,
+                        metadata_index,
+                        found: metadata.value.len(),
+                        maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_VALUE_MAX_BYTES_V1,
+                    });
+                }
+                endpoint_metadata_bytes = endpoint_metadata_bytes
+                    .checked_add(metadata.value.len())
+                    .ok_or(AdvertValidationError::EndpointMetadataLengthOverflow)?;
+                if endpoint_metadata_bytes > PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1 {
+                    return Err(AdvertValidationError::EndpointMetadataAggregateTooLarge {
+                        found: endpoint_metadata_bytes,
+                        maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1,
+                    });
+                }
+            }
+        }
+
+        if self.rendezvous_topics.len() > PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1 {
+            return Err(AdvertValidationError::TooManyRendezvousTopics {
+                found: self.rendezvous_topics.len(),
+                maximum: PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1,
+            });
+        }
+        for (index, rendezvous) in self.rendezvous_topics.iter().enumerate() {
+            if !is_canonical_bounded_text(
+                &rendezvous.topic,
+                PROVIDER_ADVERT_RENDEZVOUS_TOPIC_MAX_BYTES_V1,
+            ) {
+                return Err(AdvertValidationError::InvalidRendezvousTopic {
+                    index,
+                    maximum: PROVIDER_ADVERT_RENDEZVOUS_TOPIC_MAX_BYTES_V1,
+                });
+            }
+            if !is_canonical_bounded_text(
+                &rendezvous.region,
+                PROVIDER_ADVERT_RENDEZVOUS_REGION_MAX_BYTES_V1,
+            ) {
+                return Err(AdvertValidationError::InvalidRendezvousRegion {
+                    index,
+                    maximum: PROVIDER_ADVERT_RENDEZVOUS_REGION_MAX_BYTES_V1,
+                });
+            }
+        }
+
+        if self.notes.as_ref().is_some_and(|notes| {
+            !is_canonical_bounded_text(notes, PROVIDER_ADVERT_NOTES_MAX_BYTES_V1)
+        }) {
+            return Err(AdvertValidationError::InvalidNotes {
+                maximum: PROVIDER_ADVERT_NOTES_MAX_BYTES_V1,
+            });
+        }
+
         let mut has_stream_budget = false;
         if let Some(budget) = &self.stream_budget {
             has_stream_budget = true;
@@ -1186,6 +1583,12 @@ impl ProviderAdvertBodyV1 {
         if let Some(hints) = &self.transport_hints {
             if hints.is_empty() {
                 return Err(AdvertValidationError::EmptyTransportHints);
+            }
+            if hints.len() > PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1 {
+                return Err(AdvertValidationError::TooManyTransportHints {
+                    found: hints.len(),
+                    maximum: PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1,
+                });
             }
             has_transport_hints = true;
             let mut seen_protocols = std::collections::HashSet::new();
@@ -1214,6 +1617,13 @@ impl ProviderAdvertBodyV1 {
         }
         Ok(())
     }
+}
+
+fn is_canonical_bounded_text(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
 }
 
 impl ProviderAdvertV1 {
@@ -1245,7 +1655,18 @@ impl ProviderAdvertV1 {
     /// signature algorithm and public key, strict-verification policy, and
     /// unknown-capability policy. Signature bytes themselves are excluded.
     pub fn signature_payload_bytes(&self) -> Result<Vec<u8>, AdvertSignatureError> {
-        let envelope_bytes = norito::to_bytes(&self.signature_payload())
+        preflight_provider_advert_len(self, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
+            .map_err(|error| AdvertSignatureError::EnvelopeEncoding(error.to_string()))?;
+        let envelope = ProviderAdvertSignaturePayloadViewV1::from(self);
+        let exact = norito::core::encoded_payload_len(&envelope)
+            .map_err(|_| AdvertSignatureError::CanonicalLengthUnavailable)?;
+        if exact > PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 {
+            return Err(AdvertSignatureError::EnvelopeTooLarge {
+                found: exact,
+                maximum: PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
+            });
+        }
+        let envelope_bytes = norito::to_bytes(&envelope)
             .map_err(|err| AdvertSignatureError::EnvelopeEncoding(err.to_string()))?;
         let mut payload =
             Vec::with_capacity(PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1.len() + envelope_bytes.len());
@@ -1325,6 +1746,17 @@ pub enum AdvertSignatureError {
     /// Public key bytes could not be parsed.
     #[error("invalid ed25519 public key: {0}")]
     InvalidPublicKey(String),
+    /// Canonical signature-envelope length cannot be preflighted exactly.
+    #[error("provider advert signature envelope has no exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    /// Canonical signature envelope exceeds the V1 provider-advert ceiling.
+    #[error("provider advert signature envelope has {found} bytes; maximum is {maximum}")]
+    EnvelopeTooLarge {
+        /// Exact canonical signature-envelope bytes.
+        found: usize,
+        /// Maximum accepted signature-envelope bytes.
+        maximum: usize,
+    },
     /// Advert envelope could not be encoded into canonical signature bytes.
     #[error("failed to encode provider advert envelope for signature verification: {0}")]
     EnvelopeEncoding(String),
@@ -1344,9 +1776,38 @@ fn unix_time_now() -> Option<u64> {
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{decode_from_bytes, to_bytes};
+    use norito::{NoritoSerialize as _, decode_from_bytes, to_bytes};
 
     use super::*;
+
+    fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let mut bytes = Vec::new();
+        value
+            .serialize(&mut bytes)
+            .expect("serialize explicit layout");
+        bytes
+    }
+
+    fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        norito::to_bytes(value).expect("serialize explicit canonical frame")
+    }
+
+    fn supported_layouts() -> [u8; 8] {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+
+        [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ]
+    }
 
     fn sample_advert(now: u64) -> ProviderAdvertV1 {
         let issued_at = now;
@@ -1447,8 +1908,369 @@ mod tests {
         advert.validate_with_body(1_700_000_000).unwrap();
 
         let bytes = norito::to_bytes(&advert).expect("serialize advert");
-        let decoded: ProviderAdvertV1 = norito::decode_from_bytes(&bytes).expect("decode advert");
+        let decoded = decode_provider_advert_v1(&bytes).expect("decode bounded canonical advert");
         assert_eq!(decoded, advert);
+        let compressed =
+            norito::to_compressed_bytes(&advert, Some(norito::CompressionConfig::default()))
+                .expect("compress advert");
+        assert!(decode_provider_advert_v1(&compressed).is_err());
+        assert!(
+            decode_provider_advert_v1(&vec![0; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 + 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn advert_size_and_signature_preflight_accept_boundaries_and_reject_one_over() {
+        let now = 1_700_000_000;
+        let advert = sample_advert(now);
+        let exact = norito::core::encoded_payload_len(&advert)
+            .expect("provider advert canonical length must be countable");
+        assert_eq!(preflight_provider_advert_len(&advert, exact), Ok(exact));
+        assert_eq!(
+            preflight_provider_advert_len(&advert, exact.saturating_sub(1)),
+            Err(AdvertValidationError::AdvertTooLarge {
+                found: exact,
+                maximum: exact.saturating_sub(1),
+            })
+        );
+
+        let mut unsupported = advert.clone();
+        unsupported.signature.algorithm = SignatureAlgorithm::MultiSig;
+        assert_eq!(
+            unsupported.validate(now),
+            Err(AdvertValidationError::UnsupportedSignatureAlgorithm {
+                algorithm: SignatureAlgorithm::MultiSig,
+            })
+        );
+
+        let mut bad_key = advert.clone();
+        bad_key.signature.public_key.push(7);
+        assert_eq!(
+            bad_key.validate(now),
+            Err(AdvertValidationError::InvalidSignaturePublicKeyLength {
+                found: PUBLIC_KEY_LENGTH + 1,
+                expected: PUBLIC_KEY_LENGTH,
+            })
+        );
+
+        let mut oversized = advert;
+        oversized.body.notes = Some("x".repeat(PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1));
+        assert!(matches!(
+            oversized.validate(now),
+            Err(AdvertValidationError::AdvertTooLarge {
+                maximum: PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            oversized.signature_payload_bytes(),
+            Err(AdvertSignatureError::EnvelopeEncoding(reason))
+                if reason.contains("maximum")
+        ));
+    }
+
+    #[test]
+    fn borrowed_advert_signature_view_is_byte_exact_for_every_layout() {
+        let advert = sample_advert(1_700_000_000);
+        let owned = advert.signature_payload();
+        let borrowed = ProviderAdvertSignaturePayloadViewV1::from(&advert);
+
+        assert_eq!(
+            <ProviderAdvertSignaturePayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
+            ProviderAdvertSignaturePayloadV1::schema_hash()
+        );
+        let owned_frame = norito::to_bytes(&owned).expect("encode owned signature envelope");
+        assert_eq!(
+            norito::to_bytes(&borrowed).expect("encode borrowed signature envelope"),
+            owned_frame
+        );
+        let mut expected_domain_separated = PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1.to_vec();
+        expected_domain_separated.extend_from_slice(&owned_frame);
+        assert_eq!(
+            advert
+                .signature_payload_bytes()
+                .expect("encode domain-separated borrowed signature envelope"),
+            expected_domain_separated
+        );
+
+        for flags in supported_layouts() {
+            let owned_bytes = encode_bare_with_flags(&owned, flags);
+            let borrowed_bytes = encode_bare_with_flags(&borrowed, flags);
+            assert_eq!(
+                borrowed_bytes, owned_bytes,
+                "borrowed provider-advert signing bytes changed for flags 0x{flags:02x}"
+            );
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                borrowed.encoded_len_exact(),
+                owned.encoded_len_exact(),
+                "borrowed provider-advert signing size changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                norito::core::encoded_payload_len(&borrowed)
+                    .expect("borrowed provider advert length must be countable"),
+                borrowed_bytes.len()
+            );
+            let owned_frame = encode_frame_with_flags(&owned, flags);
+            assert_eq!(
+                encode_frame_with_flags(&borrowed, flags),
+                owned_frame,
+                "borrowed provider-advert canonical frame or layout flags changed for flags 0x{flags:02x}"
+            );
+            let mut expected_payload = PROVIDER_ADVERT_SIGNATURE_DOMAIN_V1.to_vec();
+            expected_payload.extend_from_slice(&owned_frame);
+            assert_eq!(
+                advert
+                    .signature_payload_bytes()
+                    .expect("encode borrowed provider-advert signing payload"),
+                expected_payload,
+                "provider-advert signature payload changed for flags 0x{flags:02x}"
+            );
+        }
+    }
+
+    #[test]
+    fn advert_body_collection_boundaries_are_deterministic() {
+        let mut body = sample_advert(1_700_000_000).body;
+        let aliases = body.profile_aliases.as_mut().expect("sample aliases");
+        for index in aliases.len()..PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1 {
+            aliases.push(format!("alias-{index:02}"));
+        }
+        while body.capabilities.len() < PROVIDER_ADVERT_CAPABILITIES_MAX_V1 {
+            body.capabilities.push(CapabilityTlv {
+                cap_type: CapabilityType::ToriiGateway,
+                payload: Vec::new(),
+            });
+        }
+        let endpoint = body.endpoints[0].clone();
+        body.endpoints = vec![endpoint; PROVIDER_ADVERT_ENDPOINTS_MAX_V1];
+        body.rendezvous_topics = (0..PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1)
+            .map(|index| RendezvousTopic {
+                topic: format!("sorafs.boundary.{index:02}"),
+                region: "global".to_owned(),
+            })
+            .collect();
+        body.notes = Some("x".repeat(PROVIDER_ADVERT_NOTES_MAX_BYTES_V1));
+        assert!(body.validate().is_ok());
+
+        let mut too_many_aliases = body.clone();
+        too_many_aliases
+            .profile_aliases
+            .as_mut()
+            .expect("aliases")
+            .push("overflow".to_owned());
+        assert_eq!(
+            too_many_aliases.validate(),
+            Err(AdvertValidationError::TooManyProfileAliases {
+                found: PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1 + 1,
+                maximum: PROVIDER_ADVERT_PROFILE_ALIASES_MAX_V1,
+            })
+        );
+
+        let mut too_many_capabilities = body.clone();
+        too_many_capabilities.capabilities.push(CapabilityTlv {
+            cap_type: CapabilityType::ToriiGateway,
+            payload: Vec::new(),
+        });
+        assert_eq!(
+            too_many_capabilities.validate(),
+            Err(AdvertValidationError::TooManyCapabilities {
+                found: PROVIDER_ADVERT_CAPABILITIES_MAX_V1 + 1,
+                maximum: PROVIDER_ADVERT_CAPABILITIES_MAX_V1,
+            })
+        );
+
+        let mut too_many_endpoints = body.clone();
+        too_many_endpoints
+            .endpoints
+            .push(too_many_endpoints.endpoints[0].clone());
+        assert_eq!(
+            too_many_endpoints.validate(),
+            Err(AdvertValidationError::TooManyEndpoints {
+                found: PROVIDER_ADVERT_ENDPOINTS_MAX_V1 + 1,
+                maximum: PROVIDER_ADVERT_ENDPOINTS_MAX_V1,
+            })
+        );
+
+        let mut too_many_topics = body;
+        too_many_topics.rendezvous_topics.push(RendezvousTopic {
+            topic: "overflow".to_owned(),
+            region: "global".to_owned(),
+        });
+        assert_eq!(
+            too_many_topics.validate(),
+            Err(AdvertValidationError::TooManyRendezvousTopics {
+                found: PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1 + 1,
+                maximum: PROVIDER_ADVERT_RENDEZVOUS_TOPICS_MAX_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn advert_body_byte_aggregates_accept_boundaries_and_reject_one_over() {
+        let mut body = sample_advert(1_700_000_000).body;
+        let mut capability_boundary = body.clone();
+        capability_boundary.stream_budget = None;
+        capability_boundary.transport_hints = None;
+        capability_boundary.capabilities = (0..4)
+            .map(|_| CapabilityTlv {
+                cap_type: CapabilityType::VendorReserved,
+                payload: vec![1; PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1],
+            })
+            .collect();
+        assert_eq!(
+            capability_boundary
+                .capabilities
+                .iter()
+                .map(|capability| capability.payload.len())
+                .sum::<usize>(),
+            PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1
+        );
+        capability_boundary
+            .validate()
+            .expect("exact capability aggregate boundary validates");
+
+        capability_boundary.capabilities.push(CapabilityTlv {
+            cap_type: CapabilityType::VendorReserved,
+            payload: vec![1],
+        });
+        assert_eq!(
+            capability_boundary.validate(),
+            Err(AdvertValidationError::CapabilityPayloadAggregateTooLarge {
+                found: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1 + 1,
+                maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_TOTAL_MAX_BYTES_V1,
+            })
+        );
+
+        body.capabilities.push(CapabilityTlv {
+            cap_type: CapabilityType::VendorReserved,
+            payload: vec![1; PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1],
+        });
+        body.endpoints[0].host_pattern = "h".repeat(PROVIDER_ADVERT_ENDPOINT_HOST_MAX_BYTES_V1);
+        body.endpoints[0].metadata = vec![
+            EndpointMetadata {
+                key: EndpointMetadataKey::Region,
+                value: vec![1; PROVIDER_ADVERT_ENDPOINT_METADATA_VALUE_MAX_BYTES_V1],
+            };
+            PROVIDER_ADVERT_ENDPOINT_METADATA_MAX_V1
+        ];
+        body.rendezvous_topics[0].topic = "t".repeat(PROVIDER_ADVERT_RENDEZVOUS_TOPIC_MAX_BYTES_V1);
+        body.rendezvous_topics[0].region =
+            "r".repeat(PROVIDER_ADVERT_RENDEZVOUS_REGION_MAX_BYTES_V1);
+        assert!(body.validate().is_ok());
+        let mut boundary_advert = sample_advert(1_700_000_000);
+        boundary_advert.body = body.clone();
+        let boundary_bytes = to_bytes(&boundary_advert).expect("encode field-boundary advert");
+        assert_eq!(
+            decode_provider_advert_v1(&boundary_bytes)
+                .expect("bounded decoder accepts the maximum capability field"),
+            boundary_advert
+        );
+
+        let mut oversized_capability = body.clone();
+        oversized_capability
+            .capabilities
+            .last_mut()
+            .expect("vendor capability")
+            .payload
+            .push(1);
+        assert!(matches!(
+            oversized_capability.validate(),
+            Err(AdvertValidationError::CapabilityPayloadTooLarge {
+                maximum: PROVIDER_ADVERT_CAPABILITY_PAYLOAD_MAX_BYTES_V1,
+                ..
+            })
+        ));
+
+        let mut oversized_host = body.clone();
+        oversized_host.endpoints[0].host_pattern.push('h');
+        assert_eq!(
+            oversized_host.validate(),
+            Err(AdvertValidationError::InvalidEndpointHost {
+                index: 0,
+                maximum: PROVIDER_ADVERT_ENDPOINT_HOST_MAX_BYTES_V1,
+            })
+        );
+
+        let mut aggregate_overflow = body.clone();
+        aggregate_overflow.endpoints.push(AdvertEndpoint {
+            kind: EndpointKind::Torii,
+            host_pattern: "extra.example".to_owned(),
+            metadata: vec![EndpointMetadata {
+                key: EndpointMetadataKey::Region,
+                value: vec![1],
+            }],
+        });
+        assert_eq!(
+            aggregate_overflow.validate(),
+            Err(AdvertValidationError::EndpointMetadataAggregateTooLarge {
+                found: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1 + 1,
+                maximum: PROVIDER_ADVERT_ENDPOINT_METADATA_TOTAL_MAX_BYTES_V1,
+            })
+        );
+
+        let mut oversized_topic = body.clone();
+        oversized_topic.rendezvous_topics[0].topic.push('t');
+        assert_eq!(
+            oversized_topic.validate(),
+            Err(AdvertValidationError::InvalidRendezvousTopic {
+                index: 0,
+                maximum: PROVIDER_ADVERT_RENDEZVOUS_TOPIC_MAX_BYTES_V1,
+            })
+        );
+
+        let mut oversized_notes = body;
+        oversized_notes.notes = Some("n".repeat(PROVIDER_ADVERT_NOTES_MAX_BYTES_V1 + 1));
+        assert_eq!(
+            oversized_notes.validate(),
+            Err(AdvertValidationError::InvalidNotes {
+                maximum: PROVIDER_ADVERT_NOTES_MAX_BYTES_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn advert_transport_hint_enum_boundary_is_enforced() {
+        let mut body = sample_advert(1_700_000_000).body;
+        body.capabilities.push(CapabilityTlv {
+            cap_type: CapabilityType::SoraNetHybridPq,
+            payload: Vec::new(),
+        });
+        body.transport_hints = Some(vec![
+            TransportHintV1 {
+                protocol: TransportProtocol::ToriiHttpRange,
+                priority: 0,
+            },
+            TransportHintV1 {
+                protocol: TransportProtocol::QuicStream,
+                priority: 1,
+            },
+            TransportHintV1 {
+                protocol: TransportProtocol::SoraNetRelay,
+                priority: 2,
+            },
+            TransportHintV1 {
+                protocol: TransportProtocol::VendorReserved,
+                priority: 3,
+            },
+        ]);
+        assert!(body.validate().is_ok());
+
+        body.transport_hints
+            .as_mut()
+            .expect("transport hints")
+            .push(TransportHintV1 {
+                protocol: TransportProtocol::ToriiHttpRange,
+                priority: 4,
+            });
+        assert_eq!(
+            body.validate(),
+            Err(AdvertValidationError::TooManyTransportHints {
+                found: PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1 + 1,
+                maximum: PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1,
+            })
+        );
     }
 
     #[test]

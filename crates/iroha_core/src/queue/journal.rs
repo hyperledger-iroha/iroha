@@ -242,12 +242,10 @@ impl QueuePlanJournalRecordV4 {
         enqueue_timestamp_ms: u64,
         global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
     ) -> Self {
-        let entrypoint_hash = HashOf::new(&entrypoint);
+        let entrypoint_hash = entrypoint.hash();
         let signed_transaction_hash = match &entrypoint {
-            TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
-            TransactionEntrypoint::SealedReveal(reveal) => {
-                Some(HashOf::new(reveal.signed_transaction()))
-            }
+            TransactionEntrypoint::External(signed) => Some(signed.hash()),
+            TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
             TransactionEntrypoint::SealedCommitment(_)
             | TransactionEntrypoint::PrivateKaigi(_)
             | TransactionEntrypoint::Time(_) => None,
@@ -2247,15 +2245,15 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                     record.version, QUEUE_PLAN_JOURNAL_VERSION
                 )));
             }
-            if record.entrypoint_hash != HashOf::new(&record.entrypoint) {
+            if record.entrypoint_hash != record.entrypoint.hash() {
                 return Err(invalid_data(
                     "queue plan journal entrypoint hash does not match its canonical entrypoint",
                 ));
             }
             let expected_signed_hash = match &record.entrypoint {
-                TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
+                TransactionEntrypoint::External(signed) => Some(signed.hash()),
                 TransactionEntrypoint::SealedReveal(reveal) => {
-                    Some(HashOf::new(reveal.signed_transaction()))
+                    Some(reveal.signed_transaction().hash())
                 }
                 TransactionEntrypoint::SealedCommitment(_)
                 | TransactionEntrypoint::PrivateKaigi(_)

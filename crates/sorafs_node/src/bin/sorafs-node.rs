@@ -2,7 +2,7 @@
 
 use std::{
     env, fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process,
 };
@@ -18,7 +18,11 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ManifestV1, decode_manifest_v1_canonical,
-    por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
+    por::{
+        AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditOutcomeV1, AuditVerdictV1,
+        POR_CHALLENGE_MAX_CANONICAL_BYTES_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1, PorChallengeV1,
+        PorProofV1, decode_audit_verdict_v1, decode_por_challenge_v1, decode_por_proof_v1,
+    },
 };
 use sorafs_node::{
     NodeHandle, PorFailedRepairIntentV1, PorRepairHandoff, PorRepairHandoffError,
@@ -242,21 +246,20 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         .proof_path
         .ok_or_else(|| "missing required option --proof".to_string())?;
 
-    let challenge_bytes = fs::read(&challenge_path).map_err(|err| {
-        format!(
-            "failed to read challenge {}: {err}",
-            challenge_path.display()
-        )
-    })?;
-    let proof_bytes = fs::read(&proof_path)
-        .map_err(|err| format!("failed to read proof {}: {err}", proof_path.display()))?;
+    let challenge_bytes = read_bounded_por_file(
+        &challenge_path,
+        "challenge",
+        POR_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+    )?;
+    let proof_bytes =
+        read_bounded_por_file(&proof_path, "proof", POR_PROOF_MAX_CANONICAL_BYTES_V1)?;
 
-    let challenge: PorChallengeV1 = norito::decode_from_bytes(&challenge_bytes)
+    let challenge: PorChallengeV1 = decode_por_challenge_v1(&challenge_bytes)
         .map_err(|err| format!("failed to decode challenge: {err}"))?;
     challenge
         .validate()
         .map_err(|err| format!("invalid challenge: {err}"))?;
-    let proof: PorProofV1 = norito::decode_from_bytes(&proof_bytes)
+    let proof: PorProofV1 = decode_por_proof_v1(&proof_bytes)
         .map_err(|err| format!("failed to decode proof: {err}"))?;
     proof
         .validate()
@@ -310,9 +313,12 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to record proof: {err}"))?;
 
     let verdict_snapshot = if let Some(verdict_path) = opts.verdict_path {
-        let verdict_bytes = fs::read(&verdict_path)
-            .map_err(|err| format!("failed to read verdict {}: {err}", verdict_path.display()))?;
-        let verdict: AuditVerdictV1 = norito::decode_from_bytes(&verdict_bytes)
+        let verdict_bytes = read_bounded_por_file(
+            &verdict_path,
+            "verdict",
+            AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1,
+        )?;
+        let verdict: AuditVerdictV1 = decode_audit_verdict_v1(&verdict_bytes)
             .map_err(|err| format!("failed to decode verdict: {err}"))?;
         verdict
             .validate()
@@ -356,6 +362,44 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
         write_json_file(&path, json_value)?;
     }
     Ok(())
+}
+
+fn read_bounded_por_file(path: &Path, kind: &str, maximum: usize) -> Result<Vec<u8>, String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_no_follow_flag(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|err| format!("failed to open {kind} {}: {err}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect {kind} {}: {err}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("{kind} {} must be a regular file", path.display()));
+    }
+    if metadata.len() > u64::try_from(maximum).unwrap_or(u64::MAX) {
+        return Err(format!(
+            "{kind} {} exceeds the {maximum}-byte canonical limit",
+            path.display()
+        ));
+    }
+    let read_limit = u64::try_from(
+        maximum
+            .checked_add(1)
+            .ok_or_else(|| format!("{kind} file size limit overflow"))?,
+    )
+    .map_err(|_| format!("{kind} file size limit cannot be represented"))?;
+    let mut bytes = Vec::new();
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|err| format!("failed to read {kind} {}: {err}", path.display()))?;
+    if bytes.len() > maximum {
+        return Err(format!(
+            "{kind} {} exceeds the {maximum}-byte canonical limit",
+            path.display()
+        ));
+    }
+    Ok(bytes)
 }
 
 fn build_por_summary(
@@ -706,9 +750,80 @@ fn set_no_follow_flag(options: &mut fs::OpenOptions) {
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(
+    target_os = "android",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "riscv64",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))
+))]
+compile_error!("SoraFS node output flags are not qualified for this Android architecture");
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+compile_error!("SoraFS node output flags are not qualified for this Unix target");
+
+#[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    0x400000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "aarch64", target_arch = "arm")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "android",
+    any(target_arch = "x86", target_arch = "x86_64")
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    )
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x8000
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(
+        target_arch = "aarch64",
+        target_arch = "arm",
+        target_arch = "m68k",
+        target_arch = "powerpc",
+        target_arch = "powerpc64"
+    ))
+))]
+fn platform_no_follow_flag() -> i32 {
+    0x20000
 }
 
 #[cfg(all(
@@ -725,23 +840,6 @@ fn platform_no_follow_flag() -> i32 {
 ))]
 fn platform_no_follow_flag() -> i32 {
     0x100
-}
-
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "freebsd",
-        target_os = "openbsd",
-        target_os = "netbsd",
-        target_os = "dragonfly"
-    ))
-))]
-fn platform_no_follow_flag() -> i32 {
-    0
 }
 
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
@@ -762,6 +860,114 @@ fn print_json(map: Map) -> Result<(), String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn bounded_por_file_reader_accepts_boundary_and_rejects_one_over() {
+        let temp = TempDir::new().expect("tempdir");
+        let input_path = temp.path().join("por.to");
+        fs::write(&input_path, [1_u8, 2, 3]).expect("write boundary input");
+        assert_eq!(
+            read_bounded_por_file(&input_path, "proof", 3).expect("boundary input"),
+            vec![1, 2, 3]
+        );
+
+        fs::write(&input_path, [1_u8, 2, 3, 4]).expect("write oversized input");
+        assert!(
+            read_bounded_por_file(&input_path, "proof", 3)
+                .expect_err("one-over input must fail")
+                .contains("exceeds")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_por_file_reader_rejects_symlink() {
+        let temp = TempDir::new().expect("tempdir");
+        let target_path = temp.path().join("target.to");
+        fs::write(&target_path, [1_u8, 2, 3]).expect("write target");
+        let input_path = temp.path().join("input.to");
+        std::os::unix::fs::symlink(&target_path, &input_path).expect("create symlink");
+
+        assert!(read_bounded_por_file(&input_path, "proof", 3).is_err());
+    }
+
+    // Keep one target-gated assertion for every ABI branch. Overlapping branches
+    // fail with duplicate definitions; missing branches fail to resolve the flag.
+    #[cfg(all(
+        target_os = "linux",
+        any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        )
+    ))]
+    #[test]
+    fn linux_no_follow_flag_matches_low_flag_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        not(any(
+            target_arch = "aarch64",
+            target_arch = "arm",
+            target_arch = "m68k",
+            target_arch = "powerpc",
+            target_arch = "powerpc64"
+        ))
+    ))]
+    #[test]
+    fn linux_no_follow_flag_matches_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "aarch64", target_arch = "arm")
+    ))]
+    #[test]
+    fn android_arm_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+    }
+
+    #[cfg(all(
+        target_os = "android",
+        any(target_arch = "x86", target_arch = "x86_64")
+    ))]
+    #[test]
+    fn android_x86_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+
+    #[cfg(all(target_os = "android", target_arch = "riscv64"))]
+    #[test]
+    fn android_riscv64_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x400000);
+    }
+
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "riscv32", target_arch = "riscv64")
+    ))]
+    #[test]
+    fn linux_riscv_no_follow_flag_remains_generic_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    #[test]
+    fn apple_and_bsd_no_follow_flag_matches_target_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+    }
 
     #[test]
     fn write_bytes_creates_parent_and_writes_all_bytes() {

@@ -37,7 +37,7 @@ Restest en tâches d'ingénierie traçables.
 | شهادة نقطة النهاية | يجب أن يتم دعم كل نقطة نهاية مُعلنة من خلال تقرير شهادة mTLS أو QUIC. | قم بتعريف الحمولة Norito `EndpointAttestationV1` والمخزن عند نقطة النهاية في حزمة الإدخال. |
 
 ## سير العمل للقبول1. **إنشاء الاقتراح**
-   - سطر الأوامر: ajouter `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - سطر الأوامر: ajouter `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      منتج `ProviderAdmissionProposalV1` + حزمة التصديق.
    - التحقق من الصحة: ​​ضمان الأبطال المطلوبة، الحصة > 0، التعامل مع مقسم الكنسي في `profile_id`.
 2. **إقرار الحكم**
@@ -62,7 +62,7 @@ Restest en tâches d'ingénierie traçables.
 
 ### مرجع CLI
 
-قم بتنفيذ كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+قم بتنفيذ كل أمر عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام تتطلب: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وعلى الأقل `--endpoint=<kind:host>`.
@@ -104,7 +104,7 @@ Restest en tâches d'ingénierie traçables.
 1. قم بإنشاء الاقتراح المزدوج/الإعلان الناجح مع `provider-admission proposal` و`provider-admission sign`، بالإضافة إلى `--retention-epoch` ومع مراعاة نقاط النهاية/نقاط النهاية إذا طلبت ذلك.
 2. نفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -120,7 +120,7 @@ Restest en tâches d'ingénierie traçables.
 5. قم بإعادة التركيب وتثبيت التركيبات الأساسية عبر `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` ; CI (`ci/check_sorafs_fixtures.sh`) يتأكد من أن الطلعات Norito موجودة في الاسطبلات.#### إلغاء حالة الطوارئ
 1. حدد المظروف الذي تعرض للاختراق وقم بإبطاله :
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

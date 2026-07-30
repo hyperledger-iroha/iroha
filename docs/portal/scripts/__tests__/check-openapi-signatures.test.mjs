@@ -1156,7 +1156,11 @@ test('checkOpenApiSignatures rejects incomplete manifest generator metadata', as
     ],
     [
       'dirty-missing-digest',
-      {generator_commit: null, generator_dirty: true},
+      {
+        generator_commit: null,
+        generator_dirty: true,
+        generator_source_sha256_hex: undefined,
+      },
       /generator_source_sha256_hex/i,
     ],
     [
@@ -1989,6 +1993,7 @@ function buildManifest({path: specPath, payload, sha256, signature = signPayload
     generated_unix_ms: Date.now(),
     generator_commit: 'ab'.repeat(20),
     generator_dirty: false,
+    generator_source_sha256_hex: 'cd'.repeat(32),
     artifact,
   };
   if (signature?.privateKeyHex) {

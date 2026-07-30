@@ -225,9 +225,12 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<sorafs::ResolveSorafsCapacityDispute>,
     InstructionRegistry::register_slice::<sorafs::IssueReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::CompleteReplicationOrder>,
+    InstructionRegistry::register_slice::<sorafs::ReviseReplicationOrderAssignments>,
     InstructionRegistry::register_slice::<sorafs::ExpireReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::RegisterProviderOwner>,
     InstructionRegistry::register_slice::<sorafs::UnregisterProviderOwner>,
+    InstructionRegistry::register_slice::<sorafs::SetProviderIngestCompletionAuthority>,
+    InstructionRegistry::register_slice::<sorafs::RevokeProviderIngestCompletionAuthority>,
     InstructionRegistry::register_slice::<sorafs::SetPricingSchedule>,
     InstructionRegistry::register_slice::<sorafs::UpsertProviderCredit>,
     InstructionRegistry::register_slice::<sorafs::SetSorafsPopIssuerPolicy>,
@@ -443,6 +446,42 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<zk::CancelConfidentialPolicyTransition>(
         "zk::CancelConfidentialPolicyTransition",
     );
+    registry = with_privacy_stable_ids(registry);
+    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
+        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
+        musubi::PublishMusubiRelease::WIRE_ID,
+    );
+    registry = registry
+        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
+    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
+        musubi::SetMusubiShortAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
+        musubi::AssertMusubiReleaseExists::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
+        "iroha.staking.activate_public_lane_validator",
+    );
+    registry = registry
+        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
+            "iroha.staking.rebind_public_lane_validator_peer",
+        );
+    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
+        "iroha.staking.exit_public_lane_validator",
+    );
+    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
+    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
+    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
+    registry
+}
+
+fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
         privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
     );
@@ -533,37 +572,6 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
         privacy::SubmitPrivacyProofV1::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
-        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
-        musubi::PublishMusubiRelease::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
-    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
-        musubi::SetMusubiShortAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
-        musubi::AssertMusubiReleaseExists::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
-        "iroha.staking.activate_public_lane_validator",
-    );
-    registry = registry
-        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
-            "iroha.staking.rebind_public_lane_validator_peer",
-        );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
-        "iroha.staking.exit_public_lane_validator",
-    );
-    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
-    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
-    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
     registry
 }
 

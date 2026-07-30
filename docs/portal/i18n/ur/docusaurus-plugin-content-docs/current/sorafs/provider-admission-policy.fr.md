@@ -39,7 +39,7 @@ translation_last_reviewed: 2026-02-07
 | اختتامی نقطہ سرٹیفیکیشن | ہر مشتہر اختتامی نقطہ کو ایم ٹی ایل ایس یا کوئیک سرٹیفکیٹ رپورٹ کے ذریعہ تعاون کرنا چاہئے۔ | پے لوڈ Norito `EndpointAttestationV1` کی وضاحت کریں اور اسے داخلہ بنڈل میں فی اختتامی نقطہ اسٹور کریں۔ |
 
 ## داخلہ ورک فلو1. ** تجویز تخلیق **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
      `ProviderAdmissionProposalV1` + تصدیقی بنڈل تیار کرنا۔
    - توثیق: `profile_id` میں مطلوبہ فیلڈز ، اسٹیک> 0 ، کیننیکل چنکر ہینڈل کو یقینی بنائیں۔
 2. ** گورننس کی توثیق **
@@ -66,7 +66,7 @@ translation_last_reviewed: 2026-02-07
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
+`cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -111,7 +111,7 @@ translation_last_reviewed: 2026-02-07
 1. `provider-admission proposal` اور `provider-admission sign` کے ساتھ جانشین کی تجویز/اشتہار کی جوڑی بنائیں ، `--retention-epoch` میں اضافہ اور ضرورت کے مطابق اسٹیک/اختتامی مقامات کو اپ ڈیٹ کریں۔
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -129,7 +129,7 @@ translation_last_reviewed: 2026-02-07
 #### ہنگامی منسوخی
 1. سمجھوتہ کرنے والے لفافے کی شناخت کریں اور منسوخیاں جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

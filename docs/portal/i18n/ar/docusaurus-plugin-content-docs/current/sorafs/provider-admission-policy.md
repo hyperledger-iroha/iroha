@@ -35,7 +35,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## سير عمل القبول
 
 1. **إنشاء المقترح**
-   - CLI: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: إضافة `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      لإنتاج `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - التحقق: ضمان الحقول المطلوبة، وstake > 0، ومقبض chunker قياسي في `profile_id`.
 2. **اعتماد الحوكمة**
@@ -60,7 +60,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ### مرجع CLI
 
-نفّذ كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+نفّذ كل أمر عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - الأعلام المطلوبة: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -100,7 +100,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. أنشئ زوج المقترح/advert اللاحق باستخدام `provider-admission proposal` و`provider-admission sign`، مع زيادة `--retention-epoch` وتحديث stake/endpoints حسب الحاجة.
 2. نفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -116,7 +116,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 #### إلغاء طارئ
 1. حدد الـ envelope المخترق واصدر إلغاء:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

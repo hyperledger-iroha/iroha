@@ -1,5 +1,8 @@
 import Foundation
 import XCTest
+#if canImport(NoritoBridge)
+import NoritoBridge
+#endif
 @testable import IrohaSwift
 
 final class NoritoRpcFixtureParityTests: XCTestCase {
@@ -18,9 +21,15 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             try assertFixtureIntegrity(loader: loader, name: name)
         }
 
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native decoder not linked")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge native decoder not linked"
+        )
+        XCTAssertEqual(
+            nativeBridgeABIVersion(),
+            21,
+            "required transaction fixture decode must execute through ABI-21"
+        )
         for name in Self.fixtureNames {
             try assertFixtureNativeRoundTrip(loader: loader, name: name)
         }
@@ -127,17 +136,20 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         let fixture = try loader.fixture(named: "mixed_executable_batch")
         try assertFixtureIntegrity(loader: loader, name: fixture.entry.name)
 
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native decoder not linked")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge native decoder not linked"
+        )
         let signedBytes = try XCTUnwrap(Data(base64Encoded: fixture.entry.signedBase64))
+        let versionedSignedBytes = versionedSignedTransaction(signedBytes)
         let json = try NoritoNativeBridge.shared.withChainDiscriminant(
             FixtureConstants.networkPrefix
         ) {
-            NoritoNativeBridge.shared.decodeSignedTransaction(signedBytes)
+            NoritoNativeBridge.shared.decodeSignedTransaction(versionedSignedBytes)
         }
         let payload = try XCTUnwrap(json.flatMap { decodeSignedPayload(from: $0) })
-        let executable = try XCTUnwrap(payload["executable"] as? [String: Any])
+        XCTAssertNil(payload["executable"], "legacy executable field alias must not be emitted")
+        let executable = try XCTUnwrap(payload["instructions"] as? [String: Any])
         let items = try XCTUnwrap(executable["Batch"] as? [[String: Any]])
 
         XCTAssertEqual(items.count, 3)
@@ -173,9 +185,15 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
         )
         let payloadHash = IrohaHash.hash(payloadBytes).hexLowercased()
         XCTAssertEqual(payloadHash, fixture.entry.payloadHash, "payload hash mismatch for \(name)")
+        let signedPayload = try canonicalSignedTransactionPayload(signedBytes)
+        XCTAssertEqual(
+            signedPayload,
+            payloadBytes,
+            "signed transaction payload mismatch for \(name)"
+        )
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedBytes)
+        entrypoint.writeField(signedPayload)
         let signedHash = IrohaHash.hash(entrypoint.data).hexLowercased()
         XCTAssertEqual(signedHash, fixture.entry.signedHash, "signed hash mismatch for \(name)")
         XCTAssertNotEqual(
@@ -192,15 +210,27 @@ final class NoritoRpcFixtureParityTests: XCTestCase {
             "signed_base64 missing or invalid for \(name)"
         )
         let expectedAuthority = try expectedAuthorityLiteral(from: fixture.entry.authority)
-        let json = try NoritoNativeBridge.shared.withChainDiscriminant(
+        XCTAssertEqual(
+            nativeSignedTransactionDecodeStatus(signedBytes),
+            -2,
+            "ABI-21 must reject the unversioned bare signed transaction fixture: \(name)"
+        )
+        let versionedSignedBytes = versionedSignedTransaction(signedBytes)
+        XCTAssertEqual(versionedSignedBytes.first, FixtureConstants.signedTransactionVersion)
+        XCTAssertEqual(
+            Data(versionedSignedBytes.dropFirst()),
+            signedBytes,
+            "V1 framing must add only the canonical version byte for \(name)"
+        )
+        let decodedJson = try NoritoNativeBridge.shared.withChainDiscriminant(
             FixtureConstants.networkPrefix
         ) {
-            NoritoNativeBridge.shared.decodeSignedTransaction(signedBytes)
+            NoritoNativeBridge.shared.decodeSignedTransaction(versionedSignedBytes)
         }
-        guard let json else {
-            // Native bridge binaries may lag fixture schema changes; skip unsupported fixtures.
-            return
-        }
+        let json = try XCTUnwrap(
+            decodedJson,
+            "ABI-21 native bridge must decode every required signed transaction fixture: \(name)"
+        )
         guard let payload = decodeSignedPayload(from: json) else {
             return XCTFail("failed to decode signed transaction JSON for \(name)")
         }
@@ -352,6 +382,42 @@ private struct NoritoRpcFixture {
 
 private enum FixtureConstants {
     static let networkPrefix: UInt16 = 753
+    static let signedTransactionVersion: UInt8 = 1
+}
+
+private func versionedSignedTransaction(_ bareSignedTransaction: Data) -> Data {
+    var versioned = Data([FixtureConstants.signedTransactionVersion])
+    versioned.append(bareSignedTransaction)
+    return versioned
+}
+
+private func nativeSignedTransactionDecodeStatus(_ data: Data) -> Int32 {
+    #if canImport(NoritoBridge)
+    var jsonPointer: UnsafeMutablePointer<UInt8>?
+    var jsonLength: UInt = 0
+    let status = data.withUnsafeBytes { buffer in
+        connect_norito_decode_signed_transaction_json(
+            buffer.bindMemory(to: UInt8.self).baseAddress,
+            UInt(data.count),
+            &jsonPointer,
+            &jsonLength
+        )
+    }
+    if let jsonPointer {
+        connect_norito_free(jsonPointer)
+    }
+    return status
+    #else
+    return Int32.min
+    #endif
+}
+
+private func nativeBridgeABIVersion() -> UInt32? {
+    #if canImport(NoritoBridge)
+    connect_norito_bridge_abi_version()
+    #else
+    nil
+    #endif
 }
 
 private func expectedAuthorityLiteral(from label: String) throws -> String {

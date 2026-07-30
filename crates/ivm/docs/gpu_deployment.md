@@ -6,14 +6,16 @@ results stay identical to the CPU path – but all nodes in a consensus group mu
 use homogeneous GPU hardware for deterministic performance.
 
 Note
-- CUDA PTX build integration is automated: `build.rs` compiles `cuda/*.cu`
-  with `nvcc` when available, falls back to bundled `.ptx` artifacts when they
-  exist, and otherwise fails the CUDA build instead of emitting placeholder
-  kernels. The public CUDA helper surface
+- CUDA PTX installation is fail-closed: `build.rs` consumes checked-in PTX by
+  default, while explicit `generate` and byte-for-byte `check` modes are
+  available on qualified CUDA hosts. It never emits a placeholder or silently
+  falls back to a local compiler. The public CUDA helper surface
   now covers vectors, SHA‑256/Merkle, Keccak, Poseidon2/6, AES rounds/batches,
   BN254 arithmetic, Ed25519 batch verification, and the scheduler bitonic-sort
   helper, with focused fallback/disable-path tests guarding the fail-closed
-  behavior.
+  behavior. The 11 reproducible PTX files and their signed provenance manifest
+  are not yet checked in, so the default CUDA build remains a release blocker;
+  see [`cuda/README.md`](../cuda/README.md).
 
 ## Metal on macOS
 
@@ -28,7 +30,10 @@ Metal GPU simply fall back to the CPU path and produce identical results.
    ```bash
    cargo build --release --features cuda
    ```
-   The CUDA toolkit and matching NVIDIA drivers must be installed.
+   Release builds require the qualified checked-in PTX. A pinned CUDA toolkit is
+   required only to run the explicit `IVM_CUDA_PTX_MODE=generate` or
+   `IVM_CUDA_PTX_MODE=check` qualification path; matching NVIDIA drivers remain
+   required at runtime.
 2. At runtime the VM automatically detects GPUs and will offload certain vector
    and hashing operations. Set `IVM_DISABLE_CUDA=1` to force CPU execution even
    on systems with GPUs.
@@ -37,11 +42,11 @@ Metal GPU simply fall back to the CPU path and produce identical results.
 
 ## Determinism considerations
 
-CUDA kernels operate purely on integers and avoid any non-deterministic features
-such as atomic floating point operations. Reduction steps are ordered and all
-kernels run in IEEE 754 deterministic modes where applicable. As a result, two
-nodes executing the same block with identical GPU models will produce bit-for-bit
-identical state roots.
+Consensus-facing CUDA kernels operate on fixed-width integers and avoid
+non-deterministic reductions. The backend runs golden-vector parity checks
+against the scalar implementation and disables itself on a mismatch. The
+legacy `vector_add_f32` diagnostic helper is outside consensus and must be
+removed or explicitly classified before the PTX manifest is signed.
 
 For consensus safety every validating node **must** use the same GPU model and
 CUDA driver version. Mixing different hardware (for example A100 and H100) is
@@ -51,6 +56,7 @@ changes.
 ## Operator checklist
 
 - Install matching CUDA drivers on every node.
+- Verify the signed PTX manifest and exact checked-in artifact digests.
 - Ensure each machine contains the same GPU model and memory size.
 - Verify that `IVM_DISABLE_CUDA` is **not** set when GPUs should be utilised.
 - Optionally set `IVM_MAX_GPUS` if fewer than all detected devices should be used.
@@ -62,8 +68,9 @@ changes.
    GPUs per node.
 2. Install the NVIDIA driver and CUDA toolkit matching the version used for
    compilation.
-3. Build IVM with `cargo build --release --features cuda` and deploy to the
-   staging nodes.
+3. In the pinned CUDA environment, run `IVM_CUDA_PTX_MODE=check cargo build
+   --release --features cuda`, then deploy a build that consumes those exact
+   checked-in PTX bytes.
 4. Run the full `cargo test` suite on the staging hardware to validate the GPU
    paths.
 5. Execute a small testnet for several days, comparing block hashes between the

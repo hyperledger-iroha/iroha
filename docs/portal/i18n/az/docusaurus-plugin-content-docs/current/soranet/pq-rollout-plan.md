@@ -97,11 +97,11 @@ rollout_phase = "default"
 
 | Səthi | Kanarya (Mərhələ A) | Ramp (B Mərhələsi) | Defolt (Mərhələ C) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` gətirin | `--anonymity-policy stage-a` və ya faza | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` gətirin | `--anonymity-policy anon-guard-pq` və ya faza | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Orkestr konfiqurasiyası JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust müştəri konfiqurasiyası (`iroha.toml`) | `rollout_phase = "canary"` (standart) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` imzalanmış əmrlər | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, istəyə görə `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, istəyə görə `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, istəyə görə `.ANON_STRICT_PQ` |
+| `iroha_cli` imzalanmış əmrlər | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, istəyə görə `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, istəyə görə `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, istəyə görə `.ANON_STRICT_PQ` |
 | JavaScript orkestr köməkçiləri | `rolloutPhase: "canary"` və ya `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -124,7 +124,7 @@ Bütün SDK xəritəni orkestr tərəfindən istifadə edilən eyni mərhələ t
 
 3. **Müştəri/SDK canary (T plus 1 həftə)**
 
-   - Müştəri konfiqurasiyalarında `rollout_phase = "ramp"`-i çevirin və ya təyin edilmiş SDK kohortları üçün `stage-b` ləğvetmələrini keçin.
+   - Müştəri konfiqurasiyalarında `rollout_phase = "ramp"`-i çevirin və ya təyin edilmiş SDK kohortları üçün `anon-majority-pq` ləğvetmələrini keçin.
    - Telemetriya fərqlərini çəkin (`sorafs_orchestrator_policy_events_total` `client_id` və `region` ilə qruplaşdırılıb) və onları yayılma hadisə jurnalına əlavə edin.
 
 4. **Defolt təşviqat (T plus 3 həftə)**
@@ -160,7 +160,7 @@ Xəbərdarlıq üçün mövcud qaydaların `stage` etiketindən istifadə etdiyi
 ### Ramp → Kanarya (Mərhələ B → Mərhələ A)
 
 1. `sorafs_cli guard-directory import --guard-directory guards.json` ilə irəliləmədən əvvəl çəkilmiş qoruyucu kataloq snapşotunu idxal edin və `sorafs_cli guard-directory verify`-i yenidən işə salın ki, demosasiya paketinə hashlar olsun.
-2. Orkestr və müştəri konfiqurasiyalarında `rollout_phase = "canary"` (və ya `anonymity_policy stage-a` ilə əvəz edin) təyin edin, sonra aşağı səviyyəli boru xəttini sübut etmək üçün [PQ ratchet runbook](./pq-ratchet-runbook.md)-dən PQ mandallı qazmağı təkrar çalın.
+2. Orkestr və müştəri konfiqurasiyalarında `rollout_phase = "canary"` (və ya `anonymity_policy anon-guard-pq` ilə əvəz edin) təyin edin, sonra aşağı səviyyəli boru xəttini sübut etmək üçün [PQ ratchet runbook](./pq-ratchet-runbook.md)-dən PQ mandallı qazmağı təkrar çalın.
 3. İdarəetməni xəbərdar etməzdən əvvəl yenilənmiş PQ Ratchet və SN16 telemetriya skrinşotlarını və xəbərdarlıq nəticələrini hadisə jurnalına əlavə edin.
 
 ### Qoruyucu xatırlatmalar- Aşağı düşmə baş verdikdə `docs/source/ops/soranet_transport_rollback.md`-ə istinad edin və hər hansı müvəqqəti yumşaltmanı izləmə işləri üçün yayım izləyicisinə `TODO:` elementi kimi daxil edin.

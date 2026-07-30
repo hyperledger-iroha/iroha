@@ -89,9 +89,10 @@ final class SigningKeyTests: XCTestCase {
     }
 
     func testSecp256k1SigningRoundTrip() throws {
-        guard NoritoNativeBridge.shared.secp256k1Supported else {
-            throw XCTSkip("Secp256k1 bridge functions are unavailable on this platform.")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.secp256k1Supported,
+            "Secp256k1 bridge functions are unavailable on this platform."
+        )
         let privateKey = Data(repeating: 0x01, count: Secp256k1Keypair.privateKeyLength)
         let keypair = try Secp256k1Keypair(privateKey: privateKey)
         let signingKey = SigningKey.secp256k1(keypair, metadata: SigningMetadata(label: "secp"))
@@ -114,9 +115,10 @@ final class SigningKeyTests: XCTestCase {
     }
 
     func testMlDsaSigningRoundTripWhenBridgeAvailable() throws {
-        guard NoritoNativeBridge.shared.mldsaSupported else {
-            throw XCTSkip("ML-DSA bridge is unavailable in this environment.")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.mldsaSupported,
+            "ML-DSA bridge is unavailable in this environment."
+        )
         let keypair = try MlDsaKeypair.generate(suite: .mlDsa65)
         let signingKey = try SigningKey.mlDsa(privateKey: keypair.secretKey,
                                               metadata: SigningMetadata(label: "mldsa"))
@@ -131,7 +133,9 @@ final class SigningKeyTests: XCTestCase {
             message: message,
             signature: signature
         ) else {
-            throw XCTSkip("ML-DSA verify bridge is unavailable in this environment.")
+            try failRequiredNativeTestCapability(
+                "ML-DSA verify bridge is unavailable in this environment."
+            )
         }
         XCTAssertTrue(verified)
     }
@@ -202,27 +206,29 @@ final class SigningKeyTests: XCTestCase {
     }
 
     func testMlDsaExactLengthVerifyReportsUnavailableBridge() throws {
-        guard !NoritoNativeBridge.shared.mldsaSupported else {
-            throw XCTSkip("ML-DSA bridge is available in this environment.")
-        }
         let parameters = MlDsaSuite.mlDsa65.parameters()
         let keypair = try MlDsaKeypair(suite: .mlDsa65,
                                        publicKey: Data(repeating: 0xA5, count: parameters.publicKeyLength),
                                        secretKey: Data(repeating: 0x5A, count: parameters.secretKeyLength))
 
-        XCTAssertThrowsError(try keypair.verify(message: Data("swift-ml-dsa-bridge-unavailable".utf8),
-                                                signature: Data(repeating: 0x33,
-                                                                count: parameters.signatureLength))) { error in
-            guard case MlDsaError.bridgeUnavailable = error else {
-                return XCTFail("exact-length ML-DSA verification failed with unexpected error: \(error)")
+        let message = Data("swift-ml-dsa-bridge-unavailable".utf8)
+        let signature = Data(repeating: 0x33, count: parameters.signatureLength)
+        if NoritoNativeBridge.shared.mldsaSupported {
+            XCTAssertFalse(try keypair.verify(message: message, signature: signature))
+        } else {
+            XCTAssertThrowsError(try keypair.verify(message: message, signature: signature)) { error in
+                guard case MlDsaError.bridgeUnavailable = error else {
+                    return XCTFail("exact-length ML-DSA verification failed with unexpected error: \(error)")
+                }
             }
         }
     }
 
     func testMlDsaVerifyRejectsMalformedSignaturesWhenBridgeAvailable() throws {
-        guard NoritoNativeBridge.shared.mldsaSupported else {
-            throw XCTSkip("ML-DSA bridge is unavailable in this environment.")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.mldsaSupported,
+            "ML-DSA bridge is unavailable in this environment."
+        )
         let keypair = try MlDsaKeypair.generate(suite: .mlDsa65)
         let message = Data("swift-ml-dsa-signature-admission".utf8)
         let signature = try keypair.sign(message: message)
