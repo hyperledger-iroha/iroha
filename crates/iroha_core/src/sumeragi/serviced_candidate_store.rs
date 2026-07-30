@@ -750,7 +750,7 @@ struct LeaderWireLifecycleState {
     /// This set is deliberately process-local. Its members retain their
     /// immutable durable tokens, but they do not own a scheduler barrier until
     /// the exact packet passes current ingress capacity checks and
-    /// `mark_ingress` atomically reactivates the slot.
+    /// `admit_ingress` atomically reactivates the slot.
     replay_dormant: BTreeSet<FairV2IngressLeaderWireSlot>,
 }
 
@@ -4153,12 +4153,12 @@ mod tests {
                 &[],
             )
             .expect("open gate");
-            std::fs::create_dir(&gate.path).expect("block first reserve publication");
+            std::fs::create_dir(&gate.path).expect("block first admission publication");
             assert!(
-                gate.reserve(leader_wire_token(&context, 2, 1, 5, 0))
+                gate.admit_ingress(leader_wire_token(&context, 2, 1, 5, 0))
                     .is_err()
             );
-            let restored = gate.restore().expect("reserve memory rollback");
+            let restored = gate.restore().expect("admission memory rollback");
             assert!(restored.records().is_empty());
             assert_eq!(restored.last_admission_ordinal(), 0);
             assert_eq!(restored.scheduler_ordinal_high_watermark(), 0);
@@ -4192,20 +4192,22 @@ mod tests {
             )
             .expect("open gate");
             let token = leader_wire_token(&context, 2, 13, 97, 3);
-            gate.reserve(token.clone()).expect("reserve before failure");
+            if failed_cut != "ingress" {
+                gate.admit_ingress(token.clone())
+                    .expect("admit before later failure");
+            }
             let runtime_owner =
                 LeaderWireRuntimeOwner::new(token.identity_hash(), 97).expect("runtime owner");
             match failed_cut {
                 "ingress" => {
                     replace_snapshot_with_directory(&gate);
-                    assert!(gate.mark_ingress(&token).is_err());
-                    assert_eq!(
-                        gate.restore().expect("memory rollback").records()[0].status(),
-                        LeaderWireLifecycleStatus::Dormant
-                    );
+                    assert!(gate.admit_ingress(token.clone()).is_err());
+                    let restored = gate.restore().expect("memory rollback");
+                    assert!(restored.records().is_empty());
+                    assert_eq!(restored.last_admission_ordinal(), 0);
+                    assert_eq!(restored.scheduler_ordinal_high_watermark(), 0);
                 }
                 "runtime" => {
-                    gate.mark_ingress(&token).expect("mark ingress");
                     replace_snapshot_with_directory(&gate);
                     assert!(gate.mark_runtime(&token, runtime_owner).is_err());
                     assert_eq!(
@@ -4214,7 +4216,6 @@ mod tests {
                     );
                 }
                 "terminal" => {
-                    gate.mark_ingress(&token).expect("mark ingress");
                     let receipt = gate
                         .mark_runtime(&token, runtime_owner)
                         .expect("mark runtime");
@@ -4232,7 +4233,6 @@ mod tests {
                     );
                 }
                 "volatile-terminal" => {
-                    gate.mark_ingress(&token).expect("mark ingress");
                     let receipt = gate
                         .mark_runtime(&token, runtime_owner)
                         .expect("mark runtime");

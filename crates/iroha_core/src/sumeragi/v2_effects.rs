@@ -77,24 +77,24 @@ use std::{
 };
 
 use super::v2_core::{
-    CanonicalIdentityProjection, EFFECTIVE_LOCK_TRACE_OWNER, EFFECTIVE_LOCK_TRACE_RETIRE,
-    EffectiveLockTraceProjection, EquivocationKind, EventTag, ExactBodyOwnerProjection,
-    ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
-    IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
-    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
-    IDENTITY_KIND_CONSENSUS_MESSAGE, IDENTITY_KIND_DURABLE_BODY_FRAME,
-    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
-    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
-    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
-    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
-    ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
-    ProductionQuorumCertificateIdentityProjection, TagProjection,
+    CanonicalIdentityProjection, CheckedProductionTransition, EFFECTIVE_LOCK_TRACE_OWNER,
+    EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EquivocationKind, EventTag,
+    ExactBodyOwnerProjection, ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT,
+    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT,
+    IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+    IDENTITY_KIND_CERTIFIED_BODY_REQUEST, IDENTITY_KIND_CONSENSUS_MESSAGE,
+    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_PAYLOAD_MANIFEST,
+    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP, ProductionDecisionIdentityProjection,
+    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
+    ProductionHistoricalBodyPipelineTraceProjection, ProductionQuorumCertificateIdentityProjection,
+    TagProjection, check_production_body_capacity_retirement_effective_lock_transition,
+    check_production_body_ownership_effective_lock_transition,
     check_production_decision_recovery_transition,
     check_production_historical_body_pipeline_transition, exact_body_stage_is_owned,
     plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting,
-    production_body_capacity_retirement_preserves_effective_lock_kernel,
-    production_body_ownership_preserves_effective_lock_kernel,
 };
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
@@ -1741,11 +1741,12 @@ struct BodyPipelineOwner {
 /// Planning performs every fallible identity check. The service/runtime
 /// admission happens next; installing this value afterwards is an infallible
 /// map replacement because the executor is the sole owner of these maps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct BodyPipelineOwnerBindingPlan {
     key: (wire::ConsensusRound, wire::BlockSubject),
     owner: BodyPipelineOwner,
     already_owned: bool,
+    checked_effective_lock: CheckedProductionTransition<EffectiveLockTraceProjection>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2080,12 +2081,13 @@ enum StaleFetchTransitionPlan {
 /// The exact residual is computed before any cancellation or runtime queue
 /// mutation. The executor installs it only after every fallible callback has
 /// acknowledged the planned cleanup.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct CertifiedViewBodyCleanupPlan {
     stale_stores: Vec<EffectWorkId>,
     stale_ready: Vec<(wire::ConsensusRound, wire::BlockSubject)>,
     protected_ready_rebinds: Vec<CertifiedViewReadyRebindPlan>,
     accounting: ExactBodyRetirementAccounting,
+    checked_effective_lock: CheckedProductionTransition<EffectiveLockTraceProjection>,
 }
 
 #[derive(Clone, Debug)]
@@ -2104,7 +2106,7 @@ enum FetchReadyCommitPlan {
     Install(ReadyBodyInstallPlan),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct FetchCompletionPlan {
     work_id: EffectWorkId,
     owner: BodyPipelineOwnerBindingPlan,
@@ -3802,11 +3804,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_body_capacity_retirement_preserves_effective_lock_kernel(retirement_trace) {
+        let Some(checked_retirement) =
+            check_production_body_capacity_retirement_effective_lock_transition(retirement_trace)
+        else {
             return Err(EffectExecutorError::Contract(
                 "body retirement did not refine exact effective-lock capacity".to_owned(),
             ));
-        }
+        };
 
         let validations = self
             .pending_validations
@@ -3833,6 +3837,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 pipeline_owners.push((*key, owner, ready.is_some()));
             }
         }
+        let _authorized_retirement = checked_retirement.into_projection();
         for ((round, subject), owner, ready) in &pipeline_owners {
             let retired = self
                 .runtime
@@ -6100,11 +6105,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_body_ownership_preserves_effective_lock_kernel(ownership_trace) {
+        let Some(checked_effective_lock) =
+            check_production_body_ownership_effective_lock_transition(ownership_trace)
+        else {
             return Err(EffectExecutorError::Contract(
                 "exact body ownership did not refine the effective-lock trace".to_owned(),
             ));
-        }
+        };
         Ok(BodyPipelineOwnerBindingPlan {
             key,
             owner: BodyPipelineOwner {
@@ -6112,6 +6119,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 manifest_hash: binding.owner.manifest_hash,
             },
             already_owned: binding.already_owned,
+            checked_effective_lock,
         })
     }
 
@@ -6205,7 +6213,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     }
 
     fn commit_body_pipeline_owner(&mut self, plan: BodyPipelineOwnerBindingPlan) {
-        self.body_pipeline_owners.insert(plan.key, plan.owner);
+        let BodyPipelineOwnerBindingPlan {
+            key,
+            owner,
+            already_owned: _,
+            checked_effective_lock,
+        } = plan;
+        let _authorized_ownership = checked_effective_lock.into_projection();
+        self.body_pipeline_owners.insert(key, owner);
     }
 
     fn plan_work_id(&self) -> Result<WorkIdPlan, EffectExecutorError> {
@@ -7302,17 +7317,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_body_capacity_retirement_preserves_effective_lock_kernel(cleanup_trace) {
+        let Some(checked_effective_lock) =
+            check_production_body_capacity_retirement_effective_lock_transition(cleanup_trace)
+        else {
             return Err(EffectExecutorError::Contract(
                 "certified-view cleanup did not refine exact effective-lock capacity".to_owned(),
             ));
-        }
+        };
 
         Ok(CertifiedViewBodyCleanupPlan {
             stale_stores,
             stale_ready,
             protected_ready_rebinds,
             accounting,
+            checked_effective_lock,
         })
     }
 
@@ -9008,6 +9026,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // Byte residuals for the complete store/ready cleanup were checked
         // before any cancellation. A corrupt counter therefore cannot retire
         // worker or runtime ownership and only then discover the underflow.
+        let _authorized_body_cleanup = stale_body_cleanup.checked_effective_lock.into_projection();
         for id in &stale_body_cleanup.stale_stores {
             let key = self
                 .pending_stores

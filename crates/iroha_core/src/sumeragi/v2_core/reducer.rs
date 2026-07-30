@@ -1032,9 +1032,9 @@ impl Reducer {
         match next.step_in_place(event) {
             Ok(outcome) => {
                 let transition = self.transition_projection(&audit_event, &next, outcome.effects());
-                if !refinement::accepts(transition) {
+                let Some(checked_refinement) = refinement::check(transition) else {
                     return Err(ReducerError::RefinementViolation);
-                }
+                };
                 let durable_intent_trace = ProductionDurableIntentTraceProjection {
                     event_tag: transition.event_tag,
                     owner_tag_before: Self::tag_projection(self.current_tag()),
@@ -1059,10 +1059,11 @@ impl Reducer {
                 else {
                     return Err(ReducerError::RefinementViolation);
                 };
-                let _authorized_transition = checked_transition.into_projection();
                 if let Some(violation) = next.progress_witness_violation() {
                     return Err(ReducerError::ProgressWitnessViolation(violation));
                 }
+                let _authorized_transition = checked_transition.into_projection();
+                let _authorized_refinement = checked_refinement.into_projection();
                 *self = next;
                 Ok(outcome)
             }

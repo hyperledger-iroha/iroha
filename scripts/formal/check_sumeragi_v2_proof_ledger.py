@@ -236,6 +236,9 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut",
     "AdmitFreshLeaderWireFreezesCurrentLocalSchedulerOrdinal",
     "AdmitDormantLeaderWireRetainsOrdinalsAndFrozenPrefix",
+    "AdmitDormantLeaderWirePreservesPotentialPredecessorOrdinals",
+    "AtomicDormantLeaderWireAdmissionConsumesRealPacketAndPotential",
+    "AsyncLeaderWireActionInertDormantHasNoExactAdmissionPacket",
     "AsyncLiveServeIngressDuplicateRetainsSchedulerOrdinal",
     "AsyncUnboundChunkAdmissionDoesNotMintLeaderWireLifecycle",
     "AsyncUnboundChunkExactRetryCoalescesWithoutEpisodeGrowth",
@@ -386,6 +389,8 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "CertifiedResponseCompetingResponderCannotDoubleChargeFamily",
     "CertifiedResponseConsumedFamilyCannotRetainClaim",
     "CertifiedResponseSameHeightRecoveryReopensDurableFamily",
+    "PostGstLeaderWireLifecycleRestartIsDisabled",
+    "PostGstStepCannotCreateDormantLeaderWirePotential",
     "LeaderWireIngressAdmissionRefinesLifecycleTransition",
     "LeaderWireIngressDrainRefinesLifecycleTransition",
     "LeaderWireLastConsumerRefinesLifecycleTransition",
@@ -417,6 +422,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncCandidateServicedIdentityCannotReactivate",
     "AsyncActiveControlServiceAdmissionPassesSlotGuard",
     "AsyncRetiredControlServiceAdmissionDropsWithoutCandidate",
+    "PostGstExactDormantLeaderWireAdmissionUsesFairAtomicAction",
     "AsyncControlServiceRolloverInstanceStartsEmpty",
     "AsyncLeaderWireLifecycleRolloverInstanceStartsEmpty",
     "AsyncCertifiedResponseClaimRolloverInstanceStartsEmpty",
@@ -430,6 +436,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "AsyncRetransmitProgramCounterIsBounded",
     "CertifiedResponseClaimsShareOutstandingRequestCharge",
     "CertifiedResponseFamilyLocalClaimsRemainPhysicallySerialized",
+    "AsyncLeaderWirePotentialPredecessorUniverseIsFinite",
     "AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced",
 )
 ASYNC_LIVENESS_SHARDS = (
@@ -743,7 +750,7 @@ _FORMAL_CI_NEW_MUTATION_RUNNER_INVOCATIONS = (
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2LocalIngressSchedulerReservationMutation.tla": (
-        "HASH_PENDING_LOCAL_INGRESS_MODEL"
+        "d5083b4dcd0e1fbd3b55a22b98a7ea41b6b20b646a717fc36beb41fae7788ab5"
     ),
     "SumeragiV2RestartTerminalDurabilityMutation.tla": (
         "7eae8edd73c78803cf5829c056ee29ee1e1f39cd1622d775df5c7ab90845d30b"
@@ -782,7 +789,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "82f16d90647b5061be3d40444aabe68d91cdb4cb9a76adaec713bf4cfbd9efa3"
     ),
     "SumeragiV2AdequateLeaderWireTombstoneMutation.tla": (
-        "e0762abc2ee36fbc78efb180e4c21b19d0fa825b15fce6fb725a9d559fe3487f"
+        "f009b5bfe9ac7a98c3fbdfea1348b699e0be08419388949aa53a0d06819aff60"
     ),
     "SumeragiV2AdequateLeaderCandidateTombstoneMutation.tla": (
         "ee8c810d32b03e1469fb15a4a7f421ff0ade25abbb2863c7f38a9993391fc42a"
@@ -863,10 +870,10 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "5b6cecf701049e6e23ee2c92f13395625fe12ae5de1316b620581d81448eb2f7"
     ),
     "local_ingress_scheduler_reservation_fixed.cfg": (
-        "HASH_PENDING_LOCAL_INGRESS_FIXED"
+        "b8e4fe52c9d7484f429962e638f104af23015f9b6ee48d9469021cfe0a0d4ff4"
     ),
     "local_ingress_scheduler_reservation_mutable_next_bug.cfg": (
-        "HASH_PENDING_LOCAL_INGRESS_BUG"
+        "385f27f3b9d9f4f74d4110dfba0d8d17c721f99ca44abaaa85f367a5e84de5e6"
     ),
     "restart_terminal_durability_fixed.cfg": (
         "a405e56a818aa31efbdd685480d1eba379ac4500df0e1cea00d0b97de9548e7c"
@@ -875,40 +882,46 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "2d8a68e618db861bde394461e1ff4f5da620181e42e95b09ba508e11abbe25a7"
     ),
     "adequate_leader_wire_tombstone_fixed.cfg": (
-        "79ca3af93de94b4d35d744456a4278cde1301c858f3eeded4f1cd59614d887e6"
+        "86914100ad289ec7d2bd649899ebe364571633db7e640a675cef2ee174bf372d"
     ),
     "adequate_leader_wire_slot_cardinality_bug.cfg": (
-        "ebe2e31afce3ac6c3143a731f87fc75b9cdea281bb6fc1478e524391dd8fb561"
+        "c9df85b21f862a2303857d981b110852289c3ce94b9db71223784ff678ba7f8a"
     ),
     "adequate_leader_wire_same_view_replacement_bug.cfg": (
-        "d088dc89f6a1327de21d3c68b02fcb3cb437cf1a0065f39903edc4fa40e001fc"
+        "18f455655e9161409622acea31f581440337ec7861c990372dedcaa00fb24b6a"
     ),
     "adequate_leader_wire_retry_coalescing_bug.cfg": (
-        "71530dfc47b07333ce5c3502e7c10297e591f87eca2daff831b5aacb13bbf6cb"
+        "c2a9ee8632b5a50ee6bc12ee778c9f962aa430e70e78ee78184011c784dbe93f"
     ),
     "adequate_leader_wire_tombstone_bug.cfg": (
-        "21089ce6c26e5593e2b74607df3211c6267496d389a4ea382c1dca28ca5b3278"
+        "c99a9cbf5de2dd947ee9c36d5b81425e10dd5b715604fc2c9890353bd0a2a359"
     ),
     "adequate_leader_wire_restart_resurrection_bug.cfg": (
-        "47a8669a34ef54af9f459fa441a71d4bed55e2e9595eca7f3d5136efd8789f11"
+        "a601b2821bde4eef40fff2678d3d62a6f5d327f7215c2794858f0292ef3c4410"
     ),
     "adequate_leader_wire_restart_reopen_owner_bug.cfg": (
-        "f675d09dc4ff5ac25a81d3be280f66eb56edb60cbe421cc890a5a34a26d65aca"
+        "3261e5e2b949f6f2c81e453e2f416053f0e61138050367735f84ae9761b5a02f"
     ),
     "adequate_leader_wire_restart_packet_synthesis_bug.cfg": (
-        "ec955339ee01c8a4ec87c35734c2dc460409fd685436b44dc85e9160af2fda28"
+        "cc2557767c265c31626ac1667c12ff8b600ca837b12bbaf631de81ac3a18f4d7"
     ),
     "adequate_leader_wire_restart_ordinal_reallocation_bug.cfg": (
-        "f82d8dcadc2a2224ee96f837e698ff1cc15c0257fc5e3b9a1860494250197f93"
+        "0739fa5ed3cc7db39ed6cea96ce616c44224d129b681e823814eee8da3d67b41"
+    ),
+    "adequate_leader_wire_restart_prefix_recharge_bug.cfg": (
+        "a3b2e3faebf838b619d8a566c005651a6d9fe0aaa21c85a97cd67a66f4ddf4fc"
+    ),
+    "adequate_leader_wire_dormant_potential_precharge_bug.cfg": (
+        "29e2fc2d5e035d61e3dac19e859279cf6548f753cba547379003e60da16cdfc5"
     ),
     "adequate_leader_wire_restart_capacity_bypass_bug.cfg": (
-        "07a8a2a472a716c617357a20a4bf369ec76903c60396e27c4b4ac01140c7b168"
+        "55e58a4e4b37c8963d519092bcaad671f58ab20c9324efe3255f90875f6985fc"
     ),
     "adequate_leader_wire_unconsumed_completion_bug.cfg": (
-        "665987a89e82d5199a85a1f63a389d102b94cee29da57ff18f3305dd9a3be8e2"
+        "69f4c45ab376bd0bee8780ce45c4a0ecbe64147f56ba4db5c24761ba1fab4da3"
     ),
     "adequate_leader_wire_rollover_reset_bug.cfg": (
-        "7ad14b57555ca804ad3c12c354c489821b577ba9f2f3c3fd8246e941caf2dbc6"
+        "81146c732a03279f405e3b177e912cb54d8b1da74410f9f639cd9776231ba692"
     ),
     "adequate_leader_candidate_tombstone_fixed.cfg": (
         "38ce760903e3dc175ecd2a0452a9c9dfee682e5c575bba33d1ca0776dc49f1a3"
@@ -968,7 +981,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "76c174b34dc721ce5874e2190270372f74e931532783b13f0991c3e2b592b77f"
     ),
     "adequate_leader_wire_terminal_identity_bug.cfg": (
-        "9fb73d5ca69928d83a9303261e7e604433db2d34c1cf7c72fd187fa7278a85ba"
+        "ff7cc8d7cf34fc43a858aeb4acd3c0edd142f4aa69bec0f5d4e9c9f88953587f"
     ),
     "external_producer_continuation_fixed.cfg": (
         "4e022e0641229d03ddd68b54c2ecb1f8d54401014587b50e1167848289e14fc7"
@@ -1064,7 +1077,7 @@ LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
         "a94a946e62230d7a656c0945737b744945e73051f812c7ece7d6c35f107a7e2a"
     ),
     LIVENESS_OWNERSHIP_MUTATION_RUNNER: (
-        "5d2210ad06f9e1a50d527206922e300a4cadb0681fef286a6d075eba1cebb0b1"
+        "bd98cec9fc7671d6fd411f6bdff4de583ca4ae8ae7fda093ff1ad683c2228eb2"
     ),
 }
 LIVENESS_OWNERSHIP_MUTATION_FORMAL_GLOBS = (
@@ -4867,8 +4880,8 @@ _TOTAL_GATE_CALL_ITEM_SHA256 = {
     "scheduler_select": "aec8d0ba48d61ad39f9a62178913f701be0f78222f63a4cf839d47ea536e6cfb",
     "ingress_one": "b09f804c4bd9a39d44b6b670036bdb6b114525a7023b0a176febca8e3c03ae38",
     "ingress_batch": "34ee27dae41b4e054af344f4a27697b3528040c77c446df86dbd4fc8a3deb4e0",
-    "ingress_reserve": "7abd833689ce0bd3211f26745c2985da3091d9bb16876d2ffeb01d238f8478e0",
-    "ingress_commit": "cc6c3d153bfb275d531aa4064a357849720066c2d14eab36404036dba7853f74",
+    "body_available_prepare": "7abd833689ce0bd3211f26745c2985da3091d9bb16876d2ffeb01d238f8478e0",
+    "body_available_commit": "cc6c3d153bfb275d531aa4064a357849720066c2d14eab36404036dba7853f74",
     "relay_retry": "4eaa732c6b69e6c455ac7bef64be8b0c76425c70bb5ce5138fb1fa4f063395c1",
     # Refresh after atomic-reservation work stops touching v2_worker.rs.
     "worker_poll_reply_flushes": "eae8ee4dc4996b077b9d0e3315e96e8c35a18b0189f2add40e898e60a4167749",
@@ -5034,7 +5047,7 @@ def _total_gate_call_sites(
                     let _authorized_transition = checked_transition.into_projection();
                 """,
                 (("impl", "BoundedIngress", "<", "AdapterCommand", ">"),),
-                hashes["ingress_reserve"],
+                hashes["body_available_prepare"],
                 token_consumptions=(
                     "let _authorized_transition = checked_transition.into_projection();",
                 ),
@@ -5123,7 +5136,7 @@ def _total_gate_call_sites(
                     Ok(())
                 """,
                 (("impl", "BoundedIngress", "<", "AdapterCommand", ">"),),
-                hashes["ingress_commit"],
+                hashes["body_available_commit"],
                 token_consumptions=(
                     "let _authorized_transition = checked_transition.into_projection();",
                 ),
@@ -84780,27 +84793,50 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"{path}: {label} omits production refinement tokens {missing}"
             )
 
-    def require_token_count(
+    def require_order(
         path: Path,
         label: str,
         body: str,
-        token: str,
-        expected: int,
+        markers: tuple[str, ...],
     ) -> None:
-        observed = _token_sequence_count(
-            rust_code_tokens(body), rust_code_tokens(token)
-        )
-        if observed != expected:
-            errors.append(
-                f"{path}: {label} must contain {token!r} exactly {expected} "
-                f"time(s); found {observed}"
+        body_tokens = rust_code_tokens(body)
+        cursor = 0
+        for marker in markers:
+            marker_tokens = rust_code_tokens(marker)
+            position = next(
+                (
+                    index
+                    for index in range(
+                        cursor,
+                        len(body_tokens) - len(marker_tokens) + 1,
+                    )
+                    if body_tokens[index : index + len(marker_tokens)] == marker_tokens
+                ),
+                -1,
             )
+            if position < 0:
+                errors.append(
+                    f"{path}: {label} must preserve exact production order {markers}"
+                )
+                return
+            cursor = position + len(marker_tokens)
 
-    def require_order(path: Path, label: str, body: str, markers: tuple[str, ...]) -> None:
-        positions = [body.find(marker) for marker in markers]
-        if any(position < 0 for position in positions) or positions != sorted(positions):
+    def reject_tokens(
+        path: Path,
+        label: str,
+        body: str,
+        forbidden: tuple[str, ...],
+    ) -> None:
+        body_tokens = rust_code_tokens(body)
+        observed = tuple(
+            token
+            for token in forbidden
+            if _token_sequence_count(body_tokens, rust_code_tokens(token))
+        )
+        if observed:
             errors.append(
-                f"{path}: {label} must preserve exact production order {markers}"
+                f"{path}: {label} must use the opaque checked-transition gate; "
+                f"found obsolete direct-kernel forms {observed}"
             )
 
     runner_path, runner_source = load(
@@ -84965,7 +85001,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority)",
                 "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
                 "stage_before: SUCCESSOR_STAGE_NONE, stage_after: SUCCESSOR_STAGE_NONE, published_height_before: published_height, published_height_after: published_height, restart_required_before: false, restart_required_after: false,",
-                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
+                "return Err(V2RunnerError::SuccessorRefinementRejected);",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection();",
                 "super::status::activate_v2_successor_height( expected_predecessor, authority, successor, )?;",
                 "super::status::activate_recovered_v2_successor_height(authority, successor)?;",
                 "super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
@@ -84979,8 +85017,18 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "match &authority",
                 "let published_height = super::status::v2_status()",
                 "ProductionSuccessorStartupLifecycleProjection",
-                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
+                "return Err(V2RunnerError::SuccessorRefinementRejected)",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection()",
                 "Ok(match authority",
+            ),
+        )
+        reject_tokens(
+            runner_path,
+            "PendingSuccessorActivation::recovered",
+            activation,
+            (
+                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(",
             ),
         )
         open_ingress = region(
@@ -85015,9 +85063,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "run_inner live successor startup",
             run_inner,
             (
-                "SumeragiV2Adapter::open_deferred_status(",
-                "SerializedV2Runtime::new(",
-                "V2EffectExecutor::open(",
+                "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
+                "SerializedV2Runtime::new_with_lifecycle_ordinals(",
+                "V2EffectExecutor::open_with_body_store(",
                 "ProductionV2Services::start(",
                 "executor.consume_effects(std::mem::take(&mut startup_effects), &mut services)?",
                 "executor.arm_live_clocks(height_started_at)?",
@@ -85049,7 +85097,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             ),
             (
                 "block_sync_server.serve_historical_body( kura, context_store, request, &sender, local_key, )",
-                "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, ingress_ownership, services, )",
+                "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, &ingress_ownership, services, )",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
             ),
@@ -85074,7 +85122,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "let height = predecessor.height();",
                 "validate_v2_predecessor_status(&status, height, SumeragiV2LocalWorkStage::Queued)?;",
                 "stage_before: successor_stage_projection(status.liveness.work.successor_height), stage_after: SUCCESSOR_STAGE_RUNNING, published_height_before: status.height, published_height_after: status.height, restart_required_before: status.restart_required, restart_required_after: status.restart_required,",
-                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
+                "return Err(V2SuccessorActivationError::RefinementRejected);",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection();",
                 "update_v2_successor_work_stage_at( height, SumeragiV2LocalWorkStage::Queued, SumeragiV2LocalWorkStage::Running, Instant::now(), )",
             ),
         )
@@ -85085,8 +85135,18 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             (
                 "validate_v2_predecessor_status(",
                 "ProductionSuccessorStartupLifecycleProjection",
-                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
+                "return Err(V2SuccessorActivationError::RefinementRejected)",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection()",
                 "update_v2_successor_work_stage_at(",
+            ),
+        )
+        reject_tokens(
+            status_path,
+            "begin_v2_successor_activation",
+            begin,
+            (
+                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(",
             ),
         )
         validate = region(
@@ -85125,7 +85185,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "validate_v2_predecessor_status( &predecessor_status, finalized_height, SumeragiV2LocalWorkStage::Running, )?;",
                 "expected_predecessor: expected_predecessor.refinement_projection(), authority_predecessor: authority_predecessor.refinement_projection(),",
                 "predecessor_status_height: predecessor_status.height, predecessor_stage_before: successor_stage_projection( predecessor_status.liveness.work.successor_height, ), predecessor_stage_after: SUCCESSOR_STAGE_COMPLETE,",
-                "if !production_applied_successor_trace_refines_indexed_activation_kernel(trace)",
+                "let Some(checked_trace) = check_production_applied_successor_transition(trace) else",
+                "return Err(V2SuccessorActivationError::RefinementRejected);",
+                "let _authorized_trace = checked_trace.into_projection();",
                 "update_v2_successor_work_stage_at( finalized_height, SumeragiV2LocalWorkStage::Running, SumeragiV2LocalWorkStage::Complete, now, )?;",
             ),
         )
@@ -85138,9 +85200,19 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "validate_v2_successor_snapshot(",
                 "validate_v2_predecessor_status(",
                 "ProductionAppliedSuccessorTraceProjection",
-                "production_applied_successor_trace_refines_indexed_activation_kernel(trace)",
+                "let Some(checked_trace) = check_production_applied_successor_transition(trace) else",
+                "return Err(V2SuccessorActivationError::RefinementRejected)",
+                "let _authorized_trace = checked_trace.into_projection()",
                 "update_v2_successor_work_stage_at(",
                 "set_v2_status_at(successor, now)",
+            ),
+        )
+        reject_tokens(
+            status_path,
+            "activate_v2_successor_height_at",
+            applied,
+            (
+                "production_applied_successor_trace_refines_indexed_activation_kernel(",
             ),
         )
         recovered_wrapper = region(
@@ -85174,29 +85246,37 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             recovered,
             (
                 "published_status_height_before: published.as_ref().map_or(0, |status| status.height),",
-                "if !production_recovered_successor_trace_refines_indexed_activation_kernel(trace)",
+                "let Some(checked_trace) = check_production_recovered_successor_transition(trace) else",
+                "return Err(V2SuccessorActivationError::RefinementRejected);",
+                "let _authorized_trace = checked_trace.into_projection();",
                 "if let Some(published) = published",
                 "set_v2_status_at(successor, now);",
             ),
         )
-        require_token_count(
-            status_path,
-            "publish_recovered_v2_successor_height_at",
-            recovered,
-            "if let Some(published) = published",
-            2,
-        )
         require_order(
             status_path,
-            "activate_recovered_v2_successor_height_at",
+            "publish_recovered_v2_successor_height_at",
             recovered,
             (
                 "validate_v2_successor_snapshot(",
                 "let published = SUMERAGI_V2_STATUS",
                 "ProductionRecoveredSuccessorTraceProjection",
-                "production_recovered_successor_trace_refines_indexed_activation_kernel(trace)",
+                "let Some(checked_trace) = check_production_recovered_successor_transition(trace) else",
+                "if let Some(published) = published",
+                "return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(",
+                "return Err(V2SuccessorActivationError::RefinementRejected)",
+                "let _authorized_trace = checked_trace.into_projection()",
                 "if let Some(published)",
+                "return Err(V2SuccessorActivationError::RecoveredStatusAlreadyPublished(",
                 "set_v2_status_at(successor, now)",
+            ),
+        )
+        reject_tokens(
+            status_path,
+            "publish_recovered_v2_successor_height_at",
+            recovered,
+            (
+                "production_recovered_successor_trace_refines_indexed_activation_kernel(",
             ),
         )
         if "update_v2_successor_work_stage_at(" in recovered:
@@ -85236,16 +85316,11 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             restart,
             (
                 "stage_before: successor_stage_projection(status.liveness.work.successor_height), stage_after: successor_stage_projection(status.liveness.work.successor_height), published_height_before: status.height, published_height_after: status.height, restart_required_before: status.restart_required, restart_required_after: true,",
-                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
+                "return;",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection();",
                 "status.restart_required = true;",
             ),
-        )
-        require_token_count(
-            status_path,
-            "mark_v2_restart_required",
-            restart,
-            "return;",
-            1,
         )
         require_order(
             status_path,
@@ -85253,8 +85328,18 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             restart,
             (
                 "ProductionSuccessorStartupLifecycleProjection",
-                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
+                "return",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection()",
                 "status.restart_required = true",
+            ),
+        )
+        reject_tokens(
+            status_path,
+            "mark_v2_restart_required",
+            restart,
+            (
+                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(",
             ),
         )
 
@@ -85310,13 +85395,13 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         recovery = region(
             recovery_path,
             recovery_source,
-            "recover_active_height",
-            "pub(crate) fn recover_active_height(",
+            "recover_active_height_with_plan",
+            "pub(crate) fn recover_active_height_with_plan(",
             "\nfn verify_state_kura_prefix(",
         )
         require_tokens(
             recovery_path,
-            "recover_active_height snapshot authority",
+            "recover_active_height_with_plan snapshot authority",
             recovery,
             (
                 "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
@@ -85327,7 +85412,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         )
         require_order(
             recovery_path,
-            "recover_active_height snapshot authority",
+            "recover_active_height_with_plan snapshot authority",
             recovery,
             (
                 "authenticate_v2_snapshot_replay_boundary(",
@@ -85340,7 +85425,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         )
         require_tokens(
             recovery_path,
-            "recover_active_height complete-tip authority",
+            "recover_active_height_with_plan complete-tip authority",
             recovery,
             (
                 "kura.v2_finality_artifact_with_receipt(durable_height)?",
@@ -85689,7 +85774,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "persisted.context() != &artifact.height_context",
                 "authenticate_certified_body_request(",
                 "verify_persisted_quorum_certificate(",
-                "binary_search(&responder)",
+                "position(|entry| entry.validator == responder_peer)",
                 "kura\n        .get_block(block_height)",
                 "block.hash() != request.subject.block_hash",
                 "block.canonical_resultless_proposal()",

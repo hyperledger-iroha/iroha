@@ -11187,6 +11187,37 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
+            "SumeragiV2Adapter::open_deferred_status(",
+            "run_inner live successor startup must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn run_inner(",
+            "V2EffectExecutor::open_with_body_store(",
+            "V2EffectExecutor::open(",
+            "run_inner live successor startup must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn drain_v2_ingress(",
+            "executor.accept_certified_body_response_with_ingress_ownership(\n"
+            "                    response,\n"
+            "                    &sender,\n"
+            "                    &ingress_ownership,\n"
+            "                    services,\n"
+            "                )",
+            "executor.accept_certified_body_response_with_ingress_ownership(\n"
+            "                    response,\n"
+            "                    &sender,\n"
+            "                    ingress_ownership,\n"
+            "                    services,\n"
+            "                )",
+            "historical ingress routing omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
             "fn initial_block_sync_deadline(",
             "if eager_recovery {\n        height_started_at\n    } else {",
             "if eager_recovery {\n"
@@ -11259,6 +11290,33 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/status.rs",
+            "fn activate_v2_successor_height_at(",
+            "let _authorized_trace = checked_trace.into_projection();",
+            "drop(checked_trace);",
+            "activate_v2_successor_height_at omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
+            "pub(crate) fn begin_v2_successor_activation(",
+            "let _authorized_lifecycle = checked_lifecycle.into_projection();\n"
+            "    update_v2_successor_work_stage_at(\n"
+            "        height,\n"
+            "        SumeragiV2LocalWorkStage::Queued,\n"
+            "        SumeragiV2LocalWorkStage::Running,\n"
+            "        Instant::now(),\n"
+            "    )",
+            "let mutation_result = update_v2_successor_work_stage_at(\n"
+            "        height,\n"
+            "        SumeragiV2LocalWorkStage::Queued,\n"
+            "        SumeragiV2LocalWorkStage::Running,\n"
+            "        Instant::now(),\n"
+            "    );\n"
+            "    let _authorized_lifecycle = checked_lifecycle.into_projection();\n"
+            "    mutation_result",
+            "begin_v2_successor_activation must preserve exact production order",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/status.rs",
             "fn publish_recovered_v2_successor_height_at(",
             "published_status_height_before: published.as_ref().map_or(0, |status| status.height),",
             "published_status_height_before: 0,",
@@ -11274,7 +11332,7 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "    }\n"
             "    set_v2_status_at(successor, now);",
             "set_v2_status_at(successor, now);",
-            "publish_recovered_v2_successor_height_at must contain 'if let Some(published) = published' exactly 2 time(s)",
+            "publish_recovered_v2_successor_height_at must preserve exact production order",
         ),
         (
             "crates/iroha_core/src/sumeragi/status.rs",
@@ -11286,9 +11344,9 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         (
             "crates/iroha_core/src/sumeragi/status.rs",
             "pub(crate) fn mark_v2_restart_required()",
-            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {",
-            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) { return;",
-            "mark_v2_restart_required must contain 'return;' exactly 1 time(s)",
+            "check_production_successor_startup_lifecycle_transition(lifecycle)",
+            "Some(lifecycle)",
+            "mark_v2_restart_required omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -11296,6 +11354,22 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
             "let published_height = 0;",
             "PendingSuccessorActivation omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "fn recovered(authority: RecoveredSuccessorActivationAuthority)",
+            "let Some(checked_lifecycle) =\n"
+            "            check_production_successor_startup_lifecycle_transition(lifecycle)\n"
+            "        else {\n"
+            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
+            "        };\n"
+            "        let _authorized_lifecycle = checked_lifecycle.into_projection();",
+            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(\n"
+            "            lifecycle,\n"
+            "        ) {\n"
+            "            return Err(V2RunnerError::SuccessorRefinementRejected);\n"
+            "        }",
+            "must use the opaque checked-transition gate; found obsolete direct-kernel forms",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -11327,18 +11401,18 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn recover_active_height(",
+            "pub(crate) fn recover_active_height_with_plan(",
             "if record.context() != &bootstrap.context\n"
             "            || record.proofs_of_possession() != bootstrap.validator_set_pops",
             "if false",
-            "recover_active_height snapshot authority omits production refinement tokens",
+            "recover_active_height_with_plan snapshot authority omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_recovery.rs",
-            "pub(crate) fn recover_active_height(",
+            "pub(crate) fn recover_active_height_with_plan(",
             "v2_finality_artifact_with_receipt(durable_height)",
             "v2_finality_artifact(durable_height)",
-            "recover_active_height complete-tip authority omits production refinement tokens",
+            "recover_active_height_with_plan complete-tip authority omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2.rs",
@@ -11364,8 +11438,8 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         (
             "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
             "fn build_historical_body_response(",
-            "binary_search(&responder)",
-            "contains(&responder)",
+            ".position(|entry| entry.validator == responder_peer)",
+            ".any(|entry| entry.validator == responder_peer)",
             "build_historical_body_response must preserve exact production order",
         ),
         (
@@ -11409,15 +11483,20 @@ def test_successor_production_source_mapping_mutations_fail_closed(
     assert region_start >= 0
     mutation = source.find(old, region_start)
     assert mutation >= 0
-    next_item = re.search(
-        r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?(?:async[ \t]+)?fn[ \t]+",
-        source[region_start + len(region_marker) :],
-    )
-    if next_item is not None:
-        next_item_start = (
-            region_start + len(region_marker) + next_item.start()
+    function_name = re.search(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)", region_marker)
+    if function_name is not None:
+        owning_items = []
+        for item in module.rust_items(source, function_name.group(1)):
+            item_start = source.find(item.source)
+            if item_start <= region_start < item_start + len(item.source):
+                owning_items.append((item_start, item))
+        assert len(owning_items) == 1, (
+            "region marker did not select exactly one production Rust item",
+            relative_path,
+            region_marker,
         )
-        assert mutation < next_item_start, (
+        item_start, item = owning_items[0]
+        assert item_start <= mutation < item_start + len(item.source), (
             "mutation escaped the production Rust item selected by its region marker",
             relative_path,
             region_marker,
@@ -31198,6 +31277,65 @@ def test_async_source_fidelity_pins_raw_fairness_inventory_and_domains(
     source = path.read_text(encoding="utf-8")
     path.write_text(
         mutate_tla_operator(source, "AsyncFairnessAt", old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncLeaderWireRetryableDormant",
+            "AsyncLeaderWireExactTransportPacketPresent(record)",
+            "record.slot.source \\in Responsive",
+            "must require a concrete exact transport packet",
+        ),
+        (
+            "AsyncLeaderWirePotentialPredecessorRecordsIn",
+            "candidate.schedulerOrdinal < ownerOrdinal",
+            "candidate.schedulerOrdinal < ownerOrdinal\n"
+            "     /\\ AsyncLeaderWireLifecycleActive(candidate)",
+            "must derive every retained lower scheduler owner",
+        ),
+        (
+            "PostGstAdmitExactDormantLeaderWire",
+            "DueSourcePackets(recipient, source) # {}",
+            "TRUE",
+            "must require one real due exact packet",
+        ),
+        (
+            "AsyncLeaderWireLifecycleStateAfterIngressAdmission",
+            '!.status = "Ingress"]',
+            '!.status = "Ingress",\n'
+            "                     !.ingressPredecessors =\n"
+            "                       AsyncLeaderWireIngressPrefixSnapshot(\n"
+            "                         item.envelope.recipient)]",
+            "without rewriting immutable ordinals or recharging",
+        ),
+    ),
+)
+def test_async_source_fidelity_rejects_dormant_potential_owner_weakening(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
         encoding="utf-8",
     )
 

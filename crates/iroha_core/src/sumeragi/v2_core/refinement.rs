@@ -5958,6 +5958,57 @@ pub(crate) const fn production_body_service_refines_async_fairness_kernel(
     effective_lock_trace_claim_body!(projection, 4u8)
 }
 
+/// Check the exact post-WAL effective-lock selection before reducer commit.
+#[must_use]
+pub(crate) fn check_production_enter_view_effective_lock_transition(
+    trace: EffectiveLockTraceProjection,
+    enter_view: EnterViewProjection,
+) -> Option<CheckedProductionTransition<(EffectiveLockTraceProjection, EnterViewProjection)>> {
+    if production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
+        Some(CheckedProductionTransition {
+            projection: (trace, enter_view),
+        })
+    } else {
+        None
+    }
+}
+
+/// Check one exact body-pipeline ownership transition before map mutation.
+#[must_use]
+pub(crate) fn check_production_body_ownership_effective_lock_transition(
+    projection: EffectiveLockTraceProjection,
+) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
+    if production_body_ownership_preserves_effective_lock_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check exact body-capacity retirement before retiring its live owners.
+#[must_use]
+pub(crate) fn check_production_body_capacity_retirement_effective_lock_transition(
+    projection: EffectiveLockTraceProjection,
+) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
+    if production_body_capacity_retirement_preserves_effective_lock_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Check one bounded fair-service selection before queue mutation.
+#[must_use]
+pub(crate) fn check_production_body_service_effective_lock_transition(
+    projection: EffectiveLockTraceProjection,
+) -> Option<CheckedProductionTransition<EffectiveLockTraceProjection>> {
+    if production_body_service_refines_async_fairness_kernel(projection) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
 /// Validate exact predecessor ownership returned by successor construction.
 pub(crate) const fn production_durable_predecessor_identity_kernel(
     projection: ProductionDurablePredecessorIdentityProjection,
@@ -6424,8 +6475,10 @@ fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
 /// No caller-provided authorization or action-exactness boolean crosses this
 /// boundary.  The kernel derives them from requested/granted capability keys,
 /// exact pre/post state identities, event tags, and invariant violation counts.
-#[must_use]
-pub fn accepts(projection: TransitionProjection<'_>) -> bool {
+#[must_use = "checked reducer evidence must be consumed before installing candidate state"]
+pub(crate) fn check(
+    projection: TransitionProjection<'_>,
+) -> Option<CheckedProductionTransition<TransitionProjection<'_>>> {
     if projection.enter_view.active {
         let enter_view = projection.enter_view;
         let protected_after = u64::from(enter_view.durable_lock_after.present);
@@ -6454,11 +6507,29 @@ pub fn accepts(projection: TransitionProjection<'_>) -> bool {
             selected: 0,
             cursor_after: 0,
         };
-        if !production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view) {
-            return false;
-        }
+        // The inner evidence establishes the Verus-checked effective-lock
+        // claim. Consuming it here is safe because the returned outer token
+        // retains the complete borrowed transition and is the only evidence
+        // production can consume at the reducer's state-install boundary.
+        let checked_effective_lock =
+            check_production_enter_view_effective_lock_transition(trace, enter_view)?;
+        let _authorized_effective_lock = checked_effective_lock.into_projection();
     }
-    accepts_facts(transition_facts(projection))
+    if accepts_facts(transition_facts(projection)) {
+        Some(CheckedProductionTransition { projection })
+    } else {
+        None
+    }
+}
+
+/// Report whether the complete production transition relation accepts.
+///
+/// Production uses [`check`] and consumes its opaque evidence at state
+/// installation. This boolean facade remains for pure diagnostics and
+/// mutation-focused unit tests which do not cross a mutation boundary.
+#[must_use]
+pub fn accepts(projection: TransitionProjection<'_>) -> bool {
+    check(projection).is_some()
 }
 
 #[cfg(test)]

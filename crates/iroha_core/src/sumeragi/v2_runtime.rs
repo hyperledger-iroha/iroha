@@ -28,8 +28,8 @@ use super::v2_core::{
     ExactBodyCompletionOwnership, MAX_EFFECTS_PER_STEP,
     ProductionIngressIdentityAndClassTraceProjection, SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE,
     SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
-    check_production_ingress_transition, classify_exact_body_completion_ownership,
-    production_body_service_refines_async_fairness_kernel, select_bounded_service_class,
+    check_production_body_service_effective_lock_transition, check_production_ingress_transition,
+    classify_exact_body_completion_ownership, select_bounded_service_class,
 };
 use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode as _, Encode as _};
@@ -2204,13 +2204,16 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
             selected: selection.selected,
             cursor_after: selection.next,
         };
-        if !production_body_service_refines_async_fairness_kernel(service_trace) {
+        let Some(checked_service) =
+            check_production_body_service_effective_lock_transition(service_trace)
+        else {
             panic!("Sumeragi v2 bounded service violated the effective-lock trace");
-        }
+        };
         let Some(next) = CommandClass::from_service_code(selection.next) else {
             return Err(EnqueueError::FailClosed);
         };
         if selection.selected == SERVICE_CLASS_NONE {
+            let _authorized_service = checked_service.into_projection();
             self.next_class = next;
             return Ok(None);
         }
@@ -2280,6 +2283,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                 return Err(EnqueueError::FailClosed);
             }
         }
+        let _authorized_service = checked_service.into_projection();
         self.next_class = next;
         for skipped_class in [
             CommandClass::Completion,
