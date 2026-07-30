@@ -9148,12 +9148,29 @@ mod device_authority_p256_tests {
             })
         ));
 
+        let unshield_backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
+        let mut semantic_unshield = ProofAttachment::new_ref(
+            unshield_backend.clone(),
+            ProofBox::new(
+                unshield_backend.clone(),
+                vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4],
+            ),
+            VerifyingKeyId::new(unshield_backend, "unshield-v3-wire-limit"),
+        );
+        semantic_unshield.vk_commitment = Some([0x68; 32]);
+        validate_kagemusha_redeem_proof_attachment_v2(&semantic_unshield)
+            .expect("maximum-sized unshield proof remains structurally valid");
+        semantic_unshield.proof.bytes.push(0x65);
+        assert!(matches!(
+            validate_kagemusha_redeem_proof_attachment_v2(&semantic_unshield),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_proof",
+            })
+        ));
+
         let mut maximum_unshield = request.clone();
         maximum_unshield.redeem_proof.proof.bytes =
             vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
-        maximum_unshield
-            .validate_public_binding()
-            .expect("maximum-sized unshield proof remains structurally valid");
         let maximum_unshield_archive = norito::encode_canonical(&maximum_unshield)
             .expect("encode maximum-sized unshield request");
         preflight_kagemusha_redeem_request_archive_v4(&maximum_unshield_archive)
@@ -9176,12 +9193,6 @@ mod device_authority_p256_tests {
         preflight_kagemusha_redeem_build_result_archive_v4(&maximum_build_result_archive)
             .expect("build-result wire preflight accepts the exact unshield limit");
         maximum_unshield.redeem_proof.proof.bytes.push(0x65);
-        assert!(matches!(
-            maximum_unshield.validate_public_binding(),
-            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "redeem_proof",
-            })
-        ));
         let oversized_request_archive = norito::encode_canonical(&maximum_unshield)
             .expect("encode oversized unshield request fixture");
         assert!(matches!(
