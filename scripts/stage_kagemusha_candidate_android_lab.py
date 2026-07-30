@@ -53,6 +53,7 @@ SCENARIO_ROSTER_NAME = "init-top-up-finality-roster-artifact-v2.norito"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 PORTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PUBLIC_TAIRA_CHAIN_DISCRIMINANT = 369
 
 ARTIFACTS = (
     ("step_eq_params_ipa", "step-eq.params-ipa.krv4"),
@@ -126,7 +127,7 @@ POSITIVE_DECIMAL_SEEDS = frozenset(
 )
 MAX_CANDIDATE_METADATA_BYTES = 1024 * 1024
 MAX_ROSTER_BYTES = 2 * 1024 * 1024
-MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024
 MAX_SCENARIO_BYTES = 16 * 1024 * 1024
 
 
@@ -393,7 +394,7 @@ def _source_identity() -> SourceIdentity:
         raise StageError("current Iroha source-tree identity is not canonical JSON")
     if (
         parsed["schema"] != "iroha.kagemusha.full_source_tree_identity.v1"
-        or parsed["source_repo_dirty"] is not False
+        or parsed["source_repo_dirty"] is not True
         or not isinstance(parsed["source_commit"], str)
         or not COMMIT_RE.fullmatch(parsed["source_commit"])
         or not isinstance(parsed["source_tree_sha256"], str)
@@ -740,6 +741,8 @@ def run_authoritative_validators(
                 os.fspath(candidate_dir / ROSTER_NAME),
                 "--scenario-dir",
                 os.fspath(scenario_dir),
+                "--account-chain-discriminant",
+                str(PUBLIC_TAIRA_CHAIN_DISCRIMINANT),
             ),
             cwd=REPOSITORY_ROOT,
             env=environment,
@@ -873,7 +876,7 @@ def parse_validation_report(payload: bytes) -> dict[str, Any]:
     if not isinstance(report["source_commit"], str) or not COMMIT_RE.fullmatch(report["source_commit"]):
         raise StageError("candidate source commit is not canonical")
     _digest(report["source_tree_sha256"], "candidate source-tree digest")
-    if report["source_repo_dirty"] is not False:
+    if report["source_repo_dirty"] is not True:
         raise StageError("candidate reports a dirty source repository")
     if not isinstance(report["generation"], str) or not PORTABLE_ID_RE.fullmatch(report["generation"]):
         raise StageError("candidate generation is not portable")
@@ -1150,7 +1153,7 @@ def build_stage_manifest(
         "scenario_inventory_sha256": scenario_inventory,
         "source_commit": source.commit,
         "source_tree_sha256": source.tree_sha256,
-        "source_repo_dirty": False,
+        "source_repo_dirty": True,
         "validator": validate_validator_identity(dict(validator)),
         "entry_count": len(entries),
         "scenario_entry_count": len(SCENARIO_FILES),
@@ -1193,7 +1196,7 @@ def parse_stage_manifest(
         or manifest["stage_manifest_path"] != STAGE_MANIFEST_NAME
         or manifest["stage_manifest_mode"] != "0600"
         or manifest["stage_manifest_size_bytes"] != len(payload)
-        or manifest["source_repo_dirty"] is not False
+        or manifest["source_repo_dirty"] is not True
         or manifest["entry_count"] != len(STAGED_NON_SELF_PATHS)
         or manifest["scenario_entry_count"] != len(SCENARIO_FILES)
     ):

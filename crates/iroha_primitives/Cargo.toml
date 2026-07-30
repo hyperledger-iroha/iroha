@@ -28,13 +28,10 @@ ffi_export = ["iroha_ffi", "rust_decimal/c-repr"]
 
 trybuild-tests = ["dep:trybuild"]
 bench = []
-# Recognize `packed-struct` used in derives from norito/norito_derive to silence
-# unexpected-cfg warnings during check-cfg linting. No behavior change.
-packed-struct = []
 simd-accel = []
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_primitives_derive = { path = "../iroha_primitives_derive" }
 
 iroha_macro = { workspace = true }

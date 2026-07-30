@@ -611,7 +611,7 @@ impl ConsensusKeyRecord {
 
 /// Canonical authenticated VRF commitment retained in an epoch record.
 ///
-/// The signature is over the Sumeragi `VrfCommit` v1 preimage. Keeping the
+/// The signature is over the versioned Sumeragi `VrfCommit` preimage. Keeping the
 /// complete signed fields makes a persisted observation independently
 /// verifiable against the frozen chain id and validator roster. The
 /// observation height is unsigned admission metadata: validators must compare
@@ -636,9 +636,10 @@ pub struct VrfCommitProof {
 
 /// Canonical authenticated VRF reveal retained in an epoch record.
 ///
-/// The signature is over the Sumeragi `VrfReveal` v1 preimage. The complete
-/// signed fields are deliberately retained instead of reconstructing evidence
-/// from unauthenticated participant summaries.
+/// The signature is over the versioned Sumeragi `VrfReveal` preimage, including
+/// the canonical VRF proof. The complete signed fields are deliberately
+/// retained instead of reconstructing evidence from unauthenticated
+/// participant summaries.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -651,6 +652,8 @@ pub struct VrfRevealProof {
     pub reveal: [u8; 32],
     /// Validator index in the frozen epoch roster.
     pub signer: u32,
+    /// Canonical Norito-encoded VRF proof whose verified output equals `reveal`.
+    pub vrf_proof: Vec<u8>,
     /// Exact canonical signature bytes received on the wire.
     pub signature: Vec<u8>,
     /// Unsigned height at which this exact signed message was first admitted.

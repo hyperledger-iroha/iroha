@@ -8,8 +8,10 @@ final class Secp256k1SigningTests: XCTestCase {
     private let message = Data("This is a dummy message for use with tests".utf8)
 
     func testSecp256k1KeypairSignsAndVerifies() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .secp256k1),
-                      "secp256k1 bridge functions are unavailable on this platform.")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .secp256k1),
+            "secp256k1 bridge functions are unavailable on this platform."
+        )
         guard let privateKey = Data(hexString: privateKeyHex) else {
             return XCTFail("invalid private key hex")
         }
@@ -29,8 +31,10 @@ final class Secp256k1SigningTests: XCTestCase {
     }
 
     func testSecp256k1SigningKeyEnvelope() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .secp256k1),
-                      "secp256k1 bridge functions are unavailable on this platform.")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .secp256k1),
+            "secp256k1 bridge functions are unavailable on this platform."
+        )
         guard let privateKey = Data(hexString: privateKeyHex),
               let expectedPublic = Data(hexString: publicKeyHex),
               let expectedSignature = Data(hexString: signatureHex) else {
@@ -46,9 +50,10 @@ final class Secp256k1SigningTests: XCTestCase {
     }
 
     func testSecp256k1BridgeDetachedHelpers() throws {
-        guard NoritoNativeBridge.shared.secp256k1Supported else {
-            throw XCTSkip("secp256k1 bridge functions are unavailable on this platform.")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.secp256k1Supported,
+            "secp256k1 bridge functions are unavailable on this platform."
+        )
         guard let privateKey = Data(hexString: privateKeyHex),
               let expectedPublic = Data(hexString: publicKeyHex) else {
             return XCTFail("failed to build fixtures")

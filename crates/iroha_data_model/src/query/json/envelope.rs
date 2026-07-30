@@ -862,22 +862,21 @@ impl IterableQueryJson {
         )
     }
 
+    #[cfg(not(feature = "ids_projection"))]
     fn selector<T>(&self) -> Result<SelectorTuple<T>, QueryJsonError> {
-        #[cfg(not(feature = "ids_projection"))]
-        {
-            if self.params.ids_projection.unwrap_or(false) {
-                Err(QueryJsonError::IdsProjectionUnavailable)
-            } else {
-                Ok(SelectorTuple::default())
-            }
+        if self.params.ids_projection.unwrap_or(false) {
+            Err(QueryJsonError::IdsProjectionUnavailable)
+        } else {
+            Ok(SelectorTuple::default())
         }
-        #[cfg(feature = "ids_projection")]
-        {
-            if self.params.ids_projection.unwrap_or(false) {
-                Ok(SelectorTuple::ids_only())
-            } else {
-                Ok(SelectorTuple::default())
-            }
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn selector<T>(&self) -> SelectorTuple<T> {
+        if self.params.ids_projection.unwrap_or(false) {
+            SelectorTuple::ids_only()
+        } else {
+            SelectorTuple::default()
         }
     }
 
@@ -895,7 +894,10 @@ impl IterableQueryJson {
         F: FnOnce() -> Box<dyn crate::query::Query<Item = Item> + Send + Sync + 'static>,
     {
         let predicate = self.predicate_or_pass::<Item>()?;
+        #[cfg(not(feature = "ids_projection"))]
         let selector = self.selector::<Item>()?;
+        #[cfg(feature = "ids_projection")]
+        let selector = self.selector::<Item>();
         Ok(build_query_with_params::<Item, _>(
             predicate,
             selector,

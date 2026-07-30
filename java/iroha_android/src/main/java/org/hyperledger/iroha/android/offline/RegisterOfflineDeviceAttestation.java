@@ -111,6 +111,7 @@ public final class RegisterOfflineDeviceAttestation {
         || !payload.nonce().equals(expected.nonce())
         || !payload.feePayment().equals(expected.feePayment())
         || !payload.metadata().equals(expected.metadata())
+        || !payload.attachments().equals(expected.attachments())
         || !payload.executable().isInstructions()
         || payload.executable().instructions().size() != 1
         || !payload.executable().instructions().get(0).equals(instruction())) {

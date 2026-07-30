@@ -1,7 +1,4 @@
-use std::{
-    borrow::ToOwned as _, format, hash, marker::PhantomData, num::NonZeroU8, str::FromStr,
-    string::String,
-};
+use std::{borrow::ToOwned as _, format, hash, marker::PhantomData, str::FromStr, string::String};
 
 #[cfg(not(feature = "ffi_import"))]
 use blake2::{
@@ -25,15 +22,16 @@ use crate::{ParseError, hex_decode};
 
 /// Hash of Iroha entities. Currently supports only blake2b-32.
 /// The least significant bit of hash is set to 1.
+///
+/// The marker is a logical invariant rather than a Rust validity invariant:
+/// the byte-array storage deliberately has no niche or invalid bit pattern.
+/// This lets untrusted archived bytes be inspected and rejected safely before
+/// an owned `Hash` is constructed.
 #[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TypeId)]
 #[display("{}", hex::encode(self.as_ref()))]
 #[debug("{}", hex::encode(self.as_ref()))]
-// NOTE: Invariants are maintained in `FromStr`
-#[repr(C)]
-pub struct Hash {
-    more_significant_bits: [u8; Self::LENGTH - 1],
-    least_significant_byte: NonZeroU8,
-}
+#[repr(transparent)]
+pub struct Hash([u8; Self::LENGTH]);
 
 impl Hash {
     /// Length of hash
@@ -42,18 +40,26 @@ impl Hash {
     /// Wrap the given bytes; they must be prehashed with Blake2b-32.
     pub fn prehashed(mut hash: [u8; Self::LENGTH]) -> Self {
         hash[Self::LENGTH - 1] |= 1;
-        // SAFETY:
-        // - any `u8` value after bitwise or with 1 will be at least 1
-        // - `Hash` and `[u8; Hash::LENGTH]` have the same memory layout
-        #[allow(unsafe_code)]
-        unsafe {
-            core::mem::transmute(hash)
-        }
+        Self(hash)
     }
 
     /// Check if least significant bit of `[u8; Hash::LENGTH]` is 1
     fn is_lsb_1(hash: &[u8; Self::LENGTH]) -> bool {
         hash[Self::LENGTH - 1] & 1 == 1
+    }
+
+    fn from_marked_bytes(hash: [u8; Self::LENGTH]) -> Option<Self> {
+        Self::is_lsb_1(&hash).then_some(Self(hash))
+    }
+
+    fn decode_archived(
+        archived: &norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let bytes = <[u8; Self::LENGTH] as norito::core::NoritoDeserialize>::try_deserialize(
+            archived.cast(),
+        )?;
+        Self::from_marked_bytes(bytes)
+            .ok_or_else(|| norito::core::Error::Message("invalid hash lsb".into()))
     }
 }
 
@@ -134,6 +140,48 @@ impl Hash {
         }
         finalize_blake2b(hasher)
     }
+
+    /// Hash bytes from a reader without buffering the complete input.
+    ///
+    /// Reading stops with [`std::io::ErrorKind::InvalidData`] once the input
+    /// exceeds `max_bytes`, including when the byte counter would overflow.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reader's I/O error or an invalid-data error when the bound
+    /// is exceeded.
+    pub fn new_from_reader_bounded(
+        mut reader: impl std::io::Read,
+        max_bytes: u64,
+    ) -> std::io::Result<(Self, u64)> {
+        const BUFFER_BYTES: usize = 64 * 1024;
+
+        let mut writer = HashWriter::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; BUFFER_BYTES];
+        loop {
+            let read = std::io::Read::read(&mut reader, &mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            total = total
+                .checked_add(u64::try_from(read).expect("read length fits u64"))
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Blake2b-32 input size overflow",
+                    )
+                })?;
+            if total > max_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Blake2b-32 input exceeds {max_bytes} byte limit"),
+                ));
+            }
+            std::io::Write::write_all(&mut writer, &buffer[..read])?;
+        }
+        Ok((writer.finalize(), total))
+    }
 }
 
 type Blake2b256 = Blake2b<U32>;
@@ -190,22 +238,14 @@ fn parse_hash_literal(value: &str) -> Result<Hash, json::Error> {
 impl From<Hash> for [u8; Hash::LENGTH] {
     #[inline]
     fn from(hash: Hash) -> Self {
-        #[allow(unsafe_code)]
-        // SAFETY: `Hash` and `[u8; Hash::LENGTH]` have the same memory layout
-        unsafe {
-            core::mem::transmute(hash)
-        }
+        hash.0
     }
 }
 
 impl AsRef<[u8; Hash::LENGTH]> for Hash {
     #[inline]
     fn as_ref(&self) -> &[u8; Hash::LENGTH] {
-        #[allow(unsafe_code, trivial_casts)]
-        // SAFETY: `Hash` and `[u8; Hash::LENGTH]` have the same memory layout
-        unsafe {
-            &*(core::ptr::from_ref(self).cast::<[u8; Self::LENGTH]>())
-        }
+        &self.0
     }
 }
 
@@ -252,12 +292,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for Hash {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        #[allow(unsafe_code)]
-        let bytes = unsafe { &*core::ptr::from_ref(archived).cast::<[u8; Hash::LENGTH]>() };
-        if !Self::is_lsb_1(bytes) {
-            return Err(norito::core::Error::Message("invalid hash lsb".into()));
-        }
-        Ok(Hash::prehashed(*bytes))
+        Self::decode_archived(archived)
     }
 }
 
@@ -268,10 +303,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Hash {
         }
         let mut b = [0u8; Self::LENGTH];
         b.copy_from_slice(&bytes[..Self::LENGTH]);
-        if !Self::is_lsb_1(&b) {
-            return Err(norito::core::Error::Message("invalid hash lsb".into()));
-        }
-        Ok((Hash::prehashed(b), Self::LENGTH))
+        Self::from_marked_bytes(b)
+            .map(|hash| (hash, Self::LENGTH))
+            .ok_or_else(|| norito::core::Error::Message("invalid hash lsb".into()))
     }
 }
 
@@ -286,10 +320,8 @@ impl FromStr for Hash {
             ))
         })?;
 
-        Hash::is_lsb_1(&hash)
-            .then_some(hash)
+        Hash::from_marked_bytes(hash)
             .ok_or_else(|| ParseError("expect least significant bit of hash to be 1".to_owned()))
-            .map(Self::prehashed)
     }
 }
 
@@ -389,12 +421,9 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        #[allow(unsafe_code)]
-        let bytes = unsafe { &*core::ptr::from_ref(archived).cast::<[u8; Hash::LENGTH]>() };
-        if !Hash::is_lsb_1(bytes) {
-            return Err(norito::core::Error::Message("invalid hash lsb".into()));
-        }
-        Ok(Self(Hash::prehashed(*bytes), PhantomData))
+        let hash =
+            <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived.cast::<Hash>())?;
+        Ok(Self(hash, PhantomData))
     }
 }
 
@@ -480,15 +509,8 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
 // packed sequences and option fields with Norito's strict-safe path.
 impl<'a, T> norito::core::DecodeFromSlice<'a> for HashOf<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        if bytes.len() < Hash::LENGTH {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        let mut buf = [0u8; Hash::LENGTH];
-        buf.copy_from_slice(&bytes[..Hash::LENGTH]);
-        if !Hash::is_lsb_1(&buf) {
-            return Err(norito::core::Error::Message("invalid hash lsb".into()));
-        }
-        Ok((HashOf(Hash::prehashed(buf), PhantomData), Hash::LENGTH))
+        let (hash, used) = <Hash as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((HashOf(hash, PhantomData), used))
     }
 }
 
@@ -572,6 +594,37 @@ mod tests {
     }
 
     #[test]
+    fn hash_storage_has_no_invalid_byte_pattern() {
+        assert_eq!(
+            core::mem::size_of::<Hash>(),
+            core::mem::size_of::<[u8; Hash::LENGTH]>()
+        );
+        assert_eq!(
+            core::mem::align_of::<Hash>(),
+            core::mem::align_of::<[u8; Hash::LENGTH]>()
+        );
+
+        // Deliberately bypass the private logical marker invariant. The raw
+        // storage itself must still be a valid Rust value so archived input can
+        // be inspected safely before validation, including under Miri.
+        let all_zero = Hash([0; Hash::LENGTH]);
+        assert_eq!(<[u8; Hash::LENGTH]>::from(all_zero), [0; Hash::LENGTH]);
+    }
+
+    #[test]
+    fn bounded_streaming_hash_matches_contiguous_hash_and_rejects_oversize() {
+        let bytes = vec![0x5a; 3 * 64 * 1024 + 17];
+        let (digest, size) = Hash::new_from_reader_bounded(bytes.as_slice(), bytes.len() as u64)
+            .expect("bounded hash");
+
+        assert_eq!(digest, Hash::new(&bytes));
+        assert_eq!(size, bytes.len() as u64);
+        let error = Hash::new_from_reader_bounded(bytes.as_slice(), bytes.len() as u64 - 1)
+            .expect_err("input exceeds bound");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
     fn hash_new_from_chunks_matches_concatenated_bytes() {
         let left: &[u8] = b"iroha:";
         let middle: &[u8] = b"chunked:";
@@ -610,10 +663,15 @@ mod tests {
     fn hash_of_decode_rejects_invalid_lsb() {
         use norito::codec::Decode;
 
-        let mut bytes = [0u8; Hash::LENGTH];
-        bytes[Hash::LENGTH - 1] = 0x00;
-        let err = HashOf::<()>::decode(&mut &bytes[..]);
-        assert!(err.is_err());
+        for final_byte in [0x00, 0x02] {
+            let mut bytes = [0xA5; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let err = HashOf::<()>::decode(&mut &bytes[..]);
+            assert!(
+                err.is_err(),
+                "final byte {final_byte:#04x} must fail marker validation"
+            );
+        }
     }
 
     #[test]
@@ -639,12 +697,74 @@ mod tests {
 
     #[test]
     fn hash_try_deserialize_rejects_invalid_lsb() {
-        let bytes = [0u8; Hash::LENGTH];
-        let framed = norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
-        let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-        let err = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived)
-            .expect_err("invalid lsb");
-        assert!(matches!(err, norito::core::Error::Message(_)));
+        for final_byte in [0x00, 0x02] {
+            let mut bytes = [0xA5; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let framed =
+                norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
+            let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
+            let err = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived)
+                .expect_err("invalid lsb");
+            assert!(matches!(err, norito::core::Error::Message(_)));
+        }
+    }
+
+    #[test]
+    fn hash_archived_decode_checks_every_final_byte_safely() {
+        for final_byte in u8::MIN..=u8::MAX {
+            let mut bytes = [0xA5; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let framed =
+                norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
+            let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
+            let result = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived);
+
+            if final_byte & 1 == 1 {
+                assert_eq!(
+                    <[u8; Hash::LENGTH]>::from(result.expect("marked hash")),
+                    bytes
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "final byte {final_byte:#04x} must fail marker validation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hash_decode_from_slice_checks_every_final_byte() {
+        for final_byte in u8::MIN..=u8::MAX {
+            let mut bytes = [0x5A; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let result = <Hash as norito::core::DecodeFromSlice>::decode_from_slice(&bytes);
+
+            if final_byte & 1 == 1 {
+                let (hash, used) = result.expect("marked hash");
+                assert_eq!(<[u8; Hash::LENGTH]>::from(hash), bytes);
+                assert_eq!(used, Hash::LENGTH);
+            } else {
+                assert!(
+                    result.is_err(),
+                    "final byte {final_byte:#04x} must fail marker validation"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hash_of_try_deserialize_rejects_invalid_final_bytes() {
+        for final_byte in [0x00, 0x02] {
+            let mut bytes = [0xA5; Hash::LENGTH];
+            bytes[Hash::LENGTH - 1] = final_byte;
+            let framed =
+                norito::core::frame_bare_with_header_flags::<HashOf<()>>(&bytes, 0).expect("frame");
+            let archived = norito::from_bytes::<HashOf<()>>(&framed).expect("archive");
+            let err = <HashOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+                .expect_err("invalid lsb");
+            assert!(matches!(err, norito::core::Error::Message(_)));
+        }
     }
 }
 

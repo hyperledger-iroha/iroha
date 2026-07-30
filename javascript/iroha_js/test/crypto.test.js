@@ -121,14 +121,11 @@ test("generateKeyPair is deterministic with a seed", () => {
   assert.deepEqual(kp1.publicKey, publicKeyFromPrivate(kp1.privateKey));
 });
 
-test("generateKeyPair hashes non-32 seed material", () => {
-  const seed = Buffer.from("short seed");
-  const kp1 = generateKeyPair({ seed });
-  const kp2 = generateKeyPair({ seed });
-
-  assert.equal(kp1.privateKey.length, 32);
-  assert.deepEqual(kp1.privateKey, kp2.privateKey);
-  assert.deepEqual(kp1.publicKey, kp2.publicKey);
+test("generateKeyPair rejects non-32-byte seed material", () => {
+  assert.throws(
+    () => generateKeyPair({ seed: Buffer.from("short seed") }),
+    /seed must be exactly 32 bytes/,
+  );
 });
 
 test("Ed25519 key generation and derivation remain available without the native host", () => {
@@ -403,7 +400,7 @@ test("generic crypto helpers delegate non-Ed25519 algorithms to native binding",
     supportedCryptoAlgorithms: () => ["ed25519", "gost3410-2012-256-paramset-a"],
     cryptoKeypair: (algorithm, seed) => {
       assert.equal(algorithm, "gost3410-2012-256-paramset-a");
-      assert.deepEqual(Buffer.from(seed), Buffer.from("seed"));
+      assert.deepEqual(Buffer.from(seed), Buffer.alloc(32, 0x73));
       return { algorithm, privateKey, publicKey };
     },
     cryptoKeypairFromPrivate: (algorithm, rawPrivateKey) => {
@@ -446,7 +443,7 @@ test("generic crypto helpers delegate non-Ed25519 algorithms to native binding",
       "ed25519",
       "gost3410-2012-256-paramset-a",
     ]);
-    const keyPair = generateKeyPair({ algorithm: "gost256a", seed: Buffer.from("seed") });
+    const keyPair = generateKeyPair({ algorithm: "gost256a", seed: Buffer.alloc(32, 0x73) });
     assert.equal(keyPair.algorithm, "gost3410-2012-256-paramset-a");
     assert.deepEqual(keyPair.privateKey, privateKey);
     assert.deepEqual(keyPair.publicKey, publicKey);

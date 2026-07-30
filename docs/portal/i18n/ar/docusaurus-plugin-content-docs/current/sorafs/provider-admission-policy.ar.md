@@ -31,7 +31,7 @@ translation_last_reviewed: 2026-02-07
 | استيثاق نقطة النهاية | يجب أن تكون كل نقطة نهاية مُعلنة مدعومة بتقرير شهادة mTLS أو QUIC. | تعريف حمولة Norito `EndpointAttestationV1` وتخزينها لكل نقطة نهاية داخل حزمة قبول. |
 
 ## سير عمل تقبل1. ** إنشاء المقترح **
-   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - سطر الأوامر: إضافة `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      إنتاج `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - التحقق: ضمان خصوصية، وstake > 0، ومقبض Chunker قياسي في `profile_id`.
 2. ** اعتماد الاتّحاد **
@@ -54,7 +54,7 @@ translation_last_reviewed: 2026-02-07
 
 ### مرجع CLI
 
-نفّذ كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+نفّذ كل أمر عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام المطلوب: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وعلى الأقل `--endpoint=<kind:host>` واحد.
@@ -90,7 +90,7 @@ translation_last_reviewed: 2026-02-07
 1. أنشئ اقتراح الزوج/إعلان اللاحق باستخدام `provider-admission proposal` و`provider-admission sign`، مع زيادة `--retention-epoch` وتحديث الحصة/نقاط النهاية حسب الحاجة.
 2. ينفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -104,7 +104,7 @@ translation_last_reviewed: 2026-02-07
 5. إعادة إنشاء وتثبيت التركيبات عبر `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`؛ CI (`ci/check_sorafs_fixtures.sh`) ويحق له إثبات مخرجات Norito.#### تعطيل طارئ
 1.حدد الـ المغلف المخترق واصدر إلغاء:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

@@ -603,7 +603,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         SetKeyValue::account(
             multisig_account_id.clone(),
             proposal_key,
-            "still-pending".parse::<Json>().unwrap(),
+            Json::from("still-pending"),
         )
         .into(),
     ];
@@ -1671,7 +1671,7 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         SetKeyValue::account(
             transaction_target.clone(),
             key.clone(),
-            "congratulations".parse::<Json>().unwrap(),
+            Json::from("congratulations"),
         )
         .into(),
     ];
@@ -1929,7 +1929,7 @@ fn reserved_roles() {
         let role = format!(
             "MULTISIG_SIGNATORY/{}/{}",
             other_domain,
-            account_in_another_domain.signatory()
+            account_in_another_domain.expect_single_signatory()
         )
         .parse()
         .unwrap();

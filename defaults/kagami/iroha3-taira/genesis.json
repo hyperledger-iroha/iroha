@@ -243,12 +243,16 @@
         "executor": {
           "execution_depth": 3,
           "fuel": 55000000,
-          "memory": 55000000
+          "memory": 1048576,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "smart_contract": {
           "execution_depth": 3,
           "fuel": 55000000,
-          "memory": 55000000
+          "memory": 1048576,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "sumeragi": {
           "block_cadence_ms": 1000,
@@ -272,6 +276,7 @@
           "max_instructions": 50000,
           "max_metadata_depth": 8,
           "max_signatures": 16,
+          "max_time_to_live_ms": 86400000,
           "max_tx_bytes": 10485760,
           "require_height_ttl": false,
           "require_sequence": false

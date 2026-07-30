@@ -61,6 +61,111 @@ pub type ViewChangesGauge = GenericGauge<AtomicU64>;
 #[derive(Debug, Clone, Copy)]
 pub struct Uptime(pub Duration);
 
+/// Bounded labels shared by the canonical SoraFS gateway active-request metrics.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsGatewayRequestMetricLabels<'a> {
+    /// Stable route template, never a raw request path.
+    pub endpoint: &'a str,
+    /// Upper-case HTTP method.
+    pub method: &'a str,
+    /// Bounded gateway route variant.
+    pub variant: &'a str,
+    /// Negotiated chunker profile or `unknown` when it is unavailable.
+    pub chunker: &'a str,
+    /// Negotiated gateway profile or `unknown` when it is unavailable.
+    pub profile: &'a str,
+}
+
+/// Bounded labels shared by the canonical SoraFS gateway response metrics.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsGatewayResponseMetricLabels<'a> {
+    /// Request dimensions associated with the response.
+    pub request: SorafsGatewayRequestMetricLabels<'a>,
+    /// Bounded result (`success`, `error`, or `dropped`).
+    pub result: &'a str,
+    /// HTTP response status.
+    pub status: u16,
+    /// Bounded machine-readable error code, or `none` for successful responses.
+    pub error_code: &'a str,
+}
+
+/// Common payload-free health values exported by a supervised SoraFS runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsRuntimeHealthMetricSnapshot {
+    /// Whether the supervised runtime is live.
+    pub live: bool,
+    /// Whether the runtime is ready to serve committed projections.
+    pub ready: bool,
+    /// Whether every external dependency passed qualification and health checks.
+    pub external_dependencies_ready: bool,
+}
+
+/// Payload-free journal and publication state for the SoraFS reputation runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsReputationPublicationMetricSnapshot {
+    /// Whether the journal transaction submitter is qualified and ready.
+    pub journal_transaction_submitter_ready: bool,
+    /// Whether the current publication material is acknowledged.
+    pub material_acknowledged: bool,
+}
+
+/// Payload-free values exported for the committed SoraFS reputation runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsReputationRuntimeMetricSnapshot {
+    /// Common supervised-runtime health.
+    pub runtime: SorafsRuntimeHealthMetricSnapshot,
+    /// Journal submission and publication acknowledgement state.
+    pub publication: SorafsReputationPublicationMetricSnapshot,
+    /// Latest finalized height consumed by the runtime.
+    pub latest_finalized_height: u64,
+    /// Consecutive failed reconciliation attempts.
+    pub consecutive_failures: u64,
+    /// Number of providers represented by the committed projection.
+    pub provider_count: u32,
+}
+
+/// Payload-free execution and finalized-projection state for hedging/billing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsHedgingBillingProjectionMetricSnapshot {
+    /// Whether automatic hedge execution is enabled.
+    pub automatic_execution_enabled: bool,
+    /// Whether the most recent reconciliation tick is fresh.
+    pub last_tick_fresh: bool,
+    /// Whether a finalized projection is available.
+    pub finalized_projection_ready: bool,
+}
+
+/// Payload-free values exported for the committed SoraFS hedging/billing runtime.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SorafsHedgingBillingRuntimeMetricSnapshot {
+    /// Common supervised-runtime health.
+    pub runtime: SorafsRuntimeHealthMetricSnapshot,
+    /// Hedge execution and finalized-projection state.
+    pub projection: SorafsHedgingBillingProjectionMetricSnapshot,
+    /// Finalized height consumed by the service.
+    pub finalized_height: u64,
+    /// Current finalized ledger head height.
+    pub finalized_head_height: u64,
+    /// Difference between the finalized head and consumed projection.
+    pub finalized_lag_blocks: u64,
+    /// Next committed event sequence expected by the service.
+    pub next_event_sequence: u64,
+    /// Statements ready for external signing.
+    pub ready_for_signing: u32,
+    /// Signed statements ready for immutable publication.
+    pub ready_for_publication: u32,
+    /// Statements whose publication outcome requires reconciliation.
+    pub publication_ambiguous: u32,
+    /// Statements published immutably.
+    pub published: u32,
+    /// Published statements acknowledged by the authority.
+    pub acknowledged: u32,
+    /// Statements moved to the dead-letter queue.
+    pub dead_letter: u32,
+    /// Committed hedge intents retained by the projection.
+    pub hedge_intents: u32,
+}
+
 type MicropaymentSampleSink = Arc<
     dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
 >;
@@ -1364,13 +1469,13 @@ pub struct SorafsGatewayOtel {
     #[cfg(feature = "otel-exporter")]
     active_requests: UpDownCounter<i64>,
     #[cfg(feature = "otel-exporter")]
-    requests_total: Counter<u64>,
+    responses_total: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
     ttfb_ms: OtelHistogram<f64>,
     #[cfg(feature = "otel-exporter")]
-    proof_events_total: Counter<u64>,
+    proof_verifications_total: Counter<u64>,
     #[cfg(feature = "otel-exporter")]
-    proof_latency_ms: OtelHistogram<f64>,
+    proof_duration_ms: OtelHistogram<f64>,
 }
 
 impl Default for SorafsGatewayOtel {
@@ -1394,10 +1499,10 @@ impl SorafsGatewayOtel {
                 .with_unit("requests")
                 .init();
 
-            let requests_total = meter
-                .u64_counter("sorafs.gateway.requests_total")
+            let responses_total = meter
+                .u64_counter("sorafs.gateway.responses_total")
                 .with_description(
-                    "Total SoraFS gateway requests grouped by endpoint/result/reason.",
+                    "Total SoraFS gateway responses grouped by endpoint and bounded outcome.",
                 )
                 .init();
 
@@ -1407,23 +1512,23 @@ impl SorafsGatewayOtel {
                 .with_unit("ms")
                 .init();
 
-            let proof_events_total = meter
-                .u64_counter("sorafs.gateway.proof_events_total")
-                .with_description("Proof stream outcomes grouped by kind/result/reason.")
+            let proof_verifications_total = meter
+                .u64_counter("sorafs.gateway.proof_verifications_total")
+                .with_description("SoraFS proof verification outcomes grouped by profile.")
                 .init();
 
-            let proof_latency_ms = meter
-                .f64_histogram("sorafs.gateway.proof_latency_ms")
-                .with_description("Proof stream latency (milliseconds).")
+            let proof_duration_ms = meter
+                .f64_histogram("sorafs.gateway.proof_duration_ms")
+                .with_description("SoraFS proof verification duration (milliseconds).")
                 .with_unit("ms")
                 .init();
 
             Self {
                 active_requests,
-                requests_total,
+                responses_total,
                 ttfb_ms,
-                proof_events_total,
-                proof_latency_ms,
+                proof_verifications_total,
+                proof_duration_ms,
             }
         }
         #[cfg(not(feature = "otel-exporter"))]
@@ -1433,144 +1538,54 @@ impl SorafsGatewayOtel {
     }
 
     /// Track the start of a gateway request for active request accounting.
-    #[allow(clippy::too_many_arguments)] // arguments map directly to metric dimensions
-    pub fn request_started_detailed(
-        &self,
-        endpoint: &str,
-        method: &str,
-        variant: Option<&str>,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-    ) {
+    pub fn request_started_detailed(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
         #[cfg(feature = "otel-exporter")]
         {
-            let attrs = Self::base_attrs(
-                endpoint,
-                Some(method),
-                variant,
-                chunker,
-                profile,
-                None,
-                None,
-            );
+            let attrs = Self::base_attrs(labels);
             self.active_requests.add(1, &attrs);
         }
         #[cfg(not(feature = "otel-exporter"))]
         {
-            let _ = (endpoint, method, variant, chunker, profile);
+            let _ = labels;
         }
     }
 
     /// Track the completion of a gateway request.
-    #[allow(clippy::too_many_arguments)]
-    pub fn request_completed_detailed(
-        &self,
-        endpoint: &str,
-        method: &str,
-        variant: Option<&str>,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        outcome: &str,
-        status: u16,
-        reason: Option<&str>,
-    ) {
+    pub fn request_completed_detailed(&self, labels: SorafsGatewayResponseMetricLabels<'_>) {
         #[cfg(feature = "otel-exporter")]
         {
-            let active_attrs = Self::base_attrs(
-                endpoint,
-                Some(method),
-                variant,
-                chunker,
-                profile,
-                None,
-                None,
-            );
+            let active_attrs = Self::base_attrs(labels.request);
             self.active_requests.add(-1, &active_attrs);
 
-            let mut attrs = Self::base_attrs(
-                endpoint,
-                Some(method),
-                variant,
-                chunker,
-                profile,
-                provider_id,
-                tier,
-            );
-            attrs.push(KeyValue::new("result", outcome.to_string()));
-            if let Some(reason) = reason.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("reason", reason.to_string()));
-            }
-            attrs.push(KeyValue::new("status", status.to_string()));
-            self.requests_total.add(1, &attrs);
+            let mut attrs = active_attrs;
+            attrs.push(KeyValue::new("result", labels.result.to_string()));
+            attrs.push(KeyValue::new("status", labels.status.to_string()));
+            attrs.push(KeyValue::new("error_code", labels.error_code.to_string()));
+            self.responses_total.add(1, &attrs);
         }
         #[cfg(not(feature = "otel-exporter"))]
         {
-            let _ = (
-                endpoint,
-                method,
-                variant,
-                chunker,
-                profile,
-                provider_id,
-                tier,
-                outcome,
-                status,
-                reason,
-            );
+            let _ = labels;
         }
     }
 
     /// Record a gateway latency observation with detailed labels.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_ttfb_detailed(
         &self,
-        endpoint: &str,
-        method: &str,
-        variant: Option<&str>,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        outcome: &str,
-        status: u16,
-        reason: Option<&str>,
+        labels: SorafsGatewayResponseMetricLabels<'_>,
         latency_ms: f64,
     ) {
         #[cfg(feature = "otel-exporter")]
         {
-            let mut attrs = Self::base_attrs(
-                endpoint,
-                Some(method),
-                variant,
-                chunker,
-                profile,
-                provider_id,
-                tier,
-            );
-            attrs.push(KeyValue::new("result", outcome.to_string()));
-            attrs.push(KeyValue::new("status", status.to_string()));
-            if let Some(reason) = reason.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("reason", reason.to_string()));
-            }
+            let mut attrs = Self::base_attrs(labels.request);
+            attrs.push(KeyValue::new("result", labels.result.to_string()));
+            attrs.push(KeyValue::new("status", labels.status.to_string()));
+            attrs.push(KeyValue::new("error_code", labels.error_code.to_string()));
             self.ttfb_ms.record(latency_ms, &attrs);
         }
         #[cfg(not(feature = "otel-exporter"))]
         {
-            let _ = (
-                endpoint,
-                method,
-                variant,
-                chunker,
-                profile,
-                provider_id,
-                tier,
-                outcome,
-                status,
-                reason,
-                latency_ms,
-            );
+            let _ = (labels, latency_ms);
         }
     }
 
@@ -1579,158 +1594,34 @@ impl SorafsGatewayOtel {
         &self,
         profile_version: &str,
         outcome: &str,
-        reason: Option<&str>,
+        error_code: &str,
         latency_ms: f64,
     ) {
         #[cfg(feature = "otel-exporter")]
         {
-            let mut attrs = Vec::with_capacity(4);
-            attrs.push(KeyValue::new("kind", "verification".to_string()));
-            attrs.push(KeyValue::new("result", outcome.to_string()));
-            attrs.push(KeyValue::new(
-                "profile_version",
-                profile_version.to_string(),
-            ));
-            if let Some(reason) = reason.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("reason", reason.to_string()));
-            }
-            self.proof_events_total.add(1, &attrs);
-            self.proof_latency_ms.record(latency_ms, &attrs);
+            let attrs = [
+                KeyValue::new("profile_version", profile_version.to_string()),
+                KeyValue::new("result", outcome.to_string()),
+                KeyValue::new("error_code", error_code.to_string()),
+            ];
+            self.proof_verifications_total.add(1, &attrs);
+            self.proof_duration_ms.record(latency_ms, &attrs);
         }
         #[cfg(not(feature = "otel-exporter"))]
         {
-            let _ = (profile_version, outcome, reason, latency_ms);
-        }
-    }
-
-    /// Record a gateway request outcome.
-    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-    pub fn record_request(
-        &self,
-        endpoint: &str,
-        result: &str,
-        reason: Option<&str>,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        status: Option<u16>,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs =
-                Self::base_attrs(endpoint, None, None, chunker, profile, provider_id, tier);
-            attrs.push(KeyValue::new("result", result.to_string()));
-            if let Some(reason) = reason.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("reason", reason.to_string()));
-            }
-            if let Some(status) = status {
-                attrs.push(KeyValue::new("status", status.to_string()));
-            }
-            self.requests_total.add(1, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (
-                endpoint,
-                result,
-                reason,
-                chunker,
-                profile,
-                provider_id,
-                tier,
-                status,
-            );
-        }
-    }
-
-    /// Observe a gateway TTFB measurement.
-    pub fn observe_ttfb(
-        &self,
-        endpoint: &str,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        latency_ms: f64,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let attrs = Self::base_attrs(endpoint, None, None, chunker, profile, provider_id, tier);
-            self.ttfb_ms.record(latency_ms, &attrs);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (endpoint, chunker, profile, provider_id, tier, latency_ms);
-        }
-    }
-
-    /// Record a proof stream outcome.
-    pub fn record_proof_event(
-        &self,
-        kind: &str,
-        result: &str,
-        reason: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-        latency_ms: Option<f64>,
-    ) {
-        #[cfg(feature = "otel-exporter")]
-        {
-            let mut attrs = Vec::with_capacity(6);
-            attrs.push(KeyValue::new("kind", kind.to_string()));
-            attrs.push(KeyValue::new("result", result.to_string()));
-            if let Some(reason) = reason.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("reason", reason.to_string()));
-            }
-            if let Some(provider) = provider_id.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("provider_id", provider.to_string()));
-            }
-            if let Some(tier) = tier.filter(|value| !value.is_empty()) {
-                attrs.push(KeyValue::new("tier", tier.to_string()));
-            }
-            self.proof_events_total.add(1, &attrs);
-            if let Some(latency_ms) = latency_ms {
-                self.proof_latency_ms.record(latency_ms, &attrs);
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (kind, result, reason, provider_id, tier, latency_ms);
+            let _ = (profile_version, outcome, error_code, latency_ms);
         }
     }
 
     #[cfg(feature = "otel-exporter")]
-    fn base_attrs(
-        endpoint: &str,
-        method: Option<&str>,
-        variant: Option<&str>,
-        chunker: Option<&str>,
-        profile: Option<&str>,
-        provider_id: Option<&str>,
-        tier: Option<&str>,
-    ) -> Vec<KeyValue> {
-        let mut attrs = Vec::with_capacity(7);
-        attrs.push(KeyValue::new("endpoint", endpoint.to_string()));
-        if let Some(method) = method.filter(|value| !value.is_empty()) {
-            attrs.push(KeyValue::new("method", method.to_string()));
-        }
-        if let Some(variant) = variant.filter(|value| !value.is_empty()) {
-            attrs.push(KeyValue::new("variant", variant.to_string()));
-        }
-        if let Some(chunker) = chunker.filter(|value| !value.is_empty()) {
-            attrs.push(KeyValue::new("chunker", chunker.to_string()));
-        }
-        if let Some(profile) = profile.filter(|value| !value.is_empty()) {
-            attrs.push(KeyValue::new("profile", profile.to_string()));
-        }
-        if let Some(provider) = provider_id.filter(|value| !value.is_empty()) {
-            attrs.push(KeyValue::new("provider_id", provider.to_string()));
-        }
-        if let Some(tier) = tier.filter(|value| !value.is_empty()) {
-            attrs.push(KeyValue::new("tier", tier.to_string()));
-        }
-        attrs
+    fn base_attrs(labels: SorafsGatewayRequestMetricLabels<'_>) -> Vec<KeyValue> {
+        vec![
+            KeyValue::new("endpoint", labels.endpoint.to_string()),
+            KeyValue::new("method", labels.method.to_string()),
+            KeyValue::new("variant", labels.variant.to_string()),
+            KeyValue::new("chunker", labels.chunker.to_string()),
+            KeyValue::new("profile", labels.profile.to_string()),
+        ]
     }
 }
 
@@ -3431,6 +3322,7 @@ mod serde_tests {
                 halo2: Halo2Status::default(),
             },
             stack: StackStatus::default(),
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
             teu_lane_commit: Vec::new(),
@@ -6944,8 +6836,6 @@ pub struct Metrics {
     pub governance_council_alternates: GenericGauge<AtomicU64>,
     /// Governance: total candidates considered in the latest draw.
     pub governance_council_candidates: GenericGauge<AtomicU64>,
-    /// Governance: verified VRF proofs in the latest draw.
-    pub governance_council_verified: GenericGauge<AtomicU64>,
     /// Governance: epoch index of the latest persisted council.
     pub governance_council_epoch: GenericGauge<AtomicU64>,
     /// Governance: total registered citizens.
@@ -8078,6 +7968,16 @@ pub struct Metrics {
     pub torii_sorafs_storage_por_samples_success_total: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS PoR samples marked failed per provider.
     pub torii_sorafs_storage_por_samples_failed_total: GenericGaugeVec<AtomicU64>,
+    /// Active SoraFS gateway requests grouped by the canonical request dimensions.
+    pub sorafs_gateway_active: IntGaugeVec,
+    /// Completed SoraFS gateway responses grouped by bounded outcome dimensions.
+    pub sorafs_gateway_responses_total: IntCounterVec,
+    /// SoraFS gateway time-to-first-byte histogram in milliseconds.
+    pub sorafs_gateway_ttfb_ms: HistogramVec,
+    /// SoraFS proof verification outcomes grouped by profile and bounded error code.
+    pub sorafs_gateway_proof_verifications_total: IntCounterVec,
+    /// SoraFS proof verification duration histogram in milliseconds.
+    pub sorafs_gateway_proof_duration_ms: HistogramVec,
     /// Torii SoraFS chunk-range request counters (endpoint, result).
     pub torii_sorafs_chunk_range_requests_total: IntCounterVec,
     /// Torii SoraFS chunk-range bytes served per endpoint.
@@ -9549,11 +9449,6 @@ impl Default for Metrics {
         let governance_council_candidates = GenericGauge::new(
             "governance_council_candidates",
             "Total candidates considered in the latest council draw",
-        )
-        .expect("Infallible");
-        let governance_council_verified = GenericGauge::new(
-            "governance_council_verified",
-            "Verified VRF proofs in the latest council draw",
         )
         .expect("Infallible");
         let governance_council_epoch = GenericGauge::new(
@@ -13507,6 +13402,70 @@ impl Default for Metrics {
             &["provider"],
         )
         .expect("Infallible");
+        let sorafs_gateway_active = IntGaugeVec::new(
+            Opts::new(
+                "sorafs_gateway_active",
+                "Active SoraFS gateway requests grouped by canonical request dimensions",
+            ),
+            &["endpoint", "method", "variant", "chunker", "profile"],
+        )
+        .expect("Infallible");
+        let sorafs_gateway_responses_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_gateway_responses_total",
+                "Completed SoraFS gateway responses grouped by bounded outcome dimensions",
+            ),
+            &[
+                "endpoint",
+                "method",
+                "variant",
+                "chunker",
+                "profile",
+                "result",
+                "status",
+                "error_code",
+            ],
+        )
+        .expect("Infallible");
+        let sorafs_gateway_ttfb_ms = HistogramVec::new(
+            HistogramOpts::new(
+                "sorafs_gateway_ttfb_ms",
+                "SoraFS gateway time to first byte in milliseconds",
+            )
+            .buckets(vec![
+                5.0, 10.0, 25.0, 50.0, 100.0, 120.0, 200.0, 500.0, 1000.0, 2500.0, 5000.0,
+            ]),
+            &[
+                "endpoint",
+                "method",
+                "variant",
+                "chunker",
+                "profile",
+                "result",
+                "status",
+                "error_code",
+            ],
+        )
+        .expect("Infallible");
+        let sorafs_gateway_proof_verifications_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_gateway_proof_verifications_total",
+                "SoraFS proof verification outcomes grouped by profile and bounded error code",
+            ),
+            &["profile_version", "result", "error_code"],
+        )
+        .expect("Infallible");
+        let sorafs_gateway_proof_duration_ms = HistogramVec::new(
+            HistogramOpts::new(
+                "sorafs_gateway_proof_duration_ms",
+                "SoraFS proof verification duration in milliseconds",
+            )
+            .buckets(vec![
+                5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+            ]),
+            &["profile_version", "result", "error_code"],
+        )
+        .expect("Infallible");
         let torii_sorafs_chunk_range_requests_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_chunk_range_requests_total",
@@ -13627,6 +13586,11 @@ impl Default for Metrics {
             &["provider_id"],
         )
         .expect("Infallible");
+        register_guarded(&registry, &sorafs_gateway_active);
+        register_guarded(&registry, &sorafs_gateway_responses_total);
+        register_guarded(&registry, &sorafs_gateway_ttfb_ms);
+        register_guarded(&registry, &sorafs_gateway_proof_verifications_total);
+        register_guarded(&registry, &sorafs_gateway_proof_duration_ms);
         register_guarded(&registry, &torii_sorafs_chunk_range_requests_total);
         register_guarded(&registry, &torii_sorafs_chunk_range_bytes_total);
         register_guarded(&registry, &torii_sorafs_provider_range_capability_total);
@@ -15554,7 +15518,6 @@ impl Default for Metrics {
             governance_council_members,
             governance_council_alternates,
             governance_council_candidates,
-            governance_council_verified,
             governance_council_epoch,
             governance_citizens_total,
             governance_citizen_service_events_total,
@@ -15716,7 +15679,6 @@ impl Default for Metrics {
             governance_council_members,
             governance_council_alternates,
             governance_council_candidates,
-            governance_council_verified,
             governance_council_epoch,
             governance_citizens_total,
             governance_citizen_service_events_total,
@@ -16286,6 +16248,11 @@ impl Default for Metrics {
             torii_sorafs_storage_por_inflight,
             torii_sorafs_storage_por_samples_success_total,
             torii_sorafs_storage_por_samples_failed_total,
+            sorafs_gateway_active,
+            sorafs_gateway_responses_total,
+            sorafs_gateway_ttfb_ms,
+            sorafs_gateway_proof_verifications_total,
+            sorafs_gateway_proof_duration_ms,
             torii_sorafs_chunk_range_requests_total,
             torii_sorafs_chunk_range_bytes_total,
             torii_sorafs_provider_range_capability_total,
@@ -18129,32 +18096,28 @@ impl Metrics {
     }
 
     /// Record payload-free committed reputation runtime status.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_reputation_runtime_status(
         &self,
-        live: bool,
-        ready: bool,
-        external_dependencies_ready: bool,
-        journal_transaction_submitter_ready: bool,
-        latest_finalized_height: u64,
-        consecutive_failures: u64,
-        material_acknowledged: bool,
-        provider_count: u32,
+        snapshot: SorafsReputationRuntimeMetricSnapshot,
     ) {
-        self.sorafs_reputation_runtime_live.set(u64::from(live));
-        self.sorafs_reputation_runtime_ready.set(u64::from(ready));
+        self.sorafs_reputation_runtime_live
+            .set(u64::from(snapshot.runtime.live));
+        self.sorafs_reputation_runtime_ready
+            .set(u64::from(snapshot.runtime.ready));
         self.sorafs_reputation_runtime_dependencies_ready
-            .set(u64::from(external_dependencies_ready));
+            .set(u64::from(snapshot.runtime.external_dependencies_ready));
         self.sorafs_reputation_journal_transaction_submitter_ready
-            .set(u64::from(journal_transaction_submitter_ready));
+            .set(u64::from(
+                snapshot.publication.journal_transaction_submitter_ready,
+            ));
         self.sorafs_reputation_runtime_finalized_height
-            .set(latest_finalized_height);
+            .set(snapshot.latest_finalized_height);
         self.sorafs_reputation_runtime_consecutive_failures
-            .set(consecutive_failures);
+            .set(snapshot.consecutive_failures);
         self.sorafs_reputation_runtime_material_acknowledged
-            .set(u64::from(material_acknowledged));
+            .set(u64::from(snapshot.publication.material_acknowledged));
         self.sorafs_reputation_runtime_provider_count
-            .set(u64::from(provider_count));
+            .set(u64::from(snapshot.provider_count));
     }
 
     /// Increment one bounded committed reputation runtime tick result.
@@ -18169,61 +18132,44 @@ impl Metrics {
     }
 
     /// Record payload-free committed hedging/billing runtime status.
-    #[allow(clippy::too_many_arguments)]
     pub fn record_sorafs_hedging_billing_runtime_status(
         &self,
-        live: bool,
-        ready: bool,
-        external_dependencies_ready: bool,
-        automatic_execution_enabled: bool,
-        last_tick_fresh: bool,
-        finalized_projection_ready: bool,
-        finalized_height: u64,
-        finalized_head_height: u64,
-        finalized_lag_blocks: u64,
-        next_event_sequence: u64,
-        ready_for_signing: u32,
-        ready_for_publication: u32,
-        publication_ambiguous: u32,
-        published: u32,
-        acknowledged: u32,
-        dead_letter: u32,
-        hedge_intents: u32,
+        snapshot: SorafsHedgingBillingRuntimeMetricSnapshot,
     ) {
         self.sorafs_hedging_billing_runtime_live
-            .set(u64::from(live));
+            .set(u64::from(snapshot.runtime.live));
         self.sorafs_hedging_billing_runtime_ready
-            .set(u64::from(ready));
+            .set(u64::from(snapshot.runtime.ready));
         self.sorafs_hedging_billing_runtime_dependencies_ready
-            .set(u64::from(external_dependencies_ready));
+            .set(u64::from(snapshot.runtime.external_dependencies_ready));
         self.sorafs_hedging_billing_automatic_execution_enabled
-            .set(u64::from(automatic_execution_enabled));
+            .set(u64::from(snapshot.projection.automatic_execution_enabled));
         self.sorafs_hedging_billing_last_tick_fresh
-            .set(u64::from(last_tick_fresh));
+            .set(u64::from(snapshot.projection.last_tick_fresh));
         self.sorafs_hedging_billing_finalized_projection_ready
-            .set(u64::from(finalized_projection_ready));
+            .set(u64::from(snapshot.projection.finalized_projection_ready));
         self.sorafs_hedging_billing_finalized_height
-            .set(finalized_height);
+            .set(snapshot.finalized_height);
         self.sorafs_hedging_billing_finalized_head_height
-            .set(finalized_head_height);
+            .set(snapshot.finalized_head_height);
         self.sorafs_hedging_billing_finalized_lag_blocks
-            .set(finalized_lag_blocks);
+            .set(snapshot.finalized_lag_blocks);
         self.sorafs_hedging_billing_next_event_sequence
-            .set(next_event_sequence);
+            .set(snapshot.next_event_sequence);
         self.sorafs_hedging_billing_ready_for_signing
-            .set(u64::from(ready_for_signing));
+            .set(u64::from(snapshot.ready_for_signing));
         self.sorafs_hedging_billing_ready_for_publication
-            .set(u64::from(ready_for_publication));
+            .set(u64::from(snapshot.ready_for_publication));
         self.sorafs_hedging_billing_publication_ambiguous
-            .set(u64::from(publication_ambiguous));
+            .set(u64::from(snapshot.publication_ambiguous));
         self.sorafs_hedging_billing_published
-            .set(u64::from(published));
+            .set(u64::from(snapshot.published));
         self.sorafs_hedging_billing_acknowledged
-            .set(u64::from(acknowledged));
+            .set(u64::from(snapshot.acknowledged));
         self.sorafs_hedging_billing_dead_letter
-            .set(u64::from(dead_letter));
+            .set(u64::from(snapshot.dead_letter));
         self.sorafs_hedging_billing_hedge_intents
-            .set(u64::from(hedge_intents));
+            .set(u64::from(snapshot.hedge_intents));
     }
 
     /// Increment one bounded committed hedging/billing runtime tick result.
@@ -19147,6 +19093,90 @@ impl Metrics {
             .set(1);
     }
 
+    /// Increment canonical active-request accounting for a SoraFS gateway route.
+    pub fn start_sorafs_gateway_request(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
+        self.sorafs_gateway_active
+            .with_label_values(&[
+                labels.endpoint,
+                labels.method,
+                labels.variant,
+                labels.chunker,
+                labels.profile,
+            ])
+            .inc();
+        #[cfg(feature = "otel-exporter")]
+        global_sorafs_gateway_otel().request_started_detailed(labels);
+    }
+
+    /// Complete canonical active-request accounting and record response/TTFB metrics.
+    pub fn finish_sorafs_gateway_request(
+        &self,
+        labels: SorafsGatewayResponseMetricLabels<'_>,
+        ttfb_ms: f64,
+    ) {
+        let request = labels.request;
+        let request_labels = [
+            request.endpoint,
+            request.method,
+            request.variant,
+            request.chunker,
+            request.profile,
+        ];
+        self.sorafs_gateway_active
+            .with_label_values(&request_labels)
+            .dec();
+
+        let status = labels.status.to_string();
+        let response_labels = [
+            request.endpoint,
+            request.method,
+            request.variant,
+            request.chunker,
+            request.profile,
+            labels.result,
+            status.as_str(),
+            labels.error_code,
+        ];
+        self.sorafs_gateway_responses_total
+            .with_label_values(&response_labels)
+            .inc();
+        self.sorafs_gateway_ttfb_ms
+            .with_label_values(&response_labels)
+            .observe(ttfb_ms);
+
+        #[cfg(feature = "otel-exporter")]
+        {
+            let otel = global_sorafs_gateway_otel();
+            otel.request_completed_detailed(labels);
+            otel.record_ttfb_detailed(labels, ttfb_ms);
+        }
+    }
+
+    /// Record one canonical SoraFS proof-verification outcome and duration.
+    pub fn record_sorafs_gateway_proof_verification(
+        &self,
+        profile_version: &str,
+        result: &str,
+        error_code: &str,
+        duration_ms: f64,
+    ) {
+        let labels = [profile_version, result, error_code];
+        self.sorafs_gateway_proof_verifications_total
+            .with_label_values(&labels)
+            .inc();
+        self.sorafs_gateway_proof_duration_ms
+            .with_label_values(&labels)
+            .observe(duration_ms);
+
+        #[cfg(feature = "otel-exporter")]
+        global_sorafs_gateway_otel().record_proof_verification(
+            profile_version,
+            result,
+            error_code,
+            duration_ms,
+        );
+    }
+
     /// Increment the in-flight proof stream gauge for a given proof kind.
     pub fn inc_sorafs_proof_stream_inflight(&self, kind: &str) {
         self.torii_sorafs_proof_stream_inflight
@@ -19180,15 +19210,7 @@ impl Metrics {
                 .with_label_values(&[kind])
                 .observe(value);
         }
-        #[cfg(feature = "otel-exporter")]
-        {
-            let otel = global_sorafs_gateway_otel();
-            otel.record_proof_event(kind, result, reason, provider_id, tier, latency_ms);
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (provider_id, tier);
-        }
+        let _ = (provider_id, tier);
     }
 
     /// Record proof-health alert metrics for the given provider.
@@ -19253,27 +19275,7 @@ impl Metrics {
                 .with_label_values(&[endpoint])
                 .inc_by(bytes);
         }
-        #[cfg(feature = "otel-exporter")]
-        {
-            let otel = global_sorafs_gateway_otel();
-            otel.record_request(
-                endpoint,
-                "success",
-                Some("ok"),
-                chunker,
-                profile,
-                provider_id,
-                tier,
-                Some(status),
-            );
-            if let Some(latency_ms) = latency_ms {
-                otel.observe_ttfb(endpoint, chunker, profile, provider_id, tier, latency_ms);
-            }
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = (chunker, profile, provider_id, tier, latency_ms);
-        }
+        let _ = (chunker, profile, provider_id, tier, latency_ms);
     }
 
     /// Set the provider range capability counters for the supplied feature label.
@@ -19330,29 +19332,7 @@ impl Metrics {
         self.torii_sorafs_gateway_refusals_total
             .with_label_values(&[reason, profile, provider_id, scope])
             .inc();
-        #[cfg(feature = "otel-exporter")]
-        {
-            let provider_attr = if provider_id.is_empty() {
-                None
-            } else {
-                Some(provider_id)
-            };
-            let otel = global_sorafs_gateway_otel();
-            otel.record_request(
-                scope,
-                "refused",
-                Some(reason),
-                None,
-                Some(profile),
-                provider_attr,
-                None,
-                Some(status),
-            );
-        }
-        #[cfg(not(feature = "otel-exporter"))]
-        {
-            let _ = status;
-        }
+        let _ = status;
     }
 
     /// Publish metadata about the canonical SoraFS gateway fixture bundle.
@@ -20317,7 +20297,20 @@ mod test {
     #[test]
     fn records_committed_sorafs_reputation_runtime_metrics() {
         let metrics = Metrics::default();
-        metrics.record_sorafs_reputation_runtime_status(true, false, true, false, 42, 3, true, 17);
+        metrics.record_sorafs_reputation_runtime_status(SorafsReputationRuntimeMetricSnapshot {
+            runtime: SorafsRuntimeHealthMetricSnapshot {
+                live: true,
+                ready: false,
+                external_dependencies_ready: true,
+            },
+            publication: SorafsReputationPublicationMetricSnapshot {
+                journal_transaction_submitter_ready: false,
+                material_acknowledged: true,
+            },
+            latest_finalized_height: 42,
+            consecutive_failures: 3,
+            provider_count: 17,
+        });
         metrics.inc_sorafs_reputation_runtime_tick("success");
         metrics.inc_sorafs_reputation_runtime_tick("failure");
         metrics.inc_sorafs_reputation_runtime_tick("unbounded-input");
@@ -20361,7 +20354,29 @@ mod test {
     fn records_committed_sorafs_hedging_billing_runtime_metrics() {
         let metrics = Metrics::default();
         metrics.record_sorafs_hedging_billing_runtime_status(
-            true, false, true, false, true, false, 42, 45, 3, 88, 1, 2, 3, 4, 5, 6, 7,
+            SorafsHedgingBillingRuntimeMetricSnapshot {
+                runtime: SorafsRuntimeHealthMetricSnapshot {
+                    live: true,
+                    ready: false,
+                    external_dependencies_ready: true,
+                },
+                projection: SorafsHedgingBillingProjectionMetricSnapshot {
+                    automatic_execution_enabled: false,
+                    last_tick_fresh: true,
+                    finalized_projection_ready: false,
+                },
+                finalized_height: 42,
+                finalized_head_height: 45,
+                finalized_lag_blocks: 3,
+                next_event_sequence: 88,
+                ready_for_signing: 1,
+                ready_for_publication: 2,
+                publication_ambiguous: 3,
+                published: 4,
+                acknowledged: 5,
+                dead_letter: 6,
+                hedge_intents: 7,
+            },
         );
         metrics.inc_sorafs_hedging_billing_runtime_tick("success");
         metrics.inc_sorafs_hedging_billing_runtime_tick("failure");
@@ -21053,10 +21068,7 @@ mod test {
         }
     }
 
-    #[test]
-    fn records_sorafs_reserve_finalized_projection_metrics_with_bounded_labels() {
-        let metrics = Metrics::default();
-
+    fn record_sample_sorafs_reserve_finalized_projection(metrics: &Metrics) {
         metrics.record_sorafs_reserve_finalized_projection(&SorafsReserveFinalizedProjection {
             finalized_height: 42,
             lifecycle_stage_counts: [2, 0, 0, 0, 1],
@@ -21067,8 +21079,12 @@ mod test {
             custody_counts: [1, 2, 1],
             chain_reconciled_counts: [2, 1],
         });
-        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
-        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
+    }
+
+    #[test]
+    fn records_sorafs_reserve_finalized_projection_metrics() {
+        let metrics = Metrics::default();
+        record_sample_sorafs_reserve_finalized_projection(&metrics);
 
         assert_eq!(
             metrics
@@ -21093,12 +21109,14 @@ mod test {
                 .get(),
             2
         );
+        let active_credit_draw = metrics
+            .torii_sorafs_reserve_credit_draw_micro_xor
+            .with_label_values(&["active"])
+            .get();
         assert_eq!(
-            metrics
-                .torii_sorafs_reserve_credit_draw_micro_xor
-                .with_label_values(&["active"])
-                .get(),
-            120_000_000.0
+            active_credit_draw.to_bits(),
+            120_000_000_f64.to_bits(),
+            "the integer micro-XOR value must be represented exactly"
         );
         assert_eq!(
             metrics
@@ -21112,6 +21130,14 @@ mod test {
                 .get(),
             42
         );
+    }
+
+    #[test]
+    fn bounds_sorafs_reserve_service_labels_and_records_failures() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
+        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
+
         assert_eq!(
             metrics
                 .torii_sorafs_reserve_service_requests_total
@@ -21126,6 +21152,7 @@ mod test {
                 .get(),
             1
         );
+
         metrics.record_sorafs_reserve_service_request("attacker-controlled", "also-controlled");
         assert_eq!(
             metrics
@@ -21134,6 +21161,8 @@ mod test {
                 .get(),
             1
         );
+
+        record_sample_sorafs_reserve_finalized_projection(&metrics);
         metrics.record_sorafs_reserve_finalized_projection_failure();
         assert_eq!(
             metrics
@@ -21147,6 +21176,14 @@ mod test {
                 .get(),
             1
         );
+    }
+
+    #[test]
+    fn exports_sorafs_reserve_metric_families() {
+        let metrics = Metrics::default();
+        record_sample_sorafs_reserve_finalized_projection(&metrics);
+        metrics.record_sorafs_reserve_service_request("top_up", "accepted");
+        metrics.inc_sorafs_reserve_service_rate_limit("top_up", "quota");
 
         let exported = metrics.try_to_string().expect("metrics text");
         for metric_name in [
@@ -21284,33 +21321,120 @@ mod test {
     #[test]
     fn gateway_otel_handles_noop_without_exporter() {
         let otel = SorafsGatewayOtel::new();
-        otel.record_request(
-            "chunk",
-            "success",
-            None,
-            Some("sorafs.sf1@1.0.0"),
-            Some("sorafs.sf1@1.0.0"),
-            Some("provider123"),
-            Some("hot"),
-            Some(206),
-        );
-        otel.observe_ttfb(
-            "chunk",
-            Some("sorafs.sf1@1.0.0"),
-            Some("sorafs.sf1@1.0.0"),
-            Some("provider123"),
-            Some("hot"),
-            42.0,
-        );
-        otel.record_proof_event(
-            "por",
-            "success",
-            None,
-            Some("provider123"),
-            Some("hot"),
-            Some(12.0),
-        );
+        let request = SorafsGatewayRequestMetricLabels {
+            endpoint: "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
+            method: "GET",
+            variant: "chunk",
+            chunker: "unknown",
+            profile: "unknown",
+        };
+        let response = SorafsGatewayResponseMetricLabels {
+            request,
+            result: "success",
+            status: 206,
+            error_code: "none",
+        };
+        otel.request_started_detailed(request);
+        otel.request_completed_detailed(response);
+        otel.record_ttfb_detailed(response, 42.0);
+        otel.record_proof_verification("sf1", "success", "none", 12.0);
         let _ = global_sorafs_gateway_otel();
+    }
+
+    #[test]
+    fn exports_canonical_gateway_metric_families() {
+        let metrics = Metrics::default();
+        let request = SorafsGatewayRequestMetricLabels {
+            endpoint: "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
+            method: "GET",
+            variant: "chunk",
+            chunker: "unknown",
+            profile: "unknown",
+        };
+        metrics.start_sorafs_gateway_request(request);
+        assert_eq!(
+            metrics
+                .sorafs_gateway_active
+                .with_label_values(&[
+                    request.endpoint,
+                    request.method,
+                    request.variant,
+                    request.chunker,
+                    request.profile,
+                ])
+                .get(),
+            1
+        );
+
+        let response = SorafsGatewayResponseMetricLabels {
+            request,
+            result: "success",
+            status: 206,
+            error_code: "none",
+        };
+        metrics.finish_sorafs_gateway_request(response, 42.0);
+        metrics.record_sorafs_gateway_proof_verification(
+            "sf1",
+            "failure",
+            "sequence_invalid",
+            12.0,
+        );
+
+        let response_labels = [
+            request.endpoint,
+            request.method,
+            request.variant,
+            request.chunker,
+            request.profile,
+            response.result,
+            "206",
+            response.error_code,
+        ];
+        assert_eq!(
+            metrics
+                .sorafs_gateway_responses_total
+                .with_label_values(&response_labels)
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_gateway_ttfb_ms
+                .with_label_values(&response_labels)
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_gateway_proof_verifications_total
+                .with_label_values(&["sf1", "failure", "sequence_invalid"])
+                .get(),
+            1
+        );
+
+        let exported = metrics.try_to_string().expect("gateway metrics text");
+        for metric_name in [
+            "sorafs_gateway_active",
+            "sorafs_gateway_responses_total",
+            "sorafs_gateway_ttfb_ms_bucket",
+            "sorafs_gateway_proof_verifications_total",
+            "sorafs_gateway_proof_duration_ms_bucket",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing canonical gateway metric {metric_name} from export"
+            );
+        }
+        for retired_name in [
+            "sorafs_gateway_requests_total",
+            "sorafs_gateway_proof_events_total",
+            "sorafs_gateway_proof_latency_ms",
+        ] {
+            assert!(
+                !exported.contains(retired_name),
+                "retired gateway metric {retired_name} must not be exported"
+            );
+        }
     }
 
     #[test]
@@ -21401,6 +21525,7 @@ mod test {
                 pool_fallback_total: 0,
                 budget_hit_total: 0,
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus {
                 mode_tag: PERMISSIONED_TAG.to_string(),
                 leader_index: 1,

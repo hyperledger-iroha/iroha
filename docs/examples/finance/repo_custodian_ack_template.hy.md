@@ -1,77 +1,18 @@
+<!-- Auto-generated stub for Armenian (hy) translation. Replace this content with the full translation. -->
+
 ---
 lang: hy
 direction: ltr
 source: docs/examples/finance/repo_custodian_ack_template.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: c52d7f2c5ec9dc4cda81895561bc1261659935c94bf3f7febb0867f4981fe616
-source_last_modified: "2026-01-22T16:26:46.472177+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: cae3a781a826a07a0420bd941a366c549fc3197a83f9a3c5b19bf29869e67bab
+source_last_modified: "2026-07-30T18:01:50.052428+00:00"
+translation_last_reviewed: null
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+# Translation In Progress
 
-# Repo պահառուի ճանաչման ձևանմուշ
+This file is a placeholder for the Armenian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
 
-Օգտագործեք այս ձևանմուշը, երբ ռեպո (երկկողմանի կամ եռակողմ) հղում է կատարում պահառուի
-`RepoAgreement::custodian`-ի միջոցով: Նպատակն է արձանագրել խնամակալության SLA, երթուղի
-հաշիվները, և կոնտակտները նախքան ակտիվները տեղափոխելը: Պատճենեք ձևանմուշը ձեր մեջ
-ապացույցների գրացուցակ (օրինակ
-`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), լրացրեք
-տեղապահներ և հաշշիր ֆայլը որպես կառավարման փաթեթի մաս, որը նկարագրված է
-`docs/source/finance/repo_ops.md` §2.8.
-
-## 1. Մետատվյալներ
-
-| Դաշտային | Արժեք |
-|-------|-------|
-| Պայմանագրի նույնացուցիչ | `<repo-yyMMdd-XX>` |
-| Պահառուի հաշվի id | `<i105...>` |
-| Պատրաստված է / ամսաթիվը | `<custodian ops lead>` |
-| Գրասեղանի կոնտակտները հաստատված են | `<desk lead + counterparty>` |
-| Ապացույցների տեղեկատու | «`artifacts/finance/repo/<slug>/`» |
-
-## 2. Պահառության շրջանակը
-
-- **Ստացված գրավի սահմանումներ.** `<list of asset definition ids>`
-- **Կանխիկ դրամական արժույթ / հաշվարկային երկաթուղի.** `<xor#sora / other>`
-- **Խնամակալության պատուհան՝** `<start/end timestamps or SLA summary>`
-- **Կանգնակի հրահանգներ.** `<hash + path to standing instruction document>`
-- **Ավտոմատացման նախադրյալներ.** `<scripts, configs, or runbooks custodian will invoke>`
-
-## 3. Երթուղի և մոնիտորինգ
-
-| Նյութ | Արժեք |
-|------|-------|
-| Պահառության դրամապանակ / հաշվապահական հաշիվ | `<asset ids or ledger path>` |
-| Մոնիտորինգի ալիք | `<Slack/phone/on-call rotation>` |
-| Հորատման կոնտակտ | `<primary + backup>` |
-| Պահանջվող ահազանգեր | `<PagerDuty service, Grafana board, etc.>` |
-
-## 4. Հայտարարություններ
-
-1. *Խնամակալության պատրաստակամություն.
-   վերը նշված նույնացուցիչները և պատրաստ են ընդունել գրավ՝ նշված SLA-ի ներքո
-   §2-ում»:
-2. *Վերադարձի պարտավորություն
-   ուղղորդվում է միջադեպի հրամանատարի կողմից և կտրամադրի CLI տեղեկամատյաններ, գումարած հեշեր
-   `governance/drills/<timestamp>.log`»:
-3. *Ապացույցների պահպանում
-   հրահանգներ և CLI գրանցամատյաններ առնվազն `<duration>`-ի համար և տրամադրեք դրանք
-   Ֆինանսական խորհուրդ ըստ պահանջի»:
-
-Ստորագրեք ստորև (էլեկտրոնային ստորագրություններն ընդունելի են, երբ փոխանցվում են կառավարման միջոցով
-հետագծող):
-
-| Անունը | Դերը | Ստորագրություն / ամսաթիվ |
-|------|------|------------------|
-| `<custodian ops lead>` | Պահառու օպերատոր | `<signature>` |
-| `<desk lead>` | Գրասեղան | `<signature>` |
-| `<counterparty>` | Կոնտրակուսակցական | `<signature>` |
-
-> Ստորագրվելուց հետո ֆայլը հեշացրեք (օրինակ՝ `sha256sum custodian_ack_<cust>.md`) և
-> գրանցեք ամփոփումը կառավարման փաթեթների աղյուսակում, որպեսզի վերանայողները կարողանան ստուգել այն
-> քվեարկության ժամանակ վկայակոչված ճանաչման բայթերը:
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

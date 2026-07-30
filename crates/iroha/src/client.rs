@@ -42,7 +42,6 @@ use iroha_data_model::{
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
-        manifest::DaManifestV1,
         pin_intent::DaPinIntentWithLocation,
         types::{BlobDigest, ExtraMetadata},
     },
@@ -55,6 +54,7 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 use iroha_primitives::numeric::{Numeric, Quantity};
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
+pub use iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1 as SorafsBillingAcknowledgementProof;
 pub use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
@@ -910,9 +910,14 @@ impl AccountOnboardingPlanReceiptV1 {
     pub fn verify(&self) -> bool {
         self.plan_hash == self.body.canonical_hash()
             && self
-                .signature
-                .verify(self.body.authority.signatory(), self.plan_hash.as_ref())
-                .is_ok()
+                .body
+                .authority
+                .try_signatory()
+                .is_some_and(|signatory| {
+                    self.signature
+                        .verify(signatory, self.plan_hash.as_ref())
+                        .is_ok()
+                })
     }
 }
 
@@ -1609,10 +1614,6 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the max_* field names are the canonical public SCCP V1 JSON and Norito schema"
-)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     pub max_governed_lanes: u32,
@@ -1639,10 +1640,6 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the max_* field names are the canonical public SCCP V1 JSON and Norito schema"
-)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     pub max_outbound_messages_per_block: u32,
@@ -4848,7 +4845,7 @@ impl SorafsReplicationListFilter<'_> {
     }
 }
 
-/// Optional finalized-block anchor shared by authoritative SoraFS repair reads.
+/// Optional finalized-block anchor shared by authoritative `SoraFS` repair reads.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsRepairFinalizedAnchor<'a> {
     /// Non-zero finalized block height.
@@ -5173,6 +5170,99 @@ impl SorafsReserveEventsReadbackFilter<'_> {
     }
 }
 
+const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
+const SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1: usize = 1024 * 1024;
+const SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1: usize = 22 * 1024 * 1024;
+
+fn require_nonzero_lower_hex32<'a>(value: &'a str, context: &str) -> Result<&'a str> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(eyre!(
+            "{context} must be exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+    if value.bytes().all(|byte| byte == b'0') {
+        return Err(eyre!("{context} must be non-zero"));
+    }
+    Ok(value)
+}
+
+fn require_sorafs_hedging_billing_page_limit(limit: u16) -> Result<u16> {
+    if !(1..=SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1).contains(&limit) {
+        return Err(eyre!(
+            "SoraFS hedging/billing page limit must be within 1..={SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1}"
+        ));
+    }
+    Ok(limit)
+}
+
+/// Required exact-checkpoint filter for an owner-isolated billing statement page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsBillingStatementListFilter<'a> {
+    /// Non-zero canonical lowercase checkpoint fingerprint.
+    pub expected_checkpoint_fingerprint_hex: &'a str,
+    /// Optional exclusive non-zero canonical lowercase statement identifier.
+    pub after_statement_id_hex: Option<&'a str>,
+    /// Required bounded page size in the inclusive range 1 through 100.
+    pub limit: u16,
+}
+
+impl SorafsBillingStatementListFilter<'_> {
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let checkpoint = require_nonzero_lower_hex32(
+            self.expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        if let Some(after) = self.after_statement_id_hex {
+            url.query_pairs_mut().append_pair(
+                "after_statement_id",
+                require_nonzero_lower_hex32(after, "after statement identifier")?,
+            );
+        }
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        Ok(())
+    }
+}
+
+/// Required exact-checkpoint filter for finalized hedging projection pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsHedgingProjectionFilter<'a> {
+    /// Non-zero canonical lowercase checkpoint fingerprint.
+    pub expected_checkpoint_fingerprint_hex: &'a str,
+    /// Optional exclusive non-zero canonical lowercase projection cursor.
+    pub after_hex: Option<&'a str>,
+    /// Required bounded page size in the inclusive range 1 through 100.
+    pub limit: u16,
+}
+
+impl SorafsHedgingProjectionFilter<'_> {
+    fn apply_to_url(self, url: &mut Url) -> Result<()> {
+        let checkpoint = require_nonzero_lower_hex32(
+            self.expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        if let Some(after) = self.after_hex {
+            url.query_pairs_mut().append_pair(
+                "after",
+                require_nonzero_lower_hex32(after, "hedging projection cursor")?,
+            );
+        }
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        Ok(())
+    }
+}
+
 /// Filters for `/v1/sorafs/moderation/screening-results` listing endpoint.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsModerationScreeningResultsFilter {
@@ -5456,21 +5546,6 @@ fn normalize_storage_ticket_hex(value: &str) -> Result<String> {
         ));
     }
     hex::decode(trimmed).map_err(|err| eyre!("invalid storage ticket hex: {err}"))?;
-    Ok(trimmed.to_ascii_lowercase())
-}
-
-fn normalize_block_hash_hex(value: &str) -> Result<String> {
-    let trimmed = value
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if trimmed.len() != 64 {
-        return Err(eyre!(
-            "block hash must contain 64 hexadecimal characters (got {})",
-            trimmed.len()
-        ));
-    }
-    Hash::from_str(trimmed).map_err(|err| eyre!("invalid block hash: {err}"))?;
     Ok(trimmed.to_ascii_lowercase())
 }
 
@@ -6376,7 +6451,7 @@ impl SorafsModerationCommandRoute {
     }
 }
 
-/// Canonical SoraFS repair command route for a caller-signed native transaction.
+/// Canonical `SoraFS` repair command route for a caller-signed native transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SorafsRepairCommandRoute {
     /// `SubmitSorafsRepairTask`.
@@ -8940,8 +9015,10 @@ mod status_tests {
                 sm_openssl_preview_enabled: true,
                 halo2: Halo2Status::default(),
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -8995,8 +9072,10 @@ mod status_tests {
                 sm_openssl_preview_enabled: false,
                 halo2: Halo2Status::default(),
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -9043,8 +9122,10 @@ mod status_tests {
                 sm_openssl_preview_enabled: false,
                 halo2: Halo2Status::default(),
             },
+            offline: None,
             sumeragi: Some(SumeragiConsensusStatus::default()),
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -13664,10 +13745,6 @@ impl Client {
     }
 
     /// Encode and hash a signed transaction once for later submission.
-    #[expect(
-        clippy::unused_self,
-        reason = "preparing a signed transaction is intentionally client-independent and must allow foreign-chain payloads for server-side rejection tests"
-    )]
     pub fn prepare_transaction_payload(
         &self,
         transaction: &SignedTransaction,
@@ -16831,7 +16908,7 @@ impl Client {
     ) -> Result<(JsonValue, DaProofConfig)> {
         let payload = session.outcome.assemble_payload();
         let manifest = bundle.decode_manifest()?;
-        let applied = Self::apply_sampling_plan(bundle, &manifest, proof);
+        let applied = proof.clone();
         let summary = generate_da_proof_summary(&manifest, &payload, &applied)?;
         Ok((summary, applied))
     }
@@ -16846,32 +16923,8 @@ impl Client {
     /// Returns an error if the storage ticket is malformed, the HTTP request fails, or the response
     /// payload cannot be decoded.
     pub fn get_da_manifest_bundle(&self, storage_ticket_hex: &str) -> Result<DaManifestBundle> {
-        self.get_da_manifest_bundle_with_block_hash(storage_ticket_hex, None)
-    }
-
-    /// Fetch the canonical DA manifest bundle and apply a deterministic sampling seed.
-    ///
-    /// When `block_hash_hex` is provided the request appends `?block_hash=<hash>` so Torii returns a
-    /// deterministic sampling plan rooted in `block_hash || client_blob_id`. Callers that do not need
-    /// the sampling plan can use [`Self::get_da_manifest_bundle`] for the default behaviour.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the storage ticket or block hash are malformed, the HTTP request fails,
-    /// or the response payload cannot be decoded.
-    pub fn get_da_manifest_bundle_with_block_hash(
-        &self,
-        storage_ticket_hex: &str,
-        block_hash_hex: Option<&str>,
-    ) -> Result<DaManifestBundle> {
         let normalized = normalize_storage_ticket_hex(storage_ticket_hex)?;
-        let query = if let Some(block_hash) = block_hash_hex {
-            let normalized_hash = normalize_block_hash_hex(block_hash)?;
-            format!("?block_hash={normalized_hash}")
-        } else {
-            String::new()
-        };
-        let path = format!("v1/da/manifests/{normalized}{query}");
+        let path = format!("v1/da/manifests/{normalized}");
         let url = join_torii_url(&self.torii_url, &path);
         let response = self
             .default_request(HttpMethod::GET, url)
@@ -17149,35 +17202,6 @@ impl Client {
         build_car_plan_from_manifest(&manifest)
     }
 
-    fn apply_sampling_plan(
-        bundle: &DaManifestBundle,
-        manifest: &DaManifestV1,
-        config: &DaProofConfig,
-    ) -> DaProofConfig {
-        let default_sample_count = DaProofConfig::default().sample_count;
-        if config.leaf_indexes.is_empty()
-            && config.sample_count == default_sample_count
-            && let Some(plan) = &bundle.sampling_plan
-        {
-            let mut leaf_indexes: Vec<usize> = plan
-                .samples
-                .iter()
-                .filter_map(|sample| usize::try_from(sample.index).ok())
-                .filter(|idx| *idx < manifest.chunks.len())
-                .collect();
-            leaf_indexes.sort_unstable();
-            leaf_indexes.dedup();
-            if !leaf_indexes.is_empty() {
-                return DaProofConfig {
-                    sample_count: 0,
-                    sample_seed: config.sample_seed,
-                    leaf_indexes,
-                };
-            }
-        }
-        config.clone()
-    }
-
     /// Generate a `PoR` summary for the provided payload using the supplied manifest bundle.
     ///
     /// This mirrors the `iroha da prove --json-out` output so SDK consumers can attach the same
@@ -17193,8 +17217,7 @@ impl Client {
         proof: &DaProofConfig,
     ) -> Result<JsonValue> {
         let manifest = bundle.decode_manifest()?;
-        let applied = Self::apply_sampling_plan(bundle, &manifest, proof);
-        generate_da_proof_summary(&manifest, payload, &applied)
+        generate_da_proof_summary(&manifest, payload, proof)
     }
 
     /// Build a CLI-compatible DA proof artefact with manifest/payload annotations.
@@ -17212,8 +17235,7 @@ impl Client {
         metadata: &DaProofArtifactMetadata,
     ) -> Result<JsonValue> {
         let manifest = bundle.decode_manifest()?;
-        let applied = Self::apply_sampling_plan(bundle, &manifest, proof);
-        generate_da_proof_artifact(&manifest, payload, &applied, metadata)
+        generate_da_proof_artifact(&manifest, payload, proof, metadata)
     }
 
     /// Persist a DA proof artefact to disk (defaults to pretty JSON + newline).
@@ -17517,7 +17539,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch chain-authoritative SoraFS repair counters at an optional finalized anchor.
+    /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17533,7 +17555,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch a bounded finalized page of chain-authoritative SoraFS repair tasks.
+    /// Fetch a bounded finalized page of chain-authoritative `SoraFS` repair tasks.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17549,7 +17571,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch one chain-authoritative SoraFS repair task by canonical ticket ID.
+    /// Fetch one chain-authoritative `SoraFS` repair task by canonical ticket ID.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17571,7 +17593,7 @@ impl Client {
             .send()
     }
 
-    /// Fetch a bounded finalized page of committed SoraFS repair events.
+    /// Fetch a bounded finalized page of committed `SoraFS` repair events.
     ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -17587,7 +17609,7 @@ impl Client {
             .send()
     }
 
-    /// Submit a caller-signed transaction to one exact SoraFS repair command route.
+    /// Submit a caller-signed transaction to one exact `SoraFS` repair command route.
     ///
     /// Torii requires exactly one route-matching native repair instruction and uses the same
     /// strict durable admission contract as the canonical transaction endpoint.
@@ -17700,6 +17722,164 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Appeal, transaction)
+    }
+
+    /// Fetch the supervised `SoraFS` billing projector status.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request signing, request construction, the HTTP call fails,
+    /// or the response exceeds the 1 MiB JSON bound.
+    pub fn get_sorafs_billing_status(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/status");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        )
+    }
+
+    /// Fetch one exact-checkpoint owner-isolated page of published billing statements.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
+    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
+    /// 1 MiB JSON bound.
+    pub fn get_sorafs_billing_statements(
+        &self,
+        filter: SorafsBillingStatementListFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/billing/statements");
+        filter.apply_to_url(&mut url)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        )
+    }
+
+    /// Fetch one exact owned published billing statement as canonical Norito bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the statement identifier or checkpoint fingerprint is noncanonical,
+    /// canonical request signing or request construction fails, the HTTP call fails, or the
+    /// response exceeds the 22 MiB canonical statement bound.
+    pub fn get_sorafs_billing_statement(
+        &self,
+        statement_id_hex: &str,
+        expected_checkpoint_fingerprint_hex: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let statement_id =
+            require_nonzero_lower_hex32(statement_id_hex, "billing statement identifier")?;
+        let checkpoint = require_nonzero_lower_hex32(
+            expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        let mut url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/billing/statements",
+            &[statement_id],
+        );
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_NORITO)
+                .max_response_bytes(SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1),
+        )
+    }
+
+    /// Submit one canonical owner acknowledgement for a published billing statement.
+    ///
+    /// # Errors
+    /// Returns an error if identifiers or proof fields are noncanonical, Norito serialization or
+    /// canonical request signing fails, request construction or the HTTP call fails, or the
+    /// response exceeds the 1 MiB JSON bound.
+    pub fn post_sorafs_billing_statement_acknowledgement(
+        &self,
+        statement_id_hex: &str,
+        expected_checkpoint_fingerprint_hex: &str,
+        proof: &SorafsBillingAcknowledgementProof,
+    ) -> Result<Response<Vec<u8>>> {
+        let statement_id =
+            require_nonzero_lower_hex32(statement_id_hex, "billing statement identifier")?;
+        let checkpoint = require_nonzero_lower_hex32(
+            expected_checkpoint_fingerprint_hex,
+            "expected checkpoint fingerprint",
+        )?;
+        proof.validate()?;
+        let body = norito::to_bytes(proof)
+            .wrap_err("failed to encode canonical billing acknowledgement proof")?;
+        let mut url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/billing/statements",
+            &[statement_id, "acknowledgements"],
+        );
+        url.query_pairs_mut()
+            .append_pair("expected_checkpoint_fingerprint", checkpoint);
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_NORITO)
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        )
+    }
+
+    /// Fetch payload-free `SoraFS` billing delivery reconciliation status.
+    ///
+    /// # Errors
+    /// Returns an error if canonical request signing, request construction, the HTTP call fails,
+    /// or the response exceeds the 1 MiB JSON bound.
+    pub fn get_sorafs_billing_reconciliation(&self) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/reconciliation");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        )
+    }
+
+    /// Fetch one exact-checkpoint page of finalized `SoraFS` hedging exposure.
+    ///
+    /// Automatic hedge execution is not exposed by this read-only client method.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
+    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
+    /// 1 MiB JSON bound.
+    pub fn get_sorafs_hedging_exposure(
+        &self,
+        filter: SorafsHedgingProjectionFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_sorafs_hedging_projection("v1/sorafs/hedging/exposure", filter)
+    }
+
+    /// Fetch one exact-checkpoint page of governed `SoraFS` hedge intents.
+    ///
+    /// This method returns intent projections only and cannot submit hedge execution.
+    ///
+    /// # Errors
+    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
+    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
+    /// 1 MiB JSON bound.
+    pub fn get_sorafs_hedging_intents(
+        &self,
+        filter: SorafsHedgingProjectionFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_sorafs_hedging_projection("v1/sorafs/hedging/intents", filter)
+    }
+
+    fn get_sorafs_hedging_projection(
+        &self,
+        route: &str,
+        filter: SorafsHedgingProjectionFilter<'_>,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, route);
+        filter.apply_to_url(&mut url)?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        )
     }
 
     /// Convenience: GET `/v1/sorafs/moderation/quarantine` to list local moderation quarantine records.
@@ -17858,7 +18038,7 @@ impl Client {
             .send()
     }
 
-    /// Build an exact caller-signed native SoraFS moderation transaction.
+    /// Build an exact caller-signed native `SoraFS` moderation transaction.
     ///
     /// # Errors
     /// Returns an error if the configured signing key cannot sign the exact V1 envelope.
@@ -17881,7 +18061,7 @@ impl Client {
             .wrap_err("sign exact caller-owned native SoraFS moderation transaction")
     }
 
-    /// Submit a caller-signed transaction to one exact SoraFS moderation command route.
+    /// Submit a caller-signed transaction to one exact `SoraFS` moderation command route.
     ///
     /// Torii requires one route-matching native instruction, the V1 TTL, no
     /// nonce, empty metadata, and a signature whose authority matches the
@@ -19825,102 +20005,6 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/council/audit` (optional `epoch` query)
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_gov_council_audit_json(&self, epoch: Option<u64>) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/council/audit");
-        let mut req = self.default_request(HttpMethod::GET, url);
-        if let Some(e) = epoch {
-            req = req.param("epoch", &e);
-        }
-        let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get council audit: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/gov/council/derive-vrf` with a JSON DTO body (feature: `gov_vrf` on server).
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_council_derive_vrf_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/council/derive-vrf");
-        let body = norito::json::to_vec(value)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to derive council via VRF: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/gov/council/persist` with a JSON DTO body (feature: `gov_vrf` on server).
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_council_persist_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/council/persist");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(body),
-        )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to persist council: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/gov/council/replace` with a JSON DTO body (feature: `gov_vrf` on server).
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn post_gov_council_replace_json(
-        &self,
-        value: &norito::json::Value,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/gov/council/replace");
-        let body = norito::json::to_vec(value)?;
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
-                .header("Content-Type", APPLICATION_JSON)
-                .body(body),
-        )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to replace council member: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
     /// GET `/v1/gov/referenda/{id}`
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
@@ -20348,6 +20432,30 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/contracts/aliases/resolve");
         let payload = norito::json::to_vec(&norito::json!({
+            "contract_alias": contract_alias,
+        }))?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, payload)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Convenience: POST `/v1/contracts/deployment-state` for the configured
+    /// deployment authority and one exact contract alias.
+    ///
+    /// The response bytes are intentionally left raw so callers can decode a
+    /// closed schema and bind every deployment CAS input to one ledger view.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails or the request cannot be serialized.
+    pub fn post_contract_deployment_state(
+        &self,
+        contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/deployment-state");
+        let payload = norito::json::to_vec(&norito::json!({
+            "authority": (self.account.to_string()),
             "contract_alias": contract_alias,
         }))?;
         self.send_builder(
@@ -24693,7 +24801,7 @@ mod tests {
     use crate::http_default::RequestSnapshot;
     use crate::{
         config::{BasicAuth, Config},
-        da::{DaSampledChunk, DaSamplingPlan, PDP_COMMITMENT_HEADER},
+        da::PDP_COMMITMENT_HEADER,
         http::{Method as HttpMethod, Response as HttpResponse, StatusCode},
         secrecy::SecretString,
     };
@@ -24945,6 +25053,22 @@ mod tests {
             signature_hex: hex::encode_upper(receipt.signature.payload()),
             receipt_json: receipt,
         }
+    }
+
+    #[test]
+    fn account_onboarding_receipt_with_multisig_authority_fails_closed() {
+        let mut receipt = deterministic_account_onboarding_receipt_vector().receipt_json;
+        let member = iroha_data_model::account::MultisigMember::new(
+            receipt.body.authority.expect_single_signatory().clone(),
+            1,
+        )
+        .expect("valid multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("valid multisig policy");
+        receipt.body.authority = AccountId::new_multisig(policy);
+        receipt.plan_hash = receipt.body.canonical_hash();
+
+        assert!(!receipt.verify());
     }
 
     #[test]
@@ -26569,6 +26693,37 @@ mod tests {
     }
 
     #[test]
+    fn contract_deployment_state_sends_one_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let alias: iroha_data_model::smart_contract::ContractAlias =
+            "router::universal".parse().expect("contract alias");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_contract_deployment_state(&alias)
+                .expect("signed contract deployment-state request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        assert_eq!(snapshots.len(), 1);
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/contracts/deployment-state");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode deployment-state body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "authority": (client.account.to_string()),
+                "contract_alias": alias,
+            })
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
     fn governed_contract_read_sends_canonical_account_signed_request() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -27515,32 +27670,6 @@ mod tests {
     }
 
     #[test]
-    fn build_da_proof_summary_prefers_sampling_plan_indices() {
-        let payload = vec![0x11, 0x22, 0x33, 0x44];
-        let mut bundle = manifest_bundle_from_payload(&payload);
-        bundle.sampling_plan = Some(DaSamplingPlan {
-            assignment_hash: BlobDigest::new([0xCC; 32]),
-            sample_window: 4,
-            sample_seed: None,
-            samples: vec![DaSampledChunk {
-                index: 0,
-                role: ChunkRole::Data,
-                group: 0,
-            }],
-        });
-        let session = sample_fetch_session(&payload);
-        let (summary, applied) = Client::build_da_proof_summary_from_session(
-            &bundle,
-            &session,
-            &DaProofConfig::default(),
-        )
-        .expect("proof summary with sampling plan");
-        assert_eq!(applied.sample_count, 0);
-        assert_eq!(applied.leaf_indexes, vec![0]);
-        assert!(summary.get("proofs").is_some());
-    }
-
-    #[test]
     fn build_da_car_plan_matches_manifest() {
         let (bundle, payload) = sample_da_manifest_bundle();
         let manifest = bundle.decode_manifest().expect("manifest decode");
@@ -27595,29 +27724,14 @@ mod tests {
     }
 
     #[test]
-    fn get_da_manifest_bundle_with_block_hash_appends_query_and_parses_sampling() {
+    fn get_da_manifest_bundle_fetches_without_query_parameters() {
         let (mut bundle, _) = sample_da_manifest_bundle();
-        let assignment_hash = BlobDigest::new([0xBB; 32]);
-        bundle.sampling_plan = Some(DaSamplingPlan {
-            assignment_hash,
-            sample_window: 3,
-            sample_seed: None,
-            samples: vec![DaSampledChunk {
-                index: 4,
-                role: ChunkRole::GlobalParity,
-                group: 2,
-            }],
-        });
         let response = manifest_bundle_response(&mut bundle);
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let block_hash_hex = hex::encode(Hash::new(b"block-seed").as_ref());
 
         let fetched = with_mock_http(respond_with(&snapshots, response), || {
-            client.get_da_manifest_bundle_with_block_hash(
-                &bundle.storage_ticket_hex,
-                Some(&block_hash_hex),
-            )
+            client.get_da_manifest_bundle(&bundle.storage_ticket_hex)
         })
         .expect("fetch manifest");
 
@@ -27627,21 +27741,12 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        let expected_query = format!("block_hash={block_hash_hex}");
         assert_eq!(
             snapshot.url.path(),
             format!("/v1/da/manifests/{}", bundle.storage_ticket_hex)
         );
-        assert_eq!(snapshot.url.query(), Some(expected_query.as_str()));
-
-        let sampling = fetched.sampling_plan.expect("sampling plan");
-        assert_eq!(sampling.assignment_hash, assignment_hash);
-        assert_eq!(sampling.sample_window, 3);
-        assert_eq!(sampling.samples.len(), 1);
-        let sample = &sampling.samples[0];
-        assert_eq!(sample.index, 4);
-        assert_eq!(sample.role, ChunkRole::GlobalParity);
-        assert_eq!(sample.group, 2);
+        assert_eq!(snapshot.url.query(), None);
+        assert_eq!(fetched.storage_ticket_hex, bundle.storage_ticket_hex);
     }
 
     fn sample_gateway_fetch_inputs(
@@ -29781,7 +29886,6 @@ mod tests {
             },
             network_acl: None,
             network: None,
-            confidential_gas: None,
             soranet_handshake: None,
             transport: None,
             compute_pricing: None,
@@ -30433,8 +30537,10 @@ mod tests {
             tx_gossip: TxGossipSnapshot::default(),
             crypto: CryptoStatus::default(),
             stack: StackStatus::default(),
+            offline: None,
             sumeragi: None,
             governance: GovernanceStatus::default(),
+            offline: None,
             teu_lane_commit: Vec::new(),
             teu_dataspace_backlog: Vec::new(),
             dataspace_catalog: Vec::new(),
@@ -31438,6 +31544,225 @@ mod tests {
                 "unexpected error for {ticket_id:?}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn sorafs_hedging_billing_methods_send_exact_signed_requests() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let checkpoint = "11".repeat(32);
+        let statement_id = "22".repeat(32);
+        let after_statement_id = "33".repeat(32);
+        let projection_cursor = "44".repeat(32);
+        let request_nonce = "55".repeat(32);
+        let proof = SorafsBillingAcknowledgementProof::try_from_hex(&request_nonce, vec![0xA5; 48])
+            .expect("canonical acknowledgement proof");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_billing_status()
+                .expect("billing status request");
+            client
+                .get_sorafs_billing_statements(SorafsBillingStatementListFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_statement_id_hex: Some(&after_statement_id),
+                    limit: 25,
+                })
+                .expect("billing statements request");
+            client
+                .get_sorafs_billing_statement(&statement_id, &checkpoint)
+                .expect("billing statement request");
+            client
+                .post_sorafs_billing_statement_acknowledgement(&statement_id, &checkpoint, &proof)
+                .expect("billing acknowledgement request");
+            client
+                .get_sorafs_billing_reconciliation()
+                .expect("billing reconciliation request");
+            client
+                .get_sorafs_hedging_exposure(SorafsHedgingProjectionFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_hex: Some(&projection_cursor),
+                    limit: 50,
+                })
+                .expect("hedging exposure request");
+            client
+                .get_sorafs_hedging_intents(SorafsHedgingProjectionFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_hex: None,
+                    limit: 100,
+                })
+                .expect("hedging intents request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        assert_eq!(snapshots.len(), 7);
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            assert_canonical_account_signed_request(&client, snapshot);
+            assert_eq!(
+                snapshot.max_response_bytes,
+                if index == 2 {
+                    SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1
+                } else {
+                    SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1
+                },
+                "route {index} must retain its endpoint-specific response bound",
+            );
+        }
+
+        assert_eq!(snapshots[0].method, HttpMethod::GET);
+        assert_eq!(snapshots[0].url.path(), "/v1/sorafs/billing/status");
+        assert_eq!(snapshots[0].url.query(), None);
+        assert_single_accept_header(&snapshots[0], APPLICATION_JSON);
+
+        assert_eq!(snapshots[1].method, HttpMethod::GET);
+        assert_eq!(snapshots[1].url.path(), "/v1/sorafs/billing/statements");
+        assert_eq!(
+            snapshots[1].url.query(),
+            Some(
+                format!(
+                    "expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25"
+                )
+                .as_str()
+            )
+        );
+        assert_single_accept_header(&snapshots[1], APPLICATION_JSON);
+
+        assert_eq!(snapshots[2].method, HttpMethod::GET);
+        assert_eq!(
+            snapshots[2].url.path(),
+            format!("/v1/sorafs/billing/statements/{statement_id}")
+        );
+        assert_eq!(
+            snapshots[2].url.query(),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}").as_str())
+        );
+        assert_single_accept_header(&snapshots[2], APPLICATION_NORITO);
+
+        assert_eq!(snapshots[3].method, HttpMethod::POST);
+        assert_eq!(
+            snapshots[3].url.path(),
+            format!("/v1/sorafs/billing/statements/{statement_id}/acknowledgements")
+        );
+        assert_eq!(
+            snapshots[3].url.query(),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}").as_str())
+        );
+        assert_single_accept_header(&snapshots[3], APPLICATION_JSON);
+        let acknowledgement_headers: HashMap<_, _> = snapshots[3].headers.iter().cloned().collect();
+        assert_eq!(
+            acknowledgement_headers.get("content-type"),
+            Some(&APPLICATION_NORITO.to_owned())
+        );
+        assert_eq!(
+            snapshots[3].body,
+            norito::to_bytes(&proof).expect("encode expected acknowledgement proof")
+        );
+
+        assert_eq!(snapshots[4].method, HttpMethod::GET);
+        assert_eq!(snapshots[4].url.path(), "/v1/sorafs/billing/reconciliation");
+        assert_eq!(snapshots[4].url.query(), None);
+        assert_single_accept_header(&snapshots[4], APPLICATION_JSON);
+
+        assert_eq!(snapshots[5].method, HttpMethod::GET);
+        assert_eq!(snapshots[5].url.path(), "/v1/sorafs/hedging/exposure");
+        assert_eq!(
+            snapshots[5].url.query(),
+            Some(
+                format!(
+                    "expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50"
+                )
+                .as_str()
+            )
+        );
+        assert_single_accept_header(&snapshots[5], APPLICATION_JSON);
+
+        assert_eq!(snapshots[6].method, HttpMethod::GET);
+        assert_eq!(snapshots[6].url.path(), "/v1/sorafs/hedging/intents");
+        assert_eq!(
+            snapshots[6].url.query(),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}&limit=100").as_str())
+        );
+        assert_single_accept_header(&snapshots[6], APPLICATION_JSON);
+    }
+
+    #[test]
+    fn sorafs_hedging_billing_inputs_are_strict_and_bounded() {
+        let client = client_with_base_url(base_url());
+        let checkpoint = "11".repeat(32);
+        let statement_id = "22".repeat(32);
+
+        for invalid in [
+            "AA".repeat(32),
+            format!("0x{}", "11".repeat(32)),
+            format!(" {}", "11".repeat(32)),
+            "00".repeat(32),
+            "11".repeat(31),
+        ] {
+            let list_error = client
+                .get_sorafs_billing_statements(SorafsBillingStatementListFilter {
+                    expected_checkpoint_fingerprint_hex: &invalid,
+                    after_statement_id_hex: None,
+                    limit: 1,
+                })
+                .expect_err("noncanonical checkpoint must fail before sending");
+            assert!(
+                list_error.to_string().contains("checkpoint fingerprint"),
+                "unexpected checkpoint error for {invalid:?}: {list_error}"
+            );
+
+            let statement_error = client
+                .get_sorafs_billing_statement(&invalid, &checkpoint)
+                .expect_err("noncanonical statement identifier must fail before sending");
+            assert!(
+                statement_error.to_string().contains("statement identifier"),
+                "unexpected statement error for {invalid:?}: {statement_error}"
+            );
+        }
+
+        for limit in [0, 101] {
+            let error = client
+                .get_sorafs_hedging_exposure(SorafsHedgingProjectionFilter {
+                    expected_checkpoint_fingerprint_hex: &checkpoint,
+                    after_hex: None,
+                    limit,
+                })
+                .expect_err("out-of-range page limit must fail before sending");
+            assert!(error.to_string().contains("page limit"));
+        }
+
+        let uppercase_cursor = "AA".repeat(32);
+        let cursor_error = client
+            .get_sorafs_hedging_intents(SorafsHedgingProjectionFilter {
+                expected_checkpoint_fingerprint_hex: &checkpoint,
+                after_hex: Some(&uppercase_cursor),
+                limit: 1,
+            })
+            .expect_err("uppercase cursor must fail before sending");
+        assert!(cursor_error.to_string().contains("projection cursor"));
+
+        let empty_proof = SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, Vec::new())
+            .expect_err("empty acknowledgement proof must fail");
+        assert!(empty_proof.to_string().contains("authentication proof"));
+        let zero_nonce = SorafsBillingAcknowledgementProof::try_from_hex(&"00".repeat(32), vec![1])
+            .expect_err("zero acknowledgement nonce must fail");
+        assert!(zero_nonce.to_string().contains("request nonce"));
+
+        let proof = SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, vec![1])
+            .expect("valid proof");
+        let uppercase_checkpoint = "AA".repeat(32);
+        let acknowledgement_error = client
+            .post_sorafs_billing_statement_acknowledgement(
+                &statement_id,
+                &uppercase_checkpoint,
+                &proof,
+            )
+            .expect_err("uppercase acknowledgement anchor must fail before sending");
+        assert!(
+            acknowledgement_error
+                .to_string()
+                .contains("checkpoint fingerprint")
+        );
     }
 
     #[test]
@@ -33465,7 +33790,6 @@ mod tests {
             manifest_bytes,
             manifest_json: JsonValue::Null,
             chunk_plan,
-            sampling_plan: None,
         }
     }
 
@@ -35680,45 +36004,6 @@ mod tests {
             )
             .expect("render canonical chunk fetch plan");
         }
-        let sampling_plan_value = bundle.sampling_plan.as_ref().map(|plan| {
-            let role_label = |role: ChunkRole| match role {
-                ChunkRole::Data => "data",
-                ChunkRole::LocalParity => "local_parity",
-                ChunkRole::GlobalParity => "global_parity",
-                ChunkRole::StripeParity => "stripe_parity",
-            };
-            let mut map = JsonMap::new();
-            map.insert(
-                "assignment_hash".into(),
-                JsonValue::String(hex::encode(plan.assignment_hash.as_bytes())),
-            );
-            map.insert(
-                "sample_window".into(),
-                JsonValue::from(u64::from(plan.sample_window)),
-            );
-            if let Some(seed) = plan.sample_seed {
-                map.insert("sample_seed".into(), JsonValue::String(hex::encode(seed)));
-            }
-            map.insert(
-                "samples".into(),
-                JsonValue::Array(
-                    plan.samples
-                        .iter()
-                        .map(|sample| {
-                            JsonValue::Object(JsonMap::from_iter([
-                                ("index".into(), JsonValue::from(u64::from(sample.index))),
-                                (
-                                    "role".into(),
-                                    JsonValue::String(role_label(sample.role).to_owned()),
-                                ),
-                                ("group".into(), JsonValue::from(u64::from(sample.group))),
-                            ]))
-                        })
-                        .collect(),
-                ),
-            );
-            JsonValue::Object(map)
-        });
         let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(&bundle.manifest_bytes);
         let mut response_map = JsonMap::from_iter([
             (
@@ -35748,9 +36033,6 @@ mod tests {
             ("manifest".into(), bundle.manifest_json.clone()),
             ("chunk_plan".into(), bundle.chunk_plan.clone()),
         ]);
-        if let Some(plan_value) = sampling_plan_value {
-            response_map.insert("sampling_plan".into(), plan_value);
-        }
         let response_value = JsonValue::Object(response_map);
         HttpResponse::builder()
             .status(StatusCode::OK)

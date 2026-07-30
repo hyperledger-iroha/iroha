@@ -238,7 +238,7 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
                 height: u64::try_from(kura.exact_durable_blocks_count()?)?,
                 reason: "Kura could not bind its verified startup storage inventory",
             })?;
-        let mut plan = plan_v2_startup_replay_inner(kura, Some(&startup_verification))?;
+        let mut plan = plan_v2_startup_replay_inner(kura, &startup_verification)?;
         plan.storage_binding = Some(startup_verification.storage_binding()?);
         Ok(plan)
     })();
@@ -250,15 +250,15 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
 
 fn plan_v2_startup_replay_inner(
     kura: &Kura,
-    startup_verification: Option<&V2StartupFinalityVerificationSession<'_>>,
+    startup_verification: &V2StartupFinalityVerificationSession<'_>,
 ) -> Result<V2StartupReplayPlan, V2StartupReplayError> {
-    let durable_boundary = kura.exact_replay_boundary()?;
+    let durable_boundary = startup_verification.replay_boundary();
     let durable_height = usize::try_from(durable_boundary.count)?;
-    let durable_boundary_hash = v2_startup_replay_boundary_hash(&durable_boundary);
+    let durable_boundary_hash = v2_startup_replay_boundary_hash(durable_boundary);
     let durable_height_u64 = u64::try_from(durable_height)?;
     let mut complete_prefix_height = 0_usize;
     let mut audited_bootstrap_prefix_height = 0_usize;
-    let mut previous_finality: Option<(u64, wire::finality::V2FinalityArtifact)> = None;
+    let mut previous_finality: Option<(u64, Hash, Option<Hash>)> = None;
 
     for height_index in 1..=durable_height {
         let nonzero = NonZeroUsize::new(height_index)
@@ -275,24 +275,20 @@ fn plan_v2_startup_replay_inner(
             audited_bootstrap_prefix_height = height_index;
             continue;
         }
-        if kura.is_hash_only_block_height(nonzero) {
+        if startup_verification.is_hash_only_height(height) {
             return Err(V2StartupReplayError::InvalidReplayMetadata {
                 height,
                 reason: "zero-length unavailable body is outside the typed audited snapshot import",
             });
         }
 
-        let checkpoint = kura.wsv_checkpoint(height)?;
-        let manifest = kura.commit_manifest(height)?;
-        let finality = if let Some(session) = startup_verification {
-            kura.v2_finality_artifact_with_receipt_for_startup(session, height)?
-        } else {
-            kura.v2_finality_artifact_with_receipt(height)?
-        };
+        let checkpoint = startup_verification.wsv_checkpoint(height);
+        let manifest = startup_verification.commit_manifest(height);
+        let finality = startup_verification.finality_projection(height);
 
-        match (checkpoint.as_ref(), manifest.as_ref(), finality.as_ref()) {
-            (Some(_), Some(manifest), Some((artifact, _))) => {
-                if kura.commit_manifest_binding_state(manifest)?
+        match (checkpoint, manifest, finality) {
+            (Some(_), Some(manifest), Some(finality)) => {
+                if startup_verification.commit_manifest_binding_state(height, manifest)
                     != CommitManifestBindingState::Bound
                 {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -300,7 +296,7 @@ fn plan_v2_startup_replay_inner(
                         reason: "finality exists before the checkpoint published its manifest digest",
                     });
                 }
-                if !manifest.binds_authenticated_v2_commit_authority(artifact) {
+                if !finality.binds_manifest(manifest) {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
                         height,
                         reason: "commit manifest does not bind the exact authenticated v2 finality artifact",
@@ -308,45 +304,55 @@ fn plan_v2_startup_replay_inner(
                 }
                 if previous_finality.is_none() && audited_bootstrap_prefix_height > 0 {
                     let anchor_height = u64::try_from(audited_bootstrap_prefix_height)?;
-                    let anchor_index = NonZeroUsize::new(audited_bootstrap_prefix_height)
-                        .expect("non-empty audited prefix has a non-zero tip");
-                    let anchor_hash = kura.get_durable_block_hash(anchor_index).ok_or(
+                    let anchor_hash = startup_verification.canonical_hash(anchor_height).ok_or(
                         V2StartupReplayError::InvalidReplayMetadata {
                             height,
                             reason: "hash-only snapshot prefix has no durable anchor hash",
                         },
                     )?;
-                    let anchor_matches = artifact
-                        .height_context
-                        .snapshot_bootstrap
-                        .as_ref()
-                        .is_some_and(|anchor| {
-                            anchor.snapshot_height == anchor_height
-                                && anchor.snapshot_block_hash == anchor_hash
-                        });
+                    let anchor_matches =
+                        finality
+                            .snapshot_bootstrap()
+                            .is_some_and(|(height, block_hash)| {
+                                height == anchor_height && block_hash == anchor_hash
+                            });
                     if !anchor_matches {
                         return Err(V2StartupReplayError::InvalidReplayMetadata {
                             height,
                             reason: "first full-body artifact is not bound to the audited snapshot tip",
                         });
                     }
-                } else if artifact.height_context.snapshot_bootstrap.is_some() {
+                } else if finality.snapshot_bootstrap().is_some() {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
                         height,
                         reason: "snapshot bootstrap anchor appears outside the first executable height",
                     });
                 }
-                if let Some((parent_height, parent)) = previous_finality.as_ref()
+                if let Some((parent_height, parent_commit_qc_hash, parent_successor_authority_hash)) =
+                    previous_finality
                     && parent_height.checked_add(1) == Some(height)
-                    && artifact.height_context.parent_commit_qc.as_ref() != Some(&parent.commit_qc)
                 {
-                    return Err(V2StartupReplayError::FinalityChainMismatch { height });
+                    if finality.parent_commit_qc_hash() != Some(parent_commit_qc_hash) {
+                        return Err(V2StartupReplayError::FinalityChainMismatch { height });
+                    }
+                    if parent_successor_authority_hash != Some(finality.inherited_authority_hash())
+                    {
+                        return Err(V2StartupReplayError::FinalityAuthorityLineageMismatch {
+                            height,
+                        });
+                    }
                 }
                 // Lane sidecars for historical incarnations may be retired by
                 // canonical lifecycle changes. Only the durable tip is the
                 // live crash boundary whose exact lane evidence must gate
                 // successor activation.
                 if height == durable_height_u64 {
+                    let artifact = startup_verification
+                        .durable_tip_finality_artifact(height)
+                        .ok_or(V2StartupReplayError::InvalidReplayMetadata {
+                            height,
+                            reason: "durable-tip finality projection has no authenticated artifact",
+                        })?;
                     match durable_lane_completion_matches_finality(kura, artifact) {
                         Ok(true) => {}
                         Ok(false) => {
@@ -368,7 +374,11 @@ fn plan_v2_startup_replay_inner(
                     }
                 }
                 complete_prefix_height = height_index;
-                previous_finality = Some((height, artifact.clone()));
+                previous_finality = Some((
+                    height,
+                    finality.commit_qc_hash(),
+                    finality.successor_authority_hash(),
+                ));
             }
             (_, _, Some(_)) => {
                 return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -383,7 +393,7 @@ fn plan_v2_startup_replay_inner(
                 });
             }
             (Some(_), Some(manifest), None) => {
-                if kura.commit_manifest_binding_state(manifest)?
+                if startup_verification.commit_manifest_binding_state(height, manifest)
                     == CommitManifestBindingState::Mismatched
                 {
                     return Err(V2StartupReplayError::InvalidReplayMetadata {
@@ -881,6 +891,12 @@ pub enum V2StartupReplayError {
     #[error("Sumeragi v2 finality chain mismatch at height {height}")]
     FinalityChainMismatch {
         /// Child height whose frozen context names another parent.
+        height: u64,
+    },
+    /// Consecutive artifacts disagree on the complete predecessor-authenticated authority.
+    #[error("Sumeragi v2 finality authority lineage mismatch at height {height}")]
+    FinalityAuthorityLineageMismatch {
+        /// Child height whose election authority does not descend from its parent artifact.
         height: u64,
     },
     /// Restored WSV cannot be reached by replaying the authenticated prefix plus at most one tip.
@@ -2381,6 +2397,27 @@ mod tests {
     }
 
     #[test]
+    fn empty_chain_retry_binds_current_lane_auxiliary_storage() {
+        let kura = Kura::blank_kura_for_testing();
+        kura.finish_v2_startup_finality_verification();
+        kura.reset_startup_replay_historical_payload_reads_for_test();
+
+        let plan = plan_v2_startup_replay(kura.as_ref())
+            .expect("empty-chain retry must bind current lane auxiliary storage");
+
+        assert_eq!(plan.durable_height(), 0);
+        assert_eq!(plan.complete_prefix_height(), 0);
+        assert_eq!(plan.pending_tip_height(), None);
+        plan.validate_exact_kura_boundary(kura.as_ref())
+            .expect("empty-chain plan must retain its exact storage binding");
+        assert_eq!(
+            kura.startup_replay_historical_payload_reads_for_test(),
+            0,
+            "empty-chain refresh must not perform historical payload reads"
+        );
+    }
+
+    #[test]
     fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(3, true);
         let plan = plan_v2_startup_replay(kura.as_ref()).expect("plan snapshot import");
@@ -2578,6 +2615,103 @@ mod tests {
             tree_before,
             "attacker artifact must be rejected before any storage publication"
         );
+    }
+
+    #[test]
+    fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
+        let (verified, current_keys) = verified_context();
+        let kura = Kura::blank_kura_for_testing();
+        let state =
+            state_with_consensus_keys(&kura, verified.context().chain_id.clone(), &current_keys);
+        let mut transitioned_keys = (21_u8..=24)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic transitioned BLS key")
+            })
+            .collect::<Vec<_>>();
+        transitioned_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let transitioned_roster = transitioned_keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let transitioned_pops = transitioned_keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("transitioned validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let transitioned_quorum =
+            wire::DualQuorum::from_roster(&transitioned_roster).expect("transitioned quorum");
+        let transitioned_leader_seed = [0x62; 32];
+
+        let mut parent_context = verified.context().clone();
+        parent_context.mode = wire::ConsensusMode::Npos;
+        parent_context.epoch_end_height = 1;
+        parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+            epoch: 1,
+            epoch_end_height: 10,
+            mode: wire::ConsensusMode::Npos,
+            roster: transitioned_roster,
+            validator_set_pops: transitioned_pops,
+            quorum: transitioned_quorum,
+            leader_seed: transitioned_leader_seed,
+        });
+        let block_one = dummy_block(&current_keys[0], 1, None);
+        kura.store_block(block_one.clone())
+            .expect("persist canonical parent block");
+        commit_to_state(&state, &block_one, &parent_context);
+        let parent_artifact =
+            authenticated_artifact_for(parent_context.clone(), block_one.as_ref(), &current_keys);
+        persist_complete_height(kura.as_ref(), &state, &parent_artifact);
+
+        let mut attacker_keys = (81_u8..=84)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic attacker BLS key")
+            })
+            .collect::<Vec<_>>();
+        attacker_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let attacker_roster = attacker_keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let attacker_quorum =
+            wire::DualQuorum::from_roster(&attacker_roster).expect("attacker quorum");
+        let child_context = wire::HeightContext {
+            chain_id: parent_context.chain_id.clone(),
+            protocol_version: parent_context.protocol_version,
+            height: 2,
+            epoch: 1,
+            epoch_end_height: 10,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Npos,
+            parent_commit_qc: Some(parent_artifact.commit_qc.clone()),
+            snapshot_bootstrap: None,
+            quorum: attacker_quorum,
+            roster: attacker_roster,
+            nexus_amx_context_hash: parent_context.nexus_amx_context_hash,
+            da_layout: parent_context.da_layout,
+            leader_seed: transitioned_leader_seed,
+        };
+        let block_two = dummy_block(&attacker_keys[0], 2, Some(block_one.as_ref().hash()));
+        kura.store_block(block_two.clone())
+            .expect("persist poisoned child block");
+        commit_to_state(&state, &block_two, &child_context);
+        let child_artifact =
+            authenticated_artifact_for(child_context, block_two.as_ref(), &attacker_keys);
+        persist_complete_height(kura.as_ref(), &state, &child_artifact);
+
+        assert!(matches!(
+            plan_v2_startup_replay(kura.as_ref()),
+            Err(V2StartupReplayError::FinalityAuthorityLineageMismatch { height: 2 })
+        ));
     }
 
     #[test]
@@ -3381,6 +3515,7 @@ mod tests {
         assert_eq!(kura.v2_startup_finality_inventory_len_for_test(), 1);
 
         kura.clear_v2_finality_verification_cache_for_test();
+        kura.reset_startup_replay_historical_payload_reads_for_test();
         let second_plan =
             plan_v2_startup_replay(kura.as_ref()).expect("reuse exact startup inventory");
         assert_eq!(first_plan.complete_prefix_height(), 1);
@@ -3389,6 +3524,11 @@ mod tests {
             kura.v2_finality_crypto_verifications_for_test(),
             1,
             "replanning beyond an empty runtime LRU must reuse the startup audit"
+        );
+        assert_eq!(
+            kura.startup_replay_historical_payload_reads_for_test(),
+            0,
+            "replanning must consume the authenticated in-memory boundary, index, checkpoint, manifest, finality, and retained-record projections"
         );
 
         kura.clear_v2_finality_verification_cache_for_test();

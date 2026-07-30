@@ -223,8 +223,7 @@ impl EventTag {
     pub(crate) const fn strictly_advances(self, previous: Self) -> bool {
         self.height == previous.height
             && (self.view > previous.view
-                || (self.view == previous.view
-                    && self.generation.0 > previous.generation.0))
+                || (self.view == previous.view && self.generation.0 > previous.generation.0))
     }
 }
 
@@ -1378,9 +1377,9 @@ mod tests {
         assert!(same_view_upgrade.strictly_advances(same_view_previous));
 
         assert!(!same_view_previous.strictly_advances(same_view_previous));
-        assert!(!EventTag::new(7, 3, Generation::new(u64::MAX))
-            .strictly_advances(same_view_previous));
-        assert!(!EventTag::new(8, 5, Generation::new(10))
-            .strictly_advances(same_view_previous));
+        assert!(
+            !EventTag::new(7, 3, Generation::new(u64::MAX)).strictly_advances(same_view_previous)
+        );
+        assert!(!EventTag::new(8, 5, Generation::new(10)).strictly_advances(same_view_previous));
     }
 }

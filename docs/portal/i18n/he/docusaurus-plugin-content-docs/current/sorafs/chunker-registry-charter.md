@@ -51,7 +51,7 @@ SDKs). היא אוכפת את האינווריאנטים של alias ו-handle ש
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - יש להגיש PR הכולל fixtures, הצעה, דוח דטרמיניזם ועדכוני רישום.

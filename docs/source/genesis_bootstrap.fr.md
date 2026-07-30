@@ -24,8 +24,9 @@ en utilisant le protocole d'amorçage codé Norito.
   capuchon de taille (`genesis.bootstrap_max_bytes`). Les demandes en dehors de la liste verte reçoivent `NotAllowed`, et
   les charges utiles signées par la mauvaise clé reçoivent `MismatchedPubkey`.
 - **Flux de requête :** lorsque le stockage est vide et que `genesis.file` n'est pas défini (et
-  `genesis.bootstrap_enabled=true`), le nœud effectue un contrôle en amont des homologues de confiance avec l'option facultative
-  `genesis.expected_hash`, récupère ensuite la charge utile, valide les signatures via `validate_genesis_block`,
+  `genesis.bootstrap_enabled=true`), `genesis.expected_hash` doit épingler exactement le bloc de
+  genèse signé. L'absence simultanée du fichier et du hachage constitue une erreur de configuration
+  au démarrage, avant toute requête. Le nœud récupère ensuite la charge utile et valide les signatures via `validate_genesis_block`,
   et persiste `genesis.bootstrap.nrt` aux côtés de Kura avant d'appliquer le bloc. Nouvelles tentatives d'amorçage
   honorer `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` et
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ en utilisant le protocole d'amorçage codé Norito.
   entre pairs, abandonnez la récupération ; aucun répondeur/délai d'attente ne revient à la configuration locale.
 - **Étapes de l'opérateur :** assurez-vous qu'au moins un homologue de confiance est accessible avec une genèse valide, configurez
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` et les boutons de nouvelle tentative, et
-  épinglez éventuellement `expected_hash` pour éviter d’accepter des charges utiles incompatibles. Les charges utiles persistantes peuvent être
+  épinglez le bloc exact dans `expected_hash` avant d'activer l'amorçage distant. Un `genesis.file`
+  local signé est déjà un artefact explicite et ne nécessite aucun hachage supplémentaire. Les charges utiles persistantes peuvent être
   réutilisé lors des démarrages suivants en pointant `genesis.file` vers `genesis.bootstrap.nrt`.

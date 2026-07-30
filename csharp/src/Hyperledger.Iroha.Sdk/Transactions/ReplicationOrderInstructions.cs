@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Norito;
 
 namespace Hyperledger.Iroha.Transactions;
@@ -75,7 +76,8 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
         payloadVector.WriteBytes(orderPayload);
 
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(Convert.FromHexString(OrderId));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(payloadVector.ToArray());
         writer.WriteField(context.EncodeUInt64(IssuedEpoch));
         writer.WriteField(context.EncodeUInt64(DeadlineEpoch));
@@ -84,14 +86,139 @@ public sealed record class IssueReplicationOrderInstruction : TransactionInstruc
 }
 
 /// <summary>
-/// Completes one SoraFS replication order for the governed provider signer.
+/// Exact governed signer-policy identity expected at completion commit.
+/// </summary>
+public sealed record class ProviderIngestCompletionSignerPolicyV1
+{
+    public ProviderIngestCompletionSignerPolicyV1(
+        string policyId,
+        ulong revision,
+        string? predecessorDigest,
+        string policyDigest)
+    {
+        PolicyId = ReplicationOrderInstructionValidation.RequireIdentifier(
+            policyId,
+            nameof(policyId));
+        Revision = ReplicationOrderInstructionValidation.RequirePositive(
+            revision,
+            nameof(revision));
+        PolicyDigest = ReplicationOrderInstructionValidation.RequireIdentifier(
+            policyDigest,
+            nameof(policyDigest));
+        if (revision == 1)
+        {
+            if (predecessorDigest is not null)
+            {
+                throw new ArgumentException(
+                    "Predecessor digest must be absent at revision one.",
+                    nameof(predecessorDigest));
+            }
+            PredecessorDigest = null;
+        }
+        else
+        {
+            if (predecessorDigest is null)
+            {
+                throw new ArgumentException(
+                    "Predecessor digest is required after revision one.",
+                    nameof(predecessorDigest));
+            }
+            PredecessorDigest = ReplicationOrderInstructionValidation.RequireIdentifier(
+                predecessorDigest,
+                nameof(predecessorDigest));
+        }
+    }
+
+    public string PolicyId { get; }
+
+    public ulong Revision { get; }
+
+    public string? PredecessorDigest { get; }
+
+    public string PolicyDigest { get; }
+
+    internal byte[] EncodePayload(TransactionEncodingContext context)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(Convert.FromHexString(PolicyId));
+        writer.WriteField(context.EncodeUInt64(Revision));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeOptionalFixedByteArray(
+                PredecessorDigest));
+        writer.WriteField(Convert.FromHexString(PolicyDigest));
+        return writer.ToArray();
+    }
+}
+
+/// <summary>
+/// Exact provider owner and signer policy expected at completion commit.
+/// </summary>
+public sealed record class ProviderIngestCompletionAuthorityV1
+{
+    public ProviderIngestCompletionAuthorityV1(
+        string providerOwner,
+        ProviderIngestCompletionSignerPolicyV1 signerPolicy)
+    {
+        ProviderOwner = ReplicationOrderInstructionValidation.RequireAccountId(
+            providerOwner,
+            nameof(providerOwner));
+        SignerPolicy = signerPolicy
+            ?? throw new ArgumentNullException(nameof(signerPolicy));
+    }
+
+    public string ProviderOwner { get; }
+
+    public ProviderIngestCompletionSignerPolicyV1 SignerPolicy { get; }
+
+    internal byte[] EncodePayload(TransactionEncodingContext context)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(context.EncodeAccountId(ProviderOwner));
+        writer.WriteField(SignerPolicy.EncodePayload(context));
+        return writer.ToArray();
+    }
+}
+
+/// <summary>
+/// Exact finalized committed-chain prefix used to prepare a completion.
+/// </summary>
+public sealed record class ProviderIngestFinalizedAnchorV1
+{
+    public ProviderIngestFinalizedAnchorV1(ulong height, string blockHash)
+    {
+        Height = ReplicationOrderInstructionValidation.RequirePositive(
+            height,
+            nameof(height));
+        BlockHash = ReplicationOrderInstructionValidation.RequireIdentifier(
+            blockHash,
+            nameof(blockHash));
+    }
+
+    public ulong Height { get; }
+
+    public string BlockHash { get; }
+
+    internal byte[] EncodePayload(TransactionEncodingContext context)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(context.EncodeUInt64(Height));
+        writer.WriteField(Convert.FromHexString(BlockHash));
+        return writer.ToArray();
+    }
+}
+
+/// <summary>
+/// Completes one SoraFS replication order with the exact six-field authority hard cut.
 /// </summary>
 public sealed record class CompleteReplicationOrderInstruction : TransactionInstruction
 {
     public CompleteReplicationOrderInstruction(
         string orderId,
         string providerId,
-        ulong completionEpoch)
+        ulong completionEpoch,
+        ProviderIngestCompletionAuthorityV1 expectedAuthority,
+        ulong expectedAssignmentRevision,
+        ProviderIngestFinalizedAnchorV1 finalizedAnchor)
     {
         OrderId = ReplicationOrderInstructionValidation.RequireIdentifier(
             orderId,
@@ -100,6 +227,14 @@ public sealed record class CompleteReplicationOrderInstruction : TransactionInst
             providerId,
             nameof(providerId));
         CompletionEpoch = completionEpoch;
+        ExpectedAuthority = expectedAuthority
+            ?? throw new ArgumentNullException(nameof(expectedAuthority));
+        ExpectedAssignmentRevision =
+            ReplicationOrderInstructionValidation.RequirePositive(
+                expectedAssignmentRevision,
+                nameof(expectedAssignmentRevision));
+        FinalizedAnchor = finalizedAnchor
+            ?? throw new ArgumentNullException(nameof(finalizedAnchor));
     }
 
     public string OrderId { get; }
@@ -107,6 +242,12 @@ public sealed record class CompleteReplicationOrderInstruction : TransactionInst
     public string ProviderId { get; }
 
     public ulong CompletionEpoch { get; }
+
+    public ProviderIngestCompletionAuthorityV1 ExpectedAuthority { get; }
+
+    public ulong ExpectedAssignmentRevision { get; }
+
+    public ProviderIngestFinalizedAnchorV1 FinalizedAnchor { get; }
 
     internal override string WireId => TypeName;
 
@@ -116,9 +257,14 @@ public sealed record class CompleteReplicationOrderInstruction : TransactionInst
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(Convert.FromHexString(OrderId));
-        writer.WriteField(Convert.FromHexString(ProviderId));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(ProviderId));
         writer.WriteField(context.EncodeUInt64(CompletionEpoch));
+        writer.WriteField(ExpectedAuthority.EncodePayload(context));
+        writer.WriteField(context.EncodeUInt64(ExpectedAssignmentRevision));
+        writer.WriteField(FinalizedAnchor.EncodePayload(context));
         return writer.ToArray();
     }
 }
@@ -148,7 +294,8 @@ public sealed record class ExpireReplicationOrderInstruction : TransactionInstru
     internal override byte[] EncodePayload(TransactionEncodingContext context)
     {
         var writer = new OfflineNoritoWriter();
-        writer.WriteField(Convert.FromHexString(OrderId));
+        writer.WriteField(
+            ReplicationOrderInstructionValidation.EncodeIdentifierNewtype(OrderId));
         writer.WriteField(context.EncodeUInt64(ExpirationEpoch));
         return writer.ToArray();
     }
@@ -179,6 +326,63 @@ internal static class ReplicationOrderInstructionValidation
                 parameterName);
         }
         return value;
+    }
+
+    internal static ulong RequirePositive(ulong value, string parameterName)
+    {
+        if (value == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                "Value must be greater than zero.");
+        }
+        return value;
+    }
+
+    internal static string RequireAccountId(string? value, string parameterName)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(parameterName);
+        }
+        try
+        {
+            _ = AccountAddress.Parse(value);
+        }
+        catch (AccountAddressException error)
+        {
+            throw new ArgumentException(
+                "Account id must be an exact canonical I105 literal.",
+                parameterName,
+                error);
+        }
+        return value;
+    }
+
+    internal static byte[] EncodeIdentifierNewtype(string value)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(Convert.FromHexString(value));
+        return writer.ToArray();
+    }
+
+    internal static byte[] EncodeOptionalFixedByteArray(string? value)
+    {
+        var writer = new OfflineNoritoWriter();
+        if (value is null)
+        {
+            writer.WriteByte(0);
+            return writer.ToArray();
+        }
+
+        writer.WriteByte(1);
+        var array = new OfflineNoritoWriter();
+        foreach (var item in Convert.FromHexString(value))
+        {
+            array.WriteField(new[] { item });
+        }
+        writer.WriteField(array.ToArray());
+        return writer.ToArray();
     }
 
     internal static byte[] DecodeCanonicalBase64(string? value, string parameterName)

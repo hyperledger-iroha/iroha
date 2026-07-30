@@ -14,6 +14,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+BUNDLED_VERIFIER = SCRIPT_DIR / "check_sorafs_reference_sdk_release_evidence.py"
+
 from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_SMOKE_DURATION_SECS,
@@ -48,6 +50,8 @@ from sorafs_runner_preflight import (  # noqa: E402
     write_runner_plan,
 )
 
+
+from sorafs_topology_qualification import add_topology_qualification_argument  # noqa: E402
 
 PLAN_SCHEMA = "sorafs.reference_sdk.release_evidence_collection_plan.v1"
 PLAN_FIELDS = frozenset(
@@ -94,6 +98,7 @@ class CommandPlan:
 EVIDENCE_OPTIONS_BY_KIND = {
     "release_archive": "release_archive_evidence",
     "signed_manifest": "signed_manifest_evidence",
+    "supply_chain": "supply_chain_evidence",
     "downstream_bindings": "downstream_bindings_evidence",
     "cookbook_smoke": "cookbook_smoke_evidence",
     "ffi_header_contract": "ffi_header_contract_evidence",
@@ -103,6 +108,7 @@ EVIDENCE_OPTIONS_BY_KIND = {
 EVIDENCE_FLAGS_BY_KIND = {
     "release_archive": "--release-archive-evidence",
     "signed_manifest": "--signed-manifest-evidence",
+    "supply_chain": "--supply-chain-evidence",
     "downstream_bindings": "--downstream-bindings-evidence",
     "cookbook_smoke": "--cookbook-smoke-evidence",
     "ffi_header_contract": "--ffi-header-contract-evidence",
@@ -120,7 +126,11 @@ def evidence_paths_by_kind(args: argparse.Namespace) -> dict[str, list[Path]]:
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
-    errors = validate_runner_preflight(args, summary_filename="release-summary.json")
+    errors = validate_runner_preflight(
+        args,
+        summary_filename="release-summary.json",
+        bundled_verifier=BUNDLED_VERIFIER,
+    )
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     paths_by_kind = evidence_paths_by_kind(args)
     for kind in args.required_kinds:
@@ -151,7 +161,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     summary_out = args.summary_out or args.out_dir / "release-summary.json"
     verifier_command = [
         sys.executable,
-        str(args.verifier),
+        str(BUNDLED_VERIFIER),
     ]
     for paths in evidence_paths_by_kind(args).values():
         for path in paths:
@@ -162,6 +172,8 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
         [
             "--summary-out",
             str(summary_out),
+            "--topology-qualification-summary",
+            str(args.topology_qualification_summary),
             "--max-evidence-age-secs",
             str(args.max_evidence_age_secs),
             "--min-release-targets",
@@ -270,8 +282,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--verifier",
         type=Path,
-        default=SCRIPT_DIR / "check_sorafs_reference_sdk_release_evidence.py",
-        help="Release evidence verifier script path.",
+        default=BUNDLED_VERIFIER,
+        help="Bundled release evidence verifier path; substitutions are rejected.",
     )
     parser.add_argument(
         "--out-dir",
@@ -324,6 +336,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print the verifier command plan without executing it.",
     )
+    add_topology_qualification_argument(parser)
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

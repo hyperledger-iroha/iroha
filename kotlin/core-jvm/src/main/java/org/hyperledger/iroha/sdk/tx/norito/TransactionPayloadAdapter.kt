@@ -25,6 +25,8 @@ import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.MAX_CONTRACT_ARGUMENT_RECORD_BYTES
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
@@ -50,6 +52,11 @@ internal class TransactionPayloadAdapter private constructor(
             encodeSizedField(encoder, NONCE_ADAPTER, Optional.ofNullable(value.nonce))
             encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment)
             encodeSizedField(encoder, METADATA_ADAPTER, value.metadata)
+            encodeSizedField(
+                encoder,
+                ATTACHMENTS_OPTION_ADAPTER,
+                Optional.ofNullable(value.attachments),
+            )
         }
     }
 
@@ -60,21 +67,145 @@ internal class TransactionPayloadAdapter private constructor(
             val creationTimeMs = decodeSizedField(decoder, UINT64_ADAPTER)
             val executable = decodeSizedField(decoder, EXECUTABLE_ADAPTER)
             val ttl: Optional<Long> = decodeSizedField(decoder, TTL_ADAPTER)
+            require(ttl.isPresent) {
+                "TransactionPayload.time_to_live_ms must be signature-bound"
+            }
             val nonceRaw: Optional<Long> = decodeSizedField(decoder, NONCE_ADAPTER)
             val feePayment = decodeSizedField(decoder, FEE_PAYMENT_ADAPTER)
             val metadata = LinkedHashMap(decodeSizedField(decoder, METADATA_ADAPTER))
+            val attachments: Optional<List<ProofAttachment>> =
+                decodeSizedField(decoder, ATTACHMENTS_OPTION_ADAPTER)
 
             TransactionPayload(
                 chainId = chainId,
                 authority = authority,
                 creationTimeMs = creationTimeMs,
                 executable = executable,
-                timeToLiveMs = ttl.orElse(null),
+                timeToLiveMs = ttl.get(),
                 nonce = nonceRaw.orElse(null),
                 feePayment = feePayment,
                 metadata = metadata,
+                attachments = attachments.orElse(null),
             )
         }
+
+    private class ProofBoxValue(
+        val backend: String,
+        bytes: ByteArray,
+    ) {
+        private val encodedBytes = bytes.copyOf()
+
+        fun bytes(): ByteArray = encodedBytes.copyOf()
+    }
+
+    private class ProofBoxAdapter : TypeAdapter<ProofBoxValue> {
+        override fun encode(encoder: NoritoEncoder, value: ProofBoxValue) {
+            encodeSizedField(encoder, STRING_ADAPTER, value.backend)
+            encodeSizedField(encoder, RAW_BYTE_VEC_ADAPTER, value.bytes())
+        }
+
+        override fun decode(decoder: NoritoDecoder): ProofBoxValue =
+            ProofBoxValue(
+                decodeSizedField(decoder, STRING_ADAPTER),
+                decodeSizedField(decoder, RAW_BYTE_VEC_ADAPTER),
+            )
+    }
+
+    private class ProofVerifierKeyRefAdapter : TypeAdapter<ProofVerifierKeyRef> {
+        override fun encode(encoder: NoritoEncoder, value: ProofVerifierKeyRef) {
+            encodeSizedField(encoder, STRING_ADAPTER, value.backend)
+            encodeSizedField(encoder, STRING_ADAPTER, value.name)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ProofVerifierKeyRef =
+            ProofVerifierKeyRef(
+                decodeSizedField(decoder, STRING_ADAPTER),
+                decodeSizedField(decoder, STRING_ADAPTER),
+            )
+    }
+
+    private class ProofAttachmentAdapter : TypeAdapter<ProofAttachment> {
+        override fun encode(encoder: NoritoEncoder, value: ProofAttachment) {
+            encodeSizedField(encoder, STRING_ADAPTER, value.backend)
+            encodeSizedField(
+                encoder,
+                PROOF_BOX_ADAPTER,
+                ProofBoxValue(value.backend, value.proofBytes()),
+            )
+            encodeSizedField(encoder, PROOF_VERIFIER_KEY_REF_ADAPTER, value.verifyingKeyRef)
+
+            val commitment = value.verifyingKeyCommitmentBytes()
+            val envelopeHash = value.envelopeHashBytes()
+            if (commitment != null || envelopeHash != null) {
+                encodeSizedField(
+                    encoder,
+                    OPTIONAL_HASH_ADAPTER,
+                    Optional.ofNullable(commitment),
+                )
+            }
+            if (envelopeHash != null) {
+                encodeSizedField(
+                    encoder,
+                    OPTIONAL_HASH_ADAPTER,
+                    Optional.of(envelopeHash),
+                )
+            }
+        }
+
+        override fun decode(decoder: NoritoDecoder): ProofAttachment {
+            val backend = decodeSizedField(decoder, STRING_ADAPTER)
+            val proof = decodeSizedField(decoder, PROOF_BOX_ADAPTER)
+            require(proof.backend == backend) {
+                "proof.backend must match attachment backend"
+            }
+            val verifyingKeyRef =
+                decodeSizedField(decoder, PROOF_VERIFIER_KEY_REF_ADAPTER)
+            require(verifyingKeyRef.backend == backend) {
+                "vk_ref.backend must match attachment backend"
+            }
+
+            val commitment = if (decoder.remaining() == 0) {
+                null
+            } else {
+                decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null)
+            }
+            val envelopeHash = if (decoder.remaining() == 0) {
+                null
+            } else {
+                decodeSizedField(decoder, OPTIONAL_HASH_ADAPTER).orElse(null)
+            }
+            require(decoder.remaining() == 0) {
+                "lane privacy proof attachments are not supported by this SDK"
+            }
+
+            return ProofAttachment(
+                backend,
+                proof.bytes(),
+                verifyingKeyRef,
+                commitment,
+                envelopeHash,
+            )
+        }
+    }
+
+    private class ProofAttachmentListAdapter : TypeAdapter<List<ProofAttachment>> {
+        override fun encode(encoder: NoritoEncoder, value: List<ProofAttachment>) {
+            encodeSizedField(encoder, PROOF_ATTACHMENT_SEQUENCE_ADAPTER, value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): List<ProofAttachment> =
+            decodeSizedField(decoder, PROOF_ATTACHMENT_SEQUENCE_ADAPTER)
+    }
+
+    private object FixedHashArrayAdapter : TypeAdapter<ByteArray> {
+        override fun encode(encoder: NoritoEncoder, value: ByteArray) {
+            require(value.size == 32) { "expected 32-byte hash" }
+            encodeFixedByteArray(encoder, value)
+        }
+
+        override fun decode(decoder: NoritoDecoder): ByteArray =
+            decodeFixedByteArray(decoder, 32, "proof attachment hash")
+    }
 
     private class FeePaymentIntentAdapter : TypeAdapter<FeePaymentIntent> {
         override fun encode(encoder: NoritoEncoder, value: FeePaymentIntent) {
@@ -626,6 +757,9 @@ internal class TransactionPayloadAdapter private constructor(
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
         private val RAW_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
         private val HASH_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.fixedBytes(32)
+        private val HASH_ARRAY_ADAPTER: TypeAdapter<ByteArray> = FixedHashArrayAdapter
+        private val OPTIONAL_HASH_ADAPTER: TypeAdapter<Optional<ByteArray>> =
+            NoritoAdapters.option(HASH_ARRAY_ADAPTER)
         private val IVM_BYTECODE_ADAPTER: TypeAdapter<ByteArray> = IvmBytecodeAdapter()
         private val INSTRUCTION_ADAPTER: TypeAdapter<InstructionBox> = InstructionAdapter()
         private val INSTRUCTION_LIST_ADAPTER: TypeAdapter<List<InstructionBox>> =
@@ -665,6 +799,17 @@ internal class TransactionPayloadAdapter private constructor(
         private val FEE_PAYMENT_ADAPTER: TypeAdapter<FeePaymentIntent> = FeePaymentIntentAdapter()
         private val EXECUTABLE_ADAPTER: TypeAdapter<Executable> = ExecutableAdapter()
         private val METADATA_ADAPTER: TypeAdapter<Map<String, JsonValue>> = MetadataAdapter()
+        private val PROOF_BOX_ADAPTER: TypeAdapter<ProofBoxValue> = ProofBoxAdapter()
+        private val PROOF_VERIFIER_KEY_REF_ADAPTER: TypeAdapter<ProofVerifierKeyRef> =
+            ProofVerifierKeyRefAdapter()
+        private val PROOF_ATTACHMENT_ADAPTER: TypeAdapter<ProofAttachment> =
+            ProofAttachmentAdapter()
+        private val PROOF_ATTACHMENT_SEQUENCE_ADAPTER: TypeAdapter<List<ProofAttachment>> =
+            NoritoAdapters.sequence(PROOF_ATTACHMENT_ADAPTER)
+        private val PROOF_ATTACHMENT_LIST_ADAPTER: TypeAdapter<List<ProofAttachment>> =
+            ProofAttachmentListAdapter()
+        private val ATTACHMENTS_OPTION_ADAPTER: TypeAdapter<Optional<List<ProofAttachment>>> =
+            NoritoAdapters.option(PROOF_ATTACHMENT_LIST_ADAPTER)
         private const val INSTRUCTION_BOX_SCHEMA = "iroha.data_model.isi.InstructionBox.v1"
         private const val FEE_PAYER_AUTHORITY_TAG = 0L
         private const val FEE_PAYER_SPONSOR_TAG = 1L

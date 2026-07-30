@@ -29,16 +29,17 @@ pub mod isi {
             AssetBalancePolicy, AssetIssuerUsagePolicyV1, AssetSubjectBindingV1,
             AssetTransferControlRecord, AssetTransferControlStoreV1, AssetTransferControlWindow,
             AssetTransferLimit, AssetTransferUsageBucket, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
-            DomainAssetUsagePolicyV1,
+            DomainAssetUsagePolicyV1, validate_asset_transfer_availability_reason,
         },
         events::data::prelude::{
             AccountEvent, AssetBatchTransferLegStatus, AssetBatchTransferOutcome,
             AssetBatchTransferRejection, AssetBatchTransferRejectionCode, AssetEvent,
-            MetadataChanged,
+            AssetTransferred, MetadataChanged,
         },
         isi::{
-            RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue, SetAssetTransferBlacklist,
-            SetAssetTransferControl, SetAssetTransferFreeze, error::MintabilityError,
+            RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue,
+            SetAssetTransferAvailability, SetAssetTransferBlacklist, SetAssetTransferControl,
+            error::MintabilityError,
         },
         nexus::{CapabilityRequest, DataSpaceCatalog, DataSpaceId, ManifestVerdict},
     };
@@ -107,6 +108,18 @@ pub mod isi {
                     )
                     .into(),
                 ));
+            }
+            if !amount.is_zero() {
+                self.ensure_numeric_asset_transfer_availability(
+                    source_id,
+                    amount.clone(),
+                    AssetTransferDirection::Outgoing,
+                )?;
+                self.ensure_numeric_asset_transfer_availability(
+                    destination_id,
+                    amount.clone(),
+                    AssetTransferDirection::Incoming,
+                )?;
             }
             let source_spec = self.asset_definition(source_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), source_spec)?;
@@ -344,6 +357,52 @@ pub mod isi {
             }
             Ok(())
         }
+
+        fn ensure_numeric_asset_transfer_availability(
+            &self,
+            asset_id: &AssetId,
+            amount: Quantity,
+            direction: AssetTransferDirection,
+        ) -> Result<(), Error> {
+            if amount.is_zero() {
+                return Ok(());
+            }
+            let account = self.account(asset_id.account())?;
+            let store =
+                load_asset_transfer_control_store_from_account(account.id(), account.metadata())?;
+            let Some(record) = store.find(asset_id.definition()) else {
+                return Ok(());
+            };
+            let enabled = match direction {
+                AssetTransferDirection::Incoming => record.incoming_availability.is_enabled(),
+                AssetTransferDirection::Outgoing => record.outgoing_availability.is_enabled(),
+            };
+            if enabled {
+                return Ok(());
+            }
+            let detail = format!(
+                "account {} on asset definition {} at availability revision {}",
+                asset_id.account(),
+                asset_id.definition(),
+                record.availability_revision
+            )
+            .into();
+            let admission = match direction {
+                AssetTransferDirection::Incoming => {
+                    AssetTransferAdmissionError::IncomingDisabled(detail)
+                }
+                AssetTransferDirection::Outgoing => {
+                    AssetTransferAdmissionError::OutgoingDisabled(detail)
+                }
+            };
+            Err(InstructionExecutionError::AssetTransferAdmission(admission).into())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum AssetTransferDirection {
+        Incoming,
+        Outgoing,
     }
 
     /// Assert that `object` matches the provided `asset_spec`.
@@ -488,8 +547,9 @@ pub mod isi {
 
     #[derive(Clone, Copy)]
     enum TransferControlCapability {
-        Freeze,
+        Availability,
         DailyLimit,
+        HoldingLimit,
         OwnerOnly,
     }
 
@@ -500,6 +560,9 @@ pub mod isi {
         asset_definition_id: &AssetDefinitionId,
         capability: TransferControlCapability,
     ) -> Result<(), Error> {
+        if state_transaction._curr_block.is_genesis() {
+            return Ok(());
+        }
         let owner = state_transaction
             .world
             .asset_definition(asset_definition_id)?
@@ -508,55 +571,62 @@ pub mod isi {
         if owner == *authority {
             return Ok(());
         }
-        let account = state_transaction.world.account(account_id)?;
-        let account_label = account.label().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!(
-                    "transfer-control target account {account_id} has no canonical on-chain alias label"
-                )
-                .into(),
-            )
-        })?;
-        if crate::sns::resolve_active_account_alias(
-            &state_transaction.world,
-            &state_transaction.nexus.dataspace_catalog,
-            account_label,
-            state_transaction.block_unix_timestamp_ms(),
-        )
-        .as_ref()
-            != Some(account_id)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "transfer-control target account {account_id} has no strictly active alias binding"
-                )
-                .into(),
-            )
-            .into());
-        }
-        let account_domain = account_label.domain.as_ref().cloned().ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!(
-                    "transfer-control target account {account_id} has no canonical on-chain domain label"
-                )
-                .into(),
-            )
-        })?;
-        let account_dataspace = account_label.dataspace;
         let required: Option<Permission> = match capability {
-            TransferControlCapability::Freeze => Some(
-                iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze {
+            TransferControlCapability::Availability => Some(
+                iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability {
+                    account: account_id.clone(),
                     asset_definition: asset_definition_id.clone(),
-                    account_domain,
-                    account_dataspace,
                 }
                 .into(),
             ),
-            TransferControlCapability::DailyLimit => Some(
-                iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+            TransferControlCapability::DailyLimit => {
+                let account = state_transaction.world.account(account_id)?;
+                let account_label = account.label().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "transfer-control target account {account_id} has no canonical on-chain alias label"
+                        )
+                        .into(),
+                    )
+                })?;
+                if crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    account_label,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    != Some(account_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "transfer-control target account {account_id} has no strictly active alias binding"
+                        )
+                        .into(),
+                    )
+                    .into());
+                }
+                let account_domain = account_label.domain.as_ref().cloned().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "transfer-control target account {account_id} has no canonical on-chain domain label"
+                        )
+                        .into(),
+                    )
+                })?;
+                Some(
+                    iroha_executor_data_model::permission::asset::CanSetAssetTransferDailyLimit {
+                        asset_definition: asset_definition_id.clone(),
+                        account_domain,
+                        account_dataspace: account_label.dataspace,
+                    }
+                    .into(),
+                )
+            }
+            TransferControlCapability::HoldingLimit => Some(
+                iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit {
+                    account: account_id.clone(),
                     asset_definition: asset_definition_id.clone(),
-                    account_domain,
-                    account_dataspace,
                 }
                 .into(),
             ),
@@ -580,9 +650,16 @@ pub mod isi {
         }) {
             return Ok(());
         }
+        let required_scope = match capability {
+            TransferControlCapability::Availability | TransferControlCapability::HoldingLimit => {
+                "exact account-and-asset"
+            }
+            TransferControlCapability::DailyLimit => "account-domain-and-dataspace",
+            TransferControlCapability::OwnerOnly => "asset-owner",
+        };
         Err(InstructionExecutionError::InvariantViolation(
             format!(
-                "account {authority} lacks an exact asset- and account-domain-scoped transfer-control permission for {account_id} and {asset_definition_id}; owner is {owner}"
+                "account {authority} lacks the required {required_scope} transfer-control permission for {account_id} and {asset_definition_id}; owner is {owner}"
             )
             .into(),
         ))
@@ -691,18 +768,6 @@ pub mod isi {
             return Ok(None);
         };
 
-        if record.outgoing_frozen {
-            return Err(InstructionExecutionError::AssetTransferAdmission(
-                AssetTransferAdmissionError::Frozen(
-                    format!(
-                        "account {} on asset definition {}",
-                        source_id.account(),
-                        source_id.definition()
-                    )
-                    .into(),
-                ),
-            ));
-        }
         if record.blacklisted {
             return Err(InstructionExecutionError::AssetTransferAdmission(
                 AssetTransferAdmissionError::Blacklisted(
@@ -1263,6 +1328,12 @@ pub mod isi {
         FeeSponsorCustody,
     }
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NumericAssetTransferScopePolicy {
+        Ambient,
+        ExplicitBilateral,
+    }
+
     fn sccp_registry_references_custody_asset(
         registry: &iroha_data_model::bridge::SccpRegistryV1,
         asset_id: &AssetId,
@@ -1357,6 +1428,41 @@ pub mod isi {
             event_destination_id: AssetId,
             amount: Quantity,
         ) -> Result<Self, Error> {
+            Self::prepare(
+                state_transaction,
+                authority,
+                event_source_id,
+                event_destination_id,
+                amount,
+                NumericAssetTransferScopePolicy::Ambient,
+            )
+        }
+
+        fn prepare_explicit_bilateral(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            event_source_id: AssetId,
+            event_destination_id: AssetId,
+            amount: Quantity,
+        ) -> Result<Self, Error> {
+            Self::prepare(
+                state_transaction,
+                authority,
+                event_source_id,
+                event_destination_id,
+                amount,
+                NumericAssetTransferScopePolicy::ExplicitBilateral,
+            )
+        }
+
+        fn prepare(
+            state_transaction: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            event_source_id: AssetId,
+            event_destination_id: AssetId,
+            amount: Quantity,
+            scope_policy: NumericAssetTransferScopePolicy,
+        ) -> Result<Self, Error> {
             // Reject no-op transfers before account admission, control usage, transcripts,
             // balances, or events can be staged.
             if amount.is_zero() {
@@ -1381,12 +1487,13 @@ pub mod isi {
                 Some((event_destination_id.definition(), &amount)),
                 state_transaction,
             )?;
-            let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
+            let (source_id, destination_id) = ensure_numeric_asset_transfer_policies_with_scope(
                 state_transaction,
                 &event_source_id,
                 &event_destination_id,
                 &amount,
                 NumericAssetTransferSourcePolicy::User,
+                scope_policy,
             )?;
             let numeric_spec = state_transaction
                 .numeric_spec_for(source_id.definition())
@@ -1486,9 +1593,46 @@ pub mod isi {
         }
     }
 
-    struct PreparedNativeFxTransferPair {
+    struct PreparedNumericTransferPair {
         source: PreparedNumericTransferPlan,
         destination: PreparedNumericTransferPlan,
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_authorized_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        source_id: AssetId,
+        source_destination_id: AssetId,
+        source_amount: Quantity,
+        destination_source_id: AssetId,
+        destination_id: AssetId,
+        destination_amount: Quantity,
+    ) -> Result<PreparedNumericTransferPair, Error> {
+        let source = PreparedNumericTransferPlan::prepare_explicit_bilateral(
+            state_transaction,
+            submitting_authority,
+            source_id,
+            source_destination_id,
+            source_amount,
+        )?;
+        let destination = PreparedNumericTransferPlan::prepare_explicit_bilateral(
+            state_transaction,
+            submitting_authority,
+            destination_source_id,
+            destination_id,
+            destination_amount,
+        )?;
+
+        if source.source_id.definition() == destination.source_id.definition() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "atomic bilateral transfer legs must use distinct asset definitions".into(),
+            ));
+        }
+        Ok(PreparedNumericTransferPair {
+            source,
+            destination,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1501,7 +1645,7 @@ pub mod isi {
         destination_source_id: AssetId,
         destination_id: AssetId,
         destination_amount: Quantity,
-    ) -> Result<PreparedNativeFxTransferPair, Error> {
+    ) -> Result<PreparedNumericTransferPair, Error> {
         if source_id.scope() != source_destination_id.scope()
             || destination_source_id.scope() != destination_id.scope()
         {
@@ -1518,30 +1662,89 @@ pub mod isi {
             ));
         }
 
-        let source = PreparedNumericTransferPlan::prepare_user(
+        prepare_authorized_numeric_asset_pair(
             state_transaction,
             submitting_authority,
             source_id,
             source_destination_id,
             source_amount,
-        )?;
-        let destination = PreparedNumericTransferPlan::prepare_user(
-            state_transaction,
-            submitting_authority,
             destination_source_id,
             destination_id,
             destination_amount,
+        )
+    }
+
+    /// Validate two explicitly authorized bilateral legs through the ordinary
+    /// transfer policy and transfer-control pipeline without mutating state.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_authorized_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        first_source_id: AssetId,
+        first_destination_id: AssetId,
+        first_amount: Quantity,
+        second_source_id: AssetId,
+        second_destination_id: AssetId,
+        second_amount: Quantity,
+    ) -> Result<(), Error> {
+        prepare_authorized_numeric_asset_pair(
+            state_transaction,
+            submitting_authority,
+            first_source_id,
+            first_destination_id,
+            first_amount,
+            second_source_id,
+            second_destination_id,
+            second_amount,
+        )?;
+        Ok(())
+    }
+
+    /// Atomically apply two explicitly authorized bilateral legs through the
+    /// ordinary transfer policy, transfer-control, transcript, and event pipeline.
+    ///
+    /// Both legs are fully prepared before either balance changes. Distinct
+    /// asset definitions make the two prechecked deltas independent.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_authorized_numeric_asset_pair(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        submitting_authority: &AccountId,
+        first_source_id: AssetId,
+        first_destination_id: AssetId,
+        first_amount: Quantity,
+        second_source_id: AssetId,
+        second_destination_id: AssetId,
+        second_amount: Quantity,
+    ) -> Result<(), Error> {
+        state_transaction.require_transfer_transcript_identity("bilateral settlement transfer")?;
+        let prepared = prepare_authorized_numeric_asset_pair(
+            state_transaction,
+            submitting_authority,
+            first_source_id,
+            first_destination_id,
+            first_amount,
+            second_source_id,
+            second_destination_id,
+            second_amount,
         )?;
 
-        if source.source_id.definition() == destination.source_id.definition() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "native FX transfer legs must use distinct asset definitions".into(),
-            ));
-        }
-        Ok(PreparedNativeFxTransferPair {
-            source,
-            destination,
-        })
+        let first = prepared.source.apply(state_transaction)?;
+        let second = prepared.destination.apply(state_transaction)?;
+        state_transaction
+            .record_transfer_transcripts(submitting_authority, vec![first.delta, second.delta])?;
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            first.source_id,
+            first.destination_id,
+            first.amount,
+        );
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            second.source_id,
+            second.destination_id,
+            second.amount,
+        );
+        Ok(())
     }
 
     /// Validate both native FX legs through the ordinary transparent-transfer pipeline without
@@ -1587,6 +1790,7 @@ pub mod isi {
         destination_id: AssetId,
         destination_amount: Quantity,
     ) -> Result<(), Error> {
+        state_transaction.require_transfer_transcript_identity("native FX transfer")?;
         let prepared = prepare_native_fx_numeric_asset_pair(
             state_transaction,
             submitting_authority,
@@ -1602,30 +1806,54 @@ pub mod isi {
         // delta cannot invalidate the second delta prepared from the same state snapshot.
         let source = prepared.source.apply(state_transaction)?;
         let destination = prepared.destination.apply(state_transaction)?;
-        state_transaction.record_transfer_transcript(submitting_authority, source.delta)?;
-        state_transaction.record_transfer_transcript(submitting_authority, destination.delta)?;
+        state_transaction.record_transfer_transcripts(
+            submitting_authority,
+            vec![source.delta, destination.delta],
+        )?;
         let source_amount = source.amount;
         let destination_amount = destination.amount;
 
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            source.source_id,
+            source.destination_id,
+            source_amount,
+        );
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            destination.source_id,
+            destination.destination_id,
+            destination_amount,
+        );
+        Ok(())
+    }
+
+    /// Emit the canonical balance deltas and one transfer-specific event for a
+    /// successful transparent account-to-account movement.
+    ///
+    /// Keeping the paired payload here prevents consumers from having to infer
+    /// a transfer by correlating independent `Removed` and `Added` events.
+    pub(crate) fn emit_numeric_asset_transfer_events(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source: AssetId,
+        destination: AssetId,
+        amount: Quantity,
+    ) {
         state_transaction.world.emit_events([
             AssetEvent::Removed(AssetChanged {
-                asset: source.source_id,
-                amount: source_amount.clone(),
+                asset: source.clone(),
+                amount: amount.clone(),
             }),
             AssetEvent::Added(AssetChanged {
-                asset: source.destination_id,
-                amount: source_amount,
+                asset: destination.clone(),
+                amount: amount.clone(),
             }),
-            AssetEvent::Removed(AssetChanged {
-                asset: destination.source_id,
-                amount: destination_amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: destination.destination_id,
-                amount: destination_amount,
+            AssetEvent::Transferred(AssetTransferred {
+                source,
+                destination,
+                amount,
             }),
         ]);
-        Ok(())
     }
 
     /// Validate policy gates for a transparent numeric asset balance movement.
@@ -1636,38 +1864,98 @@ pub mod isi {
         amount: &Quantity,
         source_policy: NumericAssetTransferSourcePolicy,
     ) -> Result<(AssetId, AssetId), Error> {
+        ensure_numeric_asset_transfer_policies_with_scope(
+            state_transaction,
+            source_id,
+            destination_id,
+            amount,
+            source_policy,
+            NumericAssetTransferScopePolicy::Ambient,
+        )
+    }
+
+    fn ensure_numeric_asset_transfer_policies_with_scope(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        destination_id: &AssetId,
+        amount: &Quantity,
+        source_policy: NumericAssetTransferSourcePolicy,
+        scope_policy: NumericAssetTransferScopePolicy,
+    ) -> Result<(AssetId, AssetId), Error> {
         ensure_global_asset_write_on_authoritative_route(
             state_transaction,
             source_id.definition(),
             "transfer",
         )?;
-        let source_dataspace = transfer_source_dataspace_hint(state_transaction, source_id)?;
-        let source_id = state_transaction
-            .world
-            .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
-        let destination_dataspace = match source_id.scope() {
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace)
-                if *dataspace == DataSpaceId::UNIVERSAL =>
-            {
-                Some(DataSpaceId::UNIVERSAL)
+        let (source_id, destination_id) = match scope_policy {
+            NumericAssetTransferScopePolicy::Ambient => {
+                let source_dataspace =
+                    transfer_source_dataspace_hint(state_transaction, source_id)?;
+                let source_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(source_id, source_dataspace)?;
+                let destination_dataspace = match source_id.scope() {
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace)
+                        if *dataspace == DataSpaceId::UNIVERSAL =>
+                    {
+                        Some(DataSpaceId::UNIVERSAL)
+                    }
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
+                        let hint =
+                            transfer_destination_dataspace_hint(state_transaction, destination_id)?;
+                        if matches!(
+                            destination_id.scope(),
+                            iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
+                        ) || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
+                        {
+                            hint
+                        } else {
+                            Some(*dataspace)
+                        }
+                    }
+                    _ => transfer_destination_dataspace_hint(state_transaction, destination_id)?,
+                };
+                let destination_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
+                (source_id, destination_id)
             }
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
-                let hint = transfer_destination_dataspace_hint(state_transaction, destination_id)?;
-                if matches!(
-                    destination_id.scope(),
-                    iroha_data_model::asset::AssetBalanceScope::Dataspace(_)
-                ) || hint.is_some_and(|hint| hint != DataSpaceId::UNIVERSAL)
-                {
-                    hint
-                } else {
-                    Some(*dataspace)
-                }
+            NumericAssetTransferScopePolicy::ExplicitBilateral => {
+                let definition = state_transaction
+                    .world
+                    .asset_definition(source_id.definition())
+                    .map_err(Error::from)?;
+                let explicit_dataspace = match definition.balance_scope_policy() {
+                    AssetBalancePolicy::Global => None,
+                    AssetBalancePolicy::DataspaceRestricted => {
+                        let (
+                            AssetBalanceScope::Dataspace(source_dataspace),
+                            AssetBalanceScope::Dataspace(destination_dataspace),
+                        ) = (source_id.scope(), destination_id.scope())
+                        else {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "bilateral settlement requires explicit dataspace scopes for restricted assets"
+                                    .into(),
+                            ));
+                        };
+                        if source_dataspace != destination_dataspace {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                "each bilateral settlement leg must preserve one exact balance scope"
+                                    .into(),
+                            ));
+                        }
+                        Some(*source_dataspace)
+                    }
+                };
+                let source_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(source_id, explicit_dataspace)?;
+                let destination_id = state_transaction
+                    .world
+                    .resolve_asset_id_for_scope_hint(destination_id, explicit_dataspace)?;
+                (source_id, destination_id)
             }
-            _ => transfer_destination_dataspace_hint(state_transaction, destination_id)?,
         };
-        let destination_id = state_transaction
-            .world
-            .resolve_asset_id_for_scope_hint(destination_id, destination_dataspace)?;
         if source_id.definition() != destination_id.definition() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
@@ -1823,16 +2111,7 @@ pub mod isi {
             NumericAssetTransferSourcePolicy::FeeSponsorCustody,
         )?;
         state_transaction.record_transfer_transcript(submitting_authority, delta)?;
-        state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: source_id,
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: destination_id,
-                amount,
-            }),
-        ]);
+        emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
         Ok(())
     }
 
@@ -2081,16 +2360,12 @@ pub mod isi {
             .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
 
         let amount = applied.amount;
-        state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: applied.source_id,
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: applied.destination_id,
-                amount,
-            }),
-        ]);
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            applied.source_id,
+            applied.destination_id,
+            amount,
+        );
 
         Ok(())
     }
@@ -2131,16 +2406,12 @@ pub mod isi {
             .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
 
         let amount = applied.amount;
-        state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: applied.source_id,
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: applied.destination_id,
-                amount,
-            }),
-        ]);
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            applied.source_id,
+            applied.destination_id,
+            amount,
+        );
         Ok(())
     }
 
@@ -2209,16 +2480,7 @@ pub mod isi {
             delta,
         } = prepared;
         state_transaction.record_transfer_transcript(submitting_authority, delta)?;
-        state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: source_id,
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: destination_id,
-                amount,
-            }),
-        ]);
+        emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
         Ok(())
     }
 
@@ -2257,21 +2519,17 @@ pub mod isi {
             .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
 
         let amount = applied.amount;
-        state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: applied.source_id,
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: applied.destination_id,
-                amount,
-            }),
-        ]);
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            applied.source_id,
+            applied.destination_id,
+            amount,
+        );
 
         Ok(true)
     }
 
-    impl Execute for SetAssetTransferFreeze {
+    impl Execute for SetAssetTransferAvailability {
         fn execute(
             self,
             authority: &AccountId,
@@ -2282,26 +2540,56 @@ pub mod isi {
                 authority,
                 &self.account_id,
                 &self.asset_definition_id,
-                TransferControlCapability::Freeze,
+                TransferControlCapability::Availability,
             )?;
             state_transaction.world.account(&self.account_id)?;
 
+            if let Err(error) = validate_asset_transfer_availability_reason(self.reason.as_deref())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    error.to_string().into(),
+                )
+                .into());
+            }
             let now_ms = state_transaction.block_unix_timestamp_ms();
             let mut record = active_control_record(
                 state_transaction,
                 &self.account_id,
                 &self.asset_definition_id,
             )?
-            .unwrap_or(AssetTransferControlRecord {
-                asset_definition_id: self.asset_definition_id.clone(),
-                outgoing_frozen: false,
-                blacklisted: false,
-                holding_limit: None,
-                limits: Vec::new(),
-                usages: Vec::new(),
-                updated_at_ms: None,
-            });
-            record.outgoing_frozen = self.outgoing_frozen;
+            .unwrap_or_else(|| AssetTransferControlRecord::new(self.asset_definition_id.clone()));
+            if record.availability_revision != self.expected_revision {
+                return Err(InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::AvailabilityRevisionMismatch(
+                        format!(
+                            "expected {}, current {} for account {} on asset definition {}",
+                            self.expected_revision,
+                            record.availability_revision,
+                            self.account_id,
+                            self.asset_definition_id
+                        )
+                        .into(),
+                    ),
+                )
+                .into());
+            }
+            if record.incoming_availability == self.incoming
+                && record.outgoing_availability == self.outgoing
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "asset-transfer availability update must change at least one direction".into(),
+                )
+                .into());
+            }
+            record.availability_revision =
+                record.availability_revision.checked_add(1).ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "asset-transfer availability revision overflow".into(),
+                    )
+                })?;
+            record.incoming_availability = self.incoming;
+            record.outgoing_availability = self.outgoing;
+            record.availability_reason = self.reason;
             record.updated_at_ms = Some(now_ms);
             update_control_record(state_transaction, &self.account_id, record)
         }
@@ -2328,15 +2616,7 @@ pub mod isi {
                 &self.account_id,
                 &self.asset_definition_id,
             )?
-            .unwrap_or(AssetTransferControlRecord {
-                asset_definition_id: self.asset_definition_id.clone(),
-                outgoing_frozen: false,
-                blacklisted: false,
-                holding_limit: None,
-                limits: Vec::new(),
-                usages: Vec::new(),
-                updated_at_ms: None,
-            });
+            .unwrap_or_else(|| AssetTransferControlRecord::new(self.asset_definition_id.clone()));
             record.blacklisted = self.blacklisted;
             record.updated_at_ms = Some(now_ms);
             update_control_record(state_transaction, &self.account_id, record)
@@ -2377,15 +2657,7 @@ pub mod isi {
                 &self.account_id,
                 &self.asset_definition_id,
             )?
-            .unwrap_or(AssetTransferControlRecord {
-                asset_definition_id: self.asset_definition_id.clone(),
-                outgoing_frozen: false,
-                blacklisted: false,
-                holding_limit: None,
-                limits: Vec::new(),
-                usages: Vec::new(),
-                updated_at_ms: None,
-            });
+            .unwrap_or_else(|| AssetTransferControlRecord::new(self.asset_definition_id.clone()));
 
             let next_limits = canonicalize_asset_transfer_limits(self.limits)?;
             let active_windows = next_limits
@@ -2412,7 +2684,7 @@ pub mod isi {
                 authority,
                 &self.account_id,
                 &self.asset_definition_id,
-                TransferControlCapability::OwnerOnly,
+                TransferControlCapability::HoldingLimit,
             )?;
             state_transaction.world.account(&self.account_id)?;
             let spec = state_transaction
@@ -2428,15 +2700,7 @@ pub mod isi {
                 &self.account_id,
                 &self.asset_definition_id,
             )?
-            .unwrap_or(AssetTransferControlRecord {
-                asset_definition_id: self.asset_definition_id.clone(),
-                outgoing_frozen: false,
-                blacklisted: false,
-                holding_limit: None,
-                limits: Vec::new(),
-                usages: Vec::new(),
-                updated_at_ms: None,
-            });
+            .unwrap_or_else(|| AssetTransferControlRecord::new(self.asset_definition_id.clone()));
             record.holding_limit = self.holding_limit;
             record.updated_at_ms = Some(now_ms);
             update_control_record(state_transaction, &self.account_id, record)
@@ -2544,16 +2808,12 @@ pub mod isi {
                     .telemetry
                     .observe_tx_amount(applied.amount.as_numeric().clone().to_f64_lossy());
                 let amount = applied.amount;
-                state_transaction.world.emit_events([
-                    AssetEvent::Removed(AssetChanged {
-                        asset: applied.source_id,
-                        amount: amount.clone(),
-                    }),
-                    AssetEvent::Added(AssetChanged {
-                        asset: applied.destination_id,
-                        amount,
-                    }),
-                ]);
+                emit_numeric_asset_transfer_events(
+                    state_transaction,
+                    applied.source_id,
+                    applied.destination_id,
+                    amount,
+                );
                 let outcome = AssetBatchTransferOutcome {
                     leg_index: u32::try_from(index).map_err(|_| {
                         InstructionExecutionError::InvariantViolation(
@@ -2587,7 +2847,15 @@ pub mod isi {
                 AssetTransferAdmissionError::HoldingLimitExceeded(_) => {
                     AssetBatchTransferRejectionCode::HoldingLimitExceeded
                 }
-                AssetTransferAdmissionError::Frozen(_) => AssetBatchTransferRejectionCode::Frozen,
+                AssetTransferAdmissionError::IncomingDisabled(_) => {
+                    AssetBatchTransferRejectionCode::IncomingDisabled
+                }
+                AssetTransferAdmissionError::OutgoingDisabled(_) => {
+                    AssetBatchTransferRejectionCode::OutgoingDisabled
+                }
+                AssetTransferAdmissionError::AvailabilityRevisionMismatch(_) => {
+                    AssetBatchTransferRejectionCode::PolicyRejected
+                }
                 AssetTransferAdmissionError::Blacklisted(_) => {
                     AssetBatchTransferRejectionCode::Blacklisted
                 }
@@ -3900,7 +4168,7 @@ pub mod query {
         fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance() {
             let (state, custody, definition_id, source_id) = fee_sponsor_custody_state();
             assert_ne!(custody, *ALICE_ID, "submitting authority is not custody");
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx, 0xC5);
@@ -3926,6 +4194,14 @@ pub mod query {
                     .map(|value| value.as_ref()),
                 Some(&Quantity::from(4_u32))
             );
+            assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
+                event.as_ref(),
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
+                    AssetEvent::Transferred(transfer)
+                ))) if transfer.source() == &source_id
+                    && transfer.destination() == &destination_id
+                    && transfer.amount() == &Quantity::from(4_u32)
+            )));
         }
 
         #[test]
@@ -3937,6 +4213,7 @@ pub mod query {
             stx.world
                 .increase_asset_total_amount(&definition_id, &Quantity::from(10_u32))
                 .expect("seed aggregate supply");
+            stx.world.internal_event_buf.clear();
 
             super::isi::execute_fee_sponsor_custody_burn(
                 &mut stx,
@@ -3955,6 +4232,15 @@ pub mod query {
                     .expect("asset definition")
                     .total_quantity(),
                 &Quantity::from(8_u32)
+            );
+            assert!(
+                stx.world.internal_event_buf.iter().all(|event| !matches!(
+                    event.as_ref(),
+                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
+                        AssetEvent::Transferred(_)
+                    )))
+                )),
+                "burn must never be represented as an account-to-account transfer"
             );
         }
 
@@ -4548,9 +4834,17 @@ pub mod query {
             );
             assert_eq!(
                 stx.world.internal_event_buf.len(),
-                2,
-                "identity movement emits only the canonical removed/added pair, never Created"
+                3,
+                "identity movement emits the canonical deltas and one paired transfer event"
             );
+            assert!(stx.world.internal_event_buf.iter().any(|event| matches!(
+                event.as_ref(),
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
+                    AssetEvent::Transferred(transfer)
+                ))) if transfer.source() == &asset_id
+                    && transfer.destination() == &asset_id
+                    && transfer.amount() == &Quantity::one()
+            )));
         }
 
         #[test]
@@ -4570,11 +4864,13 @@ pub mod query {
             seed_test_account_alias_binding(&mut stx, &ALICE_ID, &alice_alias);
             seed_test_account_alias_lease(&mut stx, &ALICE_ID, &alice_alias);
 
-            let err = SetAssetTransferFreeze::new(
+            let err = SetAssetTransferAvailability::new(
                 ALICE_ID.clone(),
                 asset_definition_id.clone(),
-                true,
-                Some("operator freeze".to_owned()),
+                0,
+                AssetTransferAvailability::Enabled,
+                AssetTransferAvailability::Disabled,
+                Some("operator hold".to_owned()),
             )
             .execute(&BOB_ID, &mut stx)
             .expect_err("non-owner must be rejected");
@@ -4597,7 +4893,44 @@ pub mod query {
         }
 
         #[test]
-        fn delegated_transfer_controls_bind_exact_asset_domain_and_dataspace() {
+        fn genesis_has_inherent_transfer_control_authority() {
+            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferAvailability::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                0,
+                AssetTransferAvailability::Enabled,
+                AssetTransferAvailability::Disabled,
+                Some("genesis policy".to_owned()),
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect("genesis may establish initial availability independent of ownership");
+            SetAssetHoldingLimit::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                Some(Quantity::from(5_000_u32)),
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect("genesis may establish an initial holding limit independent of ownership");
+            let record = load_asset_transfer_control_store(&stx, &ALICE_ID)
+                .find(&asset_definition_id)
+                .cloned()
+                .expect("genesis availability persisted");
+            assert_eq!(record.availability_revision, 1);
+            assert_eq!(
+                record.outgoing_availability,
+                AssetTransferAvailability::Disabled
+            );
+            assert_eq!(record.holding_limit, Some(Quantity::from(5_000_u32)));
+        }
+
+        #[test]
+        fn delegated_controls_use_exact_availability_scoped_daily_and_exact_holding() {
             let domain_id = DomainId::try_new("currency", "sbp").expect("asset definition domain");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let owner = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -4647,10 +4980,9 @@ pub mod query {
                 BOB_ID.clone(),
                 BTreeSet::from([
                     Permission::from(
-                        iroha_executor_data_model::permission::asset::CanSetAssetTransferFreeze {
+                        iroha_executor_data_model::permission::asset::CanSetAssetTransferAvailability {
+                            account: hbl_sbp_id.clone(),
                             asset_definition: asset_definition_id.clone(),
-                            account_domain: account_domain.clone(),
-                            account_dataspace,
                         },
                     ),
                     Permission::from(
@@ -4658,6 +4990,12 @@ pub mod query {
                             asset_definition: asset_definition_id.clone(),
                             account_domain,
                             account_dataspace,
+                        },
+                    ),
+                    Permission::from(
+                        iroha_executor_data_model::permission::asset::CanSetAssetHoldingLimit {
+                            account: hbl_sbp_id.clone(),
+                            asset_definition: asset_definition_id.clone(),
                         },
                     ),
                 ]),
@@ -4683,7 +5021,7 @@ pub mod query {
                 },
             ])
             .expect("transfer-control dataspace catalog");
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 86_400_000, 0);
             let mut block = state.block(header);
             block.nexus.dataspace_catalog = dataspace_catalog.clone();
             let mut stx = block.transaction();
@@ -4696,14 +5034,16 @@ pub mod query {
             seed_test_account_alias_lease(&mut stx, &hbl_other_id, &hbl_other_alias);
             seed_test_account_alias_lease(&mut stx, &ubl_sbp_id, &ubl_sbp_alias);
 
-            SetAssetTransferFreeze::new(
+            SetAssetTransferAvailability::new(
                 hbl_sbp_id.clone(),
                 asset_definition_id.clone(),
-                true,
+                0,
+                AssetTransferAvailability::Disabled,
+                AssetTransferAvailability::Disabled,
                 Some("exact FI scope".to_owned()),
             )
             .execute(&BOB_ID, &mut stx)
-            .expect("exact HBL/SBP freeze permission must execute");
+            .expect("exact HBL/SBP availability permission must execute");
             SetAssetTransferControl::new(
                 hbl_sbp_id.clone(),
                 asset_definition_id.clone(),
@@ -4714,23 +5054,53 @@ pub mod query {
             )
             .execute(&BOB_ID, &mut stx)
             .expect("exact HBL/SBP daily-limit permission must execute");
+            SetAssetHoldingLimit::new(
+                hbl_sbp_id.clone(),
+                asset_definition_id.clone(),
+                Some(Quantity::from(1_000_u32)),
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect("exact holding-limit permission must execute");
+            let blacklist_error = SetAssetTransferBlacklist::new(
+                hbl_sbp_id.clone(),
+                asset_definition_id.clone(),
+                true,
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("holding-limit permission must not authorize blacklist changes");
+            assert!(
+                blacklist_error
+                    .to_string()
+                    .contains("required asset-owner transfer-control permission"),
+                "unexpected blacklist authorization error: {blacklist_error}",
+            );
 
             for (target, expected_error) in [
-                (&hbl_other_id, "lacks an exact"),
-                (&ubl_sbp_id, "lacks an exact"),
+                (
+                    &hbl_other_id,
+                    "lacks the required account-domain-and-dataspace transfer-control permission",
+                ),
+                (
+                    &ubl_sbp_id,
+                    "lacks the required account-domain-and-dataspace transfer-control permission",
+                ),
                 (&unlabeled_id, "no canonical on-chain alias label"),
             ] {
-                let freeze_error = SetAssetTransferFreeze::new(
+                let availability_error = SetAssetTransferAvailability::new(
                     target.clone(),
                     asset_definition_id.clone(),
-                    true,
+                    0,
+                    AssetTransferAvailability::Disabled,
+                    AssetTransferAvailability::Disabled,
                     Some("out of scope".to_owned()),
                 )
                 .execute(&BOB_ID, &mut stx)
-                .expect_err("cross-scope freeze must be rejected");
+                .expect_err("cross-scope availability update must be rejected");
                 assert!(
-                    freeze_error.to_string().contains(expected_error),
-                    "unexpected freeze error for {target}: {freeze_error}",
+                    availability_error
+                        .to_string()
+                        .contains("lacks the required exact account-and-asset"),
+                    "unexpected availability error for {target}: {availability_error}",
                 );
                 let limit_error = SetAssetTransferControl::new(
                     target.clone(),
@@ -4746,14 +5116,31 @@ pub mod query {
                     limit_error.to_string().contains(expected_error),
                     "unexpected limit error for {target}: {limit_error}",
                 );
+                let holding_error = SetAssetHoldingLimit::new(
+                    target.clone(),
+                    asset_definition_id.clone(),
+                    Some(Quantity::from(1_000_u32)),
+                )
+                .execute(&BOB_ID, &mut stx)
+                .expect_err("cross-account holding limit must be rejected");
+                assert!(
+                    holding_error
+                        .to_string()
+                        .contains("lacks the required exact account-and-asset"),
+                    "unexpected holding-limit error for {target}: {holding_error}",
+                );
             }
 
             let exact = load_asset_transfer_control_store(&stx, &hbl_sbp_id);
             let exact = exact
                 .find(&asset_definition_id)
                 .expect("exact-scope controls persisted");
-            assert!(exact.outgoing_frozen);
+            assert_eq!(
+                exact.outgoing_availability,
+                AssetTransferAvailability::Disabled
+            );
             assert_eq!(exact.limits.len(), 1);
+            assert_eq!(exact.holding_limit, Some(Quantity::from(1_000_u32)));
             let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
                 .parse()
                 .expect("metadata key");
@@ -4771,48 +5158,156 @@ pub mod query {
         }
 
         #[test]
-        fn transfer_rejects_when_outbound_asset_is_frozen() {
+        fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened() {
             let (state, asset_definition_id, source_asset_id) =
                 build_asset_transfer_control_test_state(10);
 
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xCB);
 
-            SetAssetTransferFreeze::new(
+            SetAssetTransferAvailability::new(
                 ALICE_ID.clone(),
                 asset_definition_id.clone(),
-                true,
+                0,
+                AssetTransferAvailability::Disabled,
+                AssetTransferAvailability::Disabled,
                 Some("compliance hold".to_owned()),
             )
             .execute(&ALICE_ID, &mut stx)
-            .expect("freeze succeeds");
+            .expect("availability close succeeds");
 
             let err = Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
-                .expect_err("frozen outbound transfer must be rejected");
+                .expect_err("disabled outgoing transfer must be rejected");
+            assert!(matches!(
+                err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::OutgoingDisabled(_)
+                )
+            ));
+
+            Mint::asset_quantity(2_u32, source_asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("mint is a supply operation, not an incoming transfer");
+            Burn::asset_quantity(1_u32, source_asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("burn is a supply operation, not an outgoing transfer");
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Quantity::from(11_u32)
+            );
             assert!(
-                err.to_string().contains("frozen"),
-                "unexpected error: {err}"
+                !stx.world.internal_event_buf.iter().any(|event| matches!(
+                    event.as_ref(),
+                    DataEvent::Domain(DomainEvent::Account(AccountEvent::Asset(
+                        AssetEvent::Transferred(_)
+                    )))
+                )),
+                "mint and burn must not emit the transfer-specific event"
             );
 
             let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            Mint::asset_quantity(Quantity::one(), destination_asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("asset owner funds the incoming-transfer source");
+            let incoming_err =
+                Transfer::asset_quantity(destination_asset_id.clone(), 1_u32, ALICE_ID.clone())
+                    .execute(&BOB_ID, &mut stx)
+                    .expect_err("disabled incoming transfer must be rejected");
+            assert!(matches!(
+                incoming_err,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::IncomingDisabled(_)
+                )
+            ));
+            let stale = SetAssetTransferAvailability::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                0,
+                AssetTransferAvailability::Enabled,
+                AssetTransferAvailability::Enabled,
+                Some("stale reopen".to_owned()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("stale revision must fail");
+            assert!(matches!(
+                stale,
+                InstructionExecutionError::AssetTransferAdmission(
+                    AssetTransferAdmissionError::AvailabilityRevisionMismatch(_)
+                )
+            ));
+            SetAssetTransferAvailability::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                1,
+                AssetTransferAvailability::Enabled,
+                AssetTransferAvailability::Enabled,
+                Some("hold released".to_owned()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("matching revision reopens both directions");
+            Transfer::asset_quantity(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("outgoing transfer succeeds after reopen");
             assert_eq!(
                 asset_balance_or_zero(&stx, &source_asset_id),
                 Quantity::from(10_u32)
             );
             assert_eq!(
                 asset_balance_or_zero(&stx, &destination_asset_id),
-                Quantity::zero()
+                Quantity::from(2_u32)
             );
 
             let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
             let record = store
                 .find(&asset_definition_id)
-                .expect("frozen record stored");
-            assert!(record.outgoing_frozen);
+                .expect("reopened revisioned record remains stored");
+            assert_eq!(record.availability_revision, 2);
+            assert!(record.incoming_availability.is_enabled());
+            assert!(record.outgoing_availability.is_enabled());
             assert!(!record.blacklisted);
             assert!(record.usages.is_empty());
+        }
+
+        #[test]
+        fn availability_reason_over_limit_is_rejected_without_persistence() {
+            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            let reason = "x".repeat(
+                iroha_data_model::asset::ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 + 1,
+            );
+
+            let error = SetAssetTransferAvailability::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                0,
+                AssetTransferAvailability::Enabled,
+                AssetTransferAvailability::Disabled,
+                Some(reason),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("oversized persisted reason must be rejected");
+
+            assert!(
+                error.to_string().contains("maximum byte length"),
+                "unexpected error: {error}"
+            );
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            let account = stx
+                .world
+                .account(&ALICE_ID)
+                .expect("controlled account exists");
+            assert!(
+                account.metadata().get(&metadata_key).is_none(),
+                "invalid reason must not persist transfer-control metadata"
+            );
         }
 
         #[test]
@@ -4851,7 +5346,7 @@ pub mod query {
                 .find(&asset_definition_id)
                 .expect("blacklist record stored");
             assert!(record.blacklisted);
-            assert!(!record.outgoing_frozen);
+            assert!(record.outgoing_availability.is_enabled());
             assert!(record.usages.is_empty());
         }
 

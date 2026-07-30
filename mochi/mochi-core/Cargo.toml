@@ -6,6 +6,13 @@ license = "Apache-2.0"
 publish = false
 description = "Core supervisor library for the MOCHI local Iroha network GUI."
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [lib]
 path = "src/lib.rs"
 
@@ -14,20 +21,17 @@ default = ["governance", "bridge", "fast_dsl"]
 governance = []
 bridge = []
 fast_dsl = ["iroha_data_model/fast_dsl"]
-schema-structural = []
-compact-len = []
-packed-struct = []
 
 [dependencies]
-iroha_crypto = { workspace = true, features = ["std", "rand"] }
-iroha_data_model = { workspace = true, features = ["http", "transparent_api"] }
+iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
+iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_executor_data_model = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_torii_shared = { workspace = true }
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 thiserror = { workspace = true }
 toml = { workspace = true }
 color-eyre = { workspace = true }

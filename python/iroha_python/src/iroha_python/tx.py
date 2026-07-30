@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import time
+import unicodedata
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from ._quantity import (
@@ -37,6 +39,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .repo import RepoCashLeg, RepoCollateralLeg, RepoGovernance
 
 __all__ = [
+    "ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1",
+    "AssetTransferAvailability",
     "ContractCall",
     "TransactionConfig",
     "TransactionDraft",
@@ -50,6 +54,38 @@ MetadataLike = Optional[Mapping[str, Any]]
 FixedBytesLike = Union[str, bytes, bytearray, memoryview]
 VerifyingKeyLike = Union[str, Mapping[str, Any]]
 _U128_MAX = (1 << 128) - 1
+ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512
+
+
+class AssetTransferAvailability(str, Enum):
+    """Directional availability state for account-to-account asset transfers."""
+
+    ENABLED = "Enabled"
+    DISABLED = "Disabled"
+
+
+def _normalize_asset_transfer_availability(
+    value: Union[AssetTransferAvailability, str],
+    context: str,
+) -> str:
+    raw = value.value if isinstance(value, AssetTransferAvailability) else value
+    if raw not in {"Enabled", "Disabled"}:
+        raise ValueError(f"{context} must be AssetTransferAvailability.ENABLED or DISABLED")
+    return raw
+
+
+def _normalize_asset_transfer_availability_reason(value: Any) -> str:
+    reason = _require_exact_non_empty_string(value, "reason")
+    if any(unicodedata.category(character) == "Cc" for character in reason):
+        raise ValueError("reason must not contain control characters")
+    if (
+        len(reason.encode("utf-8"))
+        > ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1
+    ):
+        raise ValueError(
+            "reason exceeds the 512-byte asset-transfer availability limit"
+        )
+    return reason
 
 
 def _require_non_empty_string(value: Any, context: str) -> str:
@@ -802,28 +838,38 @@ class TransactionDraft:
         )
         return self
 
-    def set_asset_transfer_freeze(
+    def set_asset_transfer_availability(
         self,
         account_id: str,
         asset_definition_id: str,
-        outgoing_frozen: bool,
+        expected_revision: int,
+        incoming: Union[AssetTransferAvailability, str],
+        outgoing: Union[AssetTransferAvailability, str],
         *,
         reason: Optional[str] = None,
     ) -> TransactionDraft:
-        """Freeze or unfreeze outbound transfers for one account and asset."""
+        """Atomically update incoming and outgoing availability using revision CAS."""
 
-        if not isinstance(outgoing_frozen, bool):
-            raise TypeError("outgoing_frozen must be a bool")
+        if (
+            isinstance(expected_revision, bool)
+            or not isinstance(expected_revision, int)
+            or expected_revision < 0
+            or expected_revision > (1 << 64) - 1
+        ):
+            raise ValueError("expected_revision must be an unsigned 64-bit integer")
+        normalized_reason = (
+            _normalize_asset_transfer_availability_reason(reason)
+            if reason is not None
+            else None
+        )
         self.add_instruction(
-            Instruction.set_asset_transfer_freeze(
+            Instruction.set_asset_transfer_availability(
                 _require_exact_non_empty_string(account_id, "account_id"),
                 _require_exact_non_empty_string(asset_definition_id, "asset_definition_id"),
-                outgoing_frozen,
-                reason=(
-                    _require_exact_non_empty_string(reason, "reason")
-                    if reason is not None
-                    else None
-                ),
+                expected_revision,
+                _normalize_asset_transfer_availability(incoming, "incoming"),
+                _normalize_asset_transfer_availability(outgoing, "outgoing"),
+                reason=normalized_reason,
             )
         )
         return self
@@ -1114,34 +1160,10 @@ class TransactionDraft:
     def repo_unwind(
         self,
         agreement_id: str,
-        initiator: str,
-        counterparty: str,
-        cash_leg: "RepoCashLeg",
-        collateral_leg: "RepoCollateralLeg",
-        *,
-        settlement_timestamp_ms: int,
     ) -> TransactionDraft:
-        """Append a `ReverseRepoIsi` instruction to unwind a repo agreement."""
+        """Settle a repo using only its immutable on-chain maturity terms."""
 
-        cash_payload: Dict[str, Any] = {
-            "asset_definition_id": cash_leg.asset_definition_id,
-            "quantity": _normalize_quantity(cash_leg.quantity),
-        }
-        collateral_payload: Dict[str, Any] = {
-            "asset_definition_id": collateral_leg.asset_definition_id,
-            "quantity": _normalize_quantity(collateral_leg.quantity),
-        }
-        if collateral_leg.metadata:
-            collateral_payload["metadata"] = _normalize_metadata(collateral_leg.metadata)
-
-        instruction = Instruction.repo_unwind(
-            agreement_id,
-            initiator,
-            counterparty,
-            cash_payload,
-            collateral_payload,
-            int(settlement_timestamp_ms),
-        )
+        instruction = Instruction.repo_unwind(agreement_id)
         self.add_instruction(instruction)
         return self
 

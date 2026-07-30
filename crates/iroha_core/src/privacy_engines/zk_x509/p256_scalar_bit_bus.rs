@@ -20,6 +20,7 @@
 use thiserror::Error;
 
 use super::{
+    credential_pre_aux::ZkX509CredentialMainPostBaseChallengesV1,
     p256_air::{
         P256_ARITHMETIC_ROWS_PER_OPERATION_V1, ZkX509P256AirErrorV1, ZkX509P256ArithmeticTraceV1,
         ZkX509P256ModulusV1, p256_arithmetic_c_limb_bits_v1,
@@ -43,6 +44,10 @@ pub(crate) const P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1: usize = 3;
 pub(crate) const P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1: usize = 64;
 /// Scalars consumed by ECDSA verification: `u1` and `u2`.
 pub(crate) const P256_SCALAR_BIT_BUS_SCALARS_V1: usize = 2;
+/// Verifier-owned arithmetic operation supplying the `u1` scalar.
+pub(crate) const P256_SCALAR_BIT_BUS_U1_C_OPERATION_V1: u32 = 13;
+/// Verifier-owned arithmetic operation supplying the `u2` scalar.
+pub(crate) const P256_SCALAR_BIT_BUS_U2_C_OPERATION_V1: u32 = 14;
 /// Pointwise bit copies in the complete schedule.
 pub(crate) const P256_SCALAR_BIT_BUS_ACTIVE_BITS_V1: usize =
     P256_SCALAR_BIT_BUS_SCALARS_V1 * P256_SCALAR_BIT_BUS_WINDOWS_PER_SCALAR_V1 * 4;
@@ -214,6 +219,9 @@ pub(crate) enum P256ScalarBitBusErrorV1 {
     /// Arithmetic and window terminal products differ.
     #[error("zk-X509 P-256 scalar-bit terminal products differ")]
     Terminal,
+    /// A base or auxiliary operation was attempted in the wrong phase.
+    #[error("zk-X509 P-256 scalar-bit bus phase is invalid")]
+    Phase,
     /// Length or allocation arithmetic exceeded a fixed bound.
     #[error("zk-X509 P-256 scalar-bit bus resource bound is exceeded")]
     Resource,
@@ -292,6 +300,7 @@ pub(crate) fn p256_scalar_window_bit_to_c_position_v1(
 }
 
 /// Build all 512 fixed-position copies and the one canonical padding slot.
+#[cfg(test)]
 pub(crate) fn build_zk_x509_p256_scalar_bit_bus_trace_v1(
     sources: &[P256ScalarBitSourceV1],
     windows: &[P256WindowTraceV1],
@@ -488,8 +497,27 @@ pub(crate) fn evaluate_zk_x509_p256_scalar_bit_bus_terminal_constraints_v1(
 pub(crate) struct P256ScalarBitBusStarkTraceV1 {
     /// Six committed arithmetic/window bit-copy columns.
     pub(crate) base: Vec<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]>,
-    /// Twenty-four challenge-dependent product-state columns.
+    /// Thirty-two challenge-dependent product-state columns.
     pub(crate) aux: Vec<[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]>,
+}
+
+impl P256ScalarBitBusStarkTraceV1 {
+    fn zeroize_private_v1(&mut self) {
+        for row in &mut self.base {
+            row.fill(F::ZERO);
+        }
+        for row in &mut self.aux {
+            row.fill(F::ZERO);
+        }
+        self.base.clear();
+        self.aux.clear();
+    }
+}
+
+impl Drop for P256ScalarBitBusStarkTraceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
 }
 
 fn expected_stark_fixed_access_v1(
@@ -589,6 +617,7 @@ pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1(
 }
 
 /// Convert the typed bus rows to the sole padded aggregate layout.
+#[cfg(test)]
 pub(crate) fn build_p256_scalar_bit_bus_stark_trace_v1(
     trace: &P256ScalarBitBusTraceV1,
 ) -> Result<P256ScalarBitBusStarkTraceV1, P256ScalarBitBusErrorV1> {
@@ -638,6 +667,771 @@ pub(crate) fn build_p256_scalar_bit_bus_stark_trace_v1(
         [F::ZERO; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
     );
     Ok(P256ScalarBitBusStarkTraceV1 { base, aux })
+}
+
+/// Challenge-independent committed material for the scalar-bit copy bus.
+///
+/// Construction validates the arithmetic and window sources before retaining
+/// only the six committed base columns. Challenge-dependent products are not
+/// present in this type and cannot be obtained from it.
+pub(crate) struct P256ScalarBitBusBaseMaterialV1 {
+    rows: Vec<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1]>,
+}
+
+impl core::fmt::Debug for P256ScalarBitBusBaseMaterialV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("P256ScalarBitBusBaseMaterialV1")
+            .field("private_rows", &"<redacted>")
+            .finish()
+    }
+}
+
+impl P256ScalarBitBusBaseMaterialV1 {
+    /// Validate both committed sources and build the canonical padded base
+    /// domain without accepting any auxiliary challenge.
+    pub(crate) fn new_v1(
+        windows: &[P256WindowTraceV1],
+        arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        Self::from_sources_v1(
+            &[
+                P256ScalarBitSourceV1 {
+                    scalar: P256WindowScalarV1::U1,
+                    c_operation: P256_SCALAR_BIT_BUS_U1_C_OPERATION_V1,
+                },
+                P256ScalarBitSourceV1 {
+                    scalar: P256WindowScalarV1::U2,
+                    c_operation: P256_SCALAR_BIT_BUS_U2_C_OPERATION_V1,
+                },
+            ],
+            windows,
+            arithmetic_trace,
+        )
+    }
+
+    fn from_sources_v1(
+        sources: &[P256ScalarBitSourceV1],
+        windows: &[P256WindowTraceV1],
+        arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        let expected = expected_accesses_v1(sources, windows, arithmetic_trace)?;
+        if expected.len() != P256_SCALAR_BIT_BUS_FACTOR_SLOTS_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        let mut material = Self { rows: Vec::new() };
+        material
+            .rows
+            .try_reserve_exact(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
+            .map_err(|_| P256ScalarBitBusErrorV1::Resource)?;
+        for row_index in 0..P256_SCALAR_BIT_BUS_ROWS_V1 {
+            let mut row = [F::ZERO; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1];
+            for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+                let factor = row_index
+                    .checked_mul(P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1)
+                    .and_then(|first| first.checked_add(slot))
+                    .ok_or(P256ScalarBitBusErrorV1::Resource)?;
+                let access = expected
+                    .get(factor)
+                    .copied()
+                    .ok_or(P256ScalarBitBusErrorV1::Topology)?;
+                if access.fixed != expected_stark_fixed_access_v1(factor)? {
+                    return Err(P256ScalarBitBusErrorV1::Topology);
+                }
+                if access.arithmetic_bit != access.window_bit {
+                    return Err(P256ScalarBitBusErrorV1::Equality);
+                }
+                row[STARK_ARITHMETIC_BITS + slot] = access.arithmetic_bit;
+                row[STARK_WINDOW_BITS + slot] = access.window_bit;
+            }
+            material.rows.push(row);
+        }
+        material.rows.resize(
+            P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1,
+            [F::ZERO; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+        );
+        material.validate_integrity_v1()?;
+        Ok(material)
+    }
+
+    #[cfg(test)]
+    fn from_sources_for_test_v1(
+        sources: &[P256ScalarBitSourceV1],
+        windows: &[P256WindowTraceV1],
+        arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        Self::from_sources_v1(sources, windows, arithmetic_trace)
+    }
+
+    fn validate_integrity_v1(&self) -> Result<(), P256ScalarBitBusErrorV1> {
+        if self.rows.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        for (row_index, row) in self.rows.iter().enumerate() {
+            validate_scalar_bit_bus_base_row_v1(row_index, row)?;
+        }
+        Ok(())
+    }
+
+    fn base_row_v1(
+        &self,
+        row: usize,
+    ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1], P256ScalarBitBusErrorV1> {
+        let value = self
+            .rows
+            .get(row)
+            .copied()
+            .ok_or(P256ScalarBitBusErrorV1::Topology)?;
+        validate_scalar_bit_bus_base_row_v1(row, &value)?;
+        Ok(value)
+    }
+
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        for row in &mut self.rows {
+            row.fill(F::ZERO);
+        }
+        self.rows.clear();
+    }
+
+    #[cfg(test)]
+    fn row_mut_for_test_v1(
+        &mut self,
+        row: usize,
+    ) -> Result<&mut [F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1], P256ScalarBitBusErrorV1> {
+        self.rows
+            .get_mut(row)
+            .ok_or(P256ScalarBitBusErrorV1::Topology)
+    }
+
+    #[cfg(test)]
+    fn private_is_zeroized_v1(&self) -> bool {
+        self.rows.is_empty()
+    }
+}
+
+impl Drop for P256ScalarBitBusBaseMaterialV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
+fn validate_scalar_bit_bus_base_row_v1(
+    row_index: usize,
+    row: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+) -> Result<(), P256ScalarBitBusErrorV1> {
+    if row_index >= P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    if row.iter().any(|value| F::canonical(value.0).is_none()) {
+        return Err(P256ScalarBitBusErrorV1::Range);
+    }
+    if row_index >= P256_SCALAR_BIT_BUS_ROWS_V1 {
+        return if row.iter().all(|value| *value == F::ZERO) {
+            Ok(())
+        } else {
+            Err(P256ScalarBitBusErrorV1::Range)
+        };
+    }
+    let fixed =
+        p256_scalar_bit_bus_stark_fixed_row_v1(row_index, P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)?;
+    for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+        let arithmetic = row[STARK_ARITHMETIC_BITS + slot];
+        let window = row[STARK_WINDOW_BITS + slot];
+        if ![F::ZERO, F::ONE].contains(&arithmetic) || ![F::ZERO, F::ONE].contains(&window) {
+            return Err(P256ScalarBitBusErrorV1::Range);
+        }
+        let active = fixed[slot * STARK_FIXED_SLOT_WIDTH + STARK_FIXED_SLOT_ACTIVE];
+        if active == F::ZERO {
+            if arithmetic != F::ZERO || window != F::ZERO {
+                return Err(P256ScalarBitBusErrorV1::Range);
+            }
+        } else if active != F::ONE {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        } else if arithmetic != window {
+            return Err(P256ScalarBitBusErrorV1::Equality);
+        }
+    }
+    Ok(())
+}
+
+struct P256ScalarBitBusColumnFillGuardV1<'a> {
+    output: &'a mut [F],
+    committed: bool,
+}
+
+impl<'a> P256ScalarBitBusColumnFillGuardV1<'a> {
+    fn new_v1(output: &'a mut [F]) -> Self {
+        Self {
+            output,
+            committed: false,
+        }
+    }
+
+    fn output_v1(&mut self) -> &mut [F] {
+        self.output
+    }
+
+    fn commit_v1(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for P256ScalarBitBusColumnFillGuardV1<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.output.fill(F::ZERO);
+        }
+    }
+}
+
+/// Challenge-independent committed base-row replay.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct P256ScalarBitBusStarkBaseRowProviderV1<'a> {
+    material: &'a P256ScalarBitBusBaseMaterialV1,
+}
+
+impl<'a> P256ScalarBitBusStarkBaseRowProviderV1<'a> {
+    fn new_v1(
+        material: &'a P256ScalarBitBusBaseMaterialV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        if material.rows.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        Ok(Self { material })
+    }
+
+    /// One exact committed base row.
+    pub(crate) fn base_row_v1(
+        self,
+        row: usize,
+    ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1], P256ScalarBitBusErrorV1> {
+        self.material.base_row_v1(row)
+    }
+
+    /// One exact committed base cell.
+    pub(crate) fn base_cell_v1(
+        self,
+        row: usize,
+        column: usize,
+    ) -> Result<F, P256ScalarBitBusErrorV1> {
+        if column >= P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        Ok(self.base_row_v1(row)?[column])
+    }
+
+    /// Replay one full committed base column transactionally.
+    pub(crate) fn fill_base_column_v1(
+        self,
+        column: usize,
+        output: &mut [F],
+    ) -> Result<(), P256ScalarBitBusErrorV1> {
+        if column >= P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1
+            || output.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+        {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        let mut guard = P256ScalarBitBusColumnFillGuardV1::new_v1(output);
+        for (row, value) in guard.output_v1().iter_mut().enumerate() {
+            *value = self.base_cell_v1(row, column)?;
+        }
+        guard.commit_v1();
+        Ok(())
+    }
+}
+
+/// Verifier-owned fixed-row replay for the sole scalar-bit bus identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct P256ScalarBitBusStarkFixedProviderV1 {
+    trace_size: usize,
+}
+
+impl P256ScalarBitBusStarkFixedProviderV1 {
+    /// Select the canonical native domain. No witness topology is accepted.
+    pub(crate) fn new_v1(trace_size: usize) -> Result<Self, P256ScalarBitBusErrorV1> {
+        if trace_size != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        Ok(Self { trace_size })
+    }
+
+    /// One verifier-regenerated fixed row.
+    pub(crate) fn fixed_row_v1(
+        self,
+        row: usize,
+    ) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1], P256ScalarBitBusErrorV1> {
+        p256_scalar_bit_bus_stark_fixed_row_v1(row, self.trace_size)
+    }
+
+    /// One verifier-regenerated fixed cell.
+    pub(crate) fn fixed_cell_v1(
+        self,
+        row: usize,
+        column: usize,
+    ) -> Result<F, P256ScalarBitBusErrorV1> {
+        if column >= P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1 {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        Ok(self.fixed_row_v1(row)?[column])
+    }
+
+    /// Replay one full verifier-owned fixed column transactionally.
+    pub(crate) fn fill_fixed_column_v1(
+        self,
+        column: usize,
+        output: &mut [F],
+    ) -> Result<(), P256ScalarBitBusErrorV1> {
+        if column >= P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1 || output.len() != self.trace_size {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        let mut guard = P256ScalarBitBusColumnFillGuardV1::new_v1(output);
+        for (row, value) in guard.output_v1().iter_mut().enumerate() {
+            *value = self.fixed_cell_v1(row, column)?;
+        }
+        guard.commit_v1();
+        Ok(())
+    }
+}
+
+/// Pre-X5B1 scalar-bit bus capability.
+///
+/// Binding is poison-on-attempt: the sole transition is consumed before any
+/// fallible validation or product computation.
+pub(crate) struct P256ScalarBitBusBaseSourceV1 {
+    material: Option<P256ScalarBitBusBaseMaterialV1>,
+    bind_attempted: bool,
+}
+
+impl core::fmt::Debug for P256ScalarBitBusBaseSourceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("P256ScalarBitBusBaseSourceV1")
+            .field("bind_attempted", &self.bind_attempted)
+            .field("private_material", &"<redacted>")
+            .finish()
+    }
+}
+
+impl P256ScalarBitBusBaseSourceV1 {
+    /// Validate source bindings and enter the challenge-independent phase.
+    pub(crate) fn new_v1(
+        windows: &[P256WindowTraceV1],
+        arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        Self::from_base_material_v1(P256ScalarBitBusBaseMaterialV1::new_v1(
+            windows,
+            arithmetic_trace,
+        )?)
+    }
+
+    #[cfg(test)]
+    fn from_sources_for_test_v1(
+        sources: &[P256ScalarBitSourceV1],
+        windows: &[P256WindowTraceV1],
+        arithmetic_trace: &ZkX509P256ArithmeticTraceV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        Self::from_base_material_v1(P256ScalarBitBusBaseMaterialV1::from_sources_for_test_v1(
+            sources,
+            windows,
+            arithmetic_trace,
+        )?)
+    }
+
+    /// Enter the base phase from already validated, challenge-independent
+    /// material.
+    pub(crate) fn from_base_material_v1(
+        material: P256ScalarBitBusBaseMaterialV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        material.validate_integrity_v1()?;
+        Ok(Self {
+            material: Some(material),
+            bind_attempted: false,
+        })
+    }
+
+    fn ensure_base_phase_v1(&self) -> Result<(), P256ScalarBitBusErrorV1> {
+        if self.bind_attempted || self.material.is_none() {
+            Err(P256ScalarBitBusErrorV1::Phase)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn material_v1(&self) -> Result<&P256ScalarBitBusBaseMaterialV1, P256ScalarBitBusErrorV1> {
+        self.ensure_base_phase_v1()?;
+        self.material.as_ref().ok_or(P256ScalarBitBusErrorV1::Phase)
+    }
+
+    /// Committed base-row replay before X5B1.
+    pub(crate) fn base_rows_v1(
+        &self,
+    ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
+        P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
+    }
+
+    /// Verifier-owned fixed-row replay before X5B1.
+    pub(crate) fn fixed_rows_v1(
+        &self,
+    ) -> Result<P256ScalarBitBusStarkFixedProviderV1, P256ScalarBitBusErrorV1> {
+        self.ensure_base_phase_v1()?;
+        P256ScalarBitBusStarkFixedProviderV1::new_v1(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
+    }
+
+    /// Consume the sole phase transition using the opaque MAIN X5B1 token.
+    pub(crate) fn bind_v1(
+        &mut self,
+        post_base: ZkX509CredentialMainPostBaseChallengesV1,
+    ) -> Result<P256ScalarBitBusBoundSourceV1, P256ScalarBitBusErrorV1> {
+        self.ensure_base_phase_v1()?;
+        self.bind_attempted = true;
+        let material = self
+            .material
+            .as_ref()
+            .ok_or(P256ScalarBitBusErrorV1::Phase)?;
+        material.validate_integrity_v1()?;
+        let challenges = post_base.p256_scalar();
+        challenges.validate_v1()?;
+        let terminals = compute_scalar_bit_bus_terminals_v1(material, challenges)?;
+        if terminals[0] != terminals[1] {
+            return Err(P256ScalarBitBusErrorV1::Terminal);
+        }
+        Ok(P256ScalarBitBusBoundSourceV1 {
+            material: self.material.take(),
+            post_base: Some(post_base),
+            terminals,
+        })
+    }
+
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        if let Some(material) = self.material.as_mut() {
+            material.zeroize_private_v1();
+        }
+        self.material = None;
+        self.bind_attempted = true;
+    }
+
+    #[cfg(test)]
+    fn material_mut_for_test_v1(
+        &mut self,
+    ) -> Result<&mut P256ScalarBitBusBaseMaterialV1, P256ScalarBitBusErrorV1> {
+        self.ensure_base_phase_v1()?;
+        self.material.as_mut().ok_or(P256ScalarBitBusErrorV1::Phase)
+    }
+
+    #[cfg(test)]
+    const fn bind_attempted_for_test_v1(&self) -> bool {
+        self.bind_attempted
+    }
+
+    #[cfg(test)]
+    fn private_is_zeroized_v1(&self) -> bool {
+        self.material.is_none()
+    }
+}
+
+impl Drop for P256ScalarBitBusBaseSourceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
+/// Post-X5B1 scalar-bit bus capability.
+///
+/// Only this type can mint challenge-dependent product replay and expose the
+/// two terminal families.
+pub(crate) struct P256ScalarBitBusBoundSourceV1 {
+    material: Option<P256ScalarBitBusBaseMaterialV1>,
+    post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
+    terminals: [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2],
+}
+
+impl core::fmt::Debug for P256ScalarBitBusBoundSourceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("P256ScalarBitBusBoundSourceV1")
+            .field("private_material", &"<redacted>")
+            .finish()
+    }
+}
+
+impl P256ScalarBitBusBoundSourceV1 {
+    fn material_v1(&self) -> Result<&P256ScalarBitBusBaseMaterialV1, P256ScalarBitBusErrorV1> {
+        self.material.as_ref().ok_or(P256ScalarBitBusErrorV1::Phase)
+    }
+
+    /// Opaque post-base capability retained for sibling P-256 providers.
+    pub(crate) fn post_base_v1(
+        &self,
+    ) -> Result<ZkX509CredentialMainPostBaseChallengesV1, P256ScalarBitBusErrorV1> {
+        self.post_base.ok_or(P256ScalarBitBusErrorV1::Phase)
+    }
+
+    /// Committed base-row replay retained across the phase transition.
+    pub(crate) fn base_rows_v1(
+        &self,
+    ) -> Result<P256ScalarBitBusStarkBaseRowProviderV1<'_>, P256ScalarBitBusErrorV1> {
+        P256ScalarBitBusStarkBaseRowProviderV1::new_v1(self.material_v1()?)
+    }
+
+    /// Verifier-owned fixed-row replay retained across the phase transition.
+    pub(crate) fn fixed_rows_v1(
+        &self,
+    ) -> Result<P256ScalarBitBusStarkFixedProviderV1, P256ScalarBitBusErrorV1> {
+        self.material_v1()?;
+        P256ScalarBitBusStarkFixedProviderV1::new_v1(P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)
+    }
+
+    /// Mint deterministic auxiliary replay under the bound X5B1 challenges.
+    pub(crate) fn aux_source_v1(
+        &self,
+    ) -> Result<P256ScalarBitBusStarkAuxSourceV1<'_>, P256ScalarBitBusErrorV1> {
+        let source = P256ScalarBitBusStarkAuxSourceV1::new_v1(
+            self.material_v1()?,
+            self.post_base_v1()?.p256_scalar(),
+        )?;
+        if source.terminals_v1() != self.terminals {
+            return Err(P256ScalarBitBusErrorV1::Terminal);
+        }
+        Ok(source)
+    }
+
+    /// Arithmetic and window product terminals under X5B1.
+    pub(crate) const fn terminals_v1(&self) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
+        self.terminals
+    }
+
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        self.post_base = None;
+        for terminal in &mut self.terminals {
+            terminal.fill(F::ZERO);
+        }
+        if let Some(material) = self.material.as_mut() {
+            material.zeroize_private_v1();
+        }
+        self.material = None;
+    }
+
+    #[cfg(test)]
+    fn private_is_zeroized_v1(&self) -> bool {
+        self.post_base.is_none()
+            && self.material.is_none()
+            && self
+                .terminals
+                .iter()
+                .flatten()
+                .all(|value| *value == F::ZERO)
+    }
+}
+
+impl Drop for P256ScalarBitBusBoundSourceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
+/// Challenge-bound constant-memory auxiliary replay.
+pub(crate) struct P256ScalarBitBusStarkAuxSourceV1<'a> {
+    material: &'a P256ScalarBitBusBaseMaterialV1,
+    challenges: P256ScalarBitBusChallengesV1,
+    terminals: [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2],
+    arithmetic_running: [F; P256_SCALAR_BIT_BUS_LANES_V1],
+    window_running: [F; P256_SCALAR_BIT_BUS_LANES_V1],
+    next_row: usize,
+}
+
+impl core::fmt::Debug for P256ScalarBitBusStarkAuxSourceV1<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("P256ScalarBitBusStarkAuxSourceV1")
+            .field("next_row", &self.next_row)
+            .field("private_state", &"<redacted>")
+            .finish()
+    }
+}
+
+impl<'a> P256ScalarBitBusStarkAuxSourceV1<'a> {
+    fn new_v1(
+        material: &'a P256ScalarBitBusBaseMaterialV1,
+        challenges: P256ScalarBitBusChallengesV1,
+    ) -> Result<Self, P256ScalarBitBusErrorV1> {
+        challenges.validate_v1()?;
+        material.validate_integrity_v1()?;
+        let terminals = compute_scalar_bit_bus_terminals_v1(material, challenges)?;
+        if terminals[0] != terminals[1] {
+            return Err(P256ScalarBitBusErrorV1::Terminal);
+        }
+        Ok(Self {
+            material,
+            challenges,
+            terminals,
+            arithmetic_running: [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1],
+            window_running: [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1],
+            next_row: 0,
+        })
+    }
+
+    /// Emit the next exact challenge-dependent row, including canonical zero
+    /// domain padding after the final logical row.
+    pub(crate) fn next_aux_row_v1(
+        &mut self,
+    ) -> Result<Option<[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]>, P256ScalarBitBusErrorV1> {
+        if self.next_row == P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 {
+            return Ok(None);
+        }
+        if self.next_row >= P256_SCALAR_BIT_BUS_ROWS_V1 {
+            self.next_row += 1;
+            return Ok(Some([F::ZERO; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1]));
+        }
+        let mut arithmetic_running = self.arithmetic_running;
+        let mut window_running = self.window_running;
+        let row = scalar_bit_bus_aux_row_v1(
+            self.material,
+            self.next_row,
+            self.challenges,
+            &mut arithmetic_running,
+            &mut window_running,
+        )?;
+        self.arithmetic_running = arithmetic_running;
+        self.window_running = window_running;
+        self.next_row += 1;
+        if self.next_row == P256_SCALAR_BIT_BUS_ROWS_V1
+            && [self.arithmetic_running, self.window_running] != self.terminals
+        {
+            return Err(P256ScalarBitBusErrorV1::Constraint);
+        }
+        Ok(Some(row))
+    }
+
+    /// Restart deterministic auxiliary replay.
+    pub(crate) fn replay_v1(&self) -> Self {
+        Self {
+            material: self.material,
+            challenges: self.challenges,
+            terminals: self.terminals,
+            arithmetic_running: [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1],
+            window_running: [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1],
+            next_row: 0,
+        }
+    }
+
+    /// Replay one complete auxiliary column transactionally.
+    pub(crate) fn fill_aux_column_v1(
+        &self,
+        column: usize,
+        output: &mut [F],
+    ) -> Result<(), P256ScalarBitBusErrorV1> {
+        if column >= P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1
+            || output.len() != P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+        {
+            return Err(P256ScalarBitBusErrorV1::Topology);
+        }
+        let mut replay = self.replay_v1();
+        let mut guard = P256ScalarBitBusColumnFillGuardV1::new_v1(output);
+        for value in guard.output_v1() {
+            let row = replay
+                .next_aux_row_v1()?
+                .ok_or(P256ScalarBitBusErrorV1::Topology)?;
+            *value = row[column];
+        }
+        guard.commit_v1();
+        Ok(())
+    }
+
+    /// Bound arithmetic and window product terminals.
+    pub(crate) const fn terminals_v1(&self) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
+        self.terminals
+    }
+
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        for lane in &mut self.challenges.lanes {
+            lane.terms.fill(F::ZERO);
+        }
+        for terminal in &mut self.terminals {
+            terminal.fill(F::ZERO);
+        }
+        self.arithmetic_running.fill(F::ZERO);
+        self.window_running.fill(F::ZERO);
+        self.next_row = P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1;
+    }
+
+    #[cfg(test)]
+    fn private_is_zeroized_v1(&self) -> bool {
+        self.challenges
+            .lanes
+            .iter()
+            .flat_map(|lane| lane.terms)
+            .chain(self.terminals.iter().flatten().copied())
+            .chain(self.arithmetic_running)
+            .chain(self.window_running)
+            .all(|value| value == F::ZERO)
+            && self.next_row == P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1
+    }
+}
+
+impl Drop for P256ScalarBitBusStarkAuxSourceV1<'_> {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
+}
+
+fn scalar_bit_bus_aux_row_v1(
+    material: &P256ScalarBitBusBaseMaterialV1,
+    row_index: usize,
+    challenges: P256ScalarBitBusChallengesV1,
+    arithmetic_running: &mut [F; P256_SCALAR_BIT_BUS_LANES_V1],
+    window_running: &mut [F; P256_SCALAR_BIT_BUS_LANES_V1],
+) -> Result<[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1], P256ScalarBitBusErrorV1> {
+    if row_index >= P256_SCALAR_BIT_BUS_ROWS_V1 {
+        return Err(P256ScalarBitBusErrorV1::Topology);
+    }
+    let base = material.base_row_v1(row_index)?;
+    let fixed =
+        p256_scalar_bit_bus_stark_fixed_row_v1(row_index, P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1)?;
+    let mut aux = [F::ZERO; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1];
+    aux[STARK_ARITHMETIC_PRODUCTS..STARK_ARITHMETIC_PRODUCTS + P256_SCALAR_BIT_BUS_LANES_V1]
+        .copy_from_slice(arithmetic_running);
+    aux[STARK_WINDOW_PRODUCTS..STARK_WINDOW_PRODUCTS + P256_SCALAR_BIT_BUS_LANES_V1]
+        .copy_from_slice(window_running);
+    for slot in 0..P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1 {
+        let fixed_start = slot * STARK_FIXED_SLOT_WIDTH;
+        let fixed_slot = &fixed[fixed_start..fixed_start + STARK_FIXED_SLOT_WIDTH];
+        for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
+            let arithmetic_before = arithmetic_running[lane];
+            let window_before = window_running[lane];
+            arithmetic_running[lane] = arithmetic_before.mul(stark_scalar_bit_factor_v1(
+                fixed_slot,
+                base[STARK_ARITHMETIC_BITS + slot],
+                challenges.lanes[lane],
+            )?);
+            window_running[lane] = window_before.mul(stark_scalar_bit_factor_v1(
+                fixed_slot,
+                base[STARK_WINDOW_BITS + slot],
+                challenges.lanes[lane],
+            )?);
+        }
+        let state = slot + 1;
+        let arithmetic_offset = STARK_ARITHMETIC_PRODUCTS + state * P256_SCALAR_BIT_BUS_LANES_V1;
+        let window_offset = STARK_WINDOW_PRODUCTS + state * P256_SCALAR_BIT_BUS_LANES_V1;
+        aux[arithmetic_offset..arithmetic_offset + P256_SCALAR_BIT_BUS_LANES_V1]
+            .copy_from_slice(arithmetic_running);
+        aux[window_offset..window_offset + P256_SCALAR_BIT_BUS_LANES_V1]
+            .copy_from_slice(window_running);
+    }
+    Ok(aux)
+}
+
+fn compute_scalar_bit_bus_terminals_v1(
+    material: &P256ScalarBitBusBaseMaterialV1,
+    challenges: P256ScalarBitBusChallengesV1,
+) -> Result<[[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2], P256ScalarBitBusErrorV1> {
+    challenges.validate_v1()?;
+    material.validate_integrity_v1()?;
+    let mut arithmetic = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+    let mut window = [F::ONE; P256_SCALAR_BIT_BUS_LANES_V1];
+    for row in 0..P256_SCALAR_BIT_BUS_ROWS_V1 {
+        scalar_bit_bus_aux_row_v1(material, row, challenges, &mut arithmetic, &mut window)?;
+    }
+    Ok([arithmetic, window])
 }
 
 fn stark_scalar_bit_factor_v1(
@@ -976,6 +1770,10 @@ mod tests {
 
     use super::*;
     use crate::privacy_engines::zk_x509::{
+        credential_pre_aux::{
+            ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, ZkX509CredentialMainPreAuxV1,
+            derive_zk_x509_credential_pre_aux_binding_v1,
+        },
         p256_air::{
             ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1,
             build_zk_x509_p256_arithmetic_trace_v1,
@@ -1096,6 +1894,34 @@ mod tests {
         }
     }
 
+    fn post_base_v1(seed: u8) -> ZkX509CredentialMainPostBaseChallengesV1 {
+        let main = ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
+            [seed; 32],
+            [seed.wrapping_add(1); 32],
+            core::array::from_fn::<_, ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, _>(|index| {
+                [seed.wrapping_add(index as u8).wrapping_add(2); 32]
+            }),
+        );
+        derive_zk_x509_credential_pre_aux_binding_v1(
+            main,
+            [seed.wrapping_add(0x20); 32],
+            [seed.wrapping_add(0x40); 32],
+            [seed.wrapping_add(0x60); 32],
+        )
+        .expect("opaque X5B1 binding")
+        .main_post_base()
+    }
+
+    fn base_source_v1() -> P256ScalarBitBusBaseSourceV1 {
+        let fixture = fixture_v1();
+        P256ScalarBitBusBaseSourceV1::from_sources_for_test_v1(
+            &fixture.sources,
+            &fixture.windows,
+            &fixture.arithmetic,
+        )
+        .expect("challenge-independent scalar-bit bus")
+    }
+
     fn slot_v1(trace: &P256ScalarBitBusTraceV1, ordinal: usize) -> (&P256ScalarBitBusRowV1, usize) {
         (
             &trace.rows[ordinal / P256_SCALAR_BIT_BUS_FACTORS_PER_ROW_V1],
@@ -1188,6 +2014,331 @@ mod tests {
                 Err(_) => true,
             }
         })
+    }
+
+    #[test]
+    fn phased_source_matches_legacy_base_aux_fixed_and_terminals() {
+        let fixture = fixture_v1();
+        let post_base = post_base_v1(0x21);
+        let legacy_trace = build_zk_x509_p256_scalar_bit_bus_trace_v1(
+            &fixture.sources,
+            &fixture.windows,
+            &fixture.arithmetic,
+            post_base.p256_scalar(),
+        )
+        .expect("legacy differential trace");
+        let legacy =
+            build_p256_scalar_bit_bus_stark_trace_v1(&legacy_trace).expect("legacy STARK rows");
+        let mut source = base_source_v1();
+
+        {
+            let base = source.base_rows_v1().expect("pre-X5B1 base rows");
+            for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
+                let mut output = vec![F(99); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+                base.fill_base_column_v1(column, &mut output)
+                    .expect("complete base column");
+                assert_eq!(
+                    output,
+                    legacy
+                        .base
+                        .iter()
+                        .map(|row| row[column])
+                        .collect::<Vec<_>>(),
+                    "base column {column}",
+                );
+            }
+        }
+        {
+            let fixed = source.fixed_rows_v1().expect("pre-X5B1 fixed rows");
+            let legacy_fixed =
+                compile_p256_scalar_bit_bus_stark_fixed_rows_v1().expect("fixed schedule");
+            for column in 0..P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1 {
+                let mut output = vec![F(99); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+                fixed
+                    .fill_fixed_column_v1(column, &mut output)
+                    .expect("complete fixed column");
+                assert_eq!(
+                    output,
+                    legacy_fixed
+                        .iter()
+                        .map(|row| row[column])
+                        .collect::<Vec<_>>(),
+                    "fixed column {column}",
+                );
+            }
+        }
+
+        let bound = source.bind_v1(post_base).expect("one-shot X5B1 bind");
+        let aux = bound.aux_source_v1().expect("post-X5B1 auxiliary replay");
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1 {
+            let mut output = vec![F(99); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            aux.fill_aux_column_v1(column, &mut output)
+                .expect("complete auxiliary column");
+            assert_eq!(
+                output,
+                legacy.aux.iter().map(|row| row[column]).collect::<Vec<_>>(),
+                "auxiliary column {column}",
+            );
+        }
+        assert_eq!(
+            bound.terminals_v1(),
+            p256_scalar_bit_bus_opened_terminals_v1(&legacy.aux[P256_SCALAR_BIT_BUS_ROWS_V1 - 1],),
+        );
+    }
+
+    #[test]
+    fn two_opaque_tokens_leave_base_and_fixed_invariant_but_change_aux() {
+        let first_token = post_base_v1(0x31);
+        let second_token = post_base_v1(0x71);
+        assert_ne!(
+            first_token.p256_scalar(),
+            second_token.p256_scalar(),
+            "test tokens must bind distinct scalar-bit challenges",
+        );
+        let mut first = base_source_v1();
+        let mut second = base_source_v1();
+
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
+            let mut first_column = vec![F(17); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            let mut second_column = vec![F(29); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            first
+                .base_rows_v1()
+                .expect("first base rows")
+                .fill_base_column_v1(column, &mut first_column)
+                .expect("first base column");
+            second
+                .base_rows_v1()
+                .expect("second base rows")
+                .fill_base_column_v1(column, &mut second_column)
+                .expect("second base column");
+            assert_eq!(first_column, second_column, "base column {column}");
+        }
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1 {
+            let mut first_column = vec![F(17); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            let mut second_column = vec![F(29); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            first
+                .fixed_rows_v1()
+                .expect("first fixed rows")
+                .fill_fixed_column_v1(column, &mut first_column)
+                .expect("first fixed column");
+            second
+                .fixed_rows_v1()
+                .expect("second fixed rows")
+                .fill_fixed_column_v1(column, &mut second_column)
+                .expect("second fixed column");
+            assert_eq!(first_column, second_column, "fixed column {column}");
+        }
+
+        let first = first.bind_v1(first_token).expect("first opaque bind");
+        let second = second.bind_v1(second_token).expect("second opaque bind");
+        let mut changed = false;
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1 {
+            let mut first_column = vec![F::ZERO; P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            let mut second_column = vec![F::ZERO; P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            first
+                .aux_source_v1()
+                .expect("first auxiliary source")
+                .fill_aux_column_v1(column, &mut first_column)
+                .expect("first auxiliary column");
+            second
+                .aux_source_v1()
+                .expect("second auxiliary source")
+                .fill_aux_column_v1(column, &mut second_column)
+                .expect("second auxiliary column");
+            changed |= first_column != second_column;
+        }
+        assert!(changed, "X5B1 challenges must affect auxiliary products");
+
+        for column in 0..P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1 {
+            let mut first_column = vec![F(17); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            let mut second_column = vec![F(29); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+            first
+                .base_rows_v1()
+                .expect("bound first base rows")
+                .fill_base_column_v1(column, &mut first_column)
+                .expect("bound first base column");
+            second
+                .base_rows_v1()
+                .expect("bound second base rows")
+                .fill_base_column_v1(column, &mut second_column)
+                .expect("bound second base column");
+            assert_eq!(first_column, second_column, "bound base column {column}");
+        }
+    }
+
+    #[test]
+    fn phased_source_rejects_bad_identity_width_and_length_without_mutation() {
+        let fixture = fixture_v1();
+        assert!(matches!(
+            P256ScalarBitBusBaseSourceV1::new_v1(&fixture.windows, &fixture.arithmetic),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        ));
+        let mut swapped = fixture.sources;
+        swapped.swap(0, 1);
+        assert!(matches!(
+            P256ScalarBitBusBaseSourceV1::from_sources_for_test_v1(
+                &swapped,
+                &fixture.windows,
+                &fixture.arithmetic,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        ));
+        let zero = ZkX509P256ArithmeticOperationV1 {
+            kind: ZkX509P256ArithmeticKindV1::Add,
+            modulus: ZkX509P256ModulusV1::ScalarField,
+            a: [0; 32],
+            b: [0; 32],
+            c: [0; 32],
+        };
+        let mut canonical_operations =
+            vec![
+                zero;
+                usize::try_from(P256_SCALAR_BIT_BUS_U2_C_OPERATION_V1 + 1)
+                    .expect("operation count")
+            ];
+        canonical_operations
+            [usize::try_from(P256_SCALAR_BIT_BUS_U1_C_OPERATION_V1).expect("u1 operation")] =
+            fixture.operations[0];
+        canonical_operations
+            [usize::try_from(P256_SCALAR_BIT_BUS_U2_C_OPERATION_V1).expect("u2 operation")] =
+            fixture.operations[1];
+        let canonical_arithmetic = build_zk_x509_p256_arithmetic_trace_v1(&canonical_operations)
+            .expect("canonical scalar operation positions");
+        P256ScalarBitBusBaseSourceV1::new_v1(&fixture.windows, &canonical_arithmetic)
+            .expect("verifier-owned u1/u2 identities");
+
+        let mut source = base_source_v1();
+        let base = source.base_rows_v1().expect("base rows");
+        let mut bad_width = vec![F(77); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+        let before = bad_width.clone();
+        assert_eq!(
+            base.fill_base_column_v1(P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1, &mut bad_width),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        );
+        assert_eq!(bad_width, before);
+        let mut bad_length = vec![F(78); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 - 1];
+        let before = bad_length.clone();
+        assert_eq!(
+            base.fill_base_column_v1(0, &mut bad_length),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        );
+        assert_eq!(bad_length, before);
+
+        assert_eq!(
+            P256ScalarBitBusStarkFixedProviderV1::new_v1(
+                P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 / 2,
+            ),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        );
+        let fixed = source.fixed_rows_v1().expect("fixed rows");
+        let mut bad_width = vec![F(79); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+        let before = bad_width.clone();
+        assert_eq!(
+            fixed.fill_fixed_column_v1(P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1, &mut bad_width),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        );
+        assert_eq!(bad_width, before);
+
+        let bound = source.bind_v1(post_base_v1(0x42)).expect("opaque bind");
+        let aux = bound.aux_source_v1().expect("auxiliary source");
+        let mut bad_width = vec![F(80); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+        let before = bad_width.clone();
+        assert_eq!(
+            aux.fill_aux_column_v1(P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1, &mut bad_width),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        );
+        assert_eq!(bad_width, before);
+        let mut bad_length = vec![F(81); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1 + 1];
+        let before = bad_length.clone();
+        assert_eq!(
+            aux.fill_aux_column_v1(0, &mut bad_length),
+            Err(P256ScalarBitBusErrorV1::Topology),
+        );
+        assert_eq!(bad_length, before);
+    }
+
+    #[test]
+    fn bind_is_one_shot_and_failed_attempt_is_permanently_poisoned() {
+        let first_token = post_base_v1(0x51);
+        let second_token = post_base_v1(0x52);
+        let mut malformed = base_source_v1();
+        let row = malformed
+            .material_mut_for_test_v1()
+            .expect("test material")
+            .row_mut_for_test_v1(93)
+            .expect("active row");
+        row[STARK_ARITHMETIC_BITS] = F::ONE.sub(row[STARK_ARITHMETIC_BITS]);
+        assert!(matches!(
+            malformed.bind_v1(first_token),
+            Err(P256ScalarBitBusErrorV1::Equality),
+        ));
+        assert!(malformed.bind_attempted_for_test_v1());
+        assert!(matches!(
+            malformed.bind_v1(second_token),
+            Err(P256ScalarBitBusErrorV1::Phase),
+        ));
+
+        let mut valid = base_source_v1();
+        let bound = valid.bind_v1(first_token).expect("first bind succeeds");
+        assert!(matches!(
+            valid.bind_v1(second_token),
+            Err(P256ScalarBitBusErrorV1::Phase),
+        ));
+        assert!(bound.aux_source_v1().is_ok());
+    }
+
+    #[test]
+    fn mid_column_failure_zeroizes_the_entire_destination() {
+        let mut source = base_source_v1();
+        source
+            .material_mut_for_test_v1()
+            .expect("test material")
+            .row_mut_for_test_v1(113)
+            .expect("active row")[STARK_ARITHMETIC_BITS] = F(u64::MAX);
+        let provider = source.base_rows_v1().expect("shape-valid row provider");
+        let mut output = vec![F(0xdead); P256_SCALAR_BIT_BUS_STARK_TRACE_SIZE_V1];
+        assert_eq!(
+            provider.fill_base_column_v1(STARK_ARITHMETIC_BITS, &mut output),
+            Err(P256ScalarBitBusErrorV1::Range),
+        );
+        assert!(output.iter().all(|value| *value == F::ZERO));
+    }
+
+    #[test]
+    fn phased_private_state_zeroizes_recursively() {
+        let fixture = fixture_v1();
+        let mut material = P256ScalarBitBusBaseMaterialV1::from_sources_for_test_v1(
+            &fixture.sources,
+            &fixture.windows,
+            &fixture.arithmetic,
+        )
+        .expect("base material");
+        material.zeroize_private_v1();
+        assert!(material.private_is_zeroized_v1());
+
+        let mut source = base_source_v1();
+        source.zeroize_private_v1();
+        assert!(source.private_is_zeroized_v1());
+
+        let mut source = base_source_v1();
+        let mut bound = source
+            .bind_v1(post_base_v1(0x61))
+            .expect("bound scalar-bit source");
+        let mut aux = bound.aux_source_v1().expect("auxiliary source");
+        aux.next_aux_row_v1()
+            .expect("first auxiliary row")
+            .expect("row exists");
+        aux.zeroize_private_v1();
+        assert!(aux.private_is_zeroized_v1());
+        drop(aux);
+        bound.zeroize_private_v1();
+        assert!(bound.private_is_zeroized_v1());
+
+        let mut legacy =
+            build_p256_scalar_bit_bus_stark_trace_v1(&fixture.trace).expect("legacy trace");
+        legacy.zeroize_private_v1();
+        assert!(legacy.base.is_empty());
+        assert!(legacy.aux.is_empty());
     }
 
     #[test]

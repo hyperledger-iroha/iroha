@@ -76,6 +76,7 @@ class RegisterOfflineDeviceAttestation(
                 payload.nonce == expected.nonce &&
                 payload.feePayment == expected.feePayment &&
                 payload.metadata == expected.metadata &&
+                payload.attachments == expected.attachments &&
                 instructions != null &&
                 instructions.instructions.size == 1 &&
                 instructions.instructions[0] == instruction(),

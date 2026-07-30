@@ -3,12 +3,13 @@
 # raw source-entry payloads, proof-token frames, response bodies, or private
 # digest keys.
 --evidence-dir
-artifacts/sorafs/transparency/staged
+artifacts/sorafs/transparency/production
 --summary-out
-artifacts/sorafs/transparency/staged/rollout-summary.json
+artifacts/sorafs/transparency/production/rollout-summary.json
 --require-kind
 source_entry,publication,privacy_aggregate,proof_token_issuance,explorer
 --now-unix
 1800400000
 --max-evidence-age-secs
 604800
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

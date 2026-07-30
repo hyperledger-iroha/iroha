@@ -3,8 +3,10 @@ import XCTest
 
 final class ConnectFramesTests: XCTestCase {
     private func requireConnectCodec() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
-                      "NoritoBridge connect codec unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCodecAvailable,
+            "NoritoBridge connect codec unavailable"
+        )
     }
 
     func testFrameRoundTrip() throws {
@@ -238,8 +240,10 @@ final class ConnectCodecBridgeAvailabilityTests: XCTestCase {
     }
 
     func testDecodeFailsOnInvalidBytes() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable,
-                      "NoritoBridge connect codec unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCodecAvailable,
+            "NoritoBridge connect codec unavailable"
+        )
         let sessionID = Data(repeating: 0x22, count: 32)
         let frame = ConnectFrame(sessionID: sessionID,
                                  direction: .appToWallet,

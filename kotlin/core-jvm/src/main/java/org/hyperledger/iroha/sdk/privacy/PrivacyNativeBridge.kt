@@ -5,8 +5,9 @@ import java.util.Collections
 /**
  * Canonical first-release privacy capability bridge.
  *
- * The bridge exposes only the authoritative typed Norito capability snapshot. Proof operations
- * live behind protocol-specific APIs and cannot be selected with free-form strings here.
+ * The bridge exposes the authoritative typed Norito capability snapshot and the Rust-derived
+ * byte-complete exact-12 fixture bundle. Proof operations live behind protocol-specific APIs and
+ * cannot be selected with free-form strings here.
  */
 class PrivacyNativeBridge private constructor() {
     enum class ValidationStatusV1(val code: Int) {
@@ -19,6 +20,19 @@ class PrivacyNativeBridge private constructor() {
         NON_CANONICAL(6),
         MALFORMED_ARCHIVE(7),
         INVALID_SNAPSHOT(8),
+    }
+
+    /** Stable ABI-21 result of validating the Rust-derived exact-12 fixture bundle. */
+    enum class Exact12FixtureValidationStatusV1(val code: Int) {
+        VALID(0),
+        NULL_POINTER(1),
+        EMPTY(2),
+        ARCHIVE_TOO_LARGE(3),
+        DECODE_RESOURCE_LIMIT(4),
+        SCHEMA_MISMATCH(5),
+        NON_CANONICAL(6),
+        MALFORMED_ARCHIVE(7),
+        INVALID_BUNDLE(8),
     }
 
     enum class ProtocolIdV1(val canonicalLabel: String) {
@@ -52,6 +66,7 @@ class PrivacyNativeBridge private constructor() {
     companion object {
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
         const val PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: Int = 256 * 1024
+        const val EXACT12_FIXTURE_BUNDLE_MAX_BYTES: Int = 2 * 1024 * 1024
         private const val LIBRARY_NAME: String = "connect_norito_bridge"
         private val PROTOCOLS: List<ProtocolIdV1> =
             Collections.unmodifiableList(ProtocolIdV1.values().toList())
@@ -79,6 +94,62 @@ class PrivacyNativeBridge private constructor() {
             return requireCapabilityArchive(archive)
         }
 
+        /** Returns the complete canonical Rust-derived exact-12 statement/envelope fixture bundle. */
+        @JvmStatic
+        fun exact12FixtureBundleV1(): ByteArray {
+            check(nativeAvailable) { "native exact-12 privacy fixture bridge is unavailable" }
+            val archive =
+                try {
+                    nativeExact12FixtureBundle()
+                } catch (error: RuntimeException) {
+                    throw IllegalStateException(
+                        "native exact-12 privacy fixture query failed",
+                        error,
+                    )
+                } catch (error: LinkageError) {
+                    throw IllegalStateException(
+                        "native exact-12 privacy fixture query failed",
+                        error,
+                    )
+                }
+            return requireExact12FixtureBundle(archive)
+        }
+
+        /**
+         * Validates untrusted bytes against the canonical Rust-derived exact-12 fixture bundle.
+         *
+         * Null, empty, and oversized inputs are rejected before JNI copies any bytes.
+         */
+        @JvmStatic
+        fun validateExact12FixtureBundleV1(
+            archive: ByteArray?,
+        ): Exact12FixtureValidationStatusV1 {
+            if (archive == null) return Exact12FixtureValidationStatusV1.NULL_POINTER
+            if (archive.isEmpty()) return Exact12FixtureValidationStatusV1.EMPTY
+            if (archive.size > EXACT12_FIXTURE_BUNDLE_MAX_BYTES) {
+                return Exact12FixtureValidationStatusV1.ARCHIVE_TOO_LARGE
+            }
+            check(nativeAvailable) { "native exact-12 privacy fixture bridge is unavailable" }
+            val code =
+                try {
+                    nativeValidateExact12FixtureBundle(archive)
+                } catch (error: RuntimeException) {
+                    throw IllegalStateException(
+                        "native exact-12 privacy fixture validation failed",
+                        error,
+                    )
+                } catch (error: LinkageError) {
+                    throw IllegalStateException(
+                        "native exact-12 privacy fixture validation failed",
+                        error,
+                    )
+                }
+            return Exact12FixtureValidationStatusV1.values().firstOrNull { it.code == code }
+                ?: throw IllegalStateException(
+                    "native exact-12 privacy fixture validation returned an unknown status",
+                )
+        }
+
         internal fun requireCapabilityArchive(archive: ByteArray?): ByteArray {
             check(
                 archive != null &&
@@ -94,11 +165,30 @@ class PrivacyNativeBridge private constructor() {
             return archive.copyOf()
         }
 
+        internal fun requireExact12FixtureBundle(archive: ByteArray?): ByteArray {
+            check(
+                archive != null &&
+                    archive.isNotEmpty() &&
+                    archive.size <= EXACT12_FIXTURE_BUNDLE_MAX_BYTES,
+            ) {
+                "invalid exact-12 privacy fixture bundle length"
+            }
+            requireNotNull(archive)
+            check(
+                nativeValidateExact12FixtureBundle(archive) ==
+                    Exact12FixtureValidationStatusV1.VALID.code,
+            ) {
+                "invalid exact-12 privacy fixture bundle"
+            }
+            return archive.copyOf()
+        }
+
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
                 nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
-                    requireCapabilityArchive(nativeCapabilities()).isNotEmpty()
+                    requireCapabilityArchive(nativeCapabilities()).isNotEmpty() &&
+                    requireExact12FixtureBundle(nativeExact12FixtureBundle()).isNotEmpty()
             } catch (_: RuntimeException) {
                 false
             } catch (_: LinkageError) {
@@ -110,5 +200,11 @@ class PrivacyNativeBridge private constructor() {
         @JvmStatic private external fun nativeCapabilities(): ByteArray?
 
         @JvmStatic private external fun nativeValidateCapabilities(archive: ByteArray): Int
+
+        @JvmStatic private external fun nativeExact12FixtureBundle(): ByteArray?
+
+        @JvmStatic private external fun nativeValidateExact12FixtureBundle(
+            archive: ByteArray?,
+        ): Int
     }
 }

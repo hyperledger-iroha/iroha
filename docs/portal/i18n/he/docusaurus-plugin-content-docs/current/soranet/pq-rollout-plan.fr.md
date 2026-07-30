@@ -98,11 +98,11 @@ Deux helpers `cargo xtask` אוטומטית לדור לוח הזמנים ולל�
 
 | משטח | קנרי (שלב א') | רמפה (שלב ב') | ברירת מחדל (שלב C) |
 |--------|----------------|----------------|------------------------|
-| `sorafs_cli` אחזור | `--anonymity-policy stage-a` ou se reposer sur la phase | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` אחזור | `--anonymity-policy anon-guard-pq` ou se reposer sur la phase | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | תצורת התזמורת JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | תצורת לקוח חלודה (`iroha.toml`) | `rollout_phase = "canary"` (ברירת מחדל) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` פקודות חתומות | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optionnel `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optionnel `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, optionnel `.ANON_STRICT_PQ` |
+| `iroha_cli` פקודות חתומות | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optionnel `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optionnel `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, optionnel `.ANON_STRICT_PQ` |
 | עוזרי מתזמר JavaScript | `rolloutPhase: "canary"` או `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -125,7 +125,7 @@ Deux helpers `cargo xtask` אוטומטית לדור לוח הזמנים ולל�
 
 3. **קנרית לקוח/SDK (T ועוד שבוע)**
 
-   - Basculer `rollout_phase = "ramp"` dans les configs client ou passer des עוקף `stage-b` pour les cohorts SDK designees.
+   - Basculer `rollout_phase = "ramp"` dans les configs client ou passer des עוקף `anon-majority-pq` pour les cohorts SDK designees.
    - Capturer les diffs de telemetrie (`sorafs_orchestrator_policy_events_total` groupe par `client_id` et `region`) et les joindre au log d'incident de rollout.4. **מבצע ברירת מחדל (T ועוד 3 שבועות)**
 
    - אישור הממשל, מתזמר הבסיס וקונפיגורס הלקוח לעומת `rollout_phase = "default"` וטורנר פייר ל-Checklist של המוכנות החתימה על חפצי אמנות לשחרור.
@@ -157,7 +157,7 @@ Pour l'alerting, assurez-vous que les regles existantes utilisent le label `stag
 ### רמפה -> קנרית (שלב ב' -> שלב א')
 
 1. יבא את תמונת המצב של מדריך השמירה על לכידת קידום מכירות חדשני עם `sorafs_cli guard-directory import --guard-directory guards.json` ו-`sorafs_cli guard-directory verify` על מנת להוריד את החבילה בדרגה הכוללת את ה-hashes.
-2. Definissez `rollout_phase = "canary"` (או עוקף avec `anonymity_policy stage-a`) sur l'orchestrator et les configs client, puis rejouez le PQ ratchet drill du [PQ ratchet runbook](./pq-ratchet-runbook.md) le pipeline down prograd.
+2. Definissez `rollout_phase = "canary"` (או עוקף avec `anonymity_policy anon-guard-pq`) sur l'orchestrator et les configs client, puis rejouez le PQ ratchet drill du [PQ ratchet runbook](./pq-ratchet-runbook.md) le pipeline down prograd.
 3. צרף צילומי מסך מממשים את PQ Ratchet ו-SN16 טלמטרי שאליו יש תוצאות של התראות או יומן תקריות וניהול הודעות.
 
 ### מעקה הבטיחות של ראפלס

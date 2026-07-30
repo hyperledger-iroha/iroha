@@ -2633,7 +2633,8 @@ public sealed class SccpExactTests
             CompactField(ttl),
             CompactField(nonce),
             CompactField(encodedFeePayment),
-            CompactField(metadata));
+            CompactField(metadata),
+            CompactField([0]));
     }
 
     private static byte[] CanonicalFeePayment(

@@ -157,9 +157,8 @@ fn seed_referendum_and_proposal_with_kind(
                             epoch: 0,
                             members: vec![ALICE_ID.clone(), BOB_ID.clone()],
                             alternates: Vec::new(),
-                            verified: 0,
                             candidate_count: 2,
-                            derived_by: CouncilDerivationKind::Fallback,
+                            derived_by: CouncilDerivationKind::Manual,
                         },
                     )
                 })
@@ -230,9 +229,8 @@ fn seed_proposal_without_referendum(state: &mut State, pid: [u8; 32]) {
                             epoch: 0,
                             members: vec![ALICE_ID.clone(), BOB_ID.clone()],
                             alternates: Vec::new(),
-                            verified: 0,
                             candidate_count: 2,
-                            derived_by: CouncilDerivationKind::Fallback,
+                            derived_by: CouncilDerivationKind::Manual,
                         },
                     )
                 })
@@ -469,7 +467,7 @@ fn seed_snapshot_proposal(
         selection_epoch,
         &beacon,
         [(&*ALICE_ID, 20_000_u128), (&*BOB_ID, 20_000_u128)],
-        iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
+        iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
     );
     let pipeline = iroha_core::state::GovernancePipeline::seeded(
         header.height().get(),

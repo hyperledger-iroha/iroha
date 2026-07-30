@@ -120,6 +120,11 @@ pub struct OrderbookSignatureV1 {
 
 impl OrderbookSignatureV1 {
     fn validate(&self) -> Result<(), OrderbookValidationError> {
+        if self.algorithm != SignatureAlgorithm::Ed25519 {
+            return Err(OrderbookValidationError::UnsupportedSignatureAlgorithm {
+                algorithm: self.algorithm,
+            });
+        }
         if self.public_key.is_empty()
             || crate::inert_bytes(&self.public_key)
             || self.signature.is_empty()
@@ -127,17 +132,15 @@ impl OrderbookSignatureV1 {
         {
             return Err(OrderbookValidationError::InvalidSignature);
         }
-        if matches!(self.algorithm, SignatureAlgorithm::Ed25519) {
-            if self.public_key.len() != PUBLIC_KEY_LENGTH {
-                return Err(OrderbookValidationError::InvalidPublicKeyLength {
-                    length: self.public_key.len(),
-                });
-            }
-            if self.signature.len() != SIGNATURE_LENGTH {
-                return Err(OrderbookValidationError::InvalidSignatureLength {
-                    length: self.signature.len(),
-                });
-            }
+        if self.public_key.len() != PUBLIC_KEY_LENGTH {
+            return Err(OrderbookValidationError::InvalidPublicKeyLength {
+                length: self.public_key.len(),
+            });
+        }
+        if self.signature.len() != SIGNATURE_LENGTH {
+            return Err(OrderbookValidationError::InvalidSignatureLength {
+                length: self.signature.len(),
+            });
         }
         Ok(())
     }
@@ -934,9 +937,7 @@ impl SettlementChannelV1 {
         }
         validate_digest(self.channel_id, OrderbookValidationError::InvalidChannelId)?;
         validate_digest(self.trade_id, OrderbookValidationError::InvalidTradeId)?;
-        if self.buyer_account.is_empty() {
-            return Err(OrderbookValidationError::EmptyBuyerAccount);
-        }
+        validate_owner_account_v1(&self.buyer_account)?;
         validate_digest(
             self.provider_id,
             OrderbookValidationError::InvalidProviderId,
@@ -1100,9 +1101,167 @@ pub struct SettlementReceiptV1 {
     pub settlement_signature: OrderbookSignatureV1,
 }
 
+mod borrowed_norito {
+    use norito::core::NoritoSerialize;
+
+    /// Borrowed value that delegates canonical Norito serialization.
+    pub(super) struct Value<'a, T>(pub(super) &'a T);
+
+    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            T::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            self.0.serialize(writer)
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            self.0.encoded_len_hint()
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            self.0.encoded_len_exact()
+        }
+    }
+
+    /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
+    pub(super) struct Vec<'a, T>(std::option::Option<&'a std::vec::Vec<T>>);
+
+    impl<'a, T> Vec<'a, T> {
+        /// Wrap an existing owned vector without cloning it.
+        pub(super) fn borrowed(value: &'a std::vec::Vec<T>) -> Self {
+            Self(Some(value))
+        }
+
+        /// Represent the canonical empty owned vector without allocating it.
+        pub(super) fn empty() -> Self {
+            Self(None)
+        }
+    }
+
+    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
+        fn schema_hash() -> [u8; 16] {
+            <std::vec::Vec<T>>::schema_hash()
+        }
+
+        fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+            match self.0 {
+                Some(value) => value.serialize(writer),
+                None => std::vec::Vec::<T>::new().serialize(writer),
+            }
+        }
+
+        fn encoded_len_hint(&self) -> Option<usize> {
+            match self.0 {
+                Some(value) => value.encoded_len_hint(),
+                None => std::vec::Vec::<T>::new().encoded_len_hint(),
+            }
+        }
+
+        fn encoded_len_exact(&self) -> Option<usize> {
+            match self.0 {
+                Some(value) => value.encoded_len_exact(),
+                None => std::vec::Vec::<T>::new().encoded_len_exact(),
+            }
+        }
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct SettlementReceiptSignatureViewWireV1<'a> {
+    algorithm: SignatureAlgorithm,
+    public_key: borrowed_norito::Vec<'a, u8>,
+    signature: borrowed_norito::Vec<'a, u8>,
+}
+
+struct SettlementReceiptSignatureViewV1<'a>(SettlementReceiptSignatureViewWireV1<'a>);
+
+impl norito::core::NoritoSerialize for SettlementReceiptSignatureViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        OrderbookSignatureV1::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
+#[derive(NoritoSerialize)]
+struct SettlementReceiptSigningViewWireV1<'a> {
+    version: u8,
+    receipt_id: [u8; 32],
+    channel_id: [u8; 32],
+    trade_id: [u8; 32],
+    range: ByteRangeV1,
+    chunk_hash: [u8; 32],
+    bytes_delivered: u64,
+    xor_debited: borrowed_norito::Value<'a, XorQuantity>,
+    provider_credit: borrowed_norito::Value<'a, XorQuantity>,
+    fee_amount: borrowed_norito::Value<'a, XorQuantity>,
+    issued_at_unix: u64,
+    settlement_signature: SettlementReceiptSignatureViewV1<'a>,
+}
+
+struct SettlementReceiptSigningViewV1<'a>(SettlementReceiptSigningViewWireV1<'a>);
+
+impl<'a> SettlementReceiptSigningViewV1<'a> {
+    fn from_receipt(receipt: &'a SettlementReceiptV1) -> Self {
+        Self(SettlementReceiptSigningViewWireV1 {
+            version: receipt.version,
+            receipt_id: receipt.receipt_id,
+            channel_id: receipt.channel_id,
+            trade_id: receipt.trade_id,
+            range: receipt.range,
+            chunk_hash: receipt.chunk_hash,
+            bytes_delivered: receipt.bytes_delivered,
+            xor_debited: borrowed_norito::Value(&receipt.xor_debited),
+            provider_credit: borrowed_norito::Value(&receipt.provider_credit),
+            fee_amount: borrowed_norito::Value(&receipt.fee_amount),
+            issued_at_unix: receipt.issued_at_unix,
+            settlement_signature: SettlementReceiptSignatureViewV1(
+                SettlementReceiptSignatureViewWireV1 {
+                    algorithm: receipt.settlement_signature.algorithm,
+                    public_key: borrowed_norito::Vec::borrowed(
+                        &receipt.settlement_signature.public_key,
+                    ),
+                    signature: borrowed_norito::Vec::empty(),
+                },
+            ),
+        })
+    }
+}
+
+impl norito::core::NoritoSerialize for SettlementReceiptSigningViewV1<'_> {
+    fn schema_hash() -> [u8; 16] {
+        SettlementReceiptV1::schema_hash()
+    }
+
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        self.0.serialize(writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.0.encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.0.encoded_len_exact()
+    }
+}
+
 impl SettlementReceiptV1 {
     /// Validate structural and accounting constraints.
     pub fn validate(&self) -> Result<(), OrderbookValidationError> {
+        preflight_orderbook_payload_len(self, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
         if self.version != SETTLEMENT_RECEIPT_VERSION_V1 {
             return Err(OrderbookValidationError::UnsupportedReceiptVersion {
                 found: self.version,
@@ -1146,8 +1305,8 @@ impl SettlementReceiptV1 {
 pub fn settlement_receipt_signature_digest_v1(
     receipt: &SettlementReceiptV1,
 ) -> Result<[u8; 32], OrderbookValidationError> {
-    let mut signable = receipt.clone();
-    signable.settlement_signature.signature.clear();
+    preflight_orderbook_payload_len(receipt, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
+    let signable = SettlementReceiptSigningViewV1::from_receipt(receipt);
     orderbook_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &signable)
 }
 
@@ -1277,6 +1436,23 @@ fn orderbook_signature_digest<T: norito::core::NoritoSerialize>(
     Ok(*hasher.finalize().as_bytes())
 }
 
+fn preflight_orderbook_payload_len<T: norito::core::NoritoSerialize>(
+    payload: &T,
+    maximum: usize,
+) -> Result<usize, OrderbookValidationError> {
+    if let Some(length) = payload.encoded_len_exact()
+        && length > maximum
+    {
+        return Err(OrderbookValidationError::PayloadTooLarge { length, maximum });
+    }
+    let length = norito::core::encoded_payload_len(payload)
+        .map_err(|_| OrderbookValidationError::CanonicalLengthUnavailable)?;
+    if length > maximum {
+        return Err(OrderbookValidationError::PayloadTooLarge { length, maximum });
+    }
+    Ok(length)
+}
+
 fn empty_ed25519_orderbook_signature(signing_key: &SigningKey) -> OrderbookSignatureV1 {
     OrderbookSignatureV1 {
         algorithm: SignatureAlgorithm::Ed25519,
@@ -1343,6 +1519,9 @@ pub(crate) fn validate_owner_account_v1(
             max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
         });
     }
+    if crate::inert_bytes(owner_account) {
+        return Err(OrderbookValidationError::NonCanonicalOwnerAccount);
+    }
     Ok(())
 }
 
@@ -1384,6 +1563,17 @@ pub enum OrderbookPayloadDecodeError {
 /// Validation errors for SoraFS orderbook payloads.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OrderbookValidationError {
+    /// The canonical encoder cannot provide an allocation-free exact length.
+    #[error("orderbook payload does not expose an exact canonical encoded length")]
+    CanonicalLengthUnavailable,
+    /// A directly constructed payload exceeds the canonical V1 byte ceiling.
+    #[error("orderbook payload is {length} bytes; maximum canonical size is {maximum}")]
+    PayloadTooLarge {
+        /// Exact canonical payload length.
+        length: usize,
+        /// Maximum accepted canonical payload length.
+        maximum: usize,
+    },
     /// Unsupported order version.
     #[error("unsupported order version {found}")]
     UnsupportedOrderVersion { found: u8 },
@@ -1464,9 +1654,9 @@ pub enum OrderbookValidationError {
         /// Canonical maximum owner-account byte length.
         max: usize,
     },
-    /// Buyer account bytes are empty.
-    #[error("buyer account must not be empty")]
-    EmptyBuyerAccount,
+    /// Owner/buyer account bytes are inert rather than a canonical identity.
+    #[error("owner account bytes must not be inert")]
+    NonCanonicalOwnerAccount,
     /// Timestamp is missing or out of order.
     #[error("timestamp is missing or out of order")]
     InvalidTimestamp,
@@ -1683,6 +1873,7 @@ mod tests {
 
     use super::*;
     use ed25519_dalek::SigningKey;
+    use norito::core::NoritoSerialize as _;
 
     const SMALL_ORDER_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1712,6 +1903,35 @@ mod tests {
 
     fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        let mut bytes = Vec::new();
+        value
+            .serialize(&mut bytes)
+            .expect("serialize explicit layout");
+        bytes
+    }
+
+    fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        norito::to_bytes(value).expect("serialize explicit canonical frame")
+    }
+
+    fn supported_layouts() -> [u8; 8] {
+        use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
+
+        [
+            0,
+            COMPACT_LEN,
+            PACKED_SEQ,
+            PACKED_SEQ | COMPACT_LEN,
+            PACKED_STRUCT,
+            PACKED_STRUCT | COMPACT_LEN,
+            PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+            PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
+        ]
     }
 
     fn sign_order(order: OrderRequestV1, seed: u8) -> OrderRequestV1 {
@@ -2138,6 +2358,24 @@ mod tests {
     }
 
     #[test]
+    fn order_and_cancel_reject_inert_owner_accounts() {
+        let mut invalid_order = order();
+        invalid_order.owner_account = vec![0; 33];
+        refresh_order_id(&mut invalid_order);
+        assert_eq!(
+            invalid_order.validate(),
+            Err(OrderbookValidationError::NonCanonicalOwnerAccount)
+        );
+
+        let mut invalid_cancel = cancel();
+        invalid_cancel.owner_account = vec![0; 33];
+        assert_eq!(
+            invalid_cancel.validate(),
+            Err(OrderbookValidationError::NonCanonicalOwnerAccount)
+        );
+    }
+
+    #[test]
     fn order_id_derivation_binds_owner_and_nonce() {
         let owner = account(3);
         let order_id = derive_orderbook_order_id_v1(&owner, 1);
@@ -2227,6 +2465,100 @@ mod tests {
                 length: PUBLIC_KEY_LENGTH - 1,
             })
         );
+    }
+
+    #[test]
+    fn orderbook_signatures_reject_reserved_multisig_material() {
+        let mut receipt = receipt();
+        receipt.settlement_signature.algorithm = SignatureAlgorithm::MultiSig;
+        assert_eq!(
+            receipt.validate(),
+            Err(OrderbookValidationError::UnsupportedSignatureAlgorithm {
+                algorithm: SignatureAlgorithm::MultiSig,
+            })
+        );
+    }
+
+    #[test]
+    fn settlement_receipt_size_preflight_accepts_boundary_and_rejects_one_over() {
+        let receipt = receipt();
+        let exact = norito::core::encoded_payload_len(&receipt)
+            .expect("settlement receipt canonical length must be countable");
+        assert_eq!(preflight_orderbook_payload_len(&receipt, exact), Ok(exact));
+        assert_eq!(
+            preflight_orderbook_payload_len(&receipt, exact.saturating_sub(1)),
+            Err(OrderbookValidationError::PayloadTooLarge {
+                length: exact,
+                maximum: exact.saturating_sub(1),
+            })
+        );
+
+        let mut oversized = receipt;
+        oversized.settlement_signature.signature =
+            vec![9; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
+        assert!(matches!(
+            oversized.validate(),
+            Err(OrderbookValidationError::PayloadTooLarge {
+                maximum: ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            settlement_receipt_signature_digest_v1(&oversized),
+            Err(OrderbookValidationError::PayloadTooLarge {
+                maximum: ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn borrowed_settlement_receipt_signing_view_is_byte_exact_for_every_layout() {
+        let receipt = sign_receipt(receipt(), 0x14);
+        let mut owned = receipt.clone();
+        owned.settlement_signature.signature.clear();
+        let borrowed = SettlementReceiptSigningViewV1::from_receipt(&receipt);
+
+        assert_eq!(
+            <SettlementReceiptSigningViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
+            SettlementReceiptV1::schema_hash()
+        );
+        assert_eq!(
+            norito::to_bytes(&borrowed).expect("encode borrowed signing view"),
+            norito::to_bytes(&owned).expect("encode historical owned signing payload")
+        );
+
+        for flags in supported_layouts() {
+            let owned_bytes = encode_bare_with_flags(&owned, flags);
+            let borrowed_bytes = encode_bare_with_flags(&borrowed, flags);
+            assert_eq!(
+                borrowed_bytes, owned_bytes,
+                "borrowed settlement signing bytes changed for flags 0x{flags:02x}"
+            );
+            let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+            assert_eq!(
+                borrowed.encoded_len_exact(),
+                owned.encoded_len_exact(),
+                "borrowed settlement signing size changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                norito::core::encoded_payload_len(&borrowed)
+                    .expect("borrowed settlement receipt length must be countable"),
+                borrowed_bytes.len()
+            );
+            assert_eq!(
+                encode_frame_with_flags(&borrowed, flags),
+                encode_frame_with_flags(&owned, flags),
+                "borrowed settlement canonical frame or layout flags changed for flags 0x{flags:02x}"
+            );
+            assert_eq!(
+                settlement_receipt_signature_digest_v1(&receipt)
+                    .expect("digest borrowed settlement signing view"),
+                orderbook_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &owned)
+                    .expect("digest historical owned settlement payload"),
+                "settlement signature digest changed for flags 0x{flags:02x}"
+            );
+        }
     }
 
     #[test]
@@ -2817,6 +3149,37 @@ mod tests {
                 remaining_bytes: 1_025,
                 total_bytes: 1_024,
             })
+        );
+    }
+
+    #[test]
+    fn settlement_channel_enforces_canonical_buyer_account_boundaries() {
+        let trade = snapshot_trade();
+        let mut channel = snapshot_channel(&trade);
+        channel.buyer_account = vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
+        channel
+            .validate()
+            .expect("buyer account at exact byte ceiling validates");
+
+        channel.buyer_account.push(0x42);
+        assert_eq!(
+            channel.validate(),
+            Err(OrderbookValidationError::OwnerAccountTooLong {
+                length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
+                max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+            })
+        );
+
+        channel.buyer_account = vec![0; 33];
+        assert_eq!(
+            channel.validate(),
+            Err(OrderbookValidationError::NonCanonicalOwnerAccount)
+        );
+
+        channel.buyer_account.clear();
+        assert_eq!(
+            channel.validate(),
+            Err(OrderbookValidationError::EmptyOwnerAccount)
         );
     }
 

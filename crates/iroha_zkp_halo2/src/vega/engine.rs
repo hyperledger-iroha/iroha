@@ -38,7 +38,7 @@ use super::{
     date::{RFC3339_SECONDS_PER_DAY_V1, RFC3339_TIMESTAMP_ORDER_SLACK_BITS_V1},
     figure9::{VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9WitnessV1, synthesize_figure9},
     figure9_layout::FIGURE9_LAYOUT,
-    nifs::NovaNifs,
+    nifs::{NovaNifs, NovaNifsProverInput},
     r1cs::{Instance, RelaxedInstance, RelaxedWitness, Shape, SparseMatrix, Witness},
     spartan::RelaxedSpartanProof,
     sponge::{Keccak256, keccak256},
@@ -57,8 +57,8 @@ pub const VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1: &[u8] = b"neutronnova_prove";
 /// T256 coefficient, all exact dimensions, the fixed issuer and birth
 /// templates and masks, layout ranges, and the closed semantic constants.
 pub const VEGA_MDL_CANONICAL_RELATION_DIGEST_V1: [u8; 32] = [
-    0xf3, 0x27, 0xbb, 0x5b, 0x0a, 0xa3, 0xa0, 0x94, 0x18, 0xa7, 0xc0, 0x62, 0xca, 0xc8, 0x11, 0x96,
-    0xcd, 0xfb, 0x65, 0xc5, 0x62, 0x59, 0xe9, 0x01, 0x95, 0xf8, 0x09, 0x83, 0xda, 0x53, 0x07, 0xe3,
+    0x8b, 0xf6, 0xa3, 0x11, 0x20, 0x6e, 0xf6, 0x78, 0x9b, 0x2b, 0x3d, 0x61, 0x3b, 0x4e, 0x98, 0xb9,
+    0xfd, 0xc5, 0x8a, 0xcd, 0x02, 0x37, 0x3a, 0x9d, 0xbc, 0x2b, 0x7b, 0x64, 0xcb, 0x7e, 0xdf, 0xbc,
 ];
 /// Keccak-256 digest of the exact first-release Figure 9 compiled profile.
 ///
@@ -68,8 +68,8 @@ pub const VEGA_MDL_CANONICAL_RELATION_DIGEST_V1: [u8; 32] = [
 /// independently recompute the digest once the canonical shape is already
 /// required and fail closed if the compiled relation has drifted.
 pub const VEGA_MDL_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0xfd, 0x97, 0xbb, 0x0f, 0x9d, 0x67, 0x36, 0x77, 0x18, 0x2f, 0x0b, 0x87, 0x34, 0x60, 0x9c, 0x7c,
-    0x03, 0x47, 0x80, 0x63, 0x24, 0xee, 0x64, 0xc3, 0x74, 0xcc, 0xc6, 0xa7, 0xa1, 0x5e, 0xe4, 0x73,
+    0x0c, 0x7f, 0x36, 0xa2, 0x50, 0x28, 0x17, 0x38, 0x53, 0x49, 0xa8, 0xb3, 0xd9, 0x4c, 0xf1, 0x18,
+    0x9c, 0xb3, 0x13, 0xb3, 0xa1, 0x9c, 0x5b, 0x3a, 0x67, 0x68, 0x4b, 0x5f, 0xa7, 0xf1, 0x72, 0xbf,
 ];
 
 const PROOF_VERSION: u8 = 1;
@@ -79,7 +79,7 @@ const PROFILE_DESCRIPTOR: &[u8] = b"iroha.vega.figure9.mdl-age.v1";
 const PINNED_SOURCE_COMMIT: &[u8] = b"c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
 const CANONICAL_RELATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha.vega.figure9.canonical-r1cs-relation.v1";
 const CANONICAL_RELATION_LAYOUT_SCHEMA_V1: &[u8] = b"issuer-birth-digest|issuer-device-x|issuer-device-y|issuer-signed-rfc3339|issuer-valid-from-rfc3339|issuer-valid-until-rfc3339|birth-random|birth-full-date";
-const CANONICAL_RELATION_SEMANTIC_SCHEMA_V1: &[u8] = b"issuer-sig-structure-bytes|mso-payload-bytes|birth-item-bytes|birth-random-bytes|full-date-text-bytes|rfc3339-utc-seconds-text-bytes|min-presentation-year|max-presentation-year|min-age-threshold|max-age-threshold|figure9-public-inputs|rfc3339-seconds-per-day|rfc3339-timestamp-order-slack-bits";
+const CANONICAL_RELATION_SEMANTIC_SCHEMA_V1: &[u8] = b"issuer-sig-structure-bytes|mso-payload-bytes|birth-item-bytes|birth-random-bytes|full-date-text-bytes|rfc3339-utc-seconds-text-bytes|min-presentation-year|max-presentation-year|min-age-threshold|max-age-threshold|figure9-public-inputs|rfc3339-seconds-per-day|rfc3339-timestamp-order-slack-bits|issuer-and-device-es256-p1363-low-s";
 const MAX_CHAIN_ID_BYTES: usize = 255;
 const RANDOM_HEALTH_RETRIES: usize = 16;
 const COMMITMENT_WORKER_HEAP_BOUND_BYTES: usize = 256 * 1024;
@@ -422,13 +422,15 @@ pub fn prove_vega_mdl_figure9_v1<R: VegaRandomSourceV1>(
     let cross_term_blindings = sample_nonzero_scalars(random, dimensions.error_commitment_points)?;
     let mut transcript = release_transcript(context, public_inputs, &shape, dimensions)?;
     let (nifs, folded_instance, folded_witness) = NovaNifs::prove(
-        &key,
-        &shape,
-        &mask_instance,
-        &mask_witness,
-        &regular_instance,
-        &regular_witness,
-        &cross_term_blindings,
+        NovaNifsProverInput {
+            key: &key,
+            shape: &shape,
+            relaxed_instance: &mask_instance,
+            relaxed_witness: &mask_witness,
+            regular_instance: &regular_instance,
+            regular_witness: &regular_witness,
+            cross_term_blindings: &cross_term_blindings,
+        },
         &mut transcript,
     )
     .map_err(|_| VegaMdlProofErrorV1::InvalidCompiledProfile)?;
@@ -510,6 +512,7 @@ pub fn verify_vega_mdl_figure9_v1(
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct CommitmentWireV1 {
     points: Vec<VegaPointWireV1>,
@@ -518,6 +521,7 @@ struct CommitmentWireV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 struct VegaMdlProofWireV1 {
     version: u8,
@@ -758,13 +762,14 @@ fn sample_relaxed_mask<R: VegaRandomSourceV1>(
     assignment.extend_from_slice(&values);
     assignment.push(relaxation);
     assignment.extend_from_slice(&public_inputs);
-    let (a, b, c) = shape
+    let products = shape
         .multiply(&assignment)
         .map_err(|_| VegaMdlProofErrorV1::InvalidCompiledProfile)?;
-    let error = a
+    let error = products
+        .a
         .into_iter()
-        .zip(b)
-        .zip(c)
+        .zip(products.b)
+        .zip(products.c)
         .map(|((a, b), c)| a * b - relaxation * c)
         .collect::<Vec<_>>();
     let witness_blindings = sample_nonzero_scalars(random, dimensions.witness_commitment_points)?;
@@ -1164,7 +1169,7 @@ fn wire_to_scalars(scalars: &[VegaScalarWireV1]) -> Result<Vec<Scalar>, VegaMdlP
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vega::figure9::tests::baseline_signed_fixture;
+    use crate::vega::figure9::tests::{baseline_signed_fixture, high_s_counterpart_inverse};
     use crate::vega::r1cs::R1csError;
 
     struct ZeroRandom;
@@ -1665,7 +1670,7 @@ mod tests {
         assert_eq!(recomputed, VEGA_MDL_COMPILED_PROFILE_DIGEST_V1);
         assert_eq!(
             hex::encode(VEGA_MDL_COMPILED_PROFILE_DIGEST_V1),
-            "fd97bb0f9d673677182f0b8734609c7c0347806324ee64c374ccc6a7a15ee473"
+            "0c7f36a2502817385349a8b3d94cf1189cb313b3a19c5b3a67684b5fa7f172bf"
         );
         assert_eq!(
             vega_mdl_compiled_profile_digest_v1(),
@@ -1739,6 +1744,33 @@ mod tests {
         assert_eq!(proof.len(), 181_375);
         verify_vega_mdl_figure9_v1(&context(), &fixture.public, &proof)
             .expect("canonical verification");
+    }
+
+    #[test]
+    fn public_low_level_prover_rejects_both_high_s_counterparts_as_unsatisfied() {
+        let baseline = baseline_signed_fixture();
+        for role in ["issuer", "device"] {
+            let mut changed = baseline.clone();
+            let inverse = if role == "issuer" {
+                &mut changed.issuer_s_inverse
+            } else {
+                &mut changed.device_s_inverse
+            };
+            *inverse = high_s_counterpart_inverse(*inverse);
+            let error = prove_vega_mdl_figure9_v1(
+                &context(),
+                &changed.public,
+                &changed.witness(),
+                VegaMdlProverConfigV1::new(1).expect("one worker"),
+                &mut FailureRandom,
+            )
+            .expect_err("the public low-level prover must not accept a high-s witness");
+            assert_eq!(
+                error,
+                VegaMdlProofErrorV1::UnsatisfiedWitness,
+                "{role} high-s witness reached prover randomness instead of failing the relation"
+            );
+        }
     }
 
     #[test]

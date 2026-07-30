@@ -134,7 +134,8 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
-- 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=unix_time_ms` — Gas: G_sysvar
+- 0x04 CONTRACT_ABORT — Args: `r10=code:u64` → Return: `u64=0` — Gas: G_abort (halts with a manifest-declared application error code)
+- 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=deterministic_execution_time_ms` — Gas: G_sysvar
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish + bytes (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: G_hash + bytes
 - 0x91 SM2_VERIFY — Args: `r10=&Blob(msg)`, `r11=&Blob(sig)` (64-byte r∥s), `r12=&Blob(pubkey)` (SEC1), `r13=&Blob(distid)` *(optional, 0 for default)* → Return: `u64=0/1` — Gas: G_verify + bytes
@@ -182,7 +183,7 @@ For the SM4 calls, the host appends the authentication tag to the ciphertext out
 Kotodama intrinsics
 - ``sm::hash(msg: Blob) -> Blob`` mirrors `msg` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
 - ``sm::verify(msg: Blob, sig: Blob, pk: Blob[, distid: Blob]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting the fourth argument selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
-- ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the host-provided block time in milliseconds. `CoreHost` binds this to block time; test/default hosts use deterministic configured time and default to `0`.
+- ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the deterministic logical execution time in milliseconds. `CoreHost` binds transaction contract calls to the signed transaction creation time and trigger calls to the block-header creation time; test/default hosts use an explicitly configured value and default to `0`. No host reads wall-clock time while servicing the syscall.
 - ``block_height() -> int`` issues `SYSVAR_BLOCK_HEIGHT` and returns the host-provided committed block height. `CoreHost` binds this to the attached transaction context; test/default hosts default to `0`.
 
 Exact numeric helpers
@@ -355,7 +356,7 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010001 CORE_QUERY_GET — Args: `r10=CoreQueryEntityTagV1`, `r11=&typed entity id` → `r10=Option<View>` sum handle. The active projection is flattened in declaration order and contains exact typed leaf TLVs.
 - 0x010002 CORE_QUERY_PAGE — Args: `r10=CoreQueryEntityTagV1`, `r11=offset:i64 bits`, `r12=limit:1..=64` → `r10=List<View,64>` handle, `r11=Option<int>` sum handle. Pages preserve canonical ID order and expose a next offset only after a one-item lookahead proves another page exists.
 - 0x010006..0x010008 retain the canonical-Norito specialist reads for named parameters, contract manifests, and contract instances. Parameter keys are `&Name`, manifest keys are `&NoritoBytes(Hash)`, and instance keys are either `&NoritoBytes(ContractAddress)` or `&Name(alias)`; untyped `NoritoBytes(Name)` carriers are rejected. Core and specialist reads use deterministic item/byte gas schedules.
-- `QUERY_GET_PARAMETER` accepts canonical system parameter names such as `block.max_transactions`, `transaction.max_instructions`, `smart_contract.fuel`, and exact custom parameter names.
+- `QUERY_GET_PARAMETER` accepts canonical system parameter names such as `block.max_transactions`, `transaction.max_instructions`, `smart_contract.fuel`, `smart_contract.max_output_items`, `smart_contract.max_output_bytes`, and exact custom parameter names.
 - 0x010020 SYSVAR_CHAIN_ID — Args: none → `ptr (&Blob(chain_id))` or `0` — Gas: G_sysvar + bytes
 - 0x010021 SYSVAR_BLOCK_HEIGHT — Args: none → `u64=height` — Gas: G_sysvar
 - 0x010022 SYSVAR_BLOCK_TIME_MS — Args: none → `u64=block_time_ms` — Gas: G_sysvar
@@ -366,8 +367,9 @@ Extended query/sysvar surface (`SYSTEM` / SCALLX)
 - 0x010027 SYSVAR_CONTRACT_SUBJECT — Args: none → `ptr (&AccountId(contract subject))` — Gas: G_sysvar + bytes. Calls outside a deployed-contract scope fail closed.
 - 0x010028 NORMALIZE_NORITO_BYTES — Args: `r10=&Blob or &NoritoBytes` in validated public memory → `ptr (&NoritoBytes(same payload))` — Gas: G_pointer + bytes
   - Compiler transport helper for strict Norito-consuming syscalls. It rejects null, malformed, disallowed, and non-bytes pointers, then allocates a fresh canonical V1 `NoritoBytes` envelope with an identical payload and recomputed hash. It performs no serialization and does not weaken the receiving syscall's exact pointer-type checks.
-- 0x010200 SET_ASSET_TRANSFER_FREEZE — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1` → 0 — Gas: G_sci + bytes
-- 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0` → 0 — Gas: G_sci + bytes
+- 0x010200 SET_ASSET_TRANSFER_AVAILABILITY — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<String>` → 0 — Gas: G_sci + bytes
+- 0x010201 SET_ASSET_TRANSFER_DAILY_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>` → 0 — Gas: G_sci + bytes
+- 0x010202 SET_ASSET_HOLDING_LIMIT — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity>` → 0 — Gas: G_sci + bytes
 - 0x010210 ACCOUNT_RECOVERY_PROPOSE — Args: `r10=&Blob(alias), r11=&AccountId(replacement)` → 0 — Gas: G_sci + bytes
 - 0x010211 ACCOUNT_RECOVERY_APPROVE — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
 - 0x010212 ACCOUNT_RECOVERY_CANCEL — Args: `r10=&Blob(alias)` → 0 — Gas: G_sci + bytes
@@ -453,7 +455,7 @@ ZK Helpers
 Hardware / Proofs
 - 0xF4 PROVE_EXECUTION — Args: none → `r10=&NoritoBytes(ExecutionProof), r11=status:u64` — Gas: G_prove
   - Returns a deterministic execution-proof summary containing fixed fields plus SHA-256 commitments to the VM's PC, delta-register, ZK trace, constraint, memory, register, and step-root logs. This is a byte-stable proof artifact for first-release contracts and tooling; full SNARK/STARK proving can bind to these commitments without changing VM output across hardware.
-- 0xF5 GROW_HEAP — Args: `r10=bytes:u64` → `u64=new_limit` — Gas: G_grow_heap per page
+- 0xF5 GROW_HEAP — Args: `r10=bytes:u64` → `u64=new_limit` — Gas: G_grow_heap per page. Growth fails with `OutOfMemory` when it would exceed the host-installed per-runtime heap ceiling.
 - 0xF6 VERIFY_PROOF — Args: `r10=&NoritoBytes(OpenVerifyEnvelope)` → `r10=0/1, r11=status:u64` — Gas: G_verify_proof + bytes
   - `CoreHost` verifies the envelope against the on-chain verifying-key registry with the same deterministic guardrails used by the typed ZK verifier syscalls. The standalone host still returns `NotImplemented` because it has no registry or backend policy context.
 - 0xF7 GET_MERKLE_PATH — Args: `r10=addr:u64, r11=out_ptr:u64, r12=root_out:u64?` → `u64=len` — Gas: G_mpath + path_len
@@ -524,6 +526,7 @@ node enforces that policy unconditionally.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
+| 0x04 | CONTRACT_ABORT | r10=code:u64 | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
 | 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
 | 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId(to) | u64=0 | asset:gas/G_transfer_domain@ivm.core/v2 |
@@ -757,8 +760,9 @@ node enforces that policy unconditionally.
 | 0x10163 | JSON_GET_INT_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Int> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10164 | JSON_GET_DECIMAL_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Decimal> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
 | 0x10165 | JSON_GET_QUANTITY_DIRECT | r10=&Json(any validated region), r11=&Name(key) | r10=Option<&Quantity> sum handle | asset:gas/G_json_get@ivm.core/v2 + input bytes + active payload + sum allocation |
-| 0x10200 | SET_ASSET_TRANSFER_FREEZE | r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
-| 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Quantity or 0 | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10200 | SET_ASSET_TRANSFER_AVAILABILITY | r10=&AccountId, r11=&AssetDefinitionId, r12=expected_revision:u64, r13=availability_flags:u64 (bit 0 incoming, bit 1 outgoing; reserved bits zero), r14=&Option<string> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10201 | SET_ASSET_TRANSFER_DAILY_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
+| 0x10202 | SET_ASSET_HOLDING_LIMIT | r10=&AccountId, r11=&AssetDefinitionId, r12=&Option<Quantity> | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10210 | ACCOUNT_RECOVERY_PROPOSE | r10=&Blob(alias), r11=&AccountId(replacement) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10211 | ACCOUNT_RECOVERY_APPROVE | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |
 | 0x10212 | ACCOUNT_RECOVERY_CANCEL | r10=&Blob(alias) | u64=0 | asset:gas/G_sci@ivm.core/v2 + bytes |

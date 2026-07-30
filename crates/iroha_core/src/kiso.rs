@@ -4,8 +4,9 @@
 //! no any part of Iroha is interested in the whole state. However, the API could be extended
 //! in future.
 //!
-//! Updates mechanism is implemented via subscriptions to [`tokio::sync::watch`] channels. For now,
-//! only `logger.level` field is dynamic, which might be tracked with [`KisoHandle::subscribe_on_logger_updates()`].
+//! Mutable node-local settings are relayed through [`tokio::sync::watch`] channels.
+//! Consensus-relevant settings, including confidential gas, are deliberately absent
+//! from the runtime update surface.
 
 use std::{num::NonZeroU32, time::Duration};
 
@@ -18,8 +19,8 @@ use iroha_config::{
         SoranetHandshakePowUpdate, SoranetHandshakeUpdate, TransportUpdate,
     },
     parameters::actual::{
-        ConfidentialGas as ActualConfidentialGas, Logger as LoggerConfig, NoritoRpcStage,
-        Root as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPuzzle,
+        Logger as LoggerConfig, NoritoRpcStage, Root as Config,
+        SoranetHandshake as ActualSoranetHandshake, SoranetPow, SoranetPuzzle,
     },
 };
 use iroha_futures::supervisor::{Child, OnShutdown};
@@ -46,7 +47,6 @@ impl KisoHandle {
         let initial_handshake = state.network.soranet_handshake.clone();
         let (soranet_handshake_update, _) = watch::channel(initial_handshake);
         let initial_confidential_gas = state.confidential.gas;
-        let (confidential_gas_update, _) = watch::channel(initial_confidential_gas);
         crate::gas::configure_confidential_gas(initial_confidential_gas.into());
         let mut actor = Actor {
             handle: actor_receiver,
@@ -54,7 +54,6 @@ impl KisoHandle {
             logger_update,
             network_acl_update,
             soranet_handshake_update,
-            confidential_gas_update,
         };
         (
             Self {
@@ -138,20 +137,6 @@ impl KisoHandle {
         Ok(receiver)
     }
 
-    /// Subscribe on updates of the confidential gas schedule.
-    ///
-    /// # Errors
-    /// Returns an error if communication with the actor fails.
-    pub async fn subscribe_on_confidential_gas_updates(
-        &self,
-    ) -> Result<watch::Receiver<ActualConfidentialGas>, Error> {
-        let (tx, rx) = oneshot::channel();
-        let msg = Message::SubscribeOnConfidentialGas { respond_to: tx };
-        let _ = self.actor.send(msg).await;
-        let receiver = rx.await?;
-        Ok(receiver)
-    }
-
     /// Lightweight mock handle used in tests to avoid spinning up the full actor and watchers.
     ///
     /// The mock serves `get_dto` requests from the provided configuration snapshot and acknowledges
@@ -162,16 +147,9 @@ impl KisoHandle {
         let logger = state.logger.clone();
         let network_acl = Actor::snapshot_network_acl(state);
         let soranet_handshake = state.network.soranet_handshake.clone();
-        let confidential_gas = state.confidential.gas;
-        crate::gas::configure_confidential_gas(confidential_gas.into());
-        let mock_actor = run_mock_actor(
-            actor_receiver,
-            logger,
-            network_acl,
-            soranet_handshake,
-            confidential_gas,
-            dto,
-        );
+        crate::gas::configure_confidential_gas(state.confidential.gas.into());
+        let mock_actor =
+            run_mock_actor(actor_receiver, logger, network_acl, soranet_handshake, dto);
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(mock_actor);
         } else {
@@ -194,13 +172,11 @@ async fn run_mock_actor(
     logger: LoggerConfig,
     network_acl: NetworkAcl,
     soranet_handshake: ActualSoranetHandshake,
-    confidential_gas: ActualConfidentialGas,
     dto: ConfigGetDTO,
 ) {
     let (logger_tx, _) = watch::channel(logger);
     let (network_acl_tx, _) = watch::channel(network_acl);
     let (handshake_tx, _) = watch::channel(soranet_handshake);
-    let (confidential_gas_tx, _) = watch::channel(confidential_gas);
     let mut dto_snapshot = dto;
     while let Some(msg) = actor_receiver.recv().await {
         match msg {
@@ -238,9 +214,6 @@ async fn run_mock_actor(
             Message::SubscribeOnSoranetHandshake { respond_to } => {
                 let _ = respond_to.send(handshake_tx.subscribe());
             }
-            Message::SubscribeOnConfidentialGas { respond_to } => {
-                let _ = respond_to.send(confidential_gas_tx.subscribe());
-            }
         }
     }
 }
@@ -261,9 +234,6 @@ enum Message {
     },
     SubscribeOnSoranetHandshake {
         respond_to: oneshot::Sender<watch::Receiver<ActualSoranetHandshake>>,
-    },
-    SubscribeOnConfidentialGas {
-        respond_to: oneshot::Sender<watch::Receiver<ActualConfidentialGas>>,
     },
 }
 
@@ -286,7 +256,6 @@ struct Actor {
     logger_update: watch::Sender<LoggerConfig>,
     network_acl_update: watch::Sender<NetworkAcl>,
     soranet_handshake_update: watch::Sender<ActualSoranetHandshake>,
-    confidential_gas_update: watch::Sender<ActualConfidentialGas>,
 }
 
 impl Actor {
@@ -315,9 +284,6 @@ impl Actor {
             Message::SubscribeOnSoranetHandshake { respond_to } => {
                 let _ = respond_to.send(self.soranet_handshake_update.subscribe());
             }
-            Message::SubscribeOnConfidentialGas { respond_to } => {
-                let _ = respond_to.send(self.confidential_gas_update.subscribe());
-            }
         }
     }
 
@@ -327,7 +293,6 @@ impl Actor {
             logger,
             network_acl,
             network,
-            confidential_gas,
             soranet_handshake,
             transport,
             compute_pricing,
@@ -337,7 +302,6 @@ impl Actor {
         let mut next = self.state.clone();
         let mut notify_network_acl = false;
         let mut notify_soranet_handshake = false;
-        let mut notify_confidential_gas = false;
 
         let Logger { level, filter } = logger;
         next.logger.level = level;
@@ -399,15 +363,6 @@ impl Actor {
             }
         }
 
-        if let Some(gas) = confidential_gas {
-            next.confidential.gas.proof_base = gas.proof_base;
-            next.confidential.gas.per_public_input = gas.per_public_input;
-            next.confidential.gas.per_proof_byte = gas.per_proof_byte;
-            next.confidential.gas.per_nullifier = gas.per_nullifier;
-            next.confidential.gas.per_commitment = gas.per_commitment;
-            notify_confidential_gas = true;
-        }
-
         if let Some(handshake_update) = soranet_handshake {
             Self::apply_soranet_handshake_update(
                 &mut next.network.soranet_handshake,
@@ -445,12 +400,6 @@ impl Actor {
         if notify_network_acl {
             let snapshot = Self::snapshot_network_acl(&self.state);
             let _ = self.network_acl_update.send_replace(snapshot);
-        }
-        if notify_confidential_gas {
-            crate::gas::configure_confidential_gas(self.state.confidential.gas.into());
-            let _ = self
-                .confidential_gas_update
-                .send_replace(self.state.confidential.gas);
         }
         if notify_soranet_handshake {
             let _ = self
@@ -534,12 +483,56 @@ impl Actor {
         pow: &mut SoranetPow,
         update: &SoranetHandshakePowUpdate,
     ) -> Result<(), String> {
-        if let Some(required) = update.required {
-            if !required {
+        if matches!(update.required, Some(false)) {
+            return Err(
+                "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
+            );
+        }
+        if let Some(difficulty) = update.difficulty
+            && difficulty > iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
+        {
+            return Err(format!(
+                "SoraNet PoW difficulty {difficulty} exceeds the supported maximum {}",
+                iroha_crypto::soranet::puzzle::MAX_DIFFICULTY
+            ));
+        }
+        if let Some(puzzle_update) = &update.puzzle {
+            if matches!(puzzle_update.enabled, Some(false)) {
                 return Err(
-                    "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
+                    "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
+                        .to_string(),
                 );
             }
+            if let Some(memory) = puzzle_update.memory_kib
+                && !(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
+                    ..=iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB)
+                    .contains(&memory)
+            {
+                return Err(format!(
+                    "SoraNet Argon2 memory_kib {memory} is outside the supported range {}..={}",
+                    iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB,
+                    iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
+                ));
+            }
+            if let Some(time_cost) = puzzle_update.time_cost
+                && !(1..=iroha_crypto::soranet::puzzle::MAX_TIME_COST).contains(&time_cost)
+            {
+                return Err(format!(
+                    "SoraNet Argon2 time_cost {time_cost} is outside the supported range 1..={}",
+                    iroha_crypto::soranet::puzzle::MAX_TIME_COST
+                ));
+            }
+            if let Some(lanes) = puzzle_update.lanes
+                && !(1..=iroha_crypto::soranet::puzzle::MAX_LANES).contains(&lanes)
+            {
+                return Err(format!(
+                    "SoraNet Argon2 lanes {lanes} is outside the supported range 1..={}",
+                    iroha_crypto::soranet::puzzle::MAX_LANES
+                ));
+            }
+        }
+
+        if let Some(required) = update.required {
             pow.required = required;
         }
         if let Some(difficulty) = update.difficulty {
@@ -556,26 +549,22 @@ impl Actor {
         }
         if let Some(puzzle_update) = &update.puzzle {
             if let Some(enabled) = puzzle_update.enabled {
-                if !enabled {
-                    return Err(
-                        "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
-                            .to_string(),
-                    );
-                } else if pow.puzzle.is_none() {
+                if enabled && pow.puzzle.is_none() {
                     pow.puzzle = Some(default_puzzle_params());
                 }
             }
             if let Some(puzzle) = &mut pow.puzzle {
                 if let Some(memory) = puzzle_update.memory_kib {
-                    puzzle.memory_kib = NonZeroU32::new(memory.max(1)).unwrap_or(puzzle.memory_kib);
+                    puzzle.memory_kib =
+                        NonZeroU32::new(memory).expect("validated puzzle memory is non-zero");
                 }
                 if let Some(time_cost) = puzzle_update.time_cost {
                     puzzle.time_cost =
-                        NonZeroU32::new(time_cost.max(1)).unwrap_or(puzzle.time_cost);
+                        NonZeroU32::new(time_cost).expect("validated puzzle time cost is non-zero");
                 }
                 if let Some(lanes) = puzzle_update.lanes {
-                    let clamped = lanes.clamp(1, 16);
-                    puzzle.lanes = NonZeroU32::new(clamped).unwrap_or(puzzle.lanes);
+                    puzzle.lanes =
+                        NonZeroU32::new(lanes).expect("validated puzzle lane count is non-zero");
                 }
             } else if puzzle_update.enabled.unwrap_or(false) {
                 pow.puzzle = Some(default_puzzle_params());
@@ -614,8 +603,7 @@ mod tests {
     use iroha_config::{
         base::WithOrigin,
         client_api::{
-            ComputePricingUpdate, ConfidentialGas as ConfidentialGasDTO, Logger as LoggerDTO,
-            NetworkUpdate, SoranetHandshakePuzzleUpdate,
+            ComputePricingUpdate, Logger as LoggerDTO, NetworkUpdate, SoranetHandshakePuzzleUpdate,
         },
         parameters::{
             actual::{
@@ -652,6 +640,92 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
+    #[test]
+    fn pow_updates_reject_unbounded_costs_before_mutating_state() {
+        fn update(
+            difficulty: Option<u8>,
+            memory_kib: Option<u32>,
+            time_cost: Option<u32>,
+            lanes: Option<u32>,
+        ) -> SoranetHandshakePowUpdate {
+            SoranetHandshakePowUpdate {
+                required: Some(true),
+                difficulty,
+                max_future_skew_secs: Some(999),
+                min_ticket_ttl_secs: None,
+                ticket_ttl_secs: None,
+                puzzle: Some(SoranetHandshakePuzzleUpdate {
+                    enabled: Some(true),
+                    memory_kib,
+                    time_cost,
+                    lanes,
+                }),
+                signed_ticket_public_key_hex: None,
+            }
+        }
+
+        let invalid = [
+            (
+                update(
+                    Some(iroha_crypto::soranet::puzzle::MAX_DIFFICULTY + 1),
+                    None,
+                    None,
+                    None,
+                ),
+                "difficulty",
+            ),
+            (
+                update(
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB - 1),
+                    None,
+                    None,
+                ),
+                "memory_kib",
+            ),
+            (
+                update(
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB + 1),
+                    None,
+                    None,
+                ),
+                "memory_kib",
+            ),
+            (
+                update(
+                    None,
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MAX_TIME_COST + 1),
+                    None,
+                ),
+                "time_cost",
+            ),
+            (
+                update(
+                    None,
+                    None,
+                    None,
+                    Some(iroha_crypto::soranet::puzzle::MAX_LANES + 1),
+                ),
+                "lanes",
+            ),
+        ];
+
+        for (update, field) in invalid {
+            let mut pow = SoranetPow::default();
+            let original_difficulty = pow.difficulty;
+            let original_skew = pow.max_future_skew;
+            let original_puzzle = pow.puzzle;
+            let error = Actor::apply_pow_update(&mut pow, &update)
+                .expect_err("unbounded puzzle update must fail");
+            assert!(error.contains(field), "unexpected error: {error}");
+            assert_eq!(pow.difficulty, original_difficulty);
+            assert_eq!(pow.max_future_skew, original_skew);
+            assert_eq!(pow.puzzle, original_puzzle);
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -946,6 +1020,8 @@ mod tests {
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
                 zk_ivm_prove_job_max_retained_bytes:
                     iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+                transaction_ingress:
+                    iroha_config::parameters::actual::TransactionIngress::default(),
                 da_ingest: iroha_config::parameters::actual::DaIngest::default(),
                 connect: Connect {
                     enabled: false,
@@ -1191,11 +1267,6 @@ mod tests {
                     iroha_config::parameters::defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
             },
             pipeline: iroha_config::parameters::actual::Pipeline {
-                ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                    enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                    skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                    allowed_circuits: Vec::new(),
-                },
                 dynamic_prepass: false,
                 access_set_cache_enabled:
                     iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -1764,7 +1835,6 @@ mod tests {
             },
             network_acl: None,
             network: None,
-            confidential_gas: None,
             soranet_handshake: None,
             transport: None,
             compute_pricing: None,
@@ -1783,27 +1853,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn confidential_gas_update_applies_to_state() {
-        crate::gas::configure_confidential_gas(crate::gas::ConfidentialGasSchedule::default());
-        let config = test_config();
-        let (kiso, _) = KisoHandle::start(config);
+    async fn confidential_gas_snapshot_is_unchanged_by_runtime_updates() {
+        struct ResetConfidentialGas;
 
-        let updated_gas = ConfidentialGasDTO {
-            proof_base: 321_000,
-            per_public_input: 9_999,
-            per_proof_byte: 77,
-            per_nullifier: 55,
-            per_commitment: 44,
-        };
+        impl Drop for ResetConfidentialGas {
+            fn drop(&mut self) {
+                crate::gas::configure_confidential_gas(
+                    crate::gas::ConfidentialGasSchedule::default(),
+                );
+            }
+        }
+
+        let _reset = ResetConfidentialGas;
+        let mut config = test_config();
+        config.confidential.gas.proof_base = 321_000;
+        config.confidential.gas.per_public_input = 9_999;
+        config.confidential.gas.per_proof_byte = 77;
+        config.confidential.gas.per_nullifier = 55;
+        config.confidential.gas.per_commitment = 44;
+        let expected_gas = config.confidential.gas;
+        let (kiso, _) = KisoHandle::start(config);
 
         kiso.update_with_dto(ConfigUpdateDTO {
             logger: LoggerDTO {
-                level: iroha_logger::Level::INFO,
+                level: iroha_logger::Level::DEBUG,
                 filter: None,
             },
             network_acl: None,
             network: None,
-            confidential_gas: Some(updated_gas),
             soranet_handshake: None,
             transport: None,
             compute_pricing: None,
@@ -1812,25 +1889,23 @@ mod tests {
         .expect("update should succeed");
 
         let dto = kiso.get_dto().await.expect("fetch updated dto");
-        assert_eq!(dto.confidential_gas.proof_base, updated_gas.proof_base);
+        assert_eq!(dto.confidential_gas.proof_base, expected_gas.proof_base);
         assert_eq!(
             dto.confidential_gas.per_public_input,
-            updated_gas.per_public_input
+            expected_gas.per_public_input
         );
         assert_eq!(
             dto.confidential_gas.per_proof_byte,
-            updated_gas.per_proof_byte
+            expected_gas.per_proof_byte
         );
         assert_eq!(
             dto.confidential_gas.per_nullifier,
-            updated_gas.per_nullifier
+            expected_gas.per_nullifier
         );
         assert_eq!(
             dto.confidential_gas.per_commitment,
-            updated_gas.per_commitment
+            expected_gas.per_commitment
         );
-
-        crate::gas::configure_confidential_gas(crate::gas::ConfidentialGasSchedule::default());
     }
 
     #[tokio::test]
@@ -1887,7 +1962,6 @@ mod tests {
                 deny_cidrs: None,
             }),
             network: None,
-            confidential_gas: None,
             soranet_handshake: None,
             transport: None,
             compute_pricing: None,
@@ -1922,7 +1996,6 @@ mod tests {
                 deny_cidrs: Some(Vec::new()),
             }),
             network: None,
-            confidential_gas: None,
             soranet_handshake: None,
             transport: None,
             compute_pricing: None,
@@ -1965,7 +2038,6 @@ mod tests {
             },
             network_acl: None,
             network: None,
-            confidential_gas: None,
             soranet_handshake: Some(SoranetHandshakeUpdate {
                 descriptor_commit_hex: Some(descriptor_hex.clone()),
                 client_capabilities_hex: None,
@@ -2045,7 +2117,6 @@ mod tests {
             },
             network_acl: None,
             network: None,
-            confidential_gas: None,
             soranet_handshake: Some(SoranetHandshakeUpdate {
                 descriptor_commit_hex: None,
                 client_capabilities_hex: None,
@@ -2081,7 +2152,6 @@ mod tests {
                 },
                 network_acl: None,
                 network: None,
-                confidential_gas: None,
                 soranet_handshake: Some(SoranetHandshakeUpdate {
                     descriptor_commit_hex: None,
                     client_capabilities_hex: None,
@@ -2117,7 +2187,6 @@ mod tests {
                 },
                 network_acl: None,
                 network: None,
-                confidential_gas: None,
                 soranet_handshake: Some(SoranetHandshakeUpdate {
                     descriptor_commit_hex: None,
                     client_capabilities_hex: None,
@@ -2185,7 +2254,6 @@ mod tests {
             },
             network_acl: None,
             network: None,
-            confidential_gas: None,
             soranet_handshake: Some(SoranetHandshakeUpdate {
                 descriptor_commit_hex: None,
                 client_capabilities_hex: None,
@@ -2229,7 +2297,6 @@ mod tests {
                     require_sm_handshake_match: Some(false),
                     require_sm_openssl_preview_match: Some(false),
                 }),
-                confidential_gas: None,
                 soranet_handshake: None,
                 transport: None,
                 compute_pricing: None,
@@ -2254,7 +2321,6 @@ mod tests {
                     require_sm_handshake_match: None,
                     require_sm_openssl_preview_match: Some(false),
                 }),
-                confidential_gas: None,
                 soranet_handshake: None,
                 transport: None,
                 compute_pricing: None,
@@ -2278,7 +2344,6 @@ mod tests {
         let (logger_tx, logger_rx) = watch::channel(config.logger.clone());
         let (network_acl_tx, network_acl_rx) = watch::channel(Actor::snapshot_network_acl(&config));
         let (handshake_tx, handshake_rx) = watch::channel(config.network.soranet_handshake.clone());
-        let (confidential_gas_tx, confidential_gas_rx) = watch::channel(config.confidential.gas);
         let (_, handle_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let mut actor = Actor {
             handle: handle_rx,
@@ -2286,7 +2351,6 @@ mod tests {
             logger_update: logger_tx,
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
-            confidential_gas_update: confidential_gas_tx,
         };
 
         let initial_logger_level = actor.state.logger.level;
@@ -2295,7 +2359,6 @@ mod tests {
         let initial_deny_keys = actor.state.network.deny_keys.clone();
         let initial_allow_cidrs = actor.state.network.allow_cidrs.clone();
         let initial_deny_cidrs = actor.state.network.deny_cidrs.clone();
-        let initial_gas = actor.state.confidential.gas;
         let initial_descriptor = actor
             .state
             .network
@@ -2321,13 +2384,6 @@ mod tests {
                     deny_cidrs: None,
                 }),
                 network: None,
-                confidential_gas: Some(ConfidentialGasDTO {
-                    proof_base: initial_gas.proof_base.saturating_add(1),
-                    per_public_input: initial_gas.per_public_input.saturating_add(1),
-                    per_proof_byte: initial_gas.per_proof_byte.saturating_add(1),
-                    per_nullifier: initial_gas.per_nullifier.saturating_add(1),
-                    per_commitment: initial_gas.per_commitment.saturating_add(1),
-                }),
                 soranet_handshake: Some(SoranetHandshakeUpdate {
                     descriptor_commit_hex: Some("0102".to_string()),
                     client_capabilities_hex: Some("zz".to_string()),
@@ -2351,26 +2407,6 @@ mod tests {
         assert_eq!(actor.state.network.deny_keys, initial_deny_keys);
         assert_eq!(actor.state.network.allow_cidrs, initial_allow_cidrs);
         assert_eq!(actor.state.network.deny_cidrs, initial_deny_cidrs);
-        assert_eq!(
-            actor.state.confidential.gas.proof_base,
-            initial_gas.proof_base
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_public_input,
-            initial_gas.per_public_input
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_proof_byte,
-            initial_gas.per_proof_byte
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_nullifier,
-            initial_gas.per_nullifier
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_commitment,
-            initial_gas.per_commitment
-        );
         assert_eq!(
             actor
                 .state
@@ -2407,12 +2443,6 @@ mod tests {
         );
         assert_eq!(handshake_snapshot.kem_id, initial_kem_id);
         assert_eq!(handshake_snapshot.sig_id, initial_sig_id);
-        let gas_snapshot = confidential_gas_rx.borrow();
-        assert_eq!(gas_snapshot.proof_base, initial_gas.proof_base);
-        assert_eq!(gas_snapshot.per_public_input, initial_gas.per_public_input);
-        assert_eq!(gas_snapshot.per_proof_byte, initial_gas.per_proof_byte);
-        assert_eq!(gas_snapshot.per_nullifier, initial_gas.per_nullifier);
-        assert_eq!(gas_snapshot.per_commitment, initial_gas.per_commitment);
     }
 
     #[test]
@@ -2421,7 +2451,6 @@ mod tests {
         let (logger_tx, logger_rx) = watch::channel(config.logger.clone());
         let (network_acl_tx, network_acl_rx) = watch::channel(Actor::snapshot_network_acl(&config));
         let (handshake_tx, handshake_rx) = watch::channel(config.network.soranet_handshake.clone());
-        let (confidential_gas_tx, confidential_gas_rx) = watch::channel(config.confidential.gas);
         let (_, handle_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let mut actor = Actor {
             handle: handle_rx,
@@ -2429,13 +2458,11 @@ mod tests {
             logger_update: logger_tx,
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
-            confidential_gas_update: confidential_gas_tx,
         };
 
         let initial_logger_level = actor.state.logger.level;
         let initial_allowlist_only = actor.state.network.allowlist_only;
         let initial_allow_keys = actor.state.network.allow_keys.clone();
-        let initial_gas = actor.state.confidential.gas;
         let initial_transport_enabled = actor.state.torii.transport.norito_rpc.enabled;
         let initial_transport_require_mtls = actor.state.torii.transport.norito_rpc.require_mtls;
         let initial_transport_allowed = actor
@@ -2461,13 +2488,6 @@ mod tests {
                     deny_cidrs: None,
                 }),
                 network: None,
-                confidential_gas: Some(ConfidentialGasDTO {
-                    proof_base: initial_gas.proof_base.saturating_add(5),
-                    per_public_input: initial_gas.per_public_input.saturating_add(5),
-                    per_proof_byte: initial_gas.per_proof_byte.saturating_add(5),
-                    per_nullifier: initial_gas.per_nullifier.saturating_add(5),
-                    per_commitment: initial_gas.per_commitment.saturating_add(5),
-                }),
                 soranet_handshake: None,
                 transport: Some(TransportUpdate {
                     norito_rpc: Some(iroha_config::client_api::NoritoRpcUpdate {
@@ -2487,26 +2507,6 @@ mod tests {
         assert_eq!(actor.state.logger.level, initial_logger_level);
         assert_eq!(actor.state.network.allowlist_only, initial_allowlist_only);
         assert_eq!(actor.state.network.allow_keys, initial_allow_keys);
-        assert_eq!(
-            actor.state.confidential.gas.proof_base,
-            initial_gas.proof_base
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_public_input,
-            initial_gas.per_public_input
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_proof_byte,
-            initial_gas.per_proof_byte
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_nullifier,
-            initial_gas.per_nullifier
-        );
-        assert_eq!(
-            actor.state.confidential.gas.per_commitment,
-            initial_gas.per_commitment
-        );
         assert_eq!(
             actor.state.torii.transport.norito_rpc.enabled,
             initial_transport_enabled
@@ -2536,12 +2536,6 @@ mod tests {
             handshake_snapshot.kem_id,
             actor.state.network.soranet_handshake.kem_id
         );
-        let gas_snapshot = confidential_gas_rx.borrow();
-        assert_eq!(gas_snapshot.proof_base, initial_gas.proof_base);
-        assert_eq!(gas_snapshot.per_public_input, initial_gas.per_public_input);
-        assert_eq!(gas_snapshot.per_proof_byte, initial_gas.per_proof_byte);
-        assert_eq!(gas_snapshot.per_nullifier, initial_gas.per_nullifier);
-        assert_eq!(gas_snapshot.per_commitment, initial_gas.per_commitment);
     }
 
     #[test]
@@ -2550,7 +2544,6 @@ mod tests {
         let (logger_tx, _) = watch::channel(config.logger.clone());
         let (network_acl_tx, _) = watch::channel(Actor::snapshot_network_acl(&config));
         let (handshake_tx, _) = watch::channel(config.network.soranet_handshake.clone());
-        let (confidential_gas_tx, _) = watch::channel(config.confidential.gas);
         let (_, handle_rx) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let mut actor = Actor {
             handle: handle_rx,
@@ -2558,7 +2551,6 @@ mod tests {
             logger_update: logger_tx,
             network_acl_update: network_acl_tx,
             soranet_handshake_update: handshake_tx,
-            confidential_gas_update: confidential_gas_tx,
         };
 
         let family = defaults::compute::default_price_family();
@@ -2580,7 +2572,6 @@ mod tests {
                 },
                 network_acl: None,
                 network: None,
-                confidential_gas: None,
                 soranet_handshake: None,
                 transport: None,
                 compute_pricing: Some(ComputePricingUpdate {
@@ -2613,7 +2604,6 @@ mod tests {
                 },
                 network_acl: None,
                 network: None,
-                confidential_gas: None,
                 soranet_handshake: None,
                 transport: None,
                 compute_pricing: Some(ComputePricingUpdate {

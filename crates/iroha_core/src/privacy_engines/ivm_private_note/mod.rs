@@ -9,7 +9,9 @@
 //! - checked 128-bit value conservation;
 //! - deterministic program execution; and
 //! - a transparent Goldilocks STARK with SHA-256 Merkle commitments and binary
-//!   FRI.
+//!   FRI whose public-input transcript commits the canonical statement and the
+//!   exact typed chain, genesis, action, and governed-artifact consensus
+//!   binding.
 //!
 //! Wallet witnesses never cross the ledger boundary. Verification returns only
 //! statement-derived effects; in particular, no proof or caller can select a

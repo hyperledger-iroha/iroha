@@ -34,15 +34,46 @@ an explicit digest-bound limit and return `409` on change. A deployment-owned
 monotonic transparency or ledger head is still required for first-contact
 freshness.
 
+The durable orchestrator now runs payload-free panel notifications through the
+same supervised maintenance owner. It checkpoints a lease before leaving local
+state, derives a stable worker identity from the chain and governed provider
+binding, sends one canonical Norito notification to an independently qualified
+idempotent boundary, and checkpoints the exact receipt or bounded
+retry/dead-letter result. Enabling the orchestrator requires
+`panel_notification_handle`, `panel_notification_revision`, and
+`panel_notification_policy_digest_hex`; these values are public bindings, not
+credentials. Standard `irohad` forwards the deployment-owned boundary into
+Torii, and startup or an in-flight call fails closed when the provider is
+missing, substituted, stale, unavailable, or test-marked.
+
+Until an authenticated signed archive installs and reads back every terminal
+panel-notification receipt, saturated notification capacity returns
+`ResourceExhausted` without deleting or mutating retained receipts or
+checkpoint bytes. Restart preserves the same saturated state. Notification
+receipt compaction remains an open production requirement.
+
+The strict transaction ingress is the one deliberate local boundary: it admits
+an already signed transaction through Torii's canonical durable queue and owns
+no signing authority. It no longer self-attests from operator-supplied values.
+The implementation reports the fixed handle
+`torii.sorafs.moderation-strict-ingress.v1`, revision `1`, and the BLAKE3 policy
+digest
+`cc0ceac18b93fa9705c0ef86f657a9ed94c5dd6531578496a2d64e8ec5216d2e`.
+The three configured `strict_ingress_*` values are an independent expected
+binding; Torii startup fails if any of them differs from that implementation
+identity.
+
 Remaining production blockers under
-`V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are durable notification delivery,
-real settlement/publication and signed receipt-to-transparency plus monotonic
-public-head adapters,
-semantic operation-ID fencing, predecessor-bound multi-instance checkpoint
-CAS/single-writer ownership, signed replay-safe terminal and receipt
-compaction/archive, and stock-daemon construction of the runtime-only
-HSM/KMS/WebAuthn/downstream boundaries. The repository still lacks reviewed
-reference-deployment evidence for the complete moderation service, evidence
+`V1-BLOCK-MODERATION-VIEWER-RUNTIME-01` are deployment construction of the real
+messaging, settlement/publication, HSM/KMS/WebAuthn, linearizable sealed-CAS
+checkpoint-store, and signed receipt-to-transparency providers; a monotonic
+public-head adapter; semantic operation-ID fencing; equivalent
+predecessor-bound CAS/single-writer ownership for the moderation orchestrator;
+and signed replay-safe terminal and receipt compaction/archive. The evidence
+viewer core and standard launcher now require the qualified external
+checkpoint authority and treat its local file as a verified cache, but the
+repository still lacks a real store adapter and reviewed reference-deployment
+evidence for multi-replica CAS, the complete moderation service, evidence
 viewer, juror notification/portal workflow, downstream
 settlement/publication, and four-validator recovery scenarios.
 
@@ -114,9 +145,13 @@ settlement/publication, and four-validator recovery scenarios.
   responses come from a reconciled finalized-chain snapshot with bounded
   arrays and cursors; there is no local ballot fallback.
 - The durable orchestrator submits transactions and reconciles committed state.
-  Settlement/publication handoff and notification lease contracts are present,
-  but their supervised production delivery workers are not yet complete. They
-  must consume finalized outcomes rather than a process-local tally stream.
+  Exact-once settlement/publication handoff adapters and the supervised
+  payload-free panel-notification worker consume finalized outcomes rather than
+  a process-local tally stream. Notification claims are durable before the
+  provider call; replay uses the same notification identity and canonical
+  bytes; qualification drift becomes an ambiguous retry; and exact receipts or
+  dead letters are checkpointed. Deployment-owned implementations of those
+  external boundaries are still required.
 - `sorafs_manifest::SoraFsModerationBallotGovernanceEventV1` and the embedded
   node's signed Governance DAG outbox retain the canonical payload-free
   publication format, but production producers must derive it from committed
@@ -178,17 +213,17 @@ case activation are submitted as typed ISIs; no direct-open ISI exists.
 
 ## Remaining Production Gates
 
-- Construct the reference runtime's HSM/KMS/WebAuthn and authenticated
-  downstream providers. Add durable juror-notification delivery, real
-  settlement/publication and signed receipt-to-transparency adapters,
-  cross-replica semantic operation-ID fencing, predecessor-bound checkpoint
-  CAS/single-writer ownership, and signed replay-safe terminal/receipt
-  compaction and archive.
+- Construct and inject the reference deployment's real messaging,
+  settlement/publication, HSM/KMS/WebAuthn, and authenticated downstream
+  providers through the shipped qualified boundaries. Add the signed
+  receipt-to-transparency producer, cross-replica semantic operation-ID
+  fencing, predecessor-bound checkpoint CAS/single-writer ownership, and signed
+  replay-safe terminal/receipt compaction and archive.
 - Deploy the existing appeal/panel transaction outbox, finalized-chain
-  orchestrator, retry/reconciliation worker, and challenge/no-show maintenance
-  with the remaining juror notification/portal and scheduled settlement
-  delivery workers around the authoritative intake, sortition, and
-  commit/reveal ledger described by
+  orchestrator, retry/reconciliation worker, supervised panel-notification
+  pass, and challenge/no-show maintenance with the remaining juror portal and
+  scheduled settlement provider integrations around the authoritative intake,
+  sortition, and commit/reveal ledger described by
   `docs/source/sorafs_commit_reveal_plan.md`.
 - Connect panel outcomes to gateway compliance caches, transparency
   publication, settlement reconciliation, and reputation scoring.

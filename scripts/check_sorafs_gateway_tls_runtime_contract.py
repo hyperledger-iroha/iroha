@@ -189,6 +189,21 @@ def check_contract(root: Path) -> list[str]:
         failures.append("acme-harness:self-signed-client")
     if "Arc<dyn AcmeClient>" not in controller:
         failures.append("controller:missing-runtime-client-boundary")
+    if "GatewayProviderBindingV1" not in controller:
+        failures.append("controller:missing-config-provider-binding")
+    if "AcmeAutomation::try_new(config, client_binding, client)?" not in controller:
+        failures.append("controller:missing-startup-qualification")
+    if "fn qualification(&self)" not in acme:
+        failures.append("acme-harness:missing-provider-qualification")
+    if "pub trait AcmeClient: Send + Sync" not in acme:
+        failures.append("acme-harness:runtime-client-debug-exposure")
+    if '.field("client", &"<runtime-only>")' not in acme:
+        failures.append("acme-harness:runtime-client-state-not-redacted")
+    if (
+        acme.count("qualify_acme_client(&self.client_binding, &self.client)")
+        < 2
+    ):
+        failures.append("acme-harness:missing-operation-qualification-fence")
 
     renew_start = xtask.find("pub fn gateway_tls_renew(")
     renew_end = xtask.find("\npub fn gateway_tls_revoke(", renew_start)
@@ -215,6 +230,13 @@ def check_contract(root: Path) -> list[str]:
         not in torii
     ):
         failures.append("torii:missing-enabled-without-client-startup-failure")
+    if (
+        "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
+        not in torii
+    ):
+        failures.append("torii:missing-provider-binding-startup-failure")
+    if "TlsAutomationHandle::try_new(" not in torii:
+        failures.append("torii:missing-exact-client-qualification")
     for marker, failure in (
         (
             "pub fn with_sorafs_gateway_acme_client(",

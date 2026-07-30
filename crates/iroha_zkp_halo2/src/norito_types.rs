@@ -75,13 +75,9 @@ impl IpaParams {
         out
     }
 
-    /// Decode from a bare Norito payload.
+    /// Decode one exact, canonical bare Norito payload.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
-        let flags = norito::core::default_encode_flags();
-        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let archived = norito::core::archived_from_slice_unchecked::<Self>(bytes);
-        let _ctx = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        <Self as norito::NoritoDeserialize>::try_deserialize(archived.as_ref())
+        norito::codec::decode_exact_from_slice(bytes)
     }
 
     /// Compute a deterministic fingerprint of the parameter set.
@@ -117,13 +113,9 @@ impl IpaProofData {
         out
     }
 
-    /// Decode from a bare Norito payload.
+    /// Decode one exact, canonical bare Norito payload.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
-        let flags = norito::core::default_encode_flags();
-        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let archived = norito::core::archived_from_slice_unchecked::<Self>(bytes);
-        let _ctx = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        <Self as norito::NoritoDeserialize>::try_deserialize(archived.as_ref())
+        norito::codec::decode_exact_from_slice(bytes)
     }
 }
 
@@ -167,23 +159,30 @@ impl PolyOpenPublic {
         out
     }
 
-    /// Decode from a bare Norito payload.
+    /// Decode one exact, canonical bare Norito payload.
     pub fn decode_bytes(bytes: &[u8]) -> Result<Self, norito::Error> {
-        let flags = norito::core::default_encode_flags();
-        let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-        let archived = norito::core::archived_from_slice_unchecked::<Self>(bytes);
-        let _ctx = norito::core::PayloadCtxGuard::enter(archived.bytes());
-        <Self as norito::NoritoDeserialize>::try_deserialize(archived.as_ref())
+        norito::codec::decode_exact_from_slice(bytes)
     }
 }
 
-fn decode_from_slice_via_cursor<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
+fn decode_from_slice_checked<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
 where
-    T: norito::codec::Decode,
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
-    let mut cursor = std::io::Cursor::new(bytes);
-    let value = T::decode(&mut cursor)?;
-    let used = cursor.position() as usize;
+    let flags = norito::core::default_encode_flags();
+    let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+    let value = norito::core::decode_archived_field::<T>(bytes)?;
+
+    // `DecodeFromSlice` must report the canonical prefix it consumed rather
+    // than treating arbitrary trailing bytes as part of the value. Re-encoding
+    // also rejects alternate byte representations before the exact-slice
+    // boundary compares `used` with the caller-provided length.
+    let mut canonical = Vec::new();
+    value.serialize(&mut canonical)?;
+    if bytes.get(..canonical.len()) != Some(canonical.as_slice()) {
+        return Err(norito::Error::NonCanonicalEncoding);
+    }
+    let used = canonical.len();
     Ok((value, used))
 }
 
@@ -209,19 +208,19 @@ pub(crate) fn fingerprint_bytes(
 
 impl<'a> norito::core::DecodeFromSlice<'a> for IpaParams {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_from_slice_via_cursor(bytes)
+        decode_from_slice_checked(bytes)
     }
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for PolyOpenPublic {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_from_slice_via_cursor(bytes)
+        decode_from_slice_checked(bytes)
     }
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for IpaProofData {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_from_slice_via_cursor(bytes)
+        decode_from_slice_checked(bytes)
     }
 }
 

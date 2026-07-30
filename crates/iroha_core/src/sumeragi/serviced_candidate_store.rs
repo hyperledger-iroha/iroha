@@ -1943,7 +1943,7 @@ impl LeaderWireLifecycleStoreGate {
             .checked_add(1)
             .ok_or_else(|| "leader-wire lifecycle read bound overflowed".to_owned())?;
         let mut bytes = Vec::new();
-        file.by_ref()
+        Read::by_ref(&mut file)
             .take(read_limit)
             .read_to_end(&mut bytes)
             .map_err(|error| {

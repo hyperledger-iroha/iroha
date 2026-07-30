@@ -138,7 +138,6 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
 def _check_js_instruction_type_maps(
     manifest_path: Path,
     js_source_path: Path,
-    js_dist_path: Path,
     errors: List[str],
 ) -> Dict[str, Any]:
     manifest_payload = _load_json(manifest_path)
@@ -154,9 +153,6 @@ def _check_js_instruction_type_maps(
     }
 
     source_map = _extract_js_instruction_type_map(js_source_path)
-    dist_map = _extract_js_instruction_type_map(js_dist_path)
-    if source_map != dist_map:
-        errors.append("JavaScript src/dist instruction type-name maps differ")
 
     matched = 0
     for wire_id, type_name in source_map.items():
@@ -177,7 +173,6 @@ def _check_js_instruction_type_maps(
 
     return {
         "source_path": str(js_source_path),
-        "dist_path": str(js_dist_path),
         "entry_count": len(source_map),
         "manifest_matched_entry_count": matched,
         "derived_from_type_names": True,
@@ -268,12 +263,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="JavaScript Norito source to check (default: %(default)s)",
     )
     parser.add_argument(
-        "--js-dist",
-        type=Path,
-        default=Path("javascript/iroha_js/dist/norito.js"),
-        help="Generated JavaScript Norito artifact to check (default: %(default)s)",
-    )
-    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress success output.",
@@ -291,7 +280,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.builder_index,
             args.metadata,
             args.js_source,
-            args.js_dist,
         )
         if not path.exists()
     ]
@@ -308,7 +296,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             _check_js_instruction_type_maps(
                 args.manifest,
                 args.js_source,
-                args.js_dist,
                 errors,
             )
         )

@@ -14,8 +14,9 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     ValidationFail,
     executor::{
-        ArtifactAbiHashMismatchInfo, IvmAdmissionError, ManifestAbiHashMismatchInfo,
-        ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo, MaxCyclesExceedsUpperBoundInfo,
+        ArtifactAbiHashMismatchInfo, ContractRejection, IvmAdmissionError,
+        ManifestAbiHashMismatchInfo, ManifestCodeHashMismatchInfo, MaxCyclesExceedsFuelInfo,
+        MaxCyclesExceedsUpperBoundInfo,
     },
     metadata::Metadata,
     runtime::{RuntimeUpgradeManifest, RuntimeUpgradeStatus},
@@ -353,6 +354,22 @@ pub fn map_vm_error_with_context_to_validation(
     vm: &ivm::IVM,
     err: &ivm::VMError,
 ) -> ValidationFail {
+    if let ivm::VMError::ContractAbort { code } = err.as_unmetered()
+        && let Ok(code) = u32::try_from(*code)
+        && code != 0
+        && let Some(interface) = vm.contract_interface()
+        && let Some(descriptor) = interface
+            .error_codes
+            .iter()
+            .find(|descriptor| descriptor.code == code)
+    {
+        return ValidationFail::ContractRejected(ContractRejection {
+            contract: interface.seiyaku_name.clone(),
+            namespace: descriptor.namespace.clone(),
+            name: descriptor.name.clone(),
+            code,
+        });
+    }
     if let Some(diag) = vm.last_diagnostic() {
         ValidationFail::NotPermitted(format_vm_diagnostic(diag))
     } else {
@@ -419,7 +436,7 @@ mod tests {
             let mut metadata = Metadata::default();
             metadata.insert(
                 key.parse::<Name>().expect("static metadata key"),
-                Json::from_string_unchecked("malformed-reserved-value".to_owned()),
+                Json::new("malformed-reserved-value"),
             );
 
             let error = validate_generic_execution_metadata(&metadata)
@@ -691,5 +708,49 @@ mod tests {
     fn vm_error_maps_to_not_permitted() {
         let err = map_vm_error_to_validation(&ivm::VMError::OutOfGas);
         assert!(matches!(err, ValidationFail::NotPermitted(msg) if msg.contains("out of gas")));
+    }
+
+    #[test]
+    fn declared_contract_abort_maps_to_manifest_authenticated_rejection() {
+        let artifact = ivm::kotodama::compiler::Compiler::new()
+            .compile_source(
+                r#"
+                seiyaku LiquidityPolicy {
+                    error enum LiquidityError {
+                        BelowMinimum = 18,
+                    }
+
+                    kotoage fn reject() authorize("Test") {
+                        require(false, LiquidityError::BelowMinimum);
+                    }
+                }
+                "#,
+            )
+            .expect("compile contract rejection fixture");
+        let mut vm = ivm::IVM::new(u64::MAX);
+        vm.load_program(&artifact)
+            .expect("load contract rejection fixture");
+        let entry_pc = vm
+            .contract_interface()
+            .expect("embedded contract interface")
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == "reject")
+            .expect("reject entrypoint")
+            .entry_pc;
+        vm.set_program_counter(entry_pc)
+            .expect("select reject entrypoint");
+
+        let error = vm.run().expect_err("declared require must abort");
+        assert_eq!(error, ivm::VMError::ContractAbort { code: 18 });
+        assert_eq!(
+            map_vm_error_with_context_to_validation(&vm, &error),
+            ValidationFail::ContractRejected(ContractRejection {
+                contract: "LiquidityPolicy".to_owned(),
+                namespace: "LiquidityError".to_owned(),
+                name: "BelowMinimum".to_owned(),
+                code: 18,
+            })
+        );
     }
 }

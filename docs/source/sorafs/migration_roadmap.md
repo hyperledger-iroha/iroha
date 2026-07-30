@@ -67,11 +67,15 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-signatures-out artifacts/docs/book/manifest_signatures.json \
   --car-out artifacts/docs/book/content.car \
   --chunk-fetch-plan-out artifacts/docs/book/fetch_plan.json \
-  --car-digest=<expected-lowercase-hex> \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=<expected-bytes> \
   --root-cid=<expected-cid> \
   --dag-codec=0x71
 ```
+
+The `--car-digest` placeholder is the lowercase BLAKE3-256 digest of the
+complete canonical CARv2 archive (pragma, header, embedded CARv1 payload, and
+index). It is not the SF1 chunk-plan SHA3-256 digest.
 
 Release automation must source the expectations from the reviewed release
 bundle, not copy placeholder values from documentation. The manifest and
@@ -84,14 +88,22 @@ Use one canonical deployment ID across every required lane. Each lane checker
 must receive evidence from the same reviewed environment and emit a
 schema-closed, payload-free summary. Required evidence includes, at minimum:
 
+Before provisioning, validate the non-secret plan with
+`scripts/check_sorafs_l1_deployment_qualification.py` as documented in
+`docs/source/sorafs/l1_deployment_qualification.md`. A passing result confirms
+only that the proposed four-validator, multi-provider, dual-gateway,
+dual-Governance-DAG topology and its 17 deployment-bound lane slots are
+well-shaped. It explicitly recognizes no live evidence and is never promotion
+eligible.
+
 - deterministic pin registration, alias proof, provider-advert replay, and
   multi-provider retrieval;
 - gateway compliance, denylist, load, TLS/DNS, and cache-revocation behavior;
 - PDP, PoR, PoTR, PoP, repair, reputation, reserve/rent, orderbook, settlement,
   billing/hedging, moderation, governance-DAG, transparency, AI prescreen, and
   appeal-finance lanes selected by the aggregate checker;
-- four-or-more-validator consensus/finality evidence where a network exercise
-  is required;
+- exactly-four-validator DA/RBC consensus/finality evidence where a network
+  exercise is required;
 - signed approvals, key/HSM provenance, dashboards, alert tests, load/chaos
   results, and public package canaries where required by the lane contract.
 

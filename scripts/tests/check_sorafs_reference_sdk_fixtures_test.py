@@ -79,7 +79,7 @@ def test_checked_in_inventory_is_valid_signed_and_domain_complete() -> None:
 
     assert MODULE.validate_inventory(MODULE.DEFAULT_INVENTORY) == []
     assert len(MODULE.EXPECTED_PAYLOADS) == 82
-    assert len(MODULE.EXPECTED_OUTCOMES) == 30
+    assert len(MODULE.EXPECTED_OUTCOMES) == 32
     assert {
         row[0] for row in MODULE.EXPECTED_PAYLOADS.values()
     } == MODULE.REQUIRED_DOMAINS - {"reference_sdk"}
@@ -96,20 +96,100 @@ def test_cancel_asset_lock_hard_cut_vectors_are_closed_and_boundary_typed() -> N
         for path, metadata in MODULE.EXPECTED_PAYLOADS.items()
         if path.startswith("appeal_finance/")
     }
-    assert len(rows) == 8
+    assert set(rows) == {
+        "appeal_finance/cancel_asset_lock_v1.json",
+        "appeal_finance/cancel_asset_lock_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
+        "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
+    }
     assert {
         metadata[3]
         for metadata in rows.values()
     } == {
         "valid",
         "invalid_missing_expected_remaining_amount",
+        "invalid_nested_escrow_id",
         "invalid_noncanonical_quantity",
         "invalid_zero_expected_remaining_amount",
-        "noncanonical_trailing_bytes",
     }
     assert set(MODULE.EXPECTED_CANCEL_ASSET_LOCK_JSON) == {
         path for path in rows if path.endswith(".json")
     }
+    assert {
+        path
+        for path, metadata in MODULE.EXPECTED_OUTCOMES.items()
+        if metadata[0] == "appeal_finance"
+    } == {
+        "reference_sdk/appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json",
+        "reference_sdk/appeal_finance_cancel_asset_lock_zero_expected_negative_validation_outcome_v1.json",
+    }
+
+
+def test_cancel_asset_lock_substituted_escrow_id_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A different scalar hash cannot pass as the closed V1 fixture."""
+
+    inventory_path = copy_fixture_set(tmp_path)
+    fixture = inventory_path.parent / "appeal_finance/cancel_asset_lock_v1.json"
+    original = MODULE.EXPECTED_CANCEL_ASSET_LOCK_ESCROW_ID.encode("ascii")
+    substituted = original.replace(b"73CCD4", b"83CCD4", 1)
+    fixture_bytes = fixture.read_bytes()
+    assert original in fixture_bytes
+    fixture.write_bytes(fixture_bytes.replace(original, substituted, 1))
+
+    errors = MODULE.validate_inventory(inventory_path)
+
+    assert any(
+        "CancelAssetLock escrow_id does not match its closed V1 vector" in error
+        for error in errors
+    )
+
+
+def test_cancel_asset_lock_norito_vectors_are_closed_and_byte_exact() -> None:
+    """The canonical scalar and rejected nested frames retain their exact bytes."""
+
+    fixture_root = MODULE.DEFAULT_INVENTORY.parent
+    vectors = {
+        path: (fixture_root / path).read_bytes()
+        for path in MODULE.EXPECTED_CANCEL_ASSET_LOCK_NORITO
+    }
+
+    assert vectors == MODULE.EXPECTED_CANCEL_ASSET_LOCK_NORITO
+    canonical = vectors["appeal_finance/cancel_asset_lock_v1.to"]
+    nested = vectors[
+        "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to"
+    ]
+    assert len(canonical) == 85
+    assert len(nested) == 86
+    assert canonical[40] == 0x20
+    assert nested[40:42] == b"\x21\x20"
+
+
+def test_cancel_asset_lock_norito_substitution_is_rejected(
+    tmp_path: Path,
+) -> None:
+    """A signed path cannot substitute different bytes for either closed frame."""
+
+    inventory_path = copy_fixture_set(tmp_path)
+    fixture = (
+        inventory_path.parent
+        / "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to"
+    )
+    mutated = bytearray(fixture.read_bytes())
+    mutated[42] ^= 1
+    fixture.write_bytes(mutated)
+
+    errors = MODULE.validate_inventory(inventory_path)
+
+    assert any(
+        "CancelAssetLock Norito bytes do not match the closed V1 vector" in error
+        for error in errors
+    )
 
 
 def test_cancel_asset_lock_fixture_generator_is_atomic_and_fail_closed() -> None:
@@ -139,8 +219,8 @@ def test_cancel_asset_lock_fixture_generator_is_atomic_and_fail_closed() -> None
         "appeal_finance/cancel_asset_lock_v1.to",
         "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.json",
         "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
+        "appeal_finance/negative/cancel_asset_lock_nested_escrow_id_v1.to",
         "appeal_finance/negative/cancel_asset_lock_noncanonical_quantity_v1.json",
-        "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to",
         "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.json",
         "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
     ):

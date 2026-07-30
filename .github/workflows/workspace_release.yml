@@ -1,6 +1,8 @@
 name: Full workspace release gate
 
 on:
+  schedule:
+    - cron: "17 2 * * *"
   push:
     branches: [main]
     tags: ["v*"]
@@ -91,6 +93,39 @@ jobs:
       - name: Build the full workspace
         run: cargo build --locked --workspace
 
+  doc:
+    name: Workspace documentation
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-doc-1.93.1
+      - name: Document every workspace feature
+        run: cargo doc --locked --workspace --no-deps --all-features
+
   test:
     name: Workspace tests
     runs-on: [self-hosted, Linux, iroha2]
@@ -121,8 +156,90 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: workspace-release-test-1.93.1
+      - name: Enforce data-model compile-unit budget
+        run: >-
+          python3 scripts/check_compile_unit_budget.py
+          --locked
+          --lib
+          -p iroha_data_model
+          --artifact-scope workspace
+          --baseline ci/compile_unit_baselines.json
+          --baseline-key iroha_data_model_lib
+          --budget-percent 2
+          --budget-min-growth 3
+          --json-out target/ci/iroha-data-model-compile-units.json
+      - name: Upload data-model compile-unit evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: workspace-release-compile-units
+          path: target/ci/iroha-data-model-compile-units.json
+          if-no-files-found: error
       - name: Test the full workspace
         run: cargo test --locked --workspace --no-fail-fast
+
+  coverage:
+    name: Workspace coverage
+    runs-on: [self-hosted, Linux, iroha2]
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 360
+    env:
+      LLVM_PROFILE_FILE_NAME: "iroha-%p-%m.profraw"
+      IROHA_TEST_REQUIRE_NETWORK: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$source_sha"
+          test "$WORKFLOW_SHA" = "$source_sha"
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          cache: "false"
+          components: llvm-tools-preview
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          cache-on-failure: "true"
+          shared-key: workspace-release-coverage-1.93.1
+      - uses: taiki-e/install-action@10ddf82bb4948219b68187f154decde56c89ee88
+      - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955
+      - name: Collect workspace test coverage
+        run: >-
+          mold --run cargo llvm-cov nextest
+          --workspace --locked
+          --branch --no-report
+      - name: Collect documentation-test coverage
+        run: >-
+          mold --run cargo llvm-cov --doc
+          --branch --no-report
+      - name: Generate LCOV report
+        run: >-
+          cargo llvm-cov report --doctests
+          --ignore-filename-regex 'iroha_cli|iroha_torii'
+          --lcov --output-path lcov.info
+      - name: Upload LCOV report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: report-coverage
+          path: lcov.info
+          if-no-files-found: error
+      - name: Upload coverage to Coveralls
+        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b
+        with:
+          file: lcov.info
+          format: lcov
+          github-token: ${{ github.token }}
 
   clippy:
     name: Strict workspace Clippy

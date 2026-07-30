@@ -4,7 +4,7 @@
 use std::{
     collections::VecDeque,
     sync::{
-        Mutex as StdMutex,
+        Arc, Barrier, Mutex as StdMutex,
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
     },
 };
@@ -242,12 +242,10 @@ impl QueuePlanJournalRecordV4 {
         enqueue_timestamp_ms: u64,
         global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>,
     ) -> Self {
-        let entrypoint_hash = HashOf::new(&entrypoint);
+        let entrypoint_hash = entrypoint.hash();
         let signed_transaction_hash = match &entrypoint {
-            TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
-            TransactionEntrypoint::SealedReveal(reveal) => {
-                Some(HashOf::new(reveal.signed_transaction()))
-            }
+            TransactionEntrypoint::External(signed) => Some(signed.hash()),
+            TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
             TransactionEntrypoint::SealedCommitment(_)
             | TransactionEntrypoint::PrivateKaigi(_)
             | TransactionEntrypoint::Time(_) => None,
@@ -431,6 +429,8 @@ pub struct QueuePlanJournal {
     injected_faults: StdMutex<VecDeque<QueuePlanJournalTestFault>>,
     #[cfg(test)]
     exact_remove_failure_after: Option<usize>,
+    #[cfg(test)]
+    append_handoff: StdMutex<Option<(Arc<Barrier>, Arc<Barrier>)>>,
 }
 
 /// Test-only journal phase fault.
@@ -750,6 +750,8 @@ impl QueuePlanJournal {
             injected_faults: StdMutex::new(VecDeque::new()),
             #[cfg(test)]
             exact_remove_failure_after: None,
+            #[cfg(test)]
+            append_handoff: StdMutex::new(None),
         })
     }
 
@@ -1286,6 +1288,15 @@ impl QueuePlanJournal {
         script.extend(faults);
     }
 
+    /// Pause the next append before it touches storage for queue-lock concurrency tests.
+    #[cfg(test)]
+    pub(super) fn install_append_handoff(&self, reached: Arc<Barrier>, resume: Arc<Barrier>) {
+        *self
+            .append_handoff
+            .lock()
+            .expect("queue plan journal append handoff mutex poisoned") = Some((reached, resume));
+    }
+
     /// Fail a strict exact-removal batch after this many tombstones have been durably appended.
     #[cfg(test)]
     pub(super) fn inject_exact_remove_failure_after_durable_tombstones(
@@ -1776,6 +1787,17 @@ impl QueuePlanJournal {
         };
 
         #[cfg(test)]
+        if let Some((reached, resume)) = self
+            .append_handoff
+            .lock()
+            .expect("queue plan journal append handoff mutex poisoned")
+            .take()
+        {
+            reached.wait();
+            resume.wait();
+        }
+
+        #[cfg(test)]
         if phase == AppendPhase::Replace
             && self.take_fault(QueuePlanJournalTestFault::ReplaceBeforeAppend)
         {
@@ -2247,15 +2269,15 @@ fn validate_frame(frame: &QueuePlanJournalFrameV4) -> io::Result<()> {
                     record.version, QUEUE_PLAN_JOURNAL_VERSION
                 )));
             }
-            if record.entrypoint_hash != HashOf::new(&record.entrypoint) {
+            if record.entrypoint_hash != record.entrypoint.hash() {
                 return Err(invalid_data(
                     "queue plan journal entrypoint hash does not match its canonical entrypoint",
                 ));
             }
             let expected_signed_hash = match &record.entrypoint {
-                TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
+                TransactionEntrypoint::External(signed) => Some(signed.hash()),
                 TransactionEntrypoint::SealedReveal(reveal) => {
-                    Some(HashOf::new(reveal.signed_transaction()))
+                    Some(reveal.signed_transaction().hash())
                 }
                 TransactionEntrypoint::SealedCommitment(_)
                 | TransactionEntrypoint::PrivateKaigi(_)

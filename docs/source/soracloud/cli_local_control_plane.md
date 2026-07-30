@@ -38,6 +38,21 @@ manager; the CLI does not keep a shadow control-plane mirror.
   builds with `verify-build.sh`. This is a dev shim for the deterministic
   plane, not a full embedded IVM runtime.
 
+## Runtime Provenance Signature Framing
+
+Model-host heartbeats and Inrou host advertisements use one canonical V1
+signature preimage. It is the canonical Norito tuple
+`(domain_tag_bytes, version, purpose_wire_id, canonical_payload_bytes)`, where
+the fixed domain is `iroha:soracloud:runtime-provenance:v1\0`, the version is
+`1`, and the immutable purpose ids are `1` for model-host heartbeat and `2` for
+Inrou host advertisement. The byte fields are length-delimited by Norito.
+
+External signing adapters receive the expected purpose and framed preimage as
+separate inputs and must reject any disagreement before signing. Ledger
+admission independently rebuilds the operation-specific framed preimage, so a
+raw semantic-payload signature or a signature from the other runtime purpose
+fails verification.
+
 ## Vanity Alias Access Modes
 
 - Soracloud deploys keep the registered vanity host stable. Releasing a new
@@ -392,6 +407,17 @@ Hosted HTTP proxy responses carried over the P2P Torii proxy path are buffered
 up to `torii.soracloud_public_max_response_bytes` before being wrapped for the
 caller. The default is 64 MiB; larger hosted responses fail closed with a
 `502 Bad Gateway` snapshot instead of allocating unbounded memory.
+
+The embedded Hugging Face importer and inference bridge use separate bounded
+response policies. `soracloud_runtime.hf.import_max_files`,
+`import_max_file_bytes`, and `import_max_total_bytes` must be non-zero, must not
+exceed 128 files, 512 MiB per file, and 4 GiB per source respectively, and the
+per-file limit must fit inside the aggregate limit. Model metadata and inference
+responses are capped by `model_info_max_response_bytes` (8 MiB by default,
+16 MiB hard maximum) and `inference_max_response_bytes` (64 MiB default and hard
+maximum). Oversized or misreported HTTP bodies are rejected while streaming.
+Separately, startup does not publish a runtime handle when persisted snapshot
+restore or the initial authoritative reconciliation fails.
 
 Focused validation now covers both shared-storage transports:
 

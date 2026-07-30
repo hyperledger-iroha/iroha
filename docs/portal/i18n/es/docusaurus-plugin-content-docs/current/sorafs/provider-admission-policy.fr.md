@@ -37,7 +37,7 @@ restant en tâches d'ingénierie traçables.
 | Atestación de punto final | Cada punto final anunciado debe estar disponible mediante una relación de certificación mTLS o QUIC. | Defina la carga útil Norito `EndpointAttestationV1` y el almacenamiento por punto final en el paquete de admisión. |
 
 ## Flujo de trabajo de admisión1. **Creación de propuesta**
-   - CLI: añadido `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI: añadido `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      Producto `ProviderAdmissionProposalV1` + paquete de certificación.
    - Validación: s'assurer des champs requis, apuesta > 0, maneja el fragmentador canónico en `profile_id`.
 2. **Aprobación de gobierno**
@@ -62,7 +62,7 @@ El flujo CLI acepta generar paquetes de certificados intermedios (`--endpoint-at
 
 ### Referencia CLI
 
-Ejecute cada comando a través de `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
+Ejecute cada comando a través de `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Requisitos de banderas: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, y al menos un `--endpoint=<kind:host>`.
@@ -104,7 +104,7 @@ Ejecute cada comando a través de `cargo run -p sorafs_manifest --bin sorafs_man
 1. Construya la pareja de propuesta/anuncio sucesor con `provider-admission proposal` y `provider-admission sign`, y aumente `--retention-epoch` y agregue cada vez los puntos finales/estacas si es necesario.
 2. Ejecutar
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -120,7 +120,7 @@ Ejecute cada comando a través de `cargo run -p sorafs_manifest --bin sorafs_man
 5. Régénérez et commitez les fixtures canonices vía `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) valide que les sorties Norito restent stables.#### Revocación de urgencia
 1. Identifique el sobre comprometido y envíe una revocación:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

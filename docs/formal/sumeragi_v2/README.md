@@ -395,9 +395,19 @@ certificate round.
   It also binds the bounded autonomous stage projection, its durable-stage
   reducer, and the data-model stage geometry/order validation; diagnostics
   cannot advance beyond revalidated evidence or authorize consensus state.
-  The same version-2 ledger machine-maps every conceptual `ML-MUT-*` ID from
+  The same version-3 ledger machine-maps every conceptual `ML-MUT-*` ID from
   the closure ledger. `tla_counterexample` entries cover every and only the 37
-  `_bug.cfg` files. `MLDiagnosticsAreDerived`,
+  production-refinement `_bug.cfg` files. Its separate
+  `layout_only_no_transition_refinement` contract binds the accepted payload
+  schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal V4, reservation
+  journal V5, the 4096 entry ceiling, exact queue durability order, and Kura
+  execution-input persistence/recovery to
+  `SumeragiV2InFlightFirstRelease.tla` and its nine mutation controls. That
+  structural contract detects layout drift but does not claim a total Rust
+  transition-refinement theorem. The release receipt requires the four
+  refinement rows plus a separately named fifth
+  `inflight-first-release-layout` row, preventing bounded layout evidence from
+  being promoted into a refinement result. `MLDiagnosticsAreDerived`,
   `MLApiAuthoritySeparation`, `MLSdkAcceptSetEqualsRust`,
   `MLFixtureHasOneCanonicalOwner`, and `MLConsensusLayoutAgreement` are
   explicitly `static_release` or `differential_release` invariants with zero
@@ -410,7 +420,8 @@ certificate round.
   `run_sumeragi_v2_multilane_apalache.sh` is the second bounded positive
   checker. It accepts no length argument or environment length override,
   requires the exact source-binding check first, validates the pinned Apalache 0.52.2
-  launcher and jar hashes, typechecks all four complete modules, and
+  launcher and jar hashes, typechecks the four complete refinement modules
+  plus the layout-only in-flight carrier module, and
   requires one exact `NoError` result at these reviewed bounds:
 
   | Kernel | Fixed configuration | `Next` bound |
@@ -419,14 +430,18 @@ certificate round.
   | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |
   | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
   | QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |
+  | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 10 |
 
-  Nine runner-contract negative controls reject tool-version or checksum
+  Twelve runner-contract negative controls reject tool-version or checksum
   drift, source-binding bypass, reduced autoscale or QueuePlan bounds, mutation
-  substitution, a weakened success marker, and a length override. The default
+  substitution, removal of a Native invariant, a reduced in-flight bound or
+  in-flight mutation substitution, a weakened success marker, and a length
+  override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  thirty-seven exact TLC mutation witnesses. Apalache does not run those mutations:
-  their named-counterexample contract is owned by the deterministic TLC
-  runner, while the Apalache leg accepts positive `NoError` only.
+  thirty-seven exact refinement-kernel TLC mutation witnesses and the nine
+  exact in-flight layout mutation witnesses. Apalache does not run those
+  mutations: their named-counterexample contract is owned by the deterministic
+  TLC runners, while the Apalache leg accepts positive `NoError` only.
 
   Install and run the pinned toolchain with:
 
@@ -446,8 +461,10 @@ certificate round.
   each model/config/log hash, bound length, and exact `NoError` result. A
   failed or source-drifting run removes or withholds the completion evidence.
   These finite checks constrain four source-bound production-refinement
-  declarations consumed transitively by the top-level refinement debts; they
-  are not independent ledger rows, TLAPS evidence, or cross-tool proof evidence.
+  declarations consumed transitively by the top-level refinement debts and one
+  explicitly layout-only carrier kernel. They are
+  not independent ledger rows, TLAPS evidence, or cross-tool proof evidence,
+  and they do not establish a Rust transition-refinement theorem.
 
 ## Exact protocol abstractions
 
@@ -1015,9 +1032,11 @@ run, TLAPM performs a strict no-backend summary preflight. Each proof-bearing
 shard then runs in a fresh process with one worker, disabled fingerprints, and
 its own disposable cache. The complete wave executes inside an owned process
 group under a 2 GiB bounded polling ceiling with a target 250 ms cadence. Each `ps` or macOS
-`footprint` probe is limited to 200 ms; an inspection timeout fails closed and
-terminates the exact owned process group. This portable userspace guard is not
-an operating-system hard allocation limit. A separate lifeline session cleans
+`footprint` probe is limited to 2 seconds; an inspection timeout fails closed and
+terminates the exact owned process group. The next sample is scheduled from the
+completion of the previous probe so scheduler latency cannot create a catch-up
+storm. This portable userspace guard is not an operating-system hard allocation
+limit. A separate lifeline session cleans
 the body after supervisor death, while inherited lock descriptors keep the
 per-user heavy-job lock shared with Kagemusha V4 candidate generation until
 cleanup finishes. Release receipts bind the resulting JSONL samples and

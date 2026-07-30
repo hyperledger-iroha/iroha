@@ -7,13 +7,17 @@ authors.workspace = true
 
 license.workspace = true
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [dependencies]
-iroha_data_model.workspace = true
-norito = {workspace = true}
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 [features]
 default = []
-compact-len = []
 json = []
-packed-struct = []
-schema-structural = []

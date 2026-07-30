@@ -1,5 +1,4 @@
 //! Developer automation entrypoint for repository maintenance tasks.
-#![allow(unexpected_cfgs)]
 
 use std::{
     cmp::Ordering,
@@ -8504,14 +8503,14 @@ where
                 }
             }
             Ok(CommandKind::NoritoRpcFixtures {
-                options: NoritoRpcFixtureOptions {
+                options: NoritoRpcFixtureOptions::new(
                     fixtures_json,
                     exporter_manifest,
                     output_dir,
                     selection_manifest,
                     include_all,
                     check_encoded,
-                },
+                ),
             })
         }
         "norito-rpc-verify" => {
@@ -9955,10 +9954,10 @@ fn validate_release_openapi_spec(spec: &Value) -> Result<(), Box<dyn Error>> {
         .and_then(Value::as_object)
         .ok_or("release OpenAPI document is missing the info object")?;
     for field in ["title", "version"] {
-        if !info
+        if info
             .get(field)
             .and_then(Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty())
         {
             return Err(format!(
                 "release OpenAPI document info.{field} must be a non-empty string"
@@ -10007,6 +10006,68 @@ const OPENAPI_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
 const OPENAPI_SIGNATURE_ENVELOPE_MAX_BYTES: u64 = 4_096;
 const OPENAPI_SIGNER_ALLOWLIST_MAX_BYTES: u64 = 64 * 1024;
 const OPENAPI_SIGNER_ALLOWLIST_MAX_ENTRIES: usize = 256;
+const OPENAPI_GENERATOR_INPUT_INVENTORY: &[u8] =
+    include_bytes!("../../release/openapi-generator-inputs-v1.txt");
+const OPENAPI_GENERATOR_INPUT_INVENTORY_HEADER: &str = "iroha.openapi.generator-inputs.v1";
+const OPENAPI_GENERATOR_INPUT_TREE_DOMAIN: &[u8] = b"iroha-openapi-generator-input-tree-v2";
+const OPENAPI_GENERATOR_IGNORED_INPUT: &str = "Cargo.lock";
+const OPENAPI_GENERATOR_IGNORED_INPUT_MODE: &[u8] = b"100644";
+const OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const OPENAPI_CARGO_LOCK_PIN: &[u8] = include_bytes!("../../release/openapi-cargo-lock-v1.txt");
+const OPENAPI_CARGO_LOCK_PIN_PATH: &str = "release/openapi-cargo-lock-v1.txt";
+const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
+const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
+const OPENAPI_CARGO_LOCK_EXPECTED_BYTES: u64 = 315_037;
+const OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX: &str =
+    "e4e1c9b8939a9d76f80c593dd0105a4e2783cbc6e3a0020e2ae860d83a5cdc24";
+const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
+    ".github/workflows/openapi.yml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "IrohaSwift",
+    "Makefile",
+    "ci",
+    "ci/check_android_codegen.sh",
+    "ci/check_openapi_spec.sh",
+    "crates",
+    "csharp",
+    "data_model",
+    "docs/i18n",
+    "docs/portal/package-lock.json",
+    "docs/portal/package.json",
+    "docs/portal/scripts",
+    "docs/portal/static/openapi/allowed_signers.json",
+    "docs/source/sdk/android/generated",
+    "docs/source/sdk/android/generated/codegen_hash_tree.json",
+    "docs/source/sdk/android/generated/codegen_manifest_metadata.json",
+    "fixtures",
+    "integration_tests",
+    "java/iroha_android",
+    "java/norito_java",
+    "javascript/iroha_js",
+    "kotlin",
+    "mochi",
+    "python/iroha_python",
+    "python/iroha_torii_client",
+    "release/openapi-cargo-lock-v1.txt",
+    "release/openapi-generator-inputs-v1.txt",
+    "release/version-map.toml",
+    "rust-toolchain.toml",
+    "scripts",
+    "scripts/android_codegen_docs.py",
+    "scripts/android_codegen_replay_sorafs_fixture.py",
+    "scripts/check_android_codegen_parity.py",
+    "scripts/check_sorafs_release_version_map.py",
+    "tools",
+    "vendor",
+    "xtask",
+];
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OpenApiCargoLockPinV1 {
+    bytes: u64,
+    sha256_hex: String,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -10382,7 +10443,7 @@ fn read_openapi_input_stable(
     label: &str,
     max_bytes: u64,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
-    read_openapi_input_stable_with_policy(path, label, max_bytes, false)
+    read_openapi_input_stable_with_policy(path, label, max_bytes, false, false)
 }
 
 fn read_openapi_input_stable_with_policy(
@@ -10390,6 +10451,7 @@ fn read_openapi_input_stable_with_policy(
     label: &str,
     max_bytes: u64,
     require_safe_permissions: bool,
+    forbid_executable: bool,
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     let parent = path
         .parent()
@@ -10412,6 +10474,9 @@ fn read_openapi_input_stable_with_policy(
         .map_err(|err| format!("failed to inspect opened {label} {}: {err}", path.display()))?;
     if require_safe_permissions {
         validate_openapi_open_trust_file_permissions(path, &file, label)?;
+    }
+    if forbid_executable {
+        validate_openapi_open_non_executable_permissions(path, &file, label)?;
     }
     let declared_len = opened_before.len();
     if declared_len > max_bytes {
@@ -10452,6 +10517,9 @@ fn read_openapi_input_stable_with_policy(
     if require_safe_permissions {
         validate_openapi_open_trust_file_permissions(path, &file, label)?;
     }
+    if forbid_executable {
+        validate_openapi_open_non_executable_permissions(path, &file, label)?;
+    }
     validate_openapi_output_ancestors(parent, label)?;
     Ok(bytes)
 }
@@ -10461,6 +10529,7 @@ fn openapi_read_state_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
+        && left.mode() == right.mode()
         && left.len() == right.len()
         && left.mtime() == right.mtime()
         && left.mtime_nsec() == right.mtime_nsec()
@@ -10488,7 +10557,7 @@ fn read_openapi_utf8_trust_input_stable(
     label: &str,
     max_bytes: u64,
 ) -> Result<String, Box<dyn Error>> {
-    let bytes = read_openapi_input_stable_with_policy(path, label, max_bytes, true)?;
+    let bytes = read_openapi_input_stable_with_policy(path, label, max_bytes, true, false)?;
     String::from_utf8(bytes)
         .map_err(|err| format!("{label} {} must be UTF-8: {err}", path.display()).into())
 }
@@ -10946,12 +11015,14 @@ fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Err
             path.display()
         )
     })?;
-    let envelope: SignatureEnvelope = serde_json::from_str(&text).map_err(|err| {
-        format!(
-            "failed to parse signature envelope {}: {err}",
-            path.display()
-        )
-    })?;
+    let envelope: SignatureEnvelope =
+        serde_json::from_str(&text).map_err(|err| -> Box<dyn Error> {
+            format!(
+                "failed to parse signature envelope {}: {err}",
+                path.display()
+            )
+            .into()
+        })?;
     validate_signature_envelope_fields(&envelope)?;
     Ok(envelope)
 }
@@ -11082,6 +11153,34 @@ fn validate_openapi_open_trust_file_permissions(
     Ok(())
 }
 
+#[cfg(unix)]
+fn validate_openapi_open_non_executable_permissions(
+    path: &Path,
+    file: &fs::File,
+    label: &str,
+) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let metadata = file.metadata().map_err(|err| {
+        format!(
+            "failed to inspect opened {label} {} permissions: {err}",
+            path.display()
+        )
+    })?;
+    if metadata.permissions().mode() & 0o111 != 0 {
+        return Err(format!("{label} {} must not be executable", path.display()).into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_openapi_open_non_executable_permissions(
+    _path: &Path,
+    _file: &fs::File,
+    _label: &str,
+) -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn validate_openapi_open_trust_file_permissions(
     _path: &Path,
@@ -11127,21 +11226,19 @@ fn validate_openapi_generator_provenance(
             "OpenAPI generator provenance timestamp must be a positive safe integer".into(),
         );
     }
+    let Some(source_digest) = provenance.source_sha256_hex.as_deref() else {
+        return Err("OpenAPI generator provenance is missing generator_source_sha256_hex".into());
+    };
+    if !is_lower_hex_digest(source_digest, 32) || source_digest.bytes().all(|byte| byte == b'0') {
+        return Err(
+            "generator_source_sha256_hex must be exactly 64 lowercase hexadecimal characters and must be nonzero"
+                .into(),
+        );
+    }
     if provenance.dirty {
         if provenance.commit.is_some() {
             return Err(
                 "dirty OpenAPI generator provenance must set generator_commit to null".into(),
-            );
-        }
-        let Some(source_digest) = provenance.source_sha256_hex.as_deref() else {
-            return Err(
-                "dirty OpenAPI generator provenance is missing generator_source_sha256_hex".into(),
-            );
-        };
-        if !is_lower_hex_digest(source_digest, 32) {
-            return Err(
-                "generator_source_sha256_hex must be exactly 64 lowercase hexadecimal characters"
-                    .into(),
             );
         }
         if !allow_dirty_unsigned {
@@ -11159,10 +11256,8 @@ fn validate_openapi_generator_provenance(
                 "generator_commit must be exactly 40 lowercase hexadecimal characters".into(),
             );
         }
-        if provenance.source_sha256_hex.is_some() {
-            return Err(
-                "clean OpenAPI generator provenance must omit generator_source_sha256_hex".into(),
-            );
+        if commit.bytes().all(|byte| byte == b'0') {
+            return Err("generator_commit must identify a nonzero Git commit".into());
         }
     }
     Ok(())
@@ -11213,6 +11308,7 @@ fn git_source_provenance(
         return Err("git rev-parse returned an empty HEAD".into());
     }
     let generated_unix_ms = git_head_timestamp_ms(repo_root)?;
+    let committed_source_sha256_hex = git_openapi_generator_input_tree_sha256(repo_root, head)?;
 
     let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
     let mut status_args = vec![
@@ -11228,7 +11324,7 @@ fn git_source_provenance(
             generated_unix_ms,
             commit: Some(head.to_owned()),
             dirty: false,
-            source_sha256_hex: None,
+            source_sha256_hex: Some(committed_source_sha256_hex),
         });
     }
 
@@ -11255,9 +11351,14 @@ fn git_source_provenance(
     update_sha256_component(
         &mut source_digest,
         b"domain",
-        b"iroha-openapi-generator-source-v2",
+        b"iroha-openapi-generator-working-source-v3",
     );
     update_sha256_component(&mut source_digest, b"head", head.as_bytes());
+    update_sha256_component(
+        &mut source_digest,
+        b"committed-input-tree-sha256",
+        committed_source_sha256_hex.as_bytes(),
+    );
     update_sha256_component(&mut source_digest, b"status", &status);
     update_sha256_component(&mut source_digest, b"tracked-diff", &tracked_diff);
     for path_bytes in untracked
@@ -11275,6 +11376,368 @@ fn git_source_provenance(
         dirty: true,
         source_sha256_hex: Some(hex::encode(source_digest.finalize())),
     })
+}
+
+fn git_openapi_generator_input_tree_sha256(
+    repo_root: &Path,
+    commit: &str,
+) -> Result<String, Box<dyn Error>> {
+    if !is_lower_hex_digest(commit, 20) {
+        return Err(
+            "OpenAPI generator input commit must be exactly 40 lowercase hex digits".into(),
+        );
+    }
+    let inventory_paths = validate_openapi_generator_input_inventory()?;
+    let tracked_inventory_paths = inventory_paths
+        .iter()
+        .copied()
+        .filter(|path| *path != OPENAPI_GENERATOR_IGNORED_INPUT)
+        .collect::<Vec<_>>();
+    if tracked_inventory_paths.len().checked_add(1) != Some(inventory_paths.len()) {
+        return Err(
+            "OpenAPI generator input inventory must contain exactly one ignored Cargo.lock input"
+                .into(),
+        );
+    }
+    let ignored_tree_entry = git_stdout(
+        repo_root,
+        &[
+            OsString::from("ls-tree"),
+            OsString::from("-z"),
+            OsString::from("--full-tree"),
+            OsString::from(commit),
+            OsString::from("--"),
+            OsString::from(OPENAPI_GENERATOR_IGNORED_INPUT),
+        ],
+    )?;
+    if !ignored_tree_entry.is_empty() {
+        return Err(format!(
+            "OpenAPI generator ignored input {} must not exist at pinned commit {commit}",
+            OPENAPI_GENERATOR_IGNORED_INPUT
+        )
+        .into());
+    }
+    let mut args = vec![
+        OsString::from("ls-tree"),
+        OsString::from("-r"),
+        OsString::from("-z"),
+        OsString::from("--full-tree"),
+        OsString::from(commit),
+        OsString::from("--"),
+    ];
+    args.extend(
+        tracked_inventory_paths
+            .iter()
+            .map(|path| OsString::from(*path)),
+    );
+    let tree = git_stdout(repo_root, &args)?;
+    if tree.is_empty() {
+        return Err("OpenAPI generator input inventory resolved to an empty Git tree".into());
+    }
+    if !tree.ends_with(&[0]) {
+        return Err("git ls-tree output for OpenAPI generator inputs must end in NUL".into());
+    }
+
+    let mut resolved_paths = Vec::new();
+    let mut unique_paths = BTreeSet::new();
+    let mut cargo_lock_pin_mode = None;
+    for entry in tree
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let tab = entry
+            .iter()
+            .position(|byte| *byte == b'\t')
+            .ok_or("git ls-tree returned an OpenAPI generator input without a path separator")?;
+        let metadata = std::str::from_utf8(&entry[..tab]).map_err(|err| {
+            format!("git ls-tree returned non-UTF-8 OpenAPI generator metadata: {err}")
+        })?;
+        let fields = metadata.split(' ').collect::<Vec<_>>();
+        if fields.len() != 3
+            || !matches!(fields[0], "100644" | "100755" | "120000")
+            || fields[1] != "blob"
+            || !is_lower_hex_digest(fields[2], 20)
+        {
+            return Err("OpenAPI generator inputs must resolve only to canonical Git blobs".into());
+        }
+        let path = std::str::from_utf8(&entry[tab + 1..]).map_err(|err| {
+            format!("git ls-tree returned a non-UTF-8 OpenAPI generator input path: {err}")
+        })?;
+        if !unique_paths.insert(path) {
+            return Err(format!("git ls-tree duplicated OpenAPI generator input `{path}`").into());
+        }
+        if path == OPENAPI_CARGO_LOCK_PIN_PATH {
+            cargo_lock_pin_mode = Some(fields[0].to_owned());
+        }
+        resolved_paths.push(path);
+    }
+    for required in &tracked_inventory_paths {
+        let prefix = format!("{required}/");
+        if !resolved_paths
+            .iter()
+            .any(|path| *path == *required || path.starts_with(&prefix))
+        {
+            return Err(format!(
+                "OpenAPI generator input inventory path `{required}` is missing at commit {commit}"
+            )
+            .into());
+        }
+    }
+    match cargo_lock_pin_mode.as_deref() {
+        Some("100644") => {}
+        Some(mode) => {
+            return Err(format!(
+                "OpenAPI Cargo.lock pin must have Git mode 100644 at commit {commit}, found {mode}"
+            )
+            .into());
+        }
+        None => {
+            return Err(format!("OpenAPI Cargo.lock pin is missing at commit {commit}").into());
+        }
+    }
+
+    let pin = read_git_openapi_cargo_lock_pin(repo_root, commit)?;
+    let ignored_input = read_openapi_generator_ignored_input(repo_root, &pin)?;
+    Ok(openapi_generator_input_closure_sha256(
+        &tree,
+        &ignored_input,
+    ))
+}
+
+fn openapi_generator_input_closure_sha256(tree: &[u8], ignored_input: &[u8]) -> String {
+    let mut source_digest = Sha256::new();
+    update_sha256_component(
+        &mut source_digest,
+        b"domain",
+        OPENAPI_GENERATOR_INPUT_TREE_DOMAIN,
+    );
+    update_sha256_component(
+        &mut source_digest,
+        b"inventory",
+        OPENAPI_GENERATOR_INPUT_INVENTORY,
+    );
+    update_sha256_component(&mut source_digest, b"tree", tree);
+    update_sha256_component(
+        &mut source_digest,
+        b"ignored-input-path",
+        OPENAPI_GENERATOR_IGNORED_INPUT.as_bytes(),
+    );
+    update_sha256_component(
+        &mut source_digest,
+        b"ignored-input-mode",
+        OPENAPI_GENERATOR_IGNORED_INPUT_MODE,
+    );
+    update_sha256_component(&mut source_digest, b"ignored-input-bytes", ignored_input);
+    hex::encode(source_digest.finalize())
+}
+
+fn parse_openapi_cargo_lock_pin(bytes: &[u8]) -> Result<OpenApiCargoLockPinV1, Box<dyn Error>> {
+    if bytes.is_empty() || u64::try_from(bytes.len())? > OPENAPI_CARGO_LOCK_PIN_MAX_BYTES {
+        return Err(format!(
+            "OpenAPI Cargo.lock pin must contain 1..={OPENAPI_CARGO_LOCK_PIN_MAX_BYTES} bytes"
+        )
+        .into());
+    }
+    let text = std::str::from_utf8(bytes)
+        .map_err(|err| format!("OpenAPI Cargo.lock pin is not UTF-8: {err}"))?;
+    if text.contains('\r') || !text.ends_with('\n') {
+        return Err("OpenAPI Cargo.lock pin must use LF endings and one final newline".into());
+    }
+    let mut fields = text.split('\n');
+    if fields.next() != Some(OPENAPI_CARGO_LOCK_PIN_SCHEMA) {
+        return Err("OpenAPI Cargo.lock pin has an invalid schema".into());
+    }
+    let byte_text = fields
+        .next()
+        .and_then(|field| field.strip_prefix("bytes="))
+        .ok_or("OpenAPI Cargo.lock pin has an invalid bytes field")?;
+    if byte_text.is_empty()
+        || byte_text.starts_with('0')
+        || !byte_text.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err("OpenAPI Cargo.lock pin has a noncanonical bytes field".into());
+    }
+    let expected_bytes = byte_text
+        .parse::<u64>()
+        .map_err(|err| format!("OpenAPI Cargo.lock pin bytes field is invalid: {err}"))?;
+    let sha256_hex = fields
+        .next()
+        .and_then(|field| field.strip_prefix("sha256_hex="))
+        .ok_or("OpenAPI Cargo.lock pin has an invalid SHA-256 field")?;
+    if fields.next() != Some("") || fields.next().is_some() {
+        return Err("OpenAPI Cargo.lock pin must contain exactly three fields".into());
+    }
+    if expected_bytes != OPENAPI_CARGO_LOCK_EXPECTED_BYTES
+        || sha256_hex != OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX
+    {
+        return Err("OpenAPI Cargo.lock pin does not match the exact V1 size and SHA-256".into());
+    }
+    Ok(OpenApiCargoLockPinV1 {
+        bytes: expected_bytes,
+        sha256_hex: sha256_hex.to_owned(),
+    })
+}
+
+fn read_git_openapi_cargo_lock_pin(
+    repo_root: &Path,
+    commit: &str,
+) -> Result<OpenApiCargoLockPinV1, Box<dyn Error>> {
+    let object = OsString::from(format!("{commit}:{OPENAPI_CARGO_LOCK_PIN_PATH}"));
+    let size = git_stdout(
+        repo_root,
+        &[
+            OsString::from("cat-file"),
+            OsString::from("-s"),
+            object.clone(),
+        ],
+    )?;
+    let size_text = std::str::from_utf8(&size)
+        .map_err(|err| format!("OpenAPI Cargo.lock pin Git size is not UTF-8: {err}"))?;
+    if !size_text.ends_with('\n')
+        || size_text[..size_text.len() - 1].is_empty()
+        || !size_text[..size_text.len() - 1]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit())
+    {
+        return Err("OpenAPI Cargo.lock pin Git size is noncanonical".into());
+    }
+    let object_size = size_text[..size_text.len() - 1]
+        .parse::<u64>()
+        .map_err(|err| format!("OpenAPI Cargo.lock pin Git size is invalid: {err}"))?;
+    if object_size != u64::try_from(OPENAPI_CARGO_LOCK_PIN.len())?
+        || object_size > OPENAPI_CARGO_LOCK_PIN_MAX_BYTES
+    {
+        return Err(format!(
+            "OpenAPI Cargo.lock pin Git blob has {object_size} bytes; expected exactly {}",
+            OPENAPI_CARGO_LOCK_PIN.len()
+        )
+        .into());
+    }
+    let committed_pin = git_stdout(
+        repo_root,
+        &[OsString::from("cat-file"), OsString::from("blob"), object],
+    )?;
+    if u64::try_from(committed_pin.len())? != object_size {
+        return Err("OpenAPI Cargo.lock pin Git blob changed while it was read".into());
+    }
+    if committed_pin != OPENAPI_CARGO_LOCK_PIN {
+        return Err(
+            "OpenAPI Cargo.lock pin at the generator commit differs from the compiled V1 pin"
+                .into(),
+        );
+    }
+    parse_openapi_cargo_lock_pin(&committed_pin)
+}
+
+fn read_openapi_generator_ignored_input(
+    repo_root: &Path,
+    pin: &OpenApiCargoLockPinV1,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let tracked = git_stdout(
+        repo_root,
+        &[
+            "ls-files",
+            "--stage",
+            "-z",
+            "--",
+            OPENAPI_GENERATOR_IGNORED_INPUT,
+        ],
+    )?;
+    if !tracked.is_empty() {
+        return Err(format!(
+            "OpenAPI generator ignored input {} must remain untracked",
+            OPENAPI_GENERATOR_IGNORED_INPUT
+        )
+        .into());
+    }
+    let ignored = git_stdout(
+        repo_root,
+        &["check-ignore", "--", OPENAPI_GENERATOR_IGNORED_INPUT],
+    )
+    .map_err(|_| {
+        format!(
+            "OpenAPI generator ignored input {} must be excluded by Git",
+            OPENAPI_GENERATOR_IGNORED_INPUT
+        )
+    })?;
+    if ignored != format!("{}\n", OPENAPI_GENERATOR_IGNORED_INPUT).as_bytes() {
+        return Err(format!(
+            "Git returned a noncanonical ignored-input identity for {}",
+            OPENAPI_GENERATOR_IGNORED_INPUT
+        )
+        .into());
+    }
+
+    let path = repo_root.join(OPENAPI_GENERATOR_IGNORED_INPUT);
+    let bytes = read_openapi_input_stable_with_policy(
+        &path,
+        "OpenAPI generator ignored Cargo lock",
+        OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES,
+        false,
+        true,
+    )?;
+    if bytes.is_empty() {
+        return Err("OpenAPI generator ignored Cargo lock must not be empty".into());
+    }
+    if u64::try_from(bytes.len())? != pin.bytes {
+        return Err(format!(
+            "OpenAPI generator ignored Cargo lock has {} bytes; expected exactly {}",
+            bytes.len(),
+            pin.bytes
+        )
+        .into());
+    }
+    let digest = hex::encode(Sha256::digest(&bytes));
+    if digest != pin.sha256_hex {
+        return Err(format!(
+            "OpenAPI generator ignored Cargo lock SHA-256 {digest} does not match pinned {}",
+            pin.sha256_hex
+        )
+        .into());
+    }
+    Ok(bytes)
+}
+
+fn validate_openapi_generator_input_inventory() -> Result<Vec<&'static str>, Box<dyn Error>> {
+    let inventory = std::str::from_utf8(OPENAPI_GENERATOR_INPUT_INVENTORY)
+        .map_err(|err| format!("OpenAPI generator input inventory is not UTF-8: {err}"))?;
+    if inventory.contains('\r') || !inventory.ends_with('\n') {
+        return Err(
+            "OpenAPI generator input inventory must use LF endings and one final newline".into(),
+        );
+    }
+    let mut lines = inventory.lines();
+    if lines.next() != Some(OPENAPI_GENERATOR_INPUT_INVENTORY_HEADER) {
+        return Err("OpenAPI generator input inventory has an invalid schema header".into());
+    }
+    let paths = lines.collect::<Vec<_>>();
+    if paths.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(
+            "OpenAPI generator input inventory paths must be strictly sorted and unique".into(),
+        );
+    }
+    if paths != OPENAPI_GENERATOR_INPUT_PATHS {
+        return Err(
+            "OpenAPI generator input inventory does not match the exact V1 release-input contract"
+                .into(),
+        );
+    }
+    for path in &paths {
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.ends_with('/')
+            || path.contains('\\')
+            || path
+                .split('/')
+                .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            return Err(format!(
+                "OpenAPI generator input inventory contains a noncanonical path `{path}`"
+            )
+            .into());
+        }
+    }
+    Ok(paths)
 }
 
 fn git_head_timestamp_ms(repo_root: &Path) -> Result<u64, Box<dyn Error>> {
@@ -11637,7 +12100,7 @@ mod openapi_tests {
             generated_unix_ms: 1_700_000_000_000,
             commit: Some("11".repeat(20)),
             dirty: false,
-            source_sha256_hex: None,
+            source_sha256_hex: Some("22".repeat(32)),
         }
     }
 
@@ -11649,7 +12112,7 @@ mod openapi_tests {
             generated_unix_ms: 1_700_000_000_000,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
-            generator_source_sha256_hex: None,
+            generator_source_sha256_hex: Some("22".repeat(32)),
             artifact: OpenApiArtifact {
                 path: "torii.json".to_owned(),
                 bytes: u64::try_from(ARTIFACT.len()).expect("fixture length"),
@@ -11667,13 +12130,119 @@ mod openapi_tests {
             .expect("encode deterministic V2 signing payload");
         assert_eq!(
             hex::encode(Sha256::digest(payload)),
-            "83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5"
+            "775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd"
         );
+    }
+
+    #[test]
+    fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
+        assert_eq!(
+            openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
+            "d46a10a45a97a731c8c20330f435f6ca2ab143dfc38b9ca7949c2ab5010fb9f1"
+        );
+    }
+
+    #[test]
+    fn openapi_cargo_lock_pin_parser_requires_the_exact_v1_profile() {
+        assert_eq!(
+            parse_openapi_cargo_lock_pin(OPENAPI_CARGO_LOCK_PIN).expect("parse canonical pin"),
+            OpenApiCargoLockPinV1 {
+                bytes: OPENAPI_CARGO_LOCK_EXPECTED_BYTES,
+                sha256_hex: OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX.to_owned(),
+            }
+        );
+        let canonical = std::str::from_utf8(OPENAPI_CARGO_LOCK_PIN).expect("UTF-8 canonical pin");
+        for (changed, expected) in [
+            (
+                OPENAPI_CARGO_LOCK_PIN[..OPENAPI_CARGO_LOCK_PIN.len() - 1].to_vec(),
+                "one final newline",
+            ),
+            (
+                canonical
+                    .replace(OPENAPI_CARGO_LOCK_PIN_SCHEMA, "iroha.openapi.cargo-lock.v2")
+                    .into_bytes(),
+                "invalid schema",
+            ),
+            (
+                canonical
+                    .replace("bytes=315037", "bytes=315038")
+                    .into_bytes(),
+                "exact V1 size",
+            ),
+            (
+                canonical
+                    .replace(
+                        OPENAPI_CARGO_LOCK_EXPECTED_SHA256_HEX,
+                        "0000000000000000000000000000000000000000000000000000000000000000",
+                    )
+                    .into_bytes(),
+                "exact V1 size",
+            ),
+        ] {
+            let error =
+                parse_openapi_cargo_lock_pin(&changed).expect_err("substituted pin must fail");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected pin error for {changed:?}: {error}"
+            );
+        }
     }
 
     fn initialize_git_fixture(root: &Path) {
         git_stdout(root, &["init", "--quiet"]).expect("initialize git fixture");
-        fs::write(root.join("source.txt"), b"source-v1\n").expect("write fixture source");
+        const DIRECTORY_INPUTS: &[&str] = &[
+            "IrohaSwift",
+            "ci",
+            "crates",
+            "csharp",
+            "data_model",
+            "docs/i18n",
+            "docs/portal/scripts",
+            "docs/source/sdk/android/generated",
+            "fixtures",
+            "integration_tests",
+            "java/iroha_android",
+            "java/norito_java",
+            "javascript/iroha_js",
+            "kotlin",
+            "mochi",
+            "python/iroha_python",
+            "python/iroha_torii_client",
+            "scripts",
+            "tools",
+            "vendor",
+            "xtask",
+        ];
+        for relative in OPENAPI_GENERATOR_INPUT_PATHS {
+            let target = root.join(relative);
+            if DIRECTORY_INPUTS.contains(relative) {
+                fs::create_dir_all(&target).expect("create generator input directory");
+                fs::write(target.join(".fixture"), b"fixture\n")
+                    .expect("write generator input directory fixture");
+            } else {
+                fs::create_dir_all(target.parent().expect("generator input has a parent"))
+                    .expect("create generator input parent");
+                if *relative == OPENAPI_GENERATOR_IGNORED_INPUT {
+                    fs::copy(
+                        workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
+                        &target,
+                    )
+                    .expect("copy canonical ignored Cargo lock fixture");
+                } else {
+                    let bytes = if *relative == OPENAPI_CARGO_LOCK_PIN_PATH {
+                        OPENAPI_CARGO_LOCK_PIN
+                    } else if *relative == "release/openapi-generator-inputs-v1.txt" {
+                        OPENAPI_GENERATOR_INPUT_INVENTORY
+                    } else {
+                        b"fixture\n"
+                    };
+                    fs::write(target, bytes).expect("write generator input fixture");
+                }
+            }
+        }
+        fs::write(root.join(".gitignore"), b"/Cargo.lock\n")
+            .expect("write ignored Cargo lock rule");
+        fs::write(root.join("xtask/source.txt"), b"source-v1\n").expect("write fixture source");
         fs::create_dir_all(root.join("docs/portal/static/openapi/versions/current"))
             .expect("create generated fixture directory");
         fs::write(
@@ -11810,7 +12379,7 @@ mod openapi_tests {
             generated_unix_ms: 1,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
-            generator_source_sha256_hex: None,
+            generator_source_sha256_hex: Some("22".repeat(32)),
             artifact: OpenApiArtifact {
                 path: "torii.json".to_owned(),
                 bytes: stub_bytes.len() as u64,
@@ -11854,7 +12423,7 @@ mod openapi_tests {
             generated_unix_ms: 1_700_000_000_000,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
-            generator_source_sha256_hex: None,
+            generator_source_sha256_hex: Some("22".repeat(32)),
             artifact: OpenApiArtifact {
                 path: "torii.json".to_owned(),
                 bytes: artifact.len() as u64,
@@ -11867,7 +12436,7 @@ mod openapi_tests {
             .expect("encode deterministic signing payload");
         assert_eq!(
             hex::encode(Sha256::digest(payload)),
-            "83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5"
+            "775b7af4c2c8a98dc49cf117745f0032f5064485b82a807f946a71b27539b9cd"
         );
     }
 
@@ -12286,14 +12855,24 @@ mod openapi_tests {
                 "64 lowercase hexadecimal",
             ),
             (
-                "clean-with-dirty-digest",
+                "clean-without-source-digest",
                 OpenApiGeneratorProvenance {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("11".repeat(20)),
                     dirty: false,
-                    source_sha256_hex: Some("ab".repeat(32)),
+                    source_sha256_hex: None,
                 },
-                "clean OpenAPI generator provenance must omit",
+                "missing generator_source_sha256_hex",
+            ),
+            (
+                "clean-zero-source-digest",
+                OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
+                    commit: Some("11".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: Some("00".repeat(32)),
+                },
+                "64 lowercase hexadecimal",
             ),
             (
                 "clean-short-commit",
@@ -12301,7 +12880,7 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("ab".repeat(19)),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
             ),
@@ -12311,7 +12890,7 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("AB".repeat(20)),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
             ),
@@ -12321,7 +12900,7 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some("gg".repeat(20)),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
             ),
@@ -12331,9 +12910,19 @@ mod openapi_tests {
                     generated_unix_ms: 1_700_000_000_000,
                     commit: Some(format!(" {} ", "ab".repeat(20))),
                     dirty: false,
-                    source_sha256_hex: None,
+                    source_sha256_hex: Some("ab".repeat(32)),
                 },
                 "exactly 40 lowercase hexadecimal",
+            ),
+            (
+                "clean-zero-commit",
+                OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
+                    commit: Some("00".repeat(20)),
+                    dirty: false,
+                    source_sha256_hex: Some("ab".repeat(32)),
+                },
+                "nonzero Git commit",
             ),
         ] {
             let err = validate_openapi_generator_provenance(&provenance, true)
@@ -12385,6 +12974,16 @@ mod openapi_tests {
         let clean = git_source_provenance(tmp.path(), &generated).expect("clean provenance");
         assert!(!clean.dirty);
         assert!(clean.commit.is_some());
+        let expected_source_digest = git_openapi_generator_input_tree_sha256(
+            tmp.path(),
+            clean.commit.as_deref().expect("clean commit"),
+        )
+        .expect("generator input tree digest");
+        assert_eq!(
+            clean.source_sha256_hex.as_deref(),
+            Some(expected_source_digest.as_str()),
+            "clean provenance must bind the canonical generator input inventory"
+        );
         assert_eq!(
             clean.generated_unix_ms,
             git_head_timestamp_ms(tmp.path()).expect("HEAD timestamp"),
@@ -12407,7 +13006,28 @@ mod openapi_tests {
             "generated files are not source inputs"
         );
 
-        fs::write(tmp.path().join("source.txt"), b"source-v2\n").expect("modify tracked source");
+        fs::write(tmp.path().join("Cargo.lock"), b"fixture-lock-v2\n")
+            .expect("change ignored Cargo lock");
+        let lock_changed = git_source_provenance(tmp.path(), &generated)
+            .expect_err("substituted ignored Cargo lock must fail");
+        assert!(
+            lock_changed.to_string().contains("expected exactly"),
+            "unexpected substituted lock error: {lock_changed}"
+        );
+        fs::copy(
+            workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
+            tmp.path().join(OPENAPI_GENERATOR_IGNORED_INPUT),
+        )
+        .expect("restore ignored Cargo lock");
+        let lock_restored =
+            git_source_provenance(tmp.path(), &generated).expect("restored lock provenance");
+        assert_eq!(
+            lock_restored, clean,
+            "restoring the ignored Cargo lock must restore clean provenance"
+        );
+
+        fs::write(tmp.path().join("xtask/source.txt"), b"source-v2\n")
+            .expect("modify tracked source");
         let first = git_source_provenance(tmp.path(), &generated).expect("first dirty provenance");
         assert!(first.dirty);
         assert_eq!(first.commit, None);
@@ -12433,7 +13053,7 @@ mod openapi_tests {
             "identical source must retain its digest across generated timestamps"
         );
 
-        fs::write(tmp.path().join("source.txt"), b"source-v3\n")
+        fs::write(tmp.path().join("xtask/source.txt"), b"source-v3\n")
             .expect("change tracked source content");
         let changed =
             git_source_provenance(tmp.path(), &generated).expect("changed dirty provenance");
@@ -12450,6 +13070,327 @@ mod openapi_tests {
         assert_ne!(
             untracked_two.source_sha256_hex, untracked_one.source_sha256_hex,
             "untracked non-output contents must be provenance-bound"
+        );
+    }
+
+    #[test]
+    fn openapi_generator_ignored_lock_fails_closed_when_missing_empty_large_or_tracked() {
+        let tmp = tempdir().expect("tempdir");
+        initialize_git_fixture(tmp.path());
+        let lock = tmp.path().join(OPENAPI_GENERATOR_IGNORED_INPUT);
+        let head = std::str::from_utf8(
+            &git_stdout(tmp.path(), &["rev-parse", "--verify", "HEAD"]).expect("fixture HEAD"),
+        )
+        .expect("UTF-8 fixture HEAD")
+        .trim()
+        .to_owned();
+
+        fs::remove_file(&lock).expect("remove ignored Cargo lock");
+        let missing = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("missing ignored Cargo lock must fail");
+        assert!(
+            missing.to_string().contains("ignored Cargo lock"),
+            "unexpected missing-lock error: {missing}"
+        );
+
+        fs::write(&lock, []).expect("write empty ignored Cargo lock");
+        let empty = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("empty ignored Cargo lock must fail");
+        assert!(
+            empty.to_string().contains("must not be empty"),
+            "unexpected empty-lock error: {empty}"
+        );
+
+        let canonical = fs::read(workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT))
+            .expect("read canonical ignored Cargo lock");
+        fs::write(&lock, &canonical[..canonical.len() - 1])
+            .expect("write short ignored Cargo lock");
+        let short = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("short ignored Cargo lock must fail");
+        assert!(
+            short.to_string().contains("expected exactly"),
+            "unexpected short-lock error: {short}"
+        );
+
+        let mut substituted = canonical;
+        substituted[0] ^= 1;
+        fs::write(&lock, substituted).expect("write substituted ignored Cargo lock");
+        let wrong_digest = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("substituted ignored Cargo lock must fail");
+        assert!(
+            wrong_digest.to_string().contains("SHA-256"),
+            "unexpected substituted-lock error: {wrong_digest}"
+        );
+
+        let large = fs::File::create(&lock).expect("create oversized ignored Cargo lock");
+        large
+            .set_len(OPENAPI_GENERATOR_IGNORED_INPUT_MAX_BYTES + 1)
+            .expect("size oversized ignored Cargo lock");
+        drop(large);
+        let oversized = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("oversized ignored Cargo lock must fail");
+        assert!(
+            oversized.to_string().contains("exceeds the"),
+            "unexpected oversized-lock error: {oversized}"
+        );
+
+        fs::copy(
+            workspace_root().join(OPENAPI_GENERATOR_IGNORED_INPUT),
+            &lock,
+        )
+        .expect("restore ignored Cargo lock");
+        git_stdout(
+            tmp.path(),
+            &["add", "--force", "--", OPENAPI_GENERATOR_IGNORED_INPUT],
+        )
+        .expect("force-track ignored Cargo lock");
+        let tracked = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("tracked Cargo lock must fail");
+        assert!(
+            tracked.to_string().contains("must remain untracked"),
+            "unexpected tracked-lock error: {tracked}"
+        );
+    }
+
+    #[test]
+    fn openapi_generator_ignored_lock_requires_a_git_ignore_rule() {
+        let tmp = tempdir().expect("tempdir");
+        initialize_git_fixture(tmp.path());
+        fs::remove_file(tmp.path().join(".gitignore")).expect("remove Cargo lock ignore rule");
+        let head = std::str::from_utf8(
+            &git_stdout(tmp.path(), &["rev-parse", "--verify", "HEAD"]).expect("fixture HEAD"),
+        )
+        .expect("UTF-8 fixture HEAD")
+        .trim()
+        .to_owned();
+
+        let err = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
+            .expect_err("unignored Cargo lock must fail");
+        assert!(
+            err.to_string().contains("must be excluded by Git"),
+            "unexpected unignored-lock error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openapi_generator_ignored_lock_rejects_executable_symlink_and_hardlink_inputs() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let executable_fixture = tempdir().expect("executable tempdir");
+        initialize_git_fixture(executable_fixture.path());
+        let executable_lock = executable_fixture
+            .path()
+            .join(OPENAPI_GENERATOR_IGNORED_INPUT);
+        fs::set_permissions(&executable_lock, fs::Permissions::from_mode(0o700))
+            .expect("make ignored Cargo lock executable");
+        let executable_head = std::str::from_utf8(
+            &git_stdout(
+                executable_fixture.path(),
+                &["rev-parse", "--verify", "HEAD"],
+            )
+            .expect("fixture HEAD"),
+        )
+        .expect("UTF-8 fixture HEAD")
+        .trim()
+        .to_owned();
+        let executable =
+            git_openapi_generator_input_tree_sha256(executable_fixture.path(), &executable_head)
+                .expect_err("executable ignored Cargo lock must fail");
+        assert!(
+            executable.to_string().contains("must not be executable"),
+            "unexpected executable-lock error: {executable}"
+        );
+
+        let symlink_fixture = tempdir().expect("symlink tempdir");
+        initialize_git_fixture(symlink_fixture.path());
+        let symlink_lock = symlink_fixture.path().join(OPENAPI_GENERATOR_IGNORED_INPUT);
+        fs::remove_file(&symlink_lock).expect("remove ignored Cargo lock");
+        fs::write(symlink_fixture.path().join("lock-target"), b"fixture\n")
+            .expect("write lock symlink target");
+        symlink("lock-target", &symlink_lock).expect("symlink ignored Cargo lock");
+        let symlink_head = std::str::from_utf8(
+            &git_stdout(symlink_fixture.path(), &["rev-parse", "--verify", "HEAD"])
+                .expect("fixture HEAD"),
+        )
+        .expect("UTF-8 fixture HEAD")
+        .trim()
+        .to_owned();
+        let linked = git_openapi_generator_input_tree_sha256(symlink_fixture.path(), &symlink_head)
+            .expect_err("symlinked ignored Cargo lock must fail");
+        assert!(
+            linked.to_string().contains("must not be a symlink"),
+            "unexpected symlink-lock error: {linked}"
+        );
+
+        let hardlink_fixture = tempdir().expect("hardlink tempdir");
+        initialize_git_fixture(hardlink_fixture.path());
+        let hardlink_lock = hardlink_fixture
+            .path()
+            .join(OPENAPI_GENERATOR_IGNORED_INPUT);
+        fs::hard_link(&hardlink_lock, hardlink_fixture.path().join("lock-alias"))
+            .expect("hard-link ignored Cargo lock");
+        let hardlink_head = std::str::from_utf8(
+            &git_stdout(hardlink_fixture.path(), &["rev-parse", "--verify", "HEAD"])
+                .expect("fixture HEAD"),
+        )
+        .expect("UTF-8 fixture HEAD")
+        .trim()
+        .to_owned();
+        let hardlinked =
+            git_openapi_generator_input_tree_sha256(hardlink_fixture.path(), &hardlink_head)
+                .expect_err("hard-linked ignored Cargo lock must fail");
+        assert!(
+            hardlinked.to_string().contains("exactly one hard link"),
+            "unexpected hardlink-lock error: {hardlinked}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openapi_generator_pin_rejects_missing_executable_and_symlinked_git_blobs() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        for mutation in 0..3 {
+            let fixture = tempdir().expect("pin tempdir");
+            initialize_git_fixture(fixture.path());
+            let pin = fixture.path().join(OPENAPI_CARGO_LOCK_PIN_PATH);
+            match mutation {
+                0 => {
+                    fs::remove_file(&pin).expect("remove pin");
+                    git_stdout(
+                        fixture.path(),
+                        &["rm", "--quiet", "--", OPENAPI_CARGO_LOCK_PIN_PATH],
+                    )
+                    .expect("stage removed pin");
+                }
+                1 => {
+                    fs::set_permissions(&pin, fs::Permissions::from_mode(0o755))
+                        .expect("make pin executable");
+                    git_stdout(fixture.path(), &["add", "--", OPENAPI_CARGO_LOCK_PIN_PATH])
+                        .expect("stage executable pin");
+                }
+                2 => {
+                    fs::remove_file(&pin).expect("remove regular pin");
+                    symlink("openapi-generator-inputs-v1.txt", &pin)
+                        .expect("replace pin with symlink");
+                    git_stdout(fixture.path(), &["add", "--", OPENAPI_CARGO_LOCK_PIN_PATH])
+                        .expect("stage symlinked pin");
+                }
+                _ => unreachable!(),
+            }
+            git_stdout(
+                fixture.path(),
+                &[
+                    "-c",
+                    "user.name=OpenAPI Test",
+                    "-c",
+                    "user.email=openapi-test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "mutate pin",
+                ],
+            )
+            .expect("commit mutated pin");
+            let head = std::str::from_utf8(
+                &git_stdout(fixture.path(), &["rev-parse", "--verify", "HEAD"])
+                    .expect("fixture HEAD"),
+            )
+            .expect("UTF-8 fixture HEAD")
+            .trim()
+            .to_owned();
+            let error = git_openapi_generator_input_tree_sha256(fixture.path(), &head)
+                .expect_err("invalid pin tree entry must fail");
+            let expected = if mutation == 0 {
+                "is missing"
+            } else {
+                "must have Git mode 100644"
+            };
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected pin-tree error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn openapi_generator_rejects_a_pinned_commit_that_tracks_cargo_lock() {
+        let fixture = tempdir().expect("tracked ancestor tempdir");
+        initialize_git_fixture(fixture.path());
+        git_stdout(
+            fixture.path(),
+            &["add", "--force", "--", OPENAPI_GENERATOR_IGNORED_INPUT],
+        )
+        .expect("force-stage ignored Cargo lock");
+        git_stdout(
+            fixture.path(),
+            &[
+                "-c",
+                "user.name=OpenAPI Test",
+                "-c",
+                "user.email=openapi-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "bad tracked lock ancestor",
+            ],
+        )
+        .expect("commit tracked lock ancestor");
+        let bad_ancestor = std::str::from_utf8(
+            &git_stdout(fixture.path(), &["rev-parse", "--verify", "HEAD"])
+                .expect("bad ancestor HEAD"),
+        )
+        .expect("UTF-8 bad ancestor HEAD")
+        .trim()
+        .to_owned();
+
+        git_stdout(
+            fixture.path(),
+            &[
+                "rm",
+                "--cached",
+                "--quiet",
+                "--",
+                OPENAPI_GENERATOR_IGNORED_INPUT,
+            ],
+        )
+        .expect("remove Cargo lock from the current index");
+        git_stdout(
+            fixture.path(),
+            &[
+                "-c",
+                "user.name=OpenAPI Test",
+                "-c",
+                "user.email=openapi-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "remove tracked lock",
+            ],
+        )
+        .expect("commit current untracked lock state");
+        let current_tree_entry = git_stdout(
+            fixture.path(),
+            &[
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                "HEAD",
+                "--",
+                OPENAPI_GENERATOR_IGNORED_INPUT,
+            ],
+        )
+        .expect("inspect current tree");
+        assert!(current_tree_entry.is_empty());
+
+        let error = git_openapi_generator_input_tree_sha256(fixture.path(), &bad_ancestor)
+            .expect_err("tracked pinned Cargo lock must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("must not exist at pinned commit"),
+            "unexpected tracked-ancestor error: {error}"
         );
     }
 
@@ -14995,19 +15936,19 @@ mod tests {
 
         let mut parsed: Value =
             norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        if let Some(object) = parsed.as_object_mut() {
-            if let Some(Value::Array(artifacts)) = object.get_mut("artifacts") {
-                for entry in artifacts {
-                    if let Some(map) = entry.as_object_mut() {
-                        if map.get("file") == Some(&norito::json!("vote_tally_proof.zk1")) {
-                            map.insert(
-                                "blake2b_256".into(),
-                                norito::json!(
-                                    "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-                                ),
-                            );
-                        }
-                    }
+        if let Some(object) = parsed.as_object_mut()
+            && let Some(Value::Array(artifacts)) = object.get_mut("artifacts")
+        {
+            for entry in artifacts {
+                if let Some(map) = entry.as_object_mut()
+                    && map.get("file") == Some(&norito::json!("vote_tally_proof.zk1"))
+                {
+                    map.insert(
+                        "blake2b_256".into(),
+                        norito::json!(
+                            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+                        ),
+                    );
                 }
             }
         }
@@ -15042,19 +15983,19 @@ mod tests {
         // Mutate the meta file digest (deterministic artefact) and ensure verification fails.
         let mut parsed: Value =
             norito::json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-        if let Some(object) = parsed.as_object_mut() {
-            if let Some(Value::Array(artifacts)) = object.get_mut("artifacts") {
-                for entry in artifacts {
-                    if let Some(map) = entry.as_object_mut() {
-                        if map.get("file") == Some(&norito::json!("vote_tally_meta.json")) {
-                            map.insert(
-                                "blake2b_256".into(),
-                                norito::json!(
-                                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                                ),
-                            );
-                        }
-                    }
+        if let Some(object) = parsed.as_object_mut()
+            && let Some(Value::Array(artifacts)) = object.get_mut("artifacts")
+        {
+            for entry in artifacts {
+                if let Some(map) = entry.as_object_mut()
+                    && map.get("file") == Some(&norito::json!("vote_tally_meta.json"))
+                {
+                    map.insert(
+                        "blake2b_256".into(),
+                        norito::json!(
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        ),
+                    );
                 }
             }
         }

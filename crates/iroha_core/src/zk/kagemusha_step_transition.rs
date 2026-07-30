@@ -23,7 +23,9 @@ use iroha_data_model::offline::{
 };
 use norito::codec::{Decode, Encode};
 
-use super::kagemusha_sha256_v4::KagemushaSha256JobsV4;
+use super::kagemusha_sha256_v4::{
+    KagemushaSha256BitV4, KagemushaSha256ByteV4, KagemushaSha256JobsV4,
+};
 use super::kagemusha_v2::{
     I_APPEND_PROFILE as O_APPEND_PROFILE, I_ARTIFACT_MANIFEST_SHA256 as O_ARTIFACT_MANIFEST_SHA256,
     I_ASSET_ID_DIGEST as O_ASSET_ID_DIGEST, I_ASSET_SCALE as O_ASSET_SCALE,
@@ -1579,6 +1581,26 @@ fn native_bytes<F: BigPrimeField>(
         .collect()
 }
 
+fn sha256_native_bytes<F: BigPrimeField>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    limbs: &[AssignedValue<F>],
+) -> Vec<KagemushaSha256ByteV4<F>> {
+    let gate = range.gate();
+    let mut bytes = Vec::with_capacity(limbs.len() * 4);
+    for limb in limbs.iter().copied() {
+        let bits = KagemushaSha256BitV4::decompose(ctx, gate, limb, 32);
+        for byte in 0..4 {
+            bytes.push(KagemushaSha256ByteV4::from_bits_le(
+                ctx,
+                gate,
+                &bits[byte * 8..byte * 8 + 8],
+            ));
+        }
+    }
+    bytes
+}
+
 fn lex_less<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -1752,17 +1774,17 @@ fn extend_claim<F: BigPrimeField>(
         .iter()
         .copied()
         .chain(std::iter::once(0))
-        .map(|byte| ctx.load_constant(F::from(u64::from(byte))))
+        .map(KagemushaSha256ByteV4::constant)
         .collect::<Vec<_>>();
-    history_preimage.extend(native_bytes(
+    history_preimage.extend(sha256_native_bytes(
         ctx,
         range,
         &claim[CLAIM_HISTORY_ACCUMULATOR
             ..CLAIM_HISTORY_ACCUMULATOR
                 + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5],
     ));
-    history_preimage.extend(native_bytes(ctx, range, tag));
-    let history_words = sha_jobs.digest(ctx, range, &history_preimage)?;
+    history_preimage.extend(sha256_native_bytes(ctx, range, tag));
+    let history_words = sha_jobs.digest_constrained(ctx, &history_preimage)?;
     extended.extend(
         history_words
             .into_iter()
@@ -1820,10 +1842,11 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
 /// 38 (`transfer_root`). Top-up anchors and extended branch claims are
 /// constrained as canonical set unions with exact zero padding.
 ///
-/// This function does not prove confidential openings or Merkle paths. StepEq
-/// must additionally copy-bind the returned cells to the assigned secure
-/// relation from `confidential_v2`; StepEp constrains this field-neutral
-/// application relation and the same exact public limbs.
+/// This function does not prove confidential openings or Merkle paths. StepEq,
+/// the pair's semantic authority, additionally copy-binds the returned cells to
+/// the assigned secure relation from `confidential_v2`. StepEp is the
+/// lineage-and-reciprocal wrapper: it shares StepEq's compact public header but
+/// intentionally does not duplicate this application relation.
 pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
@@ -2512,14 +2535,14 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
             .expect("transition tag is six limbs");
     assert_slice_zero_if(ctx, range, one, &tag8[6..]);
     let split_digest_limbs = operation_digest_limbs(&operation, O_SPLIT_DIGEST);
-    let split_digest_bytes = native_bytes(ctx, range, &split_digest_limbs);
+    let split_digest_bytes = sha256_native_bytes(ctx, range, &split_digest_limbs);
     let mut tag_preimage = KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2
         .bytes()
         .chain(std::iter::once(0))
-        .map(|byte| ctx.load_constant(F::from(u64::from(byte))))
+        .map(KagemushaSha256ByteV4::constant)
         .collect::<Vec<_>>();
     tag_preimage.extend(split_digest_bytes);
-    let expected_tag_words = sha_jobs.digest(ctx, range, &tag_preimage)?;
+    let expected_tag_words = sha_jobs.digest_constrained(ctx, &tag_preimage)?;
     for index in 0..tag.len() {
         let expected = byte_swap_u32(ctx, range, expected_tag_words[index]);
         assert_equal_if(ctx, range, extends, tag[index], expected);

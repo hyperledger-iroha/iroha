@@ -25,7 +25,10 @@ use axum::{
     body::{Body, Bytes},
     extract::{
         ConnectInfo, Extension, Path, State,
-        ws::{Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade},
+        ws::{
+            CloseFrame, Message as WsMessage, Utf8Bytes, WebSocket, WebSocketUpgrade, close_code,
+            rejection::WebSocketUpgradeRejection,
+        },
     },
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
     response::{
@@ -122,7 +125,7 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestDigest, PinManifestFinalizedCursorV1, PinManifestRecord, PinStatus,
-            ReplicationOrderCompletionRecord, ReplicationOrderStatus,
+            ReplicationOrderStatus,
         },
         proof_ledger::{
             PdpOutcomeStatusV1, PotrOutcomeStatusV1, ProofOutcomeFinalizedCursorV1,
@@ -133,7 +136,10 @@ use iroha_data_model::{
             ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+    transaction::{
+        Executable, SignedTransaction, TransactionBuilder, TransactionEntrypoint,
+        TransactionPayload,
+    },
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanRecordSorafsProofOutcome,
@@ -164,14 +170,14 @@ use sorafs_manifest::{
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1,
     QosHints, RendezvousTopic, ReputationMerkleProofV1, ReputationSnapshotEventV1,
     ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
-    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    SORAFS_GATEWAY_PROFILE_VERSION, SettlementChannelStatusV1, SettlementChannelV1,
+    SettlementReceiptV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     chunker_registry,
     deal::XorQuantity,
     decode_manifest_v1_canonical, decode_order_cancel_v1, decode_order_request_v1,
-    decode_settlement_receipt_v1,
+    decode_provider_advert_v1, decode_settlement_receipt_v1,
     pdp::{
         PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
         PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpCommitmentV1,
@@ -234,8 +240,8 @@ use crate::{
         AliasProofEvaluationExt, AliasProofState, BLINDED_CID_LEN, CacheDecision,
         MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
         MAX_TOKEN_FUTURE_SKEW_SECS, SorafsAction, StreamTokenConcurrencyPermit,
-        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaError, TokenOverrides,
-        decode_token_base64,
+        StreamTokenHeaderError, StreamTokenIssuerError, StreamTokenQuotaError,
+        StreamTokenQuotaSubject, TokenOverrides, decode_token_base64,
         discovery::{
             AdvertError, AdvertIngest, AdvertIngestResult, AdvertWarning, ProviderAdvertCache,
             capability_name,
@@ -284,7 +290,7 @@ const HEADER_SORA_CACHE_TTL: &str = "x-sorafs-cache-ttl";
 const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_TOKEN_ID: &str = "x-sorafs-token-id";
-const HEADER_SORA_CLIENT_QUOTA_REMAINING: &str = "x-sorafs-client-quota-remaining";
+const HEADER_SORA_ISSUANCE_QUOTA_REMAINING: &str = "x-sorafs-issuance-quota-remaining";
 const HEADER_SORA_REQUEST_ID: &str = "x-sorafs-request-id";
 const HEADER_SORA_POTR_REQUEST: &str = "sora-potr-request";
 const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
@@ -2392,6 +2398,15 @@ pub struct StorageStoredFileDto {
 
 const DEFAULT_LIST_LIMIT: usize = 50;
 const MAX_LIST_LIMIT: usize = 500;
+const REPUTATION_MAX_PAGE_ITEMS_V1: u16 = 500;
+const REPUTATION_QUERY_MAX_BYTES_V1: usize = 1_024;
+const REPUTATION_LATEST_PATH_V1: &str = "/v1/sorafs/reputation/latest";
+const REPUTATION_SNAPSHOT_PATH_PREFIX_V1: &str = "/v1/sorafs/reputation/snapshots/";
+const REPUTATION_PROVIDER_PATH_PREFIX_V1: &str = "/v1/sorafs/reputation/providers/";
+const REPUTATION_WEIGHTS_PATH_V1: &str = "/v1/sorafs/reputation/weights";
+const REPUTATION_EVENTS_PATH_V1: &str = "/v1/sorafs/reputation/events";
+const REPUTATION_EVENTS_STREAM_PATH_V1: &str = "/v1/sorafs/reputation/events/stream";
+const REPUTATION_EVENTS_WEBSOCKET_PATH_V1: &str = "/v1/sorafs/reputation/events/ws";
 /// Maximum number of distinct approved providers attempted for one CID miss.
 const MAX_REMOTE_CID_SOURCES: usize = 16;
 /// Maximum registry orders inspected while resolving one CID miss.
@@ -2483,7 +2498,25 @@ type CidHydrationFlights = BTreeMap<Vec<u8>, Arc<CidHydrationFlight>>;
 
 static CID_HYDRATION_FLIGHTS: LazyLock<Mutex<CidHydrationFlights>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
-const REPUTATION_CACHE_CONTROL: &str = "public, max-age=30, must-revalidate";
+const REPUTATION_CACHE_CONTROL: &str = "private, max-age=30, must-revalidate";
+const REPUTATION_STREAM_CACHE_CONTROL: &str = "private, no-store";
+const REPUTATION_CACHE_VARY: &str =
+    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness";
+const REPUTATION_FRAMEWORK_BAD_REQUEST_ERROR: &str = "invalid SoraFS reputation request";
+const REPUTATION_FRAMEWORK_METHOD_NOT_ALLOWED_ERROR: &str =
+    "SoraFS reputation routes accept GET only";
+const REPUTATION_FRAMEWORK_PAYLOAD_TOO_LARGE_ERROR: &str =
+    "SoraFS reputation request body exceeds the configured limit";
+const REPUTATION_FRAMEWORK_UPGRADE_REQUIRED_ERROR: &str =
+    "SoraFS reputation WebSocket upgrade is required";
+const REPUTATION_INITIAL_SSE_BACKLOG_ERROR: &str = "committed reputation SSE backlog is invalid";
+const REPUTATION_INITIAL_WEBSOCKET_BACKLOG_ERROR: &str =
+    "committed reputation WebSocket backlog is invalid";
+const REPUTATION_LAST_EVENT_ID_ERROR: &str =
+    "Last-Event-ID is not supported; use the canonical since query parameter";
+const REPUTATION_LIVE_READER_ERROR: &str = "committed reputation reader failed";
+const REPUTATION_WEBSOCKET_FAILURE_CLOSE_REASON: &str = "reputation committed stream failed";
+const SORAFS_PUBLIC_CACHE_CONTROL: &str = "public, max-age=30, must-revalidate";
 const REPUTATION_COMMITTED_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Default)]
@@ -2517,6 +2550,7 @@ struct SiteFileListReadbackQuery {
 #[derive(Debug, Default)]
 struct StorageMetadataReadbackQuery {
     limit: Option<u32>,
+    offset: Option<u32>,
 }
 
 #[derive(Debug, Default)]
@@ -2538,11 +2572,20 @@ struct ReplicationListQuery {
 #[derive(Debug, Default)]
 struct ReputationEventsQuery {
     since: Option<u64>,
-    limit: Option<u32>,
+    limit: Option<u16>,
 }
 
 #[derive(Debug, Default)]
 struct ReputationSnapshotReadbackQuery {
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Default)]
+struct ReputationNoQuery;
+
+#[derive(Debug, Default)]
+struct ModerationFinalizedEventsQuery {
+    since: Option<u64>,
     limit: Option<u32>,
 }
 
@@ -2765,6 +2808,7 @@ impl StorageMetadataReadbackQuery {
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
             "limit" => parse_u32_field(&mut query.limit, "limit", value),
+            "offset" => parse_u32_field(&mut query.offset, "offset", value),
             _ => Ok(()),
         })?;
         Ok(query)
@@ -2793,25 +2837,163 @@ impl AliasListQuery {
 
 impl ReplicationListQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        if let Some(raw) = raw {
+            if raw.contains('%') {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "percent-encoded SoraFS replication query spellings are not accepted",
+                )));
+            }
+            if !raw.is_empty() && raw.split('&').any(str::is_empty) {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "empty SoraFS replication query segments are not accepted",
+                )));
+            }
+        }
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            "offset" => parse_u32_field(&mut query.offset, "offset", value),
-            "status" => {
-                query.status = Some(value.to_owned());
-                Ok(())
-            }
+            "limit" => parse_replication_query_u32(&mut query.limit, key, value),
+            "offset" => parse_replication_query_u32(&mut query.offset, key, value),
+            "status" => parse_replication_query_string(&mut query.status, key, value),
             "manifest_digest" => {
-                query.manifest_digest = Some(value.to_owned());
-                Ok(())
+                parse_replication_query_string(&mut query.manifest_digest, key, value)
             }
-            _ => Ok(()),
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown SoraFS replication query parameter `{key}`"),
+            ))),
         })?;
+        if query
+            .limit
+            .is_some_and(|limit| !(1..=MAX_LIST_LIMIT as u32).contains(&limit))
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("SoraFS replication query limit must be within 1..={MAX_LIST_LIMIT}"),
+            )));
+        }
+        if let Some(status) = query.status.as_deref()
+            && parse_replication_status_filter(status).is_none()
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "invalid replication status `{status}`; expected pending, completed, or expired"
+                ),
+            )));
+        }
+        if let Some(digest) = query.manifest_digest.as_deref() {
+            let digest = parse_canonical_hex_fixed::<32>(digest, "manifest_digest")
+                .map_err(|error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)))?;
+            if digest == [0; 32] {
+                return Err(ResponseError::from(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "manifest_digest must be non-zero",
+                )));
+            }
+        }
         Ok(query)
     }
 }
 
+fn parse_replication_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty SoraFS replication query parameter `{name}`"),
+        )));
+    }
+    if !raw.bytes().all(|byte| byte.is_ascii_digit()) || (raw.len() > 1 && raw.starts_with('0')) {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "SoraFS replication {name} must use canonical unsigned decimal without a sign or leading zero"
+            ),
+        )));
+    }
+    let value = raw.parse::<u32>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS replication {name} value `{raw}`"),
+        ))
+    })?;
+    *target = Some(value);
+    Ok(())
+}
+
+fn parse_replication_query_string(
+    target: &mut Option<String>,
+    name: &str,
+    raw: &str,
+) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty SoraFS replication query parameter `{name}`"),
+        )));
+    }
+    *target = Some(raw.to_owned());
+    Ok(())
+}
+
 impl ReputationEventsQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        for (key, value) in bounded_reputation_query_pairs(raw, 2)? {
+            match key {
+                "since" => {
+                    set_reputation_query_once(
+                        &mut query.since,
+                        parse_reputation_since(value)?,
+                        "since",
+                    )?;
+                }
+                "limit" => {
+                    set_reputation_query_once(
+                        &mut query.limit,
+                        parse_reputation_limit(value)?,
+                        "limit",
+                    )?;
+                }
+                _ => return Err(reputation_query_error("unknown reputation query parameter")),
+            }
+        }
+        Ok(query)
+    }
+}
+
+impl ReputationSnapshotReadbackQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        for (key, value) in bounded_reputation_query_pairs(raw, 1)? {
+            match key {
+                "limit" => {
+                    set_reputation_query_once(
+                        &mut query.limit,
+                        parse_reputation_limit(value)?,
+                        "limit",
+                    )?;
+                }
+                _ => return Err(reputation_query_error("unknown reputation query parameter")),
+            }
+        }
+        Ok(query)
+    }
+}
+
+impl ReputationNoQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        if raw.is_some() {
+            return Err(reputation_query_error(
+                "this reputation route does not accept query parameters",
+            ));
+        }
+        Ok(Self)
+    }
+}
+
+impl ModerationFinalizedEventsQuery {
     fn parse(raw: Option<&str>) -> ApiResult<Self> {
         let mut query = Self::default();
         walk_query_params(raw, |key, value| match key {
@@ -2823,15 +3005,94 @@ impl ReputationEventsQuery {
     }
 }
 
-impl ReputationSnapshotReadbackQuery {
-    fn parse(raw: Option<&str>) -> ApiResult<Self> {
-        let mut query = Self::default();
-        walk_query_params(raw, |key, value| match key {
-            "limit" => parse_u32_field(&mut query.limit, "limit", value),
-            _ => Ok(()),
-        })?;
-        Ok(query)
+fn bounded_reputation_query_pairs(
+    raw: Option<&str>,
+    max_parameters: usize,
+) -> ApiResult<Vec<(&str, &str)>> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    if raw.is_empty() {
+        return Err(reputation_query_error(
+            "empty reputation query strings are not accepted",
+        ));
     }
+    if raw.len() > REPUTATION_QUERY_MAX_BYTES_V1 {
+        return Err(reputation_query_error("reputation query is too long"));
+    }
+
+    let mut pairs = Vec::new();
+    for segment in raw.split('&') {
+        if segment.is_empty() {
+            return Err(reputation_query_error(
+                "empty reputation query segments are not accepted",
+            ));
+        }
+        if pairs.len() >= max_parameters {
+            return Err(reputation_query_error(
+                "too many reputation query parameters",
+            ));
+        }
+        let Some((key, value)) = segment.split_once('=') else {
+            return Err(reputation_query_error(
+                "reputation query parameters must use key=value form",
+            ));
+        };
+        if key.is_empty() || value.is_empty() {
+            return Err(reputation_query_error(
+                "empty reputation query names or values are not accepted",
+            ));
+        }
+        pairs.push((key, value));
+    }
+    Ok(pairs)
+}
+
+fn set_reputation_query_once<T>(target: &mut Option<T>, value: T, name: &str) -> ApiResult<()> {
+    if target.is_some() {
+        return Err(reputation_query_error(format!(
+            "duplicate reputation query parameter `{name}`"
+        )));
+    }
+    *target = Some(value);
+    Ok(())
+}
+
+fn parse_reputation_since(raw: &str) -> ApiResult<u64> {
+    if !is_canonical_unsigned_decimal(raw) {
+        return Err(reputation_query_error(
+            "reputation since must use canonical unsigned decimal",
+        ));
+    }
+    raw.parse::<u64>()
+        .map_err(|_| reputation_query_error("reputation since is out of range"))
+}
+
+fn parse_reputation_limit(raw: &str) -> ApiResult<u16> {
+    if !is_canonical_unsigned_decimal(raw) {
+        return Err(reputation_query_error(
+            "reputation limit must use canonical unsigned decimal",
+        ));
+    }
+    let limit = raw
+        .parse::<u16>()
+        .map_err(|_| reputation_query_error("reputation limit is out of range"))?;
+    if !(1..=REPUTATION_MAX_PAGE_ITEMS_V1).contains(&limit) {
+        return Err(reputation_query_error(format!(
+            "reputation limit must be within 1..={REPUTATION_MAX_PAGE_ITEMS_V1}"
+        )));
+    }
+    Ok(limit)
+}
+
+fn is_canonical_unsigned_decimal(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw.bytes().all(|byte| byte.is_ascii_digit())
+        && (raw == "0" || !raw.starts_with('0'))
+}
+
+fn reputation_query_error(message: impl Into<String>) -> ResponseError {
+    ResponseError::from(json_error(StatusCode::BAD_REQUEST, message))
 }
 
 impl PorIngestionReadbackQuery {
@@ -8371,239 +8632,606 @@ fn reputation_snapshot_from_committed_projection(
         })
 }
 
+fn require_reputation_canonical_auth(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<(), Response> {
+    if method != Method::GET {
+        return Err(json_error(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "SoraFS reputation routes accept GET only",
+        ));
+    }
+    match crate::app_auth::verify_canonical_request(&state.state, headers, method, uri, body, None)
+    {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) | Err(_) => Err(reputation_authentication_required_response()),
+    }
+}
+
+fn reputation_authentication_required_response() -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::UNAUTHORIZED;
+    insert_reputation_stream_cache_headers(&mut response);
+    response
+}
+
+/// Apply authenticated cache isolation to a SoraFS reputation route response.
+pub(crate) fn finalize_reputation_route_response(response: Response) -> Response {
+    let mut response = normalize_reputation_framework_error(response);
+    if response.status().is_client_error() || response.status().is_server_error() {
+        insert_reputation_stream_cache_headers(&mut response);
+    }
+    response
+}
+
+fn normalize_reputation_framework_error(response: Response) -> Response {
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || reputation_response_is_json(&response) {
+        return response;
+    }
+    let message = match status {
+        StatusCode::BAD_REQUEST => REPUTATION_FRAMEWORK_BAD_REQUEST_ERROR,
+        StatusCode::METHOD_NOT_ALLOWED => REPUTATION_FRAMEWORK_METHOD_NOT_ALLOWED_ERROR,
+        StatusCode::PAYLOAD_TOO_LARGE => REPUTATION_FRAMEWORK_PAYLOAD_TOO_LARGE_ERROR,
+        StatusCode::UPGRADE_REQUIRED => REPUTATION_FRAMEWORK_UPGRADE_REQUIRED_ERROR,
+        _ => return response,
+    };
+
+    let (mut parts, _) = response.into_parts();
+    let (json_parts, json_body) = json_error(status, message).into_parts();
+    for name in [
+        header::CONTENT_ENCODING,
+        header::CONTENT_LENGTH,
+        header::CONTENT_TYPE,
+        header::TRANSFER_ENCODING,
+    ] {
+        parts.headers.remove(name);
+    }
+    if let Some(content_type) = json_parts.headers.get(header::CONTENT_TYPE) {
+        parts
+            .headers
+            .insert(header::CONTENT_TYPE, content_type.clone());
+    }
+    Response::from_parts(parts, json_body)
+}
+
+fn reputation_response_is_json(response: &Response) -> bool {
+    response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split_once(';')
+                .map_or(value, |(media_type, _)| media_type)
+                .trim()
+                .eq_ignore_ascii_case("application/json")
+        })
+}
+
+/// Harden framework-generated SoraFS reputation route failures.
+pub(crate) async fn harden_reputation_route_responses(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    finalize_reputation_route_response(next.run(request).await)
+}
+
+fn require_empty_reputation_get_body(body: &[u8]) -> Result<(), Response> {
+    if body.is_empty() {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS reputation GET requests must have an empty body",
+        ))
+    }
+}
+
+fn require_reputation_request_target(
+    uri: &Uri,
+    expected_path: &str,
+    raw_query: Option<&str>,
+) -> Result<(), Response> {
+    if uri.path() != expected_path || uri.query() != raw_query {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS reputation request target does not match the canonical route and query",
+        ));
+    }
+    Ok(())
+}
+
+fn reputation_page_limit(limit: Option<u16>) -> usize {
+    limit.map_or(DEFAULT_LIST_LIMIT, usize::from)
+}
+
+fn parse_reputation_snapshot_id(uri: &Uri, snapshot_id_hex: &str) -> Result<[u8; 16], Response> {
+    let expected_path = format!("{REPUTATION_SNAPSHOT_PATH_PREFIX_V1}{snapshot_id_hex}");
+    if uri.path() != expected_path {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "snapshot_id_hex path segment must use its exact canonical spelling",
+        ));
+    }
+    let snapshot_id = parse_canonical_hex_fixed::<16>(snapshot_id_hex, "snapshot_id_hex")
+        .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+    if snapshot_id == [0; 16] {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "snapshot_id_hex must be non-zero",
+        ));
+    }
+    Ok(snapshot_id)
+}
+
+fn validate_reputation_provider_id(uri: &Uri, provider_id: &str) -> Result<(), Response> {
+    let expected_path = format!("{REPUTATION_PROVIDER_PATH_PREFIX_V1}{provider_id}");
+    if uri.path() != expected_path {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "provider_id path segment must use its exact canonical spelling",
+        ));
+    }
+    if provider_id.is_empty()
+        || matches!(provider_id, "." | "..")
+        || provider_id.len() > 256
+        || !provider_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "provider_id must be 1..=256 ASCII bytes from [A-Za-z0-9_.:-], excluding . and ..",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn handle_get_sorafs_reputation_latest(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    method: Method,
+    uri: Uri,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
+        }
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
+        }
+        if let Err(response) =
+            require_reputation_request_target(&uri, REPUTATION_LATEST_PATH_V1, raw_query.as_deref())
+        {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        let query = match ReputationSnapshotReadbackQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = reputation_page_limit(query.limit);
+        let (_, projection) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
+            Ok(snapshot) => snapshot,
+            Err(response) => return response,
+        };
+        let etag = reputation_snapshot_etag(snapshot, limit);
+        match authenticated_reputation_not_modified_response(&headers, &etag) {
+            Ok(Some(response)) => return response,
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+        match reputation_snapshot_summary_json(snapshot, limit) {
+            Ok(value) => authenticated_reputation_json_response(value, &etag),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
     }
-    let query = match ReputationSnapshotReadbackQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let (_, projection) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
-        Ok(snapshot) => snapshot,
-        Err(response) => return response,
-    };
-    let etag = reputation_snapshot_etag(snapshot, limit);
-    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
-        return response;
-    }
-    match reputation_snapshot_summary_json(snapshot, limit) {
-        Ok(value) => reputation_json_response(value, &etag),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-    }
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 pub(crate) async fn handle_get_sorafs_reputation_snapshot(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    method: Method,
+    uri: Uri,
     Path(snapshot_id_hex): Path<String>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
-    }
-    let query = match ReputationSnapshotReadbackQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let snapshot_id = match parse_hex_fixed::<16>(&snapshot_id_hex, "snapshot_id_hex") {
-        Ok(snapshot_id) => snapshot_id,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, err),
-    };
-    let (reader, _) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let snapshot = match reader.committed_snapshot_by_id(snapshot_id) {
-        Ok(Some(snapshot)) => snapshot,
-        Ok(None) => {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                format!("reputation snapshot `{snapshot_id_hex}` was not found"),
-            );
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
         }
-        Err(_) => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "committed reputation runtime is unavailable",
-            );
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
         }
-    };
-    let etag = reputation_snapshot_etag(&snapshot, limit);
-    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
-        return response;
+        let expected_path = format!("{REPUTATION_SNAPSHOT_PATH_PREFIX_V1}{snapshot_id_hex}");
+        if let Err(response) =
+            require_reputation_request_target(&uri, &expected_path, raw_query.as_deref())
+        {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        let query = match ReputationSnapshotReadbackQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = reputation_page_limit(query.limit);
+        let snapshot_id = match parse_reputation_snapshot_id(&uri, &snapshot_id_hex) {
+            Ok(snapshot_id) => snapshot_id,
+            Err(response) => return response,
+        };
+        let (reader, _) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let snapshot = match reader.committed_snapshot_by_id(snapshot_id) {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                return json_error(
+                    StatusCode::NOT_FOUND,
+                    format!("reputation snapshot `{snapshot_id_hex}` was not found"),
+                );
+            }
+            Err(_) => {
+                return json_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "committed reputation runtime is unavailable",
+                );
+            }
+        };
+        let etag = reputation_snapshot_etag(&snapshot, limit);
+        match authenticated_reputation_not_modified_response(&headers, &etag) {
+            Ok(Some(response)) => return response,
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+        match reputation_snapshot_summary_json(&snapshot, limit) {
+            Ok(value) => authenticated_reputation_json_response(value, &etag),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
     }
-    match reputation_snapshot_summary_json(&snapshot, limit) {
-        Ok(value) => reputation_json_response(value, &etag),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-    }
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 pub(crate) async fn handle_get_sorafs_reputation_weights(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
+        }
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
+        }
+        if let Err(response) = require_reputation_request_target(
+            &uri,
+            REPUTATION_WEIGHTS_PATH_V1,
+            raw_query.as_deref(),
+        ) {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        if let Err(error) = ReputationNoQuery::parse(raw_query.as_deref()) {
+            return error.into_response();
+        }
+        let (_, projection) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
+            Ok(snapshot) => snapshot,
+            Err(response) => return response,
+        };
+        let etag = reputation_weights_etag(snapshot);
+        match authenticated_reputation_not_modified_response(&headers, &etag) {
+            Ok(Some(response)) => return response,
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+        match reputation_weights_json(snapshot) {
+            Ok(value) => authenticated_reputation_json_response(value, &etag),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
     }
-    let (_, projection) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
-        Ok(snapshot) => snapshot,
-        Err(response) => return response,
-    };
-    let etag = reputation_weights_etag(snapshot);
-    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
-        return response;
-    }
-    match reputation_weights_json(snapshot) {
-        Ok(value) => reputation_json_response(value, &etag),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-    }
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 pub(crate) async fn handle_get_sorafs_reputation_events(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    method: Method,
+    uri: Uri,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
+        }
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
+        }
+        if let Err(response) =
+            require_reputation_request_target(&uri, REPUTATION_EVENTS_PATH_V1, raw_query.as_deref())
+        {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = reputation_page_limit(query.limit);
+        let (_, projection) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let events = reputation_committed_events_since(&projection, query.since, limit);
+        let tip_sequence = projection.events.last().map_or(0, |event| event.sequence);
+        let etag = reputation_events_etag(query.since, limit, tip_sequence, &events);
+        match authenticated_reputation_not_modified_response(&headers, &etag) {
+            Ok(Some(response)) => return response,
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+        match reputation_events_json(query.since, limit, &events) {
+            Ok(value) => authenticated_reputation_json_response(value, &etag),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
     }
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let (_, projection) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let events = reputation_committed_events_since(&projection, query.since, limit);
-    let tip_sequence = projection.events.last().map_or(0, |event| event.sequence);
-    let etag = reputation_events_etag(query.since, limit, tip_sequence, &events);
-    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
-        return response;
-    }
-    match reputation_events_json(query.since, limit, &events) {
-        Ok(value) => reputation_json_response(value, &etag),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-    }
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 pub(crate) async fn handle_get_sorafs_reputation_events_stream(
     State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
+        }
+        if headers.contains_key("last-event-id") {
+            return json_error(StatusCode::BAD_REQUEST, REPUTATION_LAST_EVENT_ID_ERROR);
+        }
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
+        }
+        if let Err(response) = require_reputation_request_target(
+            &uri,
+            REPUTATION_EVENTS_STREAM_PATH_V1,
+            raw_query.as_deref(),
+        ) {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = reputation_page_limit(query.limit);
+        let (reader, projection) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let initial_events = reputation_committed_events_since(&projection, query.since, limit);
+        let initial_backlog =
+            match prepare_reputation_sse_backlog(&initial_events, query.since.unwrap_or(0)) {
+                Ok(backlog) => backlog,
+                Err(_) => {
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        REPUTATION_INITIAL_SSE_BACKLOG_ERROR,
+                    );
+                }
+            };
+        let mut response = Sse::new(reputation_event_sse_stream(
+            initial_backlog.frames,
+            reader,
+            initial_backlog.cursor,
+        ))
+        .into_response();
+        insert_reputation_stream_cache_headers(&mut response);
+        response
     }
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let (reader, projection) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let initial_events = reputation_committed_events_since(&projection, query.since, limit);
-    Sse::new(reputation_event_sse_stream(
-        initial_events,
-        reader,
-        query.since.unwrap_or(0),
-    ))
-    .into_response()
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 pub(crate) async fn handle_get_sorafs_reputation_events_ws(
     State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
     preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    ws: WebSocketUpgrade,
+    ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
-    }
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let (committed_reader, projection) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let initial_events = reputation_committed_events_since(&projection, query.since, limit);
-    let since = query.since.unwrap_or(0);
-    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
-    ws.on_upgrade(move |socket| async move {
-        let _preauth_guard = preauth_guard;
-        if let Err(err) =
-            reputation_event_websocket_stream(socket, initial_events, committed_reader, since).await
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
         {
-            debug!(%err, "SoraFS reputation WebSocket stream closed with error");
+            return response;
         }
-    })
-    .into_response()
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
+        }
+        if let Err(response) = require_reputation_request_target(
+            &uri,
+            REPUTATION_EVENTS_WEBSOCKET_PATH_V1,
+            raw_query.as_deref(),
+        ) {
+            return response;
+        }
+        let ws = match ws {
+            Ok(ws) => ws,
+            Err(rejection) => return rejection.into_response(),
+        };
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+            Ok(query) => query,
+            Err(err) => return err.into_response(),
+        };
+        let limit = reputation_page_limit(query.limit);
+        let (committed_reader, projection) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let initial_events = reputation_committed_events_since(&projection, query.since, limit);
+        let since = query.since.unwrap_or(0);
+        let initial_backlog = match prepare_reputation_websocket_backlog(&initial_events, since) {
+            Ok(backlog) => backlog,
+            Err(_) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    REPUTATION_INITIAL_WEBSOCKET_BACKLOG_ERROR,
+                );
+            }
+        };
+        let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
+        let mut response = ws
+            .on_upgrade(move |socket| async move {
+                let _preauth_guard = preauth_guard;
+                if let Err(err) = reputation_event_websocket_stream(
+                    socket,
+                    initial_backlog.frames,
+                    committed_reader,
+                    initial_backlog.cursor,
+                )
+                .await
+                {
+                    debug!(%err, "SoraFS reputation WebSocket stream closed with error");
+                }
+            })
+            .into_response();
+        insert_reputation_stream_cache_headers(&mut response);
+        response
+    }
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 pub(crate) async fn handle_get_sorafs_reputation_provider(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
+    method: Method,
+    uri: Uri,
     Path(provider_id): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    body: Bytes,
 ) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return feature_disabled("sorafs reputation API is not enabled on this node");
-    }
-    let (_, projection) = match ready_reputation_committed_projection(&state) {
-        Ok(projection) => projection,
-        Err(response) => return response,
-    };
-    let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
-        Ok(snapshot) => snapshot,
-        Err(response) => return response,
-    };
-    let Some(provider) = snapshot
-        .providers
-        .iter()
-        .find(|entry| entry.provider_id == provider_id)
-    else {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            format!("provider `{provider_id}` was not found in the reputation snapshot"),
-        );
-    };
-    let proof = match snapshot.merkle_proof(&provider_id) {
-        Ok(proof) => proof,
-        Err(err) => {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("failed to build reputation proof: {err}"),
-            );
+    let response = async move {
+        if let Err(response) =
+            require_reputation_canonical_auth(&state, &headers, &method, &uri, body.as_ref())
+        {
+            return response;
         }
-    };
+        if let Err(response) = require_empty_reputation_get_body(body.as_ref()) {
+            return response;
+        }
+        let expected_path = format!("{REPUTATION_PROVIDER_PATH_PREFIX_V1}{provider_id}");
+        if let Err(response) =
+            require_reputation_request_target(&uri, &expected_path, raw_query.as_deref())
+        {
+            return response;
+        }
+        if !state.sorafs_node.is_enabled() {
+            return feature_disabled("sorafs reputation API is not enabled on this node");
+        }
+        if let Err(error) = ReputationNoQuery::parse(raw_query.as_deref()) {
+            return error.into_response();
+        }
+        if let Err(response) = validate_reputation_provider_id(&uri, &provider_id) {
+            return response;
+        }
+        let (_, projection) = match ready_reputation_committed_projection(&state) {
+            Ok(projection) => projection,
+            Err(response) => return response,
+        };
+        let snapshot = match reputation_snapshot_from_committed_projection(&projection) {
+            Ok(snapshot) => snapshot,
+            Err(response) => return response,
+        };
+        let Some(provider) = snapshot
+            .providers
+            .iter()
+            .find(|entry| entry.provider_id == provider_id)
+        else {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                format!("provider `{provider_id}` was not found in the reputation snapshot"),
+            );
+        };
+        let proof = match snapshot.merkle_proof(&provider_id) {
+            Ok(proof) => proof,
+            Err(err) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("failed to build reputation proof: {err}"),
+                );
+            }
+        };
 
-    let etag = reputation_provider_etag(snapshot, provider);
-    if let Some(response) = reputation_not_modified_response(&headers, &etag) {
-        return response;
+        let etag = reputation_provider_etag(snapshot, provider);
+        match authenticated_reputation_not_modified_response(&headers, &etag) {
+            Ok(Some(response)) => return response,
+            Ok(None) => {}
+            Err(response) => return response,
+        }
+        match reputation_provider_response_json(snapshot, provider, &proof) {
+            Ok(value) => authenticated_reputation_json_response(value, &etag),
+            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        }
     }
-    match reputation_provider_response_json(snapshot, provider, &proof) {
-        Ok(value) => reputation_json_response(value, &etag),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-    }
+    .await;
+    finalize_reputation_route_response(response)
 }
 
 fn orderbook_api_response(
@@ -9291,7 +9919,7 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot_events(
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation ballot API is not enabled on this node");
     }
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+    let query = match ModerationFinalizedEventsQuery::parse(raw_query.as_deref()) {
         Ok(query) => query,
         Err(err) => return err.into_response(),
     };
@@ -10390,6 +11018,20 @@ fn validate_orderbook_signed_transaction(
     transaction: &SignedTransaction,
     route: OrderbookCommandRouteV1,
 ) -> Result<(), Response> {
+    let canonical_transaction = norito::to_bytes(transaction).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "failed to encode canonical SoraFS orderbook transaction",
+        )
+    })?;
+    if canonical_transaction.len()
+        > sorafs_node::orderbook_transaction_forwarder::ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1
+    {
+        return Err(json_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "SoraFS orderbook transaction exceeds the canonical V1 byte bound",
+        ));
+    }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
@@ -12313,6 +12955,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     }
                     Err(
                         crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
                         | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
                     ) => {
                         scan.deferred = scan.deferred.saturating_add(1);
@@ -12329,7 +12972,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                         continue;
                     }
                 };
-                let signed = sign_sorafs_appeal_finance_delivery(state, signer, &claimed).await;
+                let signed = sign_sorafs_appeal_finance_delivery(state, &signer, &claimed).await;
                 let Some(bytes) = signed else {
                     match mark_appeal_finance_signing_failed(
                         submitter,
@@ -12345,10 +12988,11 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     }
                     continue;
                 };
-                if submitter
-                    .forwarder
-                    .store_signed_transaction(delivery.operation_id, &bytes)
-                    .is_err()
+                if signer.revalidate().is_err()
+                    || submitter
+                        .forwarder
+                        .store_signed_transaction(delivery.operation_id, &bytes)
+                        .is_err()
                 {
                     match mark_appeal_finance_signing_failed(
                         submitter,
@@ -12410,6 +13054,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     }
                     Err(
                         crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
                         | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
                     ) => {
                         scan.deferred = scan.deferred.saturating_add(1);
@@ -12562,6 +13207,7 @@ pub(crate) async fn run_sorafs_appeal_finance_forwarder_scan(
                     }
                     Err(
                         crate::SoraFsAppealFinanceSignerSelectionError::ProviderMissing
+                        | crate::SoraFsAppealFinanceSignerSelectionError::ProviderUnavailable
                         | crate::SoraFsAppealFinanceSignerSelectionError::IdentityMismatch,
                     ) => {
                         scan.deferred = scan.deferred.saturating_add(1);
@@ -12685,10 +13331,10 @@ fn appeal_finance_exact_applied_post_record(
 
 async fn sign_sorafs_appeal_finance_delivery(
     state: &SharedAppState,
-    signer: Arc<dyn crate::SoraFsAppealFinanceTransactionSigner>,
+    signer: &crate::SoraFsAppealFinanceQualifiedSignerV1,
     request: &sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionSigningRequestV1,
 ) -> Option<Vec<u8>> {
-    if AccountId::new(signer.public_key()) != request.authority {
+    if AccountId::new(signer.public_key().clone()) != request.authority {
         return None;
     }
     let mut builder = TransactionBuilder::new(
@@ -12701,6 +13347,7 @@ async fn sign_sorafs_appeal_finance_delivery(
     let mut payload = builder.into_payload().ok()?;
     payload.fee_payment = crate::quote_internal_fee_payment(state, &payload).ok()?;
     let expected_payload = payload.clone();
+    let signer = signer.clone();
     let transaction = tokio::task::spawn_blocking(move || signer.sign(payload))
         .await
         .ok()?
@@ -13570,9 +14217,10 @@ async fn sign_sorafs_proof_outcome_delivery(
     signer: Arc<dyn crate::SoraFsProofOutcomeTransactionSigner>,
     delivery: &sorafs_node::ProofOutcomePendingDeliveryV1,
 ) -> Option<SignedTransaction> {
+    let expected_authority = signer.authority();
     let mut builder = TransactionBuilder::new(
         (*state.chain_id).clone(),
-        signer.authority(),
+        expected_authority.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([InstructionBox::from(SubmitSorafsProofOutcome::new(
@@ -13586,7 +14234,79 @@ async fn sign_sorafs_proof_outcome_delivery(
         .await
         .ok()?
         .ok()?;
-    (transaction.payload() == &expected_payload).then_some(transaction)
+    native_signer_returned_exact_transaction(&transaction, &expected_payload, &expected_authority)
+        .then_some(transaction)
+}
+
+fn native_signer_returned_exact_transaction(
+    transaction: &SignedTransaction,
+    expected_payload: &TransactionPayload,
+    expected_authority: &AccountId,
+) -> bool {
+    transaction.payload() == expected_payload
+        && transaction.authority() == expected_authority
+        && transaction.verify_signature().is_ok()
+}
+
+#[cfg(test)]
+mod native_signer_returned_transaction_tests {
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
+
+    use super::*;
+
+    fn fixture_payload(authority: AccountId) -> TransactionPayload {
+        TransactionBuilder::new(
+            ChainId::from("native-signer-return-validation"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .into_payload()
+        .expect("build native signer validation payload")
+    }
+
+    #[test]
+    fn exact_native_signer_output_requires_payload_authority_and_valid_signature() {
+        let signer = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .expect("derive native signer validation key");
+        let authority = AccountId::new(signer.public_key().clone());
+        let payload = fixture_payload(authority.clone());
+        let valid = TransactionBuilder::from_payload(payload.clone())
+            .and_then(|builder| builder.try_sign(signer.private_key()))
+            .expect("sign exact native transaction");
+        assert!(native_signer_returned_exact_transaction(
+            &valid, &payload, &authority
+        ));
+
+        let other = KeyPair::try_from_seed(vec![0x92; 32], Algorithm::Ed25519)
+            .expect("derive substituted native signer key");
+        let forged_builder =
+            TransactionBuilder::from_payload(payload.clone()).expect("rebuild payload");
+        let forged_signature =
+            Signature::try_new(other.private_key(), &forged_builder.payload_hash_bytes())
+                .expect("sign payload hash with substituted key");
+        let forged = forged_builder.build_with_signature(forged_signature);
+        assert!(forged.verify_signature().is_err());
+        assert!(!native_signer_returned_exact_transaction(
+            &forged, &payload, &authority
+        ));
+
+        assert!(!native_signer_returned_exact_transaction(
+            &valid,
+            &payload,
+            &AccountId::new(other.public_key().clone())
+        ));
+
+        let mut substituted_payload = payload.clone();
+        substituted_payload.creation_time_ms = substituted_payload
+            .creation_time_ms
+            .checked_add(1)
+            .expect("fixture timestamp has headroom");
+        assert!(!native_signer_returned_exact_transaction(
+            &valid,
+            &substituted_payload,
+            &authority
+        ));
+    }
 }
 
 async fn submit_sorafs_proof_outcome_delivery(
@@ -15389,7 +16109,11 @@ async fn sign_sorafs_repair_transaction(
         .await
         .ok()?
         .ok()?;
-    if transaction.payload() != &expected_payload {
+    if !native_signer_returned_exact_transaction(
+        &transaction,
+        &expected_payload,
+        &request.authority,
+    ) {
         return None;
     }
     let bytes = norito::to_bytes(&transaction).ok()?;
@@ -15550,6 +16274,7 @@ async fn submit_sorafs_repair_transaction(
 
 struct ModerationMaintenancePassV1 {
     outcomes: Vec<sorafs_node::moderation_orchestrator::ModerationSubmitOutcomeV1>,
+    delivered_panel_notifications: usize,
     snapshot: sorafs_node::moderation_orchestrator::ModerationFinalizedLedgerSnapshotV1,
     durable_health: sorafs_node::moderation_orchestrator::ModerationOrchestratorDurableHealthV1,
 }
@@ -15560,12 +16285,15 @@ fn run_sorafs_moderation_maintenance_pass(
     maintenance_batch_limit: usize,
 ) -> Result<ModerationMaintenancePassV1, ModerationOrchestratorError> {
     let outcomes = orchestrator.run_maintenance(maintenance_authority, maintenance_batch_limit)?;
+    let delivered_panel_notifications = orchestrator
+        .deliver_due_panel_notifications(unix_timestamp_now_ms(), maintenance_batch_limit)?;
     let snapshot = orchestrator
         .snapshot()
         .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?;
     let durable_health = orchestrator.durable_health()?;
     Ok(ModerationMaintenancePassV1 {
         outcomes,
+        delivered_panel_notifications,
         snapshot,
         durable_health,
     })
@@ -15625,6 +16353,7 @@ fn finish_sorafs_moderation_maintenance_pass(
         pending_submission_count = pass.durable_health.pending_submissions,
         pending_handoff_count = pass.durable_health.pending_handoffs,
         pending_panel_notification_count = pass.durable_health.pending_panel_notifications,
+        delivered_panel_notification_count = pass.delivered_panel_notifications,
         "reconciled finalized SoraFS moderation state and deadline maintenance",
     );
 }
@@ -19266,6 +19995,7 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
         | ModerationQuarantineObjectError::ConflictingObject { .. }
         | ModerationQuarantineObjectError::AuthenticationFailed { .. } => StatusCode::CONFLICT,
         ModerationQuarantineObjectError::KeyWrapperUnavailable
+        | ModerationQuarantineObjectError::KeyWrapperUnqualified
         | ModerationQuarantineObjectError::KeyWrapping { .. }
         | ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::InvalidInput { .. }
@@ -19309,9 +20039,19 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
 #[tokio::test]
 async fn moderation_quarantine_provider_error_detail_is_redacted_from_http() {
     const SECRET_SENTINEL: &str = "SECRET-KMS-BEARER-DO-NOT-EMIT";
-    let error = ModerationQuarantineObjectError::redacted_key_operation_failure(
+    let unqualified_response = moderation_quarantine_object_error_response(
+        ModerationQuarantineObjectError::KeyWrapperUnqualified,
+    );
+    assert_eq!(
+        unqualified_response.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    let failure = sorafs_node::ModerationQuarantineKeyOperationErrorV1::Rejected
+        .after_scrubbing_provider_diagnostic(SECRET_SENTINEL.to_owned());
+    let error = ModerationQuarantineObjectError::key_operation_failure(
         "kms:test/redacted-http".to_owned(),
-        SECRET_SENTINEL.to_owned(),
+        failure,
     );
     assert!(!error.to_string().contains(SECRET_SENTINEL));
     assert!(!format!("{error:?}").contains(SECRET_SENTINEL));
@@ -20445,7 +21185,13 @@ fn orderbook_channel_status_label(status: SettlementChannelStatusV1) -> &'static
 
 fn reputation_json_response(value: Value, etag: &str) -> Response {
     let mut response = JsonBody(value).into_response();
-    insert_reputation_cache_headers(&mut response, etag);
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(SORAFS_PUBLIC_CACHE_CONTROL),
+    );
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        response.headers_mut().insert(ETAG, value);
+    }
     response
 }
 
@@ -20455,18 +21201,14 @@ fn reputation_not_modified_response(headers: &HeaderMap, etag: &str) -> Option<R
     }
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::NOT_MODIFIED;
-    insert_reputation_cache_headers(&mut response, etag);
-    Some(response)
-}
-
-fn insert_reputation_cache_headers(response: &mut Response, etag: &str) {
     response.headers_mut().insert(
         CACHE_CONTROL,
-        HeaderValue::from_static(REPUTATION_CACHE_CONTROL),
+        HeaderValue::from_static(SORAFS_PUBLIC_CACHE_CONTROL),
     );
     if let Ok(value) = HeaderValue::from_str(etag) {
         response.headers_mut().insert(ETAG, value);
     }
+    Some(response)
 }
 
 fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
@@ -20487,6 +21229,87 @@ fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
     })
 }
 
+fn authenticated_reputation_json_response(value: Value, etag: &str) -> Response {
+    let mut response = JsonBody(value).into_response();
+    match insert_authenticated_reputation_cache_headers(&mut response, etag) {
+        Ok(()) => response,
+        Err(response) => response,
+    }
+}
+
+fn authenticated_reputation_not_modified_response(
+    headers: &HeaderMap,
+    etag: &str,
+) -> Result<Option<Response>, Response> {
+    let mut values = headers.get_all(IF_NONE_MATCH).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "If-None-Match must contain exactly one strong reputation ETag",
+        ));
+    }
+    let raw = value.to_str().map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "If-None-Match must be visible ASCII",
+        )
+    })?;
+    let bytes = raw.as_bytes();
+    if bytes.len() != 66
+        || bytes.first() != Some(&b'"')
+        || bytes.last() != Some(&b'"')
+        || !bytes[1..65]
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "If-None-Match must be one quoted 64-character lowercase hexadecimal strong ETag",
+        ));
+    }
+    if raw != etag {
+        return Ok(None);
+    }
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::NOT_MODIFIED;
+    insert_authenticated_reputation_cache_headers(&mut response, etag)?;
+    Ok(Some(response))
+}
+
+fn insert_authenticated_reputation_cache_headers(
+    response: &mut Response,
+    etag: &str,
+) -> Result<(), Response> {
+    let value = HeaderValue::from_str(etag).map_err(|_| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to construct canonical reputation ETag",
+        )
+    })?;
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(REPUTATION_CACHE_CONTROL),
+    );
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static(REPUTATION_CACHE_VARY));
+    response.headers_mut().insert(ETAG, value);
+    Ok(())
+}
+
+fn insert_reputation_stream_cache_headers(response: &mut Response) {
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static(REPUTATION_STREAM_CACHE_CONTROL),
+    );
+    response
+        .headers_mut()
+        .insert(VARY, HeaderValue::from_static(REPUTATION_CACHE_VARY));
+}
+
 fn reputation_snapshot_etag(snapshot: &ReputationSnapshotV1, limit: usize) -> String {
     let limit = (limit as u64).to_le_bytes();
     reputation_cache_etag(
@@ -20502,7 +21325,14 @@ fn reputation_snapshot_etag(snapshot: &ReputationSnapshotV1, limit: usize) -> St
 fn reputation_weights_etag(snapshot: &ReputationSnapshotV1) -> String {
     let alpha = snapshot.alpha_bps.to_le_bytes();
     let current_weight = snapshot.current_score_weight_bps.to_le_bytes();
-    let weights_json = json::to_vec(&snapshot.weights).unwrap_or_default();
+    let weights_version = [snapshot.weights.version];
+    let por_success = snapshot.weights.por_success_bps.to_le_bytes();
+    let pdp_success = snapshot.weights.pdp_success_bps.to_le_bytes();
+    let potr_success = snapshot.weights.potr_success_bps.to_le_bytes();
+    let latency = snapshot.weights.latency_bps.to_le_bytes();
+    let dispute = snapshot.weights.dispute_bps.to_le_bytes();
+    let token_violation = snapshot.weights.token_violation_bps.to_le_bytes();
+    let repair_breach = snapshot.weights.repair_breach_bps.to_le_bytes();
     reputation_cache_etag(
         "weights",
         &[
@@ -20510,7 +21340,14 @@ fn reputation_weights_etag(snapshot: &ReputationSnapshotV1) -> String {
             snapshot.merkle_root.as_ref(),
             alpha.as_ref(),
             current_weight.as_ref(),
-            weights_json.as_ref(),
+            weights_version.as_ref(),
+            por_success.as_ref(),
+            pdp_success.as_ref(),
+            potr_success.as_ref(),
+            latency.as_ref(),
+            dispute.as_ref(),
+            token_violation.as_ref(),
+            repair_breach.as_ref(),
         ],
     )
 }
@@ -20658,52 +21495,114 @@ fn reputation_events_json(
 }
 
 fn reputation_event_sse_stream(
-    initial_events: Vec<ReputationSnapshotEventV1>,
+    initial_frames: Vec<SseEvent>,
     reader: Arc<dyn ReputationCommittedReadApiV1>,
+    cursor: u64,
+) -> impl futures::Stream<Item = Result<SseEvent, io::Error>> {
+    let source = Box::pin(reputation_committed_event_stream(reader, cursor));
+    stream::unfold(
+        (
+            initial_frames.into_iter().collect::<VecDeque<_>>(),
+            source,
+            false,
+        ),
+        |(mut initial_frames, mut source, terminated)| async move {
+            if terminated {
+                return None;
+            }
+            if let Some(event) = initial_frames.pop_front() {
+                return Some((Ok(event), (initial_frames, source, false)));
+            }
+            let item = source.next().await?;
+            let event = match item {
+                ReputationCommittedStreamItem::Event(event) => {
+                    reputation_snapshot_sse_event(&event).map_err(io::Error::other)
+                }
+                ReputationCommittedStreamItem::Lagged(skipped) => Ok(SseEvent::default()
+                    .event("lagged")
+                    .data(skipped.to_string())),
+                ReputationCommittedStreamItem::ReaderFailed => {
+                    Err(io::Error::other(REPUTATION_LIVE_READER_ERROR))
+                }
+            };
+            let terminated = event.is_err();
+            Some((event, (initial_frames, source, terminated)))
+        },
+    )
+}
+
+struct PreparedReputationSseBacklog {
+    frames: Vec<SseEvent>,
+    cursor: u64,
+}
+
+fn prepare_reputation_sse_backlog(
+    initial_events: &[ReputationSnapshotEventV1],
     since: u64,
-) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
-    reputation_committed_event_stream(initial_events, reader, since).map(|item| {
-        Ok(match item {
-            ReputationCommittedStreamItem::Event(event) => reputation_snapshot_sse_event(&event),
-            ReputationCommittedStreamItem::Lagged(skipped) => SseEvent::default()
+) -> Result<PreparedReputationSseBacklog, String> {
+    let mut frames = Vec::with_capacity(initial_events.len().saturating_add(1));
+    if let Some(skipped) = reputation_initial_lag(initial_events, since) {
+        frames.push(
+            SseEvent::default()
                 .event("lagged")
                 .data(skipped.to_string()),
-        })
-    })
+        );
+    }
+    for event in initial_events {
+        frames.push(reputation_snapshot_sse_event(event)?);
+    }
+    let cursor = initial_events.last().map_or(since, |event| event.sequence);
+    Ok(PreparedReputationSseBacklog { frames, cursor })
+}
+
+struct PreparedReputationWebSocketBacklog {
+    frames: Vec<String>,
+    cursor: u64,
+}
+
+fn prepare_reputation_websocket_backlog(
+    initial_events: &[ReputationSnapshotEventV1],
+    since: u64,
+) -> Result<PreparedReputationWebSocketBacklog, String> {
+    let mut frames = Vec::with_capacity(initial_events.len().saturating_add(1));
+    if let Some(skipped) = reputation_initial_lag(initial_events, since) {
+        frames.push(reputation_lagged_websocket_frame(skipped)?);
+    }
+    for event in initial_events {
+        frames.push(reputation_snapshot_websocket_frame(event)?);
+    }
+    let cursor = initial_events.last().map_or(since, |event| event.sequence);
+    Ok(PreparedReputationWebSocketBacklog { frames, cursor })
 }
 
 enum ReputationCommittedStreamItem {
     Event(ReputationSnapshotEventV1),
     Lagged(u64),
+    ReaderFailed,
 }
 
 fn reputation_committed_event_stream(
-    initial_events: Vec<ReputationSnapshotEventV1>,
     reader: Arc<dyn ReputationCommittedReadApiV1>,
-    since: u64,
+    cursor: u64,
 ) -> impl futures::Stream<Item = ReputationCommittedStreamItem> {
     struct ReputationCommittedStreamState {
         pending: VecDeque<ReputationSnapshotEventV1>,
-        initial_lag: Option<u64>,
         reader: Arc<dyn ReputationCommittedReadApiV1>,
         cursor: u64,
+        failed: bool,
     }
 
-    let initial_lag = initial_events.first().and_then(|first| {
-        let skipped = first.sequence.saturating_sub(since.saturating_add(1));
-        (skipped != 0).then_some(skipped)
-    });
     stream::unfold(
         ReputationCommittedStreamState {
-            pending: initial_events.into_iter().collect(),
-            initial_lag,
+            pending: VecDeque::new(),
             reader,
-            cursor: since,
+            cursor,
+            failed: false,
         },
         |mut state| async move {
             loop {
-                if let Some(skipped) = state.initial_lag.take() {
-                    return Some((ReputationCommittedStreamItem::Lagged(skipped), state));
+                if state.failed {
+                    return None;
                 }
                 if let Some(event) = state.pending.pop_front() {
                     state.cursor = event.sequence;
@@ -20713,7 +21612,10 @@ fn reputation_committed_event_stream(
                 tokio::time::sleep(REPUTATION_COMMITTED_POLL_INTERVAL).await;
                 let retained_events = match state.reader.committed_events_after(state.cursor) {
                     Ok(events) => events,
-                    Err(_) => return None,
+                    Err(_) => {
+                        state.failed = true;
+                        return Some((ReputationCommittedStreamItem::ReaderFailed, state));
+                    }
                 };
                 let mut events = retained_events
                     .into_iter()
@@ -20738,34 +21640,34 @@ fn reputation_committed_event_stream(
     )
 }
 
+fn reputation_initial_lag(initial_events: &[ReputationSnapshotEventV1], since: u64) -> Option<u64> {
+    initial_events.first().and_then(|first| {
+        let skipped = first.sequence.saturating_sub(since.saturating_add(1));
+        (skipped != 0).then_some(skipped)
+    })
+}
+
 async fn reputation_event_websocket_stream(
     ws: WebSocket,
-    initial_events: Vec<ReputationSnapshotEventV1>,
+    initial_frames: Vec<String>,
     committed_reader: Arc<dyn ReputationCommittedReadApiV1>,
-    since: u64,
+    cursor: u64,
 ) -> Result<(), String> {
     let (mut sender, mut socket_reader) = ws.split();
-    let event_stream = reputation_committed_event_stream(initial_events, committed_reader, since);
+    for text in initial_frames {
+        sender
+            .send(WsMessage::Text(Utf8Bytes::from(text)))
+            .await
+            .map_err(|err| format!("failed to send reputation initial frame: {err}"))?;
+    }
+    let event_stream = reputation_committed_event_stream(committed_reader, cursor);
     tokio::pin!(event_stream);
 
     loop {
         tokio::select! {
             item = event_stream.next() => {
                 match item {
-                    Some(ReputationCommittedStreamItem::Event(event)) => {
-                        let text = reputation_snapshot_websocket_frame(&event);
-                        sender
-                            .send(WsMessage::Text(Utf8Bytes::from(text)))
-                            .await
-                            .map_err(|err| format!("failed to send reputation live frame: {err}"))?;
-                    }
-                    Some(ReputationCommittedStreamItem::Lagged(skipped)) => {
-                        let text = reputation_lagged_websocket_frame(skipped);
-                        sender
-                            .send(WsMessage::Text(Utf8Bytes::from(text)))
-                            .await
-                            .map_err(|err| format!("failed to send reputation lag frame: {err}"))?;
-                    }
+                    Some(item) => send_reputation_websocket_stream_item(&mut sender, item).await?,
                     None => return Ok(()),
                 }
             }
@@ -20790,40 +21692,95 @@ async fn reputation_event_websocket_stream(
     }
 }
 
-fn reputation_snapshot_sse_event(event: &ReputationSnapshotEventV1) -> SseEvent {
-    let data = reputation_event_json(event)
-        .and_then(|value| {
-            json::to_string(&value)
-                .map_err(|err| format!("failed to serialize reputation event: {err}"))
-        })
-        .unwrap_or_else(|err| {
-            let mut map = Map::new();
-            map.insert("error".into(), Value::from(err));
-            json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_owned())
-        });
-    SseEvent::default()
-        .event("reputation_snapshot")
-        .id(event.sequence.to_string())
-        .data(data)
+async fn send_reputation_websocket_stream_item<S>(
+    sender: &mut S,
+    item: ReputationCommittedStreamItem,
+) -> Result<(), String>
+where
+    S: futures::Sink<WsMessage> + Unpin + Send,
+    S::Error: std::fmt::Display,
+{
+    let (text, label) = match item {
+        ReputationCommittedStreamItem::Event(event) => {
+            let text = match reputation_snapshot_websocket_frame(&event) {
+                Ok(text) => text,
+                Err(err) => return close_reputation_websocket_on_failure(sender, err).await,
+            };
+            (text, "live")
+        }
+        ReputationCommittedStreamItem::Lagged(skipped) => {
+            let text = match reputation_lagged_websocket_frame(skipped) {
+                Ok(text) => text,
+                Err(err) => return close_reputation_websocket_on_failure(sender, err).await,
+            };
+            (text, "lag")
+        }
+        ReputationCommittedStreamItem::ReaderFailed => {
+            return close_reputation_websocket_on_failure(
+                sender,
+                REPUTATION_LIVE_READER_ERROR.to_owned(),
+            )
+            .await;
+        }
+    };
+    sender
+        .send(WsMessage::Text(Utf8Bytes::from(text)))
+        .await
+        .map_err(|err| format!("failed to send reputation {label} frame: {err}"))
 }
 
-fn reputation_snapshot_websocket_frame(event: &ReputationSnapshotEventV1) -> String {
-    let data = reputation_event_json(event).unwrap_or_else(|err| {
-        let mut map = Map::new();
-        map.insert("error".into(), Value::from(err));
-        Value::Object(map)
-    });
+async fn close_reputation_websocket_on_failure<S>(
+    sender: &mut S,
+    error: String,
+) -> Result<(), String>
+where
+    S: futures::Sink<WsMessage> + Unpin + Send,
+    S::Error: std::fmt::Display,
+{
+    sender
+        .send(reputation_websocket_failure_close_message())
+        .await
+        .map_err(|close_error| {
+            format!("{error}; failed to send reputation WebSocket 1011 close: {close_error}")
+        })?;
+    Err(error)
+}
+
+fn reputation_websocket_failure_close_message() -> WsMessage {
+    WsMessage::Close(Some(CloseFrame {
+        code: close_code::ERROR,
+        reason: Utf8Bytes::from_static(REPUTATION_WEBSOCKET_FAILURE_CLOSE_REASON),
+    }))
+}
+
+fn reputation_snapshot_sse_event(event: &ReputationSnapshotEventV1) -> Result<SseEvent, String> {
+    let data = reputation_event_json(event).and_then(|value| {
+        json::to_string(&value)
+            .map_err(|err| format!("failed to serialize reputation event: {err}"))
+    })?;
+    Ok(SseEvent::default()
+        .event("reputation_snapshot")
+        .id(event.sequence.to_string())
+        .data(data))
+}
+
+fn reputation_snapshot_websocket_frame(
+    event: &ReputationSnapshotEventV1,
+) -> Result<String, String> {
+    let data = reputation_event_json(event)?;
     let mut frame = Map::new();
     frame.insert("event".into(), Value::from("reputation_snapshot"));
     frame.insert("data".into(), data);
-    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+    json::to_string(&Value::Object(frame))
+        .map_err(|err| format!("failed to serialize reputation WebSocket event frame: {err}"))
 }
 
-fn reputation_lagged_websocket_frame(skipped: u64) -> String {
+fn reputation_lagged_websocket_frame(skipped: u64) -> Result<String, String> {
     let mut frame = Map::new();
     frame.insert("event".into(), Value::from("lagged"));
     frame.insert("skipped".into(), Value::from(skipped));
-    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
+    json::to_string(&Value::Object(frame))
+        .map_err(|err| format!("failed to serialize reputation WebSocket lag frame: {err}"))
 }
 
 fn reputation_event_json(event: &ReputationSnapshotEventV1) -> Result<Value, String> {
@@ -20944,6 +21901,10 @@ fn reputation_proof_json(proof: &ReputationMerkleProofV1) -> Value {
         Value::from(u64::from(proof.leaf_index)),
     );
     map.insert(
+        "leaf_count".into(),
+        Value::from(u64::from(proof.leaf_count)),
+    );
+    map.insert(
         "siblings_hex".into(),
         Value::Array(
             proof
@@ -20966,7 +21927,7 @@ pub(crate) async fn handle_post_sorafs_provider_advert(
 
     let telemetry = state.telemetry.clone();
 
-    let advert = match norito::decode_from_bytes::<ProviderAdvertV1>(body.as_ref()) {
+    let advert = match decode_provider_advert_v1(body.as_ref()) {
         Ok(value) => value,
         Err(err) => {
             warn!(?err, "failed to decode provider advert payload");
@@ -21377,17 +22338,24 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
 
     let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(manifest_bytes.as_slice());
     let file_count = stored.files().len();
+    let offset = query
+        .offset
+        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
+        .unwrap_or(0)
+        .min(file_count);
     let limit = query
         .limit
         .map(|limit| normalize_limit(Some(limit)))
-        .unwrap_or(file_count);
+        .unwrap_or_else(|| file_count.saturating_sub(offset));
     let files = stored
         .files()
         .iter()
+        .skip(offset)
         .take(limit)
         .map(storage_stored_file_dto)
         .collect::<Vec<_>>();
     let returned_file_count = files.len();
+    let returned_end = offset.saturating_add(returned_file_count);
 
     let response = StorageManifestResponseDto {
         manifest_id_hex,
@@ -21418,7 +22386,11 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
             Value::from(returned_file_count as u64),
         );
         obj.insert("limit".into(), Value::from(limit as u64));
-        obj.insert("truncated_files".into(), Value::from(file_count > limit));
+        obj.insert("offset".into(), Value::from(offset as u64));
+        obj.insert(
+            "truncated_files".into(),
+            Value::from(returned_end < file_count),
+        );
     }
 
     JsonBody(value).into_response()
@@ -21498,34 +22470,47 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         }
     };
     let file_count = stored.files().len();
+    let offset = query
+        .offset
+        .map(|offset| usize::try_from(offset).unwrap_or(usize::MAX))
+        .unwrap_or(0);
+    let file_offset = offset.min(file_count);
     let files = stored
         .files()
         .iter()
+        .skip(file_offset)
         .take(limit)
         .map(file_listing_entry_json)
         .collect::<Vec<_>>();
     let returned_file_count = files.len();
     let chunk_count = specs.len();
+    let chunk_offset = offset.min(chunk_count);
 
     let chunk_digests = specs
         .iter()
+        .skip(chunk_offset)
         .take(limit)
         .map(|spec| Value::String(hex::encode(spec.digest)))
         .collect::<Vec<_>>();
     let chunks = specs
         .iter()
+        .skip(chunk_offset)
         .take(limit)
         .map(chunk_fetch_spec_json)
         .collect::<Vec<_>>();
 
     let mut plan_map = Map::new();
     plan_map.insert("chunk_count".into(), Value::from(chunk_count as u64));
+    plan_map.insert("offset".into(), Value::from(offset as u64));
     plan_map.insert(
         "returned_chunk_count".into(),
         Value::from(chunks.len() as u64),
     );
     plan_map.insert("limit".into(), Value::from(limit as u64));
-    plan_map.insert("truncated_chunks".into(), Value::from(chunk_count > limit));
+    plan_map.insert(
+        "truncated_chunks".into(),
+        Value::from(chunk_offset.saturating_add(chunks.len()) < chunk_count),
+    );
     plan_map.insert("content_length".into(), Value::from(plan.content_length));
     plan_map.insert(
         "payload_digest_blake3".into(),
@@ -21540,7 +22525,10 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         "returned_file_count".into(),
         Value::from(returned_file_count as u64),
     );
-    plan_map.insert("truncated_files".into(), Value::from(file_count > limit));
+    plan_map.insert(
+        "truncated_files".into(),
+        Value::from(file_offset.saturating_add(returned_file_count) < file_count),
+    );
     plan_map.insert("files".into(), Value::Array(files));
     plan_map.insert("chunk_digest_count".into(), Value::from(chunk_count as u64));
     plan_map.insert(
@@ -21549,7 +22537,7 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
     );
     plan_map.insert(
         "truncated_chunk_digests".into(),
-        Value::from(chunk_count > limit),
+        Value::from(chunk_offset.saturating_add(chunk_digests.len()) < chunk_count),
     );
     plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
     plan_map.insert("chunks".into(), Value::Array(chunks));
@@ -21773,10 +22761,7 @@ pub(crate) async fn handle_get_sorafs_aliases(
     };
 
     let namespace_filter = query.namespace.as_deref().map(str::to_ascii_lowercase);
-    let digest_filter = query
-        .manifest_digest
-        .as_deref()
-        .map(str::to_ascii_lowercase);
+    let digest_filter = query.manifest_digest.as_deref();
 
     let mut aliases: Vec<&RegistryAlias> = snapshot.aliases.iter().collect();
     if let Some(namespace) = namespace_filter {
@@ -21894,7 +22879,7 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
         orders.retain(|order| filter.matches(order.status_label()));
     }
     if let Some(digest) = digest_filter {
-        orders.retain(|order| order.manifest_digest_hex().eq_ignore_ascii_case(&digest));
+        orders.retain(|order| order.manifest_digest_hex() == digest);
     }
 
     let total = orders.len();
@@ -24443,6 +25428,50 @@ fn is_canonical_lower_hex(value: &str, maximum_bytes: usize) -> bool {
 }
 
 #[cfg(feature = "app_api")]
+fn stream_token_api_token_required_response() -> Response {
+    let mut response = json_error(
+        StatusCode::UNAUTHORIZED,
+        "a valid Torii API token is required to issue a SoraFS stream token",
+    );
+    response.headers_mut().insert(
+        header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("IrohaApiToken realm=\"sorafs-stream-token\""),
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
+fn authenticated_stream_token_quota_subject(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+) -> Result<StreamTokenQuotaSubject, Response> {
+    if state.api_tokens_set.is_empty() {
+        let mut response = json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "stream token issuance requires at least one configured Torii API token",
+        );
+        response
+            .headers_mut()
+            .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+        return Err(response);
+    }
+
+    let mut values = headers.get_all(crate::HEADER_API_TOKEN).iter();
+    let Some(token) = values
+        .next()
+        .and_then(|value| value.to_str().ok())
+        .filter(|token| state.api_tokens_set.contains(*token))
+    else {
+        return Err(stream_token_api_token_required_response());
+    };
+    if values.next().is_some() {
+        return Err(stream_token_api_token_required_response());
+    }
+
+    Ok(StreamTokenQuotaSubject::from_validated_api_token(token))
+}
+
+#[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_token(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -24456,6 +25485,10 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         return feature_disabled("stream token issuance is not enabled on this node");
     };
 
+    let quota_subject = match authenticated_stream_token_quota_subject(&state, &headers) {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
     let client_id = match required_canonical_stream_header(
         &headers,
         HEADER_SORA_CLIENT,
@@ -24532,7 +25565,7 @@ pub(crate) async fn handle_post_sorafs_storage_token(
     };
 
     let token_issue = match issuer.issue_token(
-        &client_id,
+        quota_subject,
         manifest.manifest_cid().to_vec(),
         provider_id,
         manifest.chunk_profile_handle().to_string(),
@@ -24541,7 +25574,7 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         Ok(token) => token,
         Err(err) => {
             return match &err {
-                StreamTokenIssuerError::ClientQuotaExceeded {
+                StreamTokenIssuerError::IssuanceQuotaExceeded {
                     limit,
                     retry_after_secs,
                     ..
@@ -24565,18 +25598,17 @@ pub(crate) async fn handle_post_sorafs_storage_token(
                         header_value(&nonce, "X-SoraFS-Nonce"),
                     );
                     headers.insert(
-                        header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
-                        header_value("0", "X-SoraFS-Client-Quota-Remaining"),
+                        header::HeaderName::from_static(HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
+                        header_value("0", "X-SoraFS-Issuance-Quota-Remaining"),
                     );
                     response
                 }
                 StreamTokenIssuerError::InvalidPolicy { .. }
-                | StreamTokenIssuerError::InvalidClientId
                 | StreamTokenIssuerError::InvalidBody(_) => {
                     json_error(StatusCode::BAD_REQUEST, err.to_string())
                 }
-                StreamTokenIssuerError::ClientQuotaCapacityExceeded { .. }
-                | StreamTokenIssuerError::ClientQuotaStateUnavailable
+                StreamTokenIssuerError::IssuanceQuotaCapacityExceeded { .. }
+                | StreamTokenIssuerError::IssuanceQuotaStateUnavailable
                 | StreamTokenIssuerError::ClockRollback { .. } => {
                     error!(?err, "stream token issuance quota state unavailable");
                     let mut response = json_error(
@@ -24652,8 +25684,8 @@ pub(crate) async fn handle_post_sorafs_storage_token(
     );
     let quota_header = token_issue.remaining_quota.to_string();
     response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_CLIENT_QUOTA_REMAINING),
-        header_value(&quota_header, "X-SoraFS-Client-Quota-Remaining"),
+        header::HeaderName::from_static(HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
+        header_value(&quota_header, "X-SoraFS-Issuance-Quota-Remaining"),
     );
     response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
 
@@ -27959,6 +28991,22 @@ fn pin_manifest_query_error_response(error: QueryExecutionFail) -> Response {
     )
 }
 
+fn record_gateway_proof_verification(
+    state: &SharedAppState,
+    result: &str,
+    error_code: &str,
+    started_at: Instant,
+) {
+    state.telemetry.with_metrics(|metrics| {
+        metrics.record_sorafs_gateway_proof_verification(
+            SORAFS_GATEWAY_PROFILE_VERSION,
+            result,
+            error_code,
+            started_at.elapsed(),
+        );
+    });
+}
+
 #[cfg(feature = "app_api")]
 fn render_finalized_proof_stream_response(
     state: &SharedAppState,
@@ -28055,9 +29103,16 @@ fn render_finalized_proof_stream_response(
             );
         }
     };
+    let verification_started_at = Instant::now();
     let verified = match ProofStreamItem::from_json(&value, &context) {
         Ok(verified) => verified,
         Err(_) => {
+            record_gateway_proof_verification(
+                state,
+                "failure",
+                "item_invalid",
+                verification_started_at,
+            );
             return json_error(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "authoritative finalized SoraFS proof-outcome projection is invalid",
@@ -28065,12 +29120,31 @@ fn render_finalized_proof_stream_response(
         }
     };
     let mut sequence_verifier = ProofStreamSequenceVerifier::new(&context);
-    if sequence_verifier.verify_item(&verified).is_err() || sequence_verifier.finish().is_err() {
+    if sequence_verifier.verify_item(&verified).is_err() {
+        record_gateway_proof_verification(
+            state,
+            "failure",
+            "sequence_invalid",
+            verification_started_at,
+        );
         return json_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "authoritative finalized SoraFS proof-outcome sequence is invalid",
         );
     }
+    if sequence_verifier.finish().is_err() {
+        record_gateway_proof_verification(
+            state,
+            "failure",
+            "sequence_invalid",
+            verification_started_at,
+        );
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authoritative finalized SoraFS proof-outcome sequence is invalid",
+        );
+    }
+    record_gateway_proof_verification(state, "success", "none", verification_started_at);
     let mut rendered =
         json::to_vec(&verified.to_json()).expect("verified proof-outcome projection must encode");
     rendered.push(b'\n');
@@ -28537,6 +29611,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                     "unable to allocate the bounded PoR response",
                 );
             }
+            let verification_started_at = Instant::now();
             let mut sequence_verifier = ProofStreamSequenceVerifier::new(&verification_context);
             for (flat_index, proof) in samples {
                 let mut map = sample_to_map(flat_index, &proof);
@@ -28574,6 +29649,12 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                         Ok(verified) => verified,
                         Err(_) => {
                             warn!("generated PoR proof failed finalized-root verification");
+                            record_gateway_proof_verification(
+                                &state,
+                                "failure",
+                                "item_invalid",
+                                verification_started_at,
+                            );
                             return json_error(
                                 StatusCode::SERVICE_UNAVAILABLE,
                                 "generated PoR proof failed finalized-root verification",
@@ -28582,6 +29663,12 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                     };
                 if sequence_verifier.verify_item(&verified).is_err() {
                     warn!("generated PoR sequence failed request-bound verification");
+                    record_gateway_proof_verification(
+                        &state,
+                        "failure",
+                        "sequence_invalid",
+                        verification_started_at,
+                    );
                     return json_error(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "generated PoR sequence failed request-bound verification",
@@ -28594,11 +29681,18 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             }
             if sequence_verifier.finish().is_err() {
                 warn!("generated PoR sequence has invalid order or cardinality");
+                record_gateway_proof_verification(
+                    &state,
+                    "failure",
+                    "sequence_invalid",
+                    verification_started_at,
+                );
                 return json_error(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "generated PoR sequence has invalid order or cardinality",
                 );
             }
+            record_gateway_proof_verification(&state, "success", "none", verification_started_at);
             let stream = stream::iter(verified_items.into_iter().map(Ok::<Bytes, Infallible>))
                 .inspect(move |_| {
                     let _keep_inflight_until_body_poll = &inflight_guard;
@@ -28952,11 +30046,10 @@ mod app_api_tests {
     };
 
     use axum::{body, http::Uri};
-    use blake3::hash;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::SorafsTokenConfig;
     use sorafs_car::{
-        CarBuildPlan,
+        CarBuildPlan, CarWriter,
         multi_fetch::{
             FetchOptions, FetchProvider, ProviderMetadata, RangeCapability, StreamBudget,
             fetch_plan_parallel,
@@ -28984,6 +30077,16 @@ mod app_api_tests {
         utils::extractors::JsonOnly,
     };
 
+    fn canonical_fixture_car_stats(
+        plan: &CarBuildPlan,
+        payload: &[u8],
+    ) -> sorafs_car::CarWriteStats {
+        CarWriter::new(plan, payload)
+            .expect("canonical fixture CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical fixture CAR archive stats")
+    }
+
     #[test]
     fn walk_query_params_decodes_percent_encoding() {
         let mut pairs = Vec::new();
@@ -28999,6 +30102,54 @@ mod app_api_tests {
     fn walk_query_params_rejects_invalid_percent_sequences() {
         let err = walk_query_params(Some("%ZZ=value"), |_, _| Ok(())).expect_err("should fail");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn replication_list_query_is_a_strict_canonical_hard_cut() {
+        let manifest_digest = "ab".repeat(32);
+        let raw = format!("limit=25&offset=3&status=completed&manifest_digest={manifest_digest}");
+        let query = ReplicationListQuery::parse(Some(&raw)).expect("canonical query");
+        assert_eq!(query.limit, Some(25));
+        assert_eq!(query.offset, Some(3));
+        assert_eq!(query.status.as_deref(), Some("completed"));
+        assert_eq!(
+            query.manifest_digest.as_deref(),
+            Some(manifest_digest.as_str())
+        );
+
+        let uppercase_digest = manifest_digest.to_ascii_uppercase();
+        for invalid in [
+            "limit=".to_owned(),
+            "limit=0".to_owned(),
+            format!("limit={}", MAX_LIST_LIMIT + 1),
+            "limit=1&limit=2".to_owned(),
+            "limit=01".to_owned(),
+            "limit=+1".to_owned(),
+            "offset=00".to_owned(),
+            "offset=+0".to_owned(),
+            "offset=&offset=1".to_owned(),
+            "status=".to_owned(),
+            "status=Completed".to_owned(),
+            "status=complete".to_owned(),
+            "sta%74us=pending".to_owned(),
+            "status=%70ending".to_owned(),
+            "manifest_digest=00".to_owned(),
+            format!("manifest_digest={}", "00".repeat(32)),
+            format!("manifest_digest={uppercase_digest}"),
+            format!("manifest_digest=%61{}", "b".repeat(63)),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            "limit=1&&offset=0".to_owned(),
+            "legacy_status=pending".to_owned(),
+        ] {
+            let error = ReplicationListQuery::parse(Some(&invalid))
+                .expect_err("legacy or noncanonical query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
     }
 
     #[test]
@@ -29107,17 +30258,23 @@ mod app_api_tests {
     }
 
     #[test]
-    fn storage_metadata_readback_query_parses_limits() {
-        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&ignored=true"))
+    fn storage_metadata_readback_query_parses_pagination() {
+        let query = StorageMetadataReadbackQuery::parse(Some("limit=2&offset=7&ignored=true"))
             .expect("parse storage metadata readback query");
         assert_eq!(normalize_limit(query.limit), 2);
+        assert_eq!(query.offset, Some(7));
 
         let query = StorageMetadataReadbackQuery::parse(Some("limit=9999"))
             .expect("parse oversized storage metadata query");
         assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+        assert_eq!(query.offset, None);
 
         let err = StorageMetadataReadbackQuery::parse(Some("limit=bad"))
             .expect_err("invalid limit should fail");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+
+        let err = StorageMetadataReadbackQuery::parse(Some("offset=bad"))
+            .expect_err("invalid offset should fail");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -29137,18 +30294,71 @@ mod app_api_tests {
     }
 
     #[test]
-    fn reputation_snapshot_readback_query_parses_limits() {
-        let query = ReputationSnapshotReadbackQuery::parse(Some("limit=2&ignored=true"))
-            .expect("parse reputation snapshot readback query");
-        assert_eq!(normalize_limit(query.limit), 2);
+    fn reputation_queries_are_bounded_schema_closed_and_canonical() {
+        let snapshot =
+            ReputationSnapshotReadbackQuery::parse(Some("limit=500")).expect("canonical limit");
+        assert_eq!(snapshot.limit, Some(500));
+        assert_eq!(reputation_page_limit(snapshot.limit), 500);
 
-        let query = ReputationSnapshotReadbackQuery::parse(Some("limit=9999"))
-            .expect("parse oversized reputation snapshot readback query");
-        assert_eq!(normalize_limit(query.limit), MAX_LIST_LIMIT);
+        let events =
+            ReputationEventsQuery::parse(Some("since=0&limit=1")).expect("canonical event query");
+        assert_eq!(events.since, Some(0));
+        assert_eq!(events.limit, Some(1));
 
-        let err = ReputationSnapshotReadbackQuery::parse(Some("limit=bad"))
-            .expect_err("invalid limit should fail");
-        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        assert!(ReputationSnapshotReadbackQuery::parse(None).is_ok());
+        assert!(ReputationEventsQuery::parse(None).is_ok());
+        assert!(ReputationNoQuery::parse(None).is_ok());
+
+        let oversized = format!("limit={}", "1".repeat(REPUTATION_QUERY_MAX_BYTES_V1));
+        for invalid in [
+            String::new(),
+            "limit=".to_owned(),
+            "limit".to_owned(),
+            "limit=0".to_owned(),
+            "limit=501".to_owned(),
+            "limit=01".to_owned(),
+            "limit=+1".to_owned(),
+            "limit=%31".to_owned(),
+            "lim%69t=1".to_owned(),
+            "limit=1&limit=2".to_owned(),
+            "ignored=true".to_owned(),
+            "&limit=1".to_owned(),
+            "limit=1&".to_owned(),
+            oversized,
+        ] {
+            let error = ReputationSnapshotReadbackQuery::parse(Some(&invalid))
+                .expect_err("noncanonical reputation snapshot query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
+
+        for invalid in [
+            "since=".to_owned(),
+            "since=00".to_owned(),
+            "since=+1".to_owned(),
+            "since=-1".to_owned(),
+            "since=18446744073709551616".to_owned(),
+            "since=1&since=2".to_owned(),
+            "since=1&limit=1&legacy=1".to_owned(),
+            "legacy=1".to_owned(),
+        ] {
+            let error = ReputationEventsQuery::parse(Some(&invalid))
+                .expect_err("noncanonical reputation event query must fail");
+            assert_eq!(
+                error.status(),
+                StatusCode::BAD_REQUEST,
+                "query unexpectedly accepted: {invalid}"
+            );
+        }
+
+        for invalid in ["", "limit=1", "legacy=true"] {
+            let error = ReputationNoQuery::parse(Some(invalid))
+                .expect_err("query-free reputation route must reject every query spelling");
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        }
     }
 
     #[test]
@@ -29204,9 +30414,10 @@ mod app_api_tests {
 
         let payload = b"deterministic payload for alignment";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03, 0x04])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 BLAKE3_256_MULTIHASH_CODE,
@@ -29217,8 +30428,8 @@ mod app_api_tests {
                     .expect("derive canonical alignment fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(hash(payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -29249,9 +30460,10 @@ mod app_api_tests {
 
         let payload = b"payload for misalignment check";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0x0A, 0x0B, 0x0C])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 BLAKE3_256_MULTIHASH_CODE,
@@ -29262,8 +30474,8 @@ mod app_api_tests {
                     .expect("derive canonical misalignment fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(hash(payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -29387,12 +30599,13 @@ fn snapshot_to_json(snapshot: CapacitySnapshot, limit: usize) -> Result<Value, j
 fn pin_snapshot_with_attestation(
     state: &SharedAppState,
 ) -> ApiResult<(Value, PinRegistrySnapshot)> {
-    let world = state.state.world_view();
-    let block_hash = state.state.latest_block_hash_fast();
-    let height = u64::try_from(state.state.committed_height()).unwrap_or(u64::MAX);
-    let chain_id = state.state.chain_id_ref();
+    // The full state view retries across concurrent commits, keeping the world
+    // projection, height, block hash, and chain id on one committed generation.
+    let view = state.state.view();
+    let block_hash = view.latest_block_hash();
+    let height = u64::try_from(view.height()).unwrap_or(u64::MAX);
 
-    let attestation = match build_attestation_value(height, block_hash.as_ref(), chain_id) {
+    let attestation = match build_attestation_value(height, block_hash.as_ref(), &view.chain_id) {
         Ok(value) => value,
         Err(err) => {
             error!(?err, "failed to serialize registry attestation metadata");
@@ -29404,7 +30617,7 @@ fn pin_snapshot_with_attestation(
         }
     };
 
-    match collect_pin_registry(&world) {
+    match collect_pin_registry(view.world()) {
         Ok(snapshot) => {
             let telemetry = state.telemetry_handle();
             record_pin_registry_metrics(&telemetry, &snapshot);
@@ -29523,7 +30736,7 @@ impl ReplicationStatusFilter {
 }
 
 fn parse_replication_status_filter(value: &str) -> Option<ReplicationStatusFilter> {
-    match value.to_ascii_lowercase().as_str() {
+    match value {
         "pending" => Some(ReplicationStatusFilter::Pending),
         "completed" => Some(ReplicationStatusFilter::Completed),
         "expired" => Some(ReplicationStatusFilter::Expired),
@@ -29724,6 +30937,11 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
         | StorageBackendError::PorCommitmentGeometryOverflow { .. }
         | StorageBackendError::AllocationGeometryOverflow { .. }
         | StorageBackendError::PorRootMismatch
+        | StorageBackendError::ManifestChunkPlanDigestMismatch
+        | StorageBackendError::CarArchiveReconstruction { .. }
+        | StorageBackendError::ManifestCarArchiveDigestMismatch
+        | StorageBackendError::ManifestCarSizeMismatch { .. }
+        | StorageBackendError::ManifestDagCodecMismatch { .. }
         | StorageBackendError::PorSampleCountTooLarge { .. }
         | StorageBackendError::PdpTree(_)
         | StorageBackendError::PdpCommitment(_)
@@ -29838,6 +31056,30 @@ mod storage_backend_error_tests {
         });
         let response = storage_backend_error(err);
         assert_eq!(response.status(), super::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn manifest_archive_binding_errors_map_to_bad_request() {
+        for error in [
+            StorageBackendError::ManifestChunkPlanDigestMismatch,
+            StorageBackendError::CarArchiveReconstruction {
+                reason: "fixture".to_owned(),
+            },
+            StorageBackendError::ManifestCarArchiveDigestMismatch,
+            StorageBackendError::ManifestCarSizeMismatch {
+                expected: 1,
+                actual: 2,
+            },
+            StorageBackendError::ManifestDagCodecMismatch {
+                expected: 0x55,
+                actual: 0x71,
+            },
+        ] {
+            assert_eq!(
+                storage_backend_error(error).status(),
+                super::StatusCode::BAD_REQUEST
+            );
+        }
     }
 
     #[test]
@@ -30090,8 +31332,17 @@ pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<Chu
 mod chunk_profile_tests {
     use super::*;
 
-    use blake3;
     use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
+
+    fn canonical_fixture_car_stats(
+        plan: &CarBuildPlan,
+        payload: &[u8],
+    ) -> sorafs_car::CarWriteStats {
+        sorafs_car::CarWriter::new(plan, payload)
+            .expect("canonical fixture CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical fixture CAR archive stats")
+    }
 
     #[test]
     fn chunk_profile_for_manifest_accepts_inline_profile() {
@@ -30105,9 +31356,10 @@ mod chunk_profile_tests {
         };
         let plan =
             CarBuildPlan::single_file_with_profile(payload, profile).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(profile, BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(
@@ -30115,8 +31367,8 @@ mod chunk_profile_tests {
                     .expect("derive canonical inline-profile PoR root"),
             )
             .content_length(content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -30131,9 +31383,10 @@ mod chunk_profile_tests {
         let payload = b"chunk-profile-fixture";
         let content_length = payload.len() as u64;
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let mut manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 BLAKE3_256_MULTIHASH_CODE,
@@ -30144,8 +31397,8 @@ mod chunk_profile_tests {
                     .expect("derive canonical unknown-profile fixture PoR root"),
             )
             .content_length(content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
@@ -30644,7 +31897,8 @@ mod advert_tests {
     use axum::{
         Router,
         body::{self, Bytes},
-        extract::Path as AxumPath,
+        extract::{DefaultBodyLimit, Path as AxumPath},
+        http::Request,
         response::IntoResponse,
         routing::{get, post},
     };
@@ -30698,6 +31952,8 @@ mod advert_tests {
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
                 PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
+                ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
+                ProviderIngestFinalizedAnchorV1, ReplicationOrderCompletionRecord,
                 ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
             },
             proof_ledger::{
@@ -30753,10 +32009,18 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::{
-        GovernanceDagRuntimeSigner, ModerationQuarantineKeyWrapper, NodeRuntimeDeps,
-        PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1,
-        PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
-        PrivacyReleaseAnchorV1,
+        FencedPrivacyPublicationReceiptV1, FencedPrivacyPublicationRequestV1,
+        FencedTransparencyAuthoritativeHeadReaderV1, FencedTransparencyHeadAncestryProofV1,
+        FencedTransparencyPublicationInclusionV1, FencedTransparencyPublishErrorV1,
+        FencedTransparencyPublisherV1, FencedTransparencyTargetHeadV1,
+        GovernanceDagRuntimeProviderQualificationV1, GovernanceDagRuntimeSigner,
+        ModerationQuarantineKeyOperationErrorV1, ModerationQuarantineKeyProviderQualificationV1,
+        ModerationQuarantineKeyProviderReadinessErrorV1, ModerationQuarantineKeyWrapper,
+        NodeRuntimeDeps, PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1,
+        PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1,
+        PrivacyReleaseAnchorHeadV1, PrivacyReleaseAnchorV1,
+        ProductionTransparencyRuntimeProviderV1, TransparencyRuntimeProviderBindingV1,
+        TransparencyRuntimeProviderQualificationV1,
         config::{StorageConfig, StorageConfigBuilder},
         reputation::runtime::{
             REPUTATION_COMMITTED_READ_PROJECTION_VERSION_V1,
@@ -30767,6 +32031,7 @@ mod advert_tests {
     use std::collections::{BTreeMap, HashSet};
     use tempfile::TempDir;
     use tokio::net::TcpListener;
+    use tower::ServiceExt as _;
 
     use super::*;
     use crate::{
@@ -30851,7 +32116,7 @@ mod advert_tests {
     }
 
     impl ApiTestGovernanceDagSigner {
-        const HANDLE: &'static str = "pkcs11:governance-dag:torii-api-test";
+        const HANDLE: &'static str = "pkcs11:governance-dag:torii-api-primary";
         const PEER_ID: &'static [u8] = b"12D3KooWToriiApiTestGovernancePublisher";
 
         fn new() -> Self {
@@ -30870,11 +32135,19 @@ mod advert_tests {
             assert_eq!(algorithm, Algorithm::Ed25519);
             bytes.try_into().expect("Ed25519 public key width")
         }
+
+        fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x85; 32])
+        }
     }
 
     impl GovernanceDagRuntimeSigner for ApiTestGovernanceDagSigner {
         fn handle(&self) -> &str {
             Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(Self::expected_qualification())
         }
 
         fn publisher_peer_id(&self) -> &[u8] {
@@ -30894,6 +32167,223 @@ mod advert_tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct ApiTestFencedPrivacyState {
+        head: Option<FencedTransparencyTargetHeadV1>,
+        publications:
+            BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>,
+        receipts: BTreeMap<
+            [u8; 32],
+            (
+                FencedPrivacyPublicationRequestV1,
+                FencedPrivacyPublicationReceiptV1,
+            ),
+        >,
+        history: Vec<FencedTransparencyTargetHeadV1>,
+    }
+
+    #[derive(Default)]
+    struct ApiTestFencedPrivacyProvider {
+        state: Mutex<ApiTestFencedPrivacyState>,
+    }
+
+    impl std::fmt::Debug for ApiTestFencedPrivacyProvider {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("ApiTestFencedPrivacyProvider")
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl ApiTestFencedPrivacyProvider {
+        const HANDLE: &'static str = "governance-cas:transparency:torii-api-primary";
+
+        fn expected_qualification() -> GovernanceDagRuntimeProviderQualificationV1 {
+            GovernanceDagRuntimeProviderQualificationV1::new(1, [0x86; 32])
+        }
+    }
+
+    impl FencedTransparencyPublisherV1 for ApiTestFencedPrivacyProvider {
+        fn handle(&self) -> &str {
+            Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(Self::expected_qualification())
+        }
+
+        fn compare_and_append_privacy(
+            &self,
+            request: &FencedPrivacyPublicationRequestV1,
+        ) -> Result<FencedPrivacyPublicationReceiptV1, FencedTransparencyPublishErrorV1> {
+            request.validate()?;
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| FencedTransparencyPublishErrorV1::Ambiguous)?;
+            if let Some((retained_request, receipt)) = state.receipts.get(&request.request_digest())
+            {
+                return if retained_request == request {
+                    Ok(receipt.clone())
+                } else {
+                    Err(FencedTransparencyPublishErrorV1::InvalidRequest)
+                };
+            }
+            if let Some((idempotency_digest, payload_digest, included_head)) = state
+                .publications
+                .get(&request.publication_scope())
+                .copied()
+            {
+                if idempotency_digest != request.publication_idempotency_digest()
+                    || payload_digest != request.payload_digest()
+                {
+                    return Err(FencedTransparencyPublishErrorV1::PublicationConflict);
+                }
+                let readback_head = state
+                    .head
+                    .ok_or(FencedTransparencyPublishErrorV1::InvalidReceipt)?;
+                let receipt = FencedPrivacyPublicationReceiptV1::from_verified_existing(
+                    request,
+                    Self::HANDLE,
+                    Self::expected_qualification(),
+                    included_head,
+                    readback_head,
+                )?;
+                state
+                    .receipts
+                    .insert(request.request_digest(), (request.clone(), receipt.clone()));
+                return Ok(receipt);
+            }
+            if state.head != request.expected_authoritative_head() {
+                return Err(FencedTransparencyPublishErrorV1::CompareConflict);
+            }
+            if request.fencing_token()
+                <= state
+                    .head
+                    .map_or(0, FencedTransparencyTargetHeadV1::fencing_floor)
+            {
+                return Err(FencedTransparencyPublishErrorV1::StaleFencingToken);
+            }
+            let receipt = FencedPrivacyPublicationReceiptV1::from_verified_append(
+                request,
+                Self::HANDLE,
+                Self::expected_qualification(),
+            )?;
+            state.head = Some(receipt.included_head());
+            state.history.push(receipt.included_head());
+            state.publications.insert(
+                request.publication_scope(),
+                (
+                    request.publication_idempotency_digest(),
+                    request.payload_digest(),
+                    receipt.included_head(),
+                ),
+            );
+            state
+                .receipts
+                .insert(request.request_digest(), (request.clone(), receipt.clone()));
+            Ok(receipt)
+        }
+    }
+
+    fn api_test_fenced_privacy_digest_head(
+        hasher: &mut blake3::Hasher,
+        head: Option<FencedTransparencyTargetHeadV1>,
+    ) {
+        match head {
+            Some(head) => {
+                hasher.update(&[1]);
+                hasher.update(&head.generation().to_le_bytes());
+                hasher.update(&head.head_digest());
+                hasher.update(&head.fencing_floor().to_le_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+    }
+
+    impl FencedTransparencyAuthoritativeHeadReaderV1 for ApiTestFencedPrivacyProvider {
+        fn handle(&self) -> &str {
+            Self::HANDLE
+        }
+
+        fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
+            Ok(Self::expected_qualification())
+        }
+
+        fn read_authoritative_head_with_ancestry(
+            &self,
+            required_ancestors: &[FencedTransparencyTargetHeadV1],
+            required_publications: &[FencedTransparencyPublicationInclusionV1],
+        ) -> Result<FencedTransparencyHeadAncestryProofV1, String> {
+            let state = self
+                .state
+                .lock()
+                .map_err(|_| "fused privacy target state is unavailable".to_owned())?;
+            let current_index = state
+                .head
+                .map(|head| {
+                    state
+                        .history
+                        .iter()
+                        .position(|candidate| *candidate == head)
+                        .ok_or_else(|| "fused privacy target ancestry is unavailable".to_owned())
+                })
+                .transpose()?;
+            for ancestor in required_ancestors {
+                let ancestor_index = state
+                    .history
+                    .iter()
+                    .position(|candidate| candidate == ancestor)
+                    .ok_or_else(|| "fused privacy target ancestry is unavailable".to_owned())?;
+                if current_index.is_none_or(|current| ancestor_index > current) {
+                    return Err("fused privacy target ancestry is unavailable".to_owned());
+                }
+            }
+            for publication in required_publications {
+                if !state.publications.values().any(
+                    |(publication_idempotency_digest, payload_digest, included_head)| {
+                        *publication_idempotency_digest
+                            == publication.publication_idempotency_digest()
+                            && *payload_digest == publication.payload_digest()
+                            && *included_head == publication.included_head()
+                    },
+                ) {
+                    return Err("fused privacy publication inclusion is unavailable".to_owned());
+                }
+            }
+
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"sorafs.torii.api.fenced-head-ancestry-proof.v1");
+            api_test_fenced_privacy_digest_head(&mut hasher, state.head);
+            for ancestor in required_ancestors {
+                api_test_fenced_privacy_digest_head(&mut hasher, Some(*ancestor));
+            }
+            for publication in required_publications {
+                hasher.update(&publication.publication_idempotency_digest());
+                hasher.update(&publication.payload_digest());
+                api_test_fenced_privacy_digest_head(&mut hasher, Some(publication.included_head()));
+            }
+            FencedTransparencyHeadAncestryProofV1::try_new(
+                state.head,
+                required_ancestors.to_vec(),
+                required_publications.to_vec(),
+                *hasher.finalize().as_bytes(),
+            )
+            .map_err(|_| "fused privacy target ancestry proof is malformed".to_owned())
+        }
+    }
+
+    fn with_test_fenced_privacy_runtime(runtime_deps: NodeRuntimeDeps) -> NodeRuntimeDeps {
+        let provider = Arc::new(ApiTestFencedPrivacyProvider::default());
+        let publisher: Arc<dyn FencedTransparencyPublisherV1> = provider.clone();
+        let head_reader: Arc<dyn FencedTransparencyAuthoritativeHeadReaderV1> = provider;
+        runtime_deps
+            .with_fenced_transparency_publisher(publisher)
+            .with_fenced_transparency_head_reader(head_reader)
+    }
+
     fn node_with_test_governance_publisher(
         builder: StorageConfigBuilder,
         runtime_deps: NodeRuntimeDeps,
@@ -30905,6 +32395,9 @@ mod advert_tests {
                     .expect("test peer id is UTF-8"),
             ))
             .governance_dag_signer_handle(Some(ApiTestGovernanceDagSigner::HANDLE.to_owned()))
+            .governance_dag_signer_qualification(Some(
+                ApiTestGovernanceDagSigner::expected_qualification(),
+            ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
         sorafs_node::NodeHandle::try_new_with_runtime_deps(
@@ -34275,7 +35768,10 @@ mod advert_tests {
     }
 
     fn sorafs_app_state_with_reputation_storage() -> (SharedAppState, TempDir) {
-        let mut app = mk_app_state_for_tests();
+        let request_keypair = reputation_request_keypair();
+        let request_account = AccountId::new(request_keypair.public_key().clone());
+        let request_account = Account::new(request_account.clone()).build(&request_account);
+        let mut app = mk_app_state_for_tests_with_world(World::with([], [request_account], []));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let temp_root = temp_dir
             .path()
@@ -34311,6 +35807,92 @@ mod advert_tests {
         (app, temp_dir)
     }
 
+    fn reputation_request_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
+            .expect("derive reputation request authentication key")
+    }
+
+    fn reputation_signed_get_headers(uri: &Uri, body: &[u8]) -> HeaderMap {
+        let keypair = reputation_request_keypair();
+        let account = AccountId::new(keypair.public_key().clone());
+        signed_app_headers(&account, &keypair, &Method::GET, uri, body)
+    }
+
+    fn reputation_auth_test_guard() -> impl Drop {
+        crate::tests_runtime_handlers::app_auth_test_guard(
+            crate::app_auth::CanonicalRequestAuthConfig::default(),
+        )
+    }
+
+    fn assert_reputation_terminal_response(response: &Response, expected_status: StatusCode) {
+        assert_eq!(response.status(), expected_status);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(REPUTATION_STREAM_CACHE_CONTROL)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some(REPUTATION_CACHE_VARY)
+        );
+    }
+
+    async fn assert_reputation_json_terminal_response(
+        response: Response,
+        expected_status: StatusCode,
+        expected_message: &str,
+    ) {
+        assert_reputation_terminal_response(&response, expected_status);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect reputation terminal JSON body");
+        let value: Value =
+            norito::json::from_slice(&body).expect("decode reputation terminal JSON body");
+        let object = value
+            .as_object()
+            .expect("reputation terminal response must be a JSON object");
+        assert_eq!(object.len(), 1);
+        assert_eq!(
+            object.get("error").and_then(Value::as_str),
+            Some(expected_message)
+        );
+    }
+
+    fn reputation_framework_test_router(state: SharedAppState, body_limit: usize) -> Router {
+        Router::new()
+            .route(
+                REPUTATION_LATEST_PATH_V1,
+                get(handle_get_sorafs_reputation_latest)
+                    .layer(DefaultBodyLimit::max(body_limit))
+                    .layer(axum::middleware::from_fn(harden_reputation_route_responses)),
+            )
+            .route(
+                REPUTATION_EVENTS_WEBSOCKET_PATH_V1,
+                get(handle_get_sorafs_reputation_events_ws)
+                    .layer(DefaultBodyLimit::max(body_limit))
+                    .layer(axum::middleware::from_fn(harden_reputation_route_responses)),
+            )
+            .route(
+                REPUTATION_EVENTS_STREAM_PATH_V1,
+                get(handle_get_sorafs_reputation_events_stream)
+                    .layer(DefaultBodyLimit::max(body_limit))
+                    .layer(axum::middleware::from_fn(harden_reputation_route_responses)),
+            )
+            .with_state(state)
+    }
+
     #[derive(Debug)]
     struct StaticReputationCommittedReaderV1 {
         projection: ReputationCommittedReadProjectionV1,
@@ -34333,6 +35915,17 @@ mod advert_tests {
                 .iter()
                 .find(|snapshot| snapshot.snapshot_id == snapshot_id)
                 .cloned())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingReputationCommittedReaderV1;
+
+    impl ReputationCommittedReadApiV1 for FailingReputationCommittedReaderV1 {
+        fn committed_read_projection(
+            &self,
+        ) -> Result<ReputationCommittedReadProjectionV1, ReputationRuntimeError> {
+            Err(ReputationRuntimeError::InvalidRuntimePolicy)
         }
     }
 
@@ -34600,6 +36193,7 @@ mod advert_tests {
         let cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(temp_root.join("storage"))
+            .moderation_quarantine_key_provider(Some(torii_test_quarantine_key_provider_config()))
             .build();
         let node = sorafs_node::NodeHandle::try_new_with_quarantine_key_wrapper(
             cfg,
@@ -34676,6 +36270,18 @@ mod advert_tests {
             }
         }
 
+        impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyCyclePrfProvider {
+            fn handle(&self) -> &str {
+                "threshold-prf:transparency:primary"
+            }
+
+            fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+                Ok(TransparencyRuntimeProviderQualificationV1::new(
+                    1, [0xC7; 32],
+                ))
+            }
+        }
+
         #[derive(Default)]
         struct TestPrivacyReleaseAnchor {
             heads: Mutex<BTreeMap<[u8; 32], PrivacyReleaseAnchorHeadV1>>,
@@ -34699,6 +36305,7 @@ mod advert_tests {
                 &self,
                 expected: PrivacyReleaseAnchorHeadV1,
                 next: PrivacyReleaseAnchorHeadV1,
+                _lease: &sorafs_node::TransparencyLeaderLeaseGrantV1,
             ) -> Result<(), PrivacyReleaseAnchorErrorV1> {
                 if expected.query_id() != next.query_id()
                     || next.sequence() != expected.sequence().saturating_add(1)
@@ -34721,6 +36328,124 @@ mod advert_tests {
             }
         }
 
+        impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyReleaseAnchor {
+            fn handle(&self) -> &str {
+                "governance-dag:transparency:primary"
+            }
+
+            fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+                Ok(TransparencyRuntimeProviderQualificationV1::new(
+                    1, [0xD7; 32],
+                ))
+            }
+        }
+
+        #[derive(Default)]
+        struct TestTransparencyLeaderLeaseProvider {
+            active: Mutex<Option<sorafs_node::TransparencyLeaderLeaseGrantV1>>,
+            fencing_token: AtomicU64,
+        }
+
+        impl ProductionTransparencyRuntimeProviderV1 for TestTransparencyLeaderLeaseProvider {
+            fn handle(&self) -> &str {
+                "sealed-cas:transparency:leader-primary"
+            }
+
+            fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
+                Ok(TransparencyRuntimeProviderQualificationV1::new(
+                    1, [0xE7; 32],
+                ))
+            }
+        }
+
+        impl sorafs_node::TransparencyLeaderLeaseProviderV1 for TestTransparencyLeaderLeaseProvider {
+            fn acquire(
+                &self,
+                request: &sorafs_node::TransparencyLeaderLeaseAcquireRequestV1,
+            ) -> Result<
+                sorafs_node::TransparencyLeaderLeaseGrantV1,
+                sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
+            > {
+                let mut active = self
+                    .active
+                    .lock()
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                if active
+                    .as_ref()
+                    .is_some_and(|grant| request.acquire_at_unix() < grant.expires_at_unix())
+                {
+                    return Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Conflict);
+                }
+                let fencing_token = self
+                    .fencing_token
+                    .load(Ordering::SeqCst)
+                    .max(request.fencing_floor())
+                    .checked_add(1)
+                    .ok_or(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                self.fencing_token.store(fencing_token, Ordering::SeqCst);
+                let mut lease_id = [0xA7; 32];
+                lease_id[..8].copy_from_slice(&fencing_token.to_le_bytes());
+                let grant = sorafs_node::TransparencyLeaderLeaseGrantV1::try_new(
+                    lease_id,
+                    request.scope(),
+                    fencing_token,
+                    request.acquire_at_unix(),
+                    request.expires_at_unix(),
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "sealed-cas:transparency:leader-primary",
+                        1,
+                        [0xE7; 32],
+                    )
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?,
+                )
+                .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                *active = Some(grant.clone());
+                Ok(grant)
+            }
+
+            fn renew(
+                &self,
+                _request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
+            ) -> Result<
+                sorafs_node::TransparencyLeaderLeaseGrantV1,
+                sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
+            > {
+                Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
+            }
+
+            fn release(
+                &self,
+                request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
+            ) -> Result<
+                sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1,
+                sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
+            > {
+                let mut active = self
+                    .active
+                    .lock()
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?;
+                if active.as_ref() != Some(request.current_grant()) {
+                    return Err(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Conflict);
+                }
+                let grant = active
+                    .take()
+                    .ok_or(sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Conflict)?;
+                sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1::try_new(
+                    grant.lease_id(),
+                    grant.scope(),
+                    grant.fencing_token(),
+                    request.release_at_unix(),
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "sealed-cas:transparency:leader-primary",
+                        1,
+                        [0xE7; 32],
+                    )
+                    .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)?,
+                )
+                .map_err(|_| sorafs_node::TransparencyLeaderLeaseProviderErrorV1::Internal)
+            }
+        }
+
         let auth = orderbook_auth_fixture();
         let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -34729,6 +36454,9 @@ mod advert_tests {
         let node = node_with_test_governance_publisher(
             StorageConfig::builder()
                 .enabled(true)
+                .provider_id(Some(iroha_data_model::sorafs::capacity::ProviderId::new(
+                    [0x91; 32],
+                )))
                 .data_dir(temp_dir.path().join("storage"))
                 .governance_dir(Some(governance_dir))
                 .privacy_aggregate_schedule(Some(sorafs_node::PrivacyAggregateScheduleConfig {
@@ -34736,10 +36464,47 @@ mod advert_tests {
                     cycle_seconds: 100,
                     publish_delay_seconds: 10,
                 }))
-                .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config())),
-            NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
-                .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default())),
+                .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
+                .privacy_cycle_prf_provider_binding(Some(
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "threshold-prf:transparency:primary",
+                        1,
+                        [0xC7; 32],
+                    )
+                    .expect("valid test threshold-PRF provider binding"),
+                ))
+                .privacy_release_anchor_provider_binding(Some(
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "governance-dag:transparency:primary",
+                        1,
+                        [0xD7; 32],
+                    )
+                    .expect("valid test release-anchor provider binding"),
+                ))
+                .privacy_leader_lease_provider_binding(Some(
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        "sealed-cas:transparency:leader-primary",
+                        1,
+                        [0xE7; 32],
+                    )
+                    .expect("valid test leader-lease provider binding"),
+                ))
+                .privacy_fenced_publisher_binding(Some(
+                    TransparencyRuntimeProviderBindingV1::try_new(
+                        ApiTestFencedPrivacyProvider::HANDLE,
+                        1,
+                        [0x86; 32],
+                    )
+                    .expect("valid test fused privacy target binding"),
+                )),
+            with_test_fenced_privacy_runtime(
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider))
+                    .with_privacy_release_anchor(Arc::new(TestPrivacyReleaseAnchor::default()))
+                    .with_transparency_leader_lease_provider(Arc::new(
+                        TestTransparencyLeaderLeaseProvider::default(),
+                    )),
+            ),
         );
         assert!(node.has_governance_publisher());
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
@@ -34941,14 +36706,7 @@ mod advert_tests {
     fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregatePolicyConfig {
         let cycle = privacy_aggregate_api_cycle_config();
         sorafs_node::config::PrivacyAggregatePolicyConfig::new(
-            cycle.query_id,
-            cycle.first_cycle_start_unix,
-            cycle.cycle_seconds,
-            cycle.aggregate_id_prefix,
-            cycle.populations,
-            cycle.metrics,
-            cycle.privacy,
-            cycle.policy_digest,
+            cycle,
             sorafs_node::PrivacyCompositionBudgetPolicyV1 {
                 budget_id: [0xB0; 32],
                 epsilon_limit_numerator: 10,
@@ -35052,8 +36810,21 @@ mod advert_tests {
             &self.handle
         }
 
-        fn public_key(&self) -> PublicKey {
-            self.keypair.public_key().clone()
+        fn public_key(&self) -> Result<PublicKey, crate::SoraFsAppealFinanceSigningError> {
+            Ok(self.keypair.public_key().clone())
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
+            crate::SoraFsAppealFinanceSigningError,
+        >{
+            Ok(
+                sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1::new(
+                    1, [0xA1; 32],
+                ),
+            )
         }
 
         fn sign(
@@ -35075,7 +36846,7 @@ mod advert_tests {
             AppealFinanceTransactionForwarderPolicyV1,
         };
 
-        let handle = "test-hsm:appeal-finance".to_owned();
+        let handle = "pkcs11:appeal-finance-a".to_owned();
         let runtime_signer: Arc<dyn crate::SoraFsAppealFinanceTransactionSigner> =
             Arc::new(TestAppealFinanceRuntimeSigner {
                 handle: handle.clone(),
@@ -35091,6 +36862,8 @@ mod advert_tests {
                         handle,
                         authority: signer.account.clone(),
                         public_key: signer.keypair.public_key().clone(),
+                        revision: 1,
+                        policy_digest: [0xA1; 32],
                         valid_from_block_height: 1,
                         revoked_at_block_height: None,
                     },
@@ -38925,6 +40698,33 @@ mod advert_tests {
     }
 
     #[test]
+    fn orderbook_signed_transaction_transports_full_inner_payload_ceiling_in_json() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let payload =
+            vec![0xA5; sorafs_manifest::orderbook::ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
+        let transaction = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SubmitSorafsOrderbookOrder::new(payload, [0x33; 32])])
+        .sign(auth.provider.keypair.private_key());
+
+        let canonical = norito::to_bytes(&transaction).expect("encode canonical transaction");
+        let json = norito::json::to_vec(&transaction).expect("encode transaction JSON");
+        let wire_limit = sorafs_node::orderbook_transaction_forwarder::
+            ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1;
+        assert!(
+            canonical.len() <= wire_limit,
+            "canonical signed envelope must carry the full inner-payload ceiling"
+        );
+        assert!(
+            json.len() <= wire_limit,
+            "advertised JSON transport must carry the full inner-payload ceiling"
+        );
+    }
+
+    #[test]
     fn orderbook_command_contract_rejects_route_mismatch_before_ledger_query() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let instruction: InstructionBox =
@@ -40119,22 +41919,662 @@ mod advert_tests {
         );
     }
 
-    #[tokio::test]
-    async fn reputation_routes_fail_closed_without_committed_runtime() {
-        let (app, _dir) = sorafs_app_state_with_reputation_storage();
+    #[test]
+    fn reputation_path_identifiers_are_exact_canonical_hard_cuts() {
+        let canonical_snapshot = "ab".repeat(16);
+        let canonical_snapshot_uri: Uri =
+            format!("/v1/sorafs/reputation/snapshots/{canonical_snapshot}")
+                .parse()
+                .expect("canonical snapshot URI");
+        assert_eq!(
+            parse_reputation_snapshot_id(&canonical_snapshot_uri, &canonical_snapshot)
+                .expect("canonical snapshot id"),
+            [0xAB; 16]
+        );
 
-        let response = handle_get_sorafs_reputation_latest(
-            State(app),
-            HeaderMap::new(),
-            axum::extract::RawQuery(None),
+        for invalid in [
+            "00".repeat(16),
+            canonical_snapshot.to_ascii_uppercase(),
+            format!("0x{canonical_snapshot}"),
+            format!(" {canonical_snapshot}"),
+            "ab".repeat(15),
+        ] {
+            let encoded_path = invalid.replace(' ', "%20");
+            let uri: Uri = format!("/v1/sorafs/reputation/snapshots/{encoded_path}")
+                .parse()
+                .expect("invalid snapshot test URI remains syntactically valid");
+            let response = parse_reputation_snapshot_id(&uri, &invalid)
+                .expect_err("noncanonical snapshot id must fail");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let provider_uri =
+            Uri::from_static("/v1/sorafs/reputation/providers/provider-a:primary_1.0");
+        validate_reputation_provider_id(&provider_uri, "provider-a:primary_1.0")
+            .expect("canonical provider id");
+        let too_long_provider = "p".repeat(257);
+        let too_long_uri: Uri = format!("/v1/sorafs/reputation/providers/{too_long_provider}")
+            .parse()
+            .expect("oversized provider URI remains syntactically valid");
+        for (uri, provider_id) in [
+            (
+                Uri::from_static("/v1/sorafs/reputation/providers/"),
+                String::new(),
+            ),
+            (
+                Uri::from_static("/v1/sorafs/reputation/providers/provider%20a"),
+                "provider a".to_owned(),
+            ),
+            (
+                Uri::from_static("/v1/sorafs/reputation/providers/provider%2Fa"),
+                "provider/a".to_owned(),
+            ),
+            (
+                Uri::from_static("/v1/sorafs/reputation/providers/."),
+                ".".to_owned(),
+            ),
+            (
+                Uri::from_static("/v1/sorafs/reputation/providers/.."),
+                "..".to_owned(),
+            ),
+            (too_long_uri, too_long_provider),
+        ] {
+            let response = validate_reputation_provider_id(&uri, &provider_id)
+                .expect_err("noncanonical provider id must fail");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
+    #[test]
+    fn reputation_conditional_etags_are_exact_strong_and_private() {
+        let etag = format!("\"{}\"", "ab".repeat(32));
+        let mut exact = HeaderMap::new();
+        exact.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_str(&etag).expect("canonical ETag header"),
+        );
+        let response = authenticated_reputation_not_modified_response(&exact, &etag)
+            .expect("canonical conditional header")
+            .expect("matching ETag");
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(REPUTATION_CACHE_CONTROL)
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some(REPUTATION_CACHE_VARY)
+        );
+
+        let different = format!("\"{}\"", "cd".repeat(32));
+        let mut non_matching = HeaderMap::new();
+        non_matching.insert(
+            IF_NONE_MATCH,
+            HeaderValue::from_str(&different).expect("canonical non-matching ETag"),
+        );
+        assert!(
+            authenticated_reputation_not_modified_response(&non_matching, &etag)
+                .expect("valid non-matching ETag")
+                .is_none()
+        );
+
+        for invalid in [
+            "*".to_owned(),
+            format!("W/{etag}"),
+            etag.to_ascii_uppercase(),
+            format!("{etag}, {different}"),
+            format!(" {etag}"),
+            etag.trim_matches('"').to_owned(),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                IF_NONE_MATCH,
+                HeaderValue::from_str(&invalid).expect("visible invalid ETag header"),
+            );
+            let response = authenticated_reputation_not_modified_response(&headers, &etag)
+                .expect_err("ETag alias must fail");
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "ETag alias unexpectedly accepted: {invalid}"
+            );
+        }
+
+        let mut duplicated = HeaderMap::new();
+        duplicated.append(
+            IF_NONE_MATCH,
+            HeaderValue::from_str(&etag).expect("first ETag"),
+        );
+        duplicated.append(
+            IF_NONE_MATCH,
+            HeaderValue::from_str(&etag).expect("second ETag"),
+        );
+        let response = authenticated_reputation_not_modified_response(&duplicated, &etag)
+            .expect_err("duplicate ETag headers must fail");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn reputation_terminal_failures_are_private_no_store_and_auth_varying() {
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::NOT_FOUND,
+            StatusCode::METHOD_NOT_ALLOWED,
+            StatusCode::UPGRADE_REQUIRED,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let response =
+                finalize_reputation_route_response(json_error(status, "terminal failure"));
+            assert_reputation_terminal_response(&response, status);
+        }
+    }
+
+    #[tokio::test]
+    async fn reputation_route_layer_normalizes_framework_failures_to_canonical_json() {
+        let _auth_guard = reputation_auth_test_guard();
+        let (app, _dir) = sorafs_app_state_with_reputation_storage();
+        let router = reputation_framework_test_router(app, 4);
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(REPUTATION_LATEST_PATH_V1)
+                    .body(Body::empty())
+                    .expect("build reputation method rejection request"),
+            )
+            .await
+            .expect("route reputation method rejection");
+        let allow = response
+            .headers()
+            .get(header::ALLOW)
+            .cloned()
+            .expect("Axum method rejection Allow header");
+        assert!(
+            allow
+                .to_str()
+                .expect("visible Allow header")
+                .split(',')
+                .any(|method| method.trim() == "GET")
+        );
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::METHOD_NOT_ALLOWED,
+            REPUTATION_FRAMEWORK_METHOD_NOT_ALLOWED_ERROR,
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let oversized_body = Bytes::from_static(b"12345");
+        let oversized_uri = Uri::from_static(REPUTATION_LATEST_PATH_V1);
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(oversized_uri.clone())
+            .body(Body::from(oversized_body.clone()))
+            .expect("build oversized reputation request");
+        *request.headers_mut() =
+            reputation_signed_get_headers(&oversized_uri, oversized_body.as_ref());
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route oversized reputation request");
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            REPUTATION_FRAMEWORK_PAYLOAD_TOO_LARGE_ERROR,
+        )
+        .await;
+
+        let websocket_uri = Uri::from_static(REPUTATION_EVENTS_WEBSOCKET_PATH_V1);
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(websocket_uri.clone())
+            .body(Body::empty())
+            .expect("build malformed WebSocket request");
+        *request.headers_mut() = reputation_signed_get_headers(&websocket_uri, &[]);
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route malformed WebSocket request");
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::BAD_REQUEST,
+            REPUTATION_FRAMEWORK_BAD_REQUEST_ERROR,
+        )
+        .await;
+
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(websocket_uri.clone())
+            .body(Body::empty())
+            .expect("build non-upgradable WebSocket request");
+        let mut headers = reputation_signed_get_headers(&websocket_uri, &[]);
+        headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
+        headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+        headers.insert(
+            header::SEC_WEBSOCKET_VERSION,
+            HeaderValue::from_static("13"),
+        );
+        headers.insert(
+            header::SEC_WEBSOCKET_KEY,
+            HeaderValue::from_static("dGhlIHNhbXBsZSBub25jZQ=="),
+        );
+        *request.headers_mut() = headers;
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("route non-upgradable WebSocket request");
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::UPGRADE_REQUIRED,
+            REPUTATION_FRAMEWORK_UPGRADE_REQUIRED_ERROR,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn reputation_sse_accepts_since_only_and_rejects_last_event_id_alias() {
+        let _auth_guard = reputation_auth_test_guard();
+        let (mut app, _dir) = sorafs_app_state_with_reputation_storage();
+        attach_reputation_committed_projection(
+            &mut app,
+            committed_reputation_projection_fixture(reputation_snapshot_fixture()),
+        );
+        let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream?since=0&limit=1");
+        let raw_query = Some("since=0&limit=1".to_owned());
+
+        let response = handle_get_sorafs_reputation_events_stream(
+            State(app.clone()),
+            reputation_signed_get_headers(&stream_uri, &[]),
+            Method::GET,
+            stream_uri.clone(),
+            axum::extract::RawQuery(raw_query.clone()),
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut aliased_headers = reputation_signed_get_headers(&stream_uri, &[]);
+        aliased_headers.insert("last-event-id", HeaderValue::from_static("1"));
+        let response = handle_get_sorafs_reputation_events_stream(
+            State(app.clone()),
+            aliased_headers,
+            Method::GET,
+            stream_uri.clone(),
+            axum::extract::RawQuery(raw_query.clone()),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::BAD_REQUEST,
+            REPUTATION_LAST_EVENT_ID_ERROR,
+        )
+        .await;
+
+        let router = reputation_framework_test_router(app, 1024);
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(stream_uri.clone())
+            .body(Body::empty())
+            .expect("build canonical mounted SSE request");
+        *request.headers_mut() = reputation_signed_get_headers(&stream_uri, &[]);
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route canonical mounted SSE request");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(stream_uri.clone())
+            .body(Body::empty())
+            .expect("build aliased mounted SSE request");
+        let mut headers = reputation_signed_get_headers(&stream_uri, &[]);
+        headers.insert("last-event-id", HeaderValue::from_static("1"));
+        *request.headers_mut() = headers;
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("route aliased mounted SSE request");
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::BAD_REQUEST,
+            REPUTATION_LAST_EVENT_ID_ERROR,
+        )
+        .await;
+    }
+
+    #[test]
+    fn every_reputation_handler_verifies_the_exact_canonical_request() {
+        let source = include_str!("api.rs");
+        for handler_name in [
+            "handle_get_sorafs_reputation_latest",
+            "handle_get_sorafs_reputation_snapshot",
+            "handle_get_sorafs_reputation_provider",
+            "handle_get_sorafs_reputation_weights",
+            "handle_get_sorafs_reputation_events",
+            "handle_get_sorafs_reputation_events_stream",
+            "handle_get_sorafs_reputation_events_ws",
+        ] {
+            let marker = format!("pub(crate) async fn {handler_name}");
+            let start = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing reputation handler `{handler_name}`"));
+            let tail = &source[start..];
+            let end = tail[marker.len()..]
+                .find("\npub(crate) async fn ")
+                .map_or(tail.len(), |offset| marker.len() + offset);
+            let handler = &tail[..end];
+            assert!(
+                handler.contains("require_reputation_canonical_auth("),
+                "reputation handler `{handler_name}` must verify canonical request authentication"
+            );
+            assert!(
+                handler.contains("require_empty_reputation_get_body("),
+                "reputation handler `{handler_name}` must reject a non-empty GET body"
+            );
+            assert!(
+                handler.contains("require_reputation_request_target("),
+                "reputation handler `{handler_name}` must bind its exact path and raw query"
+            );
+            assert!(
+                handler.contains("finalize_reputation_route_response("),
+                "reputation handler `{handler_name}` must harden every terminal response"
+            );
+        }
+
+        let mount_source = include_str!("../lib.rs");
+        assert_eq!(
+            mount_source.matches("capacity_authenticated_get!(").count(),
+            5,
+            "all five finite reputation GET mounts must use the hardened authenticated macro"
+        );
+        assert_eq!(
+            mount_source
+                .matches("sorafs::api::harden_reputation_route_responses")
+                .count(),
+            3,
+            "the finite-route macro plus both streaming mounts must harden framework rejections"
+        );
+    }
+
+    #[tokio::test]
+    async fn reputation_handlers_require_exact_canonical_authentication() {
+        let _auth_guard = reputation_auth_test_guard();
+        let (mut app, _dir) = sorafs_app_state_with_reputation_storage();
+        attach_reputation_committed_projection(
+            &mut app,
+            committed_reputation_projection_fixture(reputation_snapshot_fixture()),
+        );
+
+        let latest_uri = Uri::from_static("/v1/sorafs/reputation/latest");
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            HeaderMap::new(),
+            Method::GET,
+            latest_uri.clone(),
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
+        let response_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect reputation authentication failure body");
+        assert!(
+            response_body.is_empty(),
+            "canonical authentication failures must be payload-free"
+        );
+
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            reputation_signed_get_headers(&latest_uri, &[]),
+            Method::POST,
+            latest_uri.clone(),
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::METHOD_NOT_ALLOWED);
+
+        let different_path = Uri::from_static("/v1/sorafs/reputation/weights");
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            reputation_signed_get_headers(&latest_uri, &[]),
+            Method::GET,
+            different_path,
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
+
+        let signed_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=1");
+        let tampered_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=2");
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            reputation_signed_get_headers(&signed_uri, &[]),
+            Method::GET,
+            tampered_uri,
+            axum::extract::RawQuery(Some("limit=2".to_owned())),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
+        let invalid_auth_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect invalid reputation authentication failure body");
+        assert!(invalid_auth_body.is_empty());
+
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            reputation_signed_get_headers(&signed_uri, &[]),
+            Method::GET,
+            signed_uri,
+            axum::extract::RawQuery(Some("limit=2".to_owned())),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
+
+        let unsigned_body = Bytes::from_static(b"body-tamper");
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            reputation_signed_get_headers(&latest_uri, &[]),
+            Method::GET,
+            latest_uri.clone(),
+            axum::extract::RawQuery(None),
+            unsigned_body,
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
+
+        let body = Bytes::from_static(b"not-empty");
+        let response = handle_get_sorafs_reputation_latest(
+            State(app.clone()),
+            reputation_signed_get_headers(&latest_uri, body.as_ref()),
+            Method::GET,
+            latest_uri,
+            axum::extract::RawQuery(None),
+            body,
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
+
+        let weights_uri = Uri::from_static("/v1/sorafs/reputation/weights?legacy=true");
+        let response = handle_get_sorafs_reputation_weights(
+            State(app.clone()),
+            reputation_signed_get_headers(&weights_uri, &[]),
+            Method::GET,
+            weights_uri,
+            axum::extract::RawQuery(Some("legacy=true".to_owned())),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
+
+        let uppercase_id = "AB".repeat(16);
+        let snapshot_uri: Uri = format!("/v1/sorafs/reputation/snapshots/{uppercase_id}")
+            .parse()
+            .expect("uppercase snapshot URI");
+        let response = handle_get_sorafs_reputation_snapshot(
+            State(app.clone()),
+            reputation_signed_get_headers(&snapshot_uri, &[]),
+            Method::GET,
+            snapshot_uri,
+            Path(uppercase_id),
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
+
+        let provider_uri = Uri::from_static("/v1/sorafs/reputation/providers/provider%20alias");
+        let response = handle_get_sorafs_reputation_provider(
+            State(app.clone()),
+            reputation_signed_get_headers(&provider_uri, &[]),
+            Method::GET,
+            provider_uri,
+            Path("provider alias".to_owned()),
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
+
+        let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream");
+        let response = handle_get_sorafs_reputation_events_stream(
+            State(app.clone()),
+            HeaderMap::new(),
+            Method::GET,
+            stream_uri,
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::UNAUTHORIZED);
+
+        let websocket_uri = Uri::from_static("/v1/sorafs/reputation/events/ws?since=0");
+        assert_eq!(
+            require_reputation_canonical_auth(
+                &app,
+                &HeaderMap::new(),
+                &Method::GET,
+                &websocket_uri,
+                &[],
+            )
+            .expect_err("WebSocket handshake must require canonical auth")
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        require_reputation_canonical_auth(
+            &app,
+            &reputation_signed_get_headers(&websocket_uri, &[]),
+            &Method::GET,
+            &websocket_uri,
+            &[],
+        )
+        .expect("exact signed WebSocket handshake");
+
+        let response = handle_get_sorafs_reputation_events_ws(
+            State(app),
+            reputation_signed_get_headers(&websocket_uri, &[]),
+            Method::GET,
+            websocket_uri,
+            None,
+            axum::extract::RawQuery(Some("since=0".to_owned())),
+            Err(axum::extract::ws::rejection::WebSocketKeyHeaderMissing::default().into()),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_terminal_response(&response, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn reputation_streams_reject_invalid_initial_backlogs_before_establishment() {
+        let _auth_guard = reputation_auth_test_guard();
+        let (mut app, _dir) = sorafs_app_state_with_reputation_storage();
+        let envelope = reputation_snapshot_fixture();
+        let mut projection = committed_reputation_projection_fixture(envelope);
+        projection.events[0].version = 0;
+        attach_reputation_committed_projection(&mut app, projection.clone());
+
+        let stream_uri = Uri::from_static(REPUTATION_EVENTS_STREAM_PATH_V1);
+        let response = handle_get_sorafs_reputation_events_stream(
+            State(app),
+            reputation_signed_get_headers(&stream_uri, &[]),
+            Method::GET,
+            stream_uri,
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+        assert_reputation_json_terminal_response(
+            response,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            REPUTATION_INITIAL_SSE_BACKLOG_ERROR,
+        )
+        .await;
+
+        assert!(
+            prepare_reputation_websocket_backlog(&projection.events, 0).is_err(),
+            "the same invalid committed backlog must fail WebSocket preflight"
+        );
+        let source = include_str!("api.rs");
+        let handler_start = source
+            .find("pub(crate) async fn handle_get_sorafs_reputation_events_ws")
+            .expect("reputation WebSocket handler");
+        let handler_end = source[handler_start..]
+            .find("\npub(crate) async fn handle_get_sorafs_reputation_provider")
+            .map(|offset| handler_start + offset)
+            .expect("end of reputation WebSocket handler");
+        let handler = &source[handler_start..handler_end];
+        let preflight = handler
+            .find("prepare_reputation_websocket_backlog")
+            .expect("WebSocket initial-backlog preflight");
+        let upgrade = handler
+            .find(".on_upgrade(")
+            .expect("WebSocket upgrade establishment");
+        assert!(
+            preflight < upgrade,
+            "the entire committed backlog must be serialized before returning 101"
+        );
+    }
+
+    #[tokio::test]
+    async fn reputation_routes_fail_closed_without_committed_runtime() {
+        let _auth_guard = reputation_auth_test_guard();
+        let (app, _dir) = sorafs_app_state_with_reputation_storage();
+        let uri = Uri::from_static("/v1/sorafs/reputation/latest");
+
+        let response = handle_get_sorafs_reputation_latest(
+            State(app),
+            reputation_signed_get_headers(&uri, &[]),
+            Method::GET,
+            uri,
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
+
+        assert_reputation_terminal_response(&response, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
     async fn reputation_routes_fail_closed_until_committed_projection_is_ready() {
+        let _auth_guard = reputation_auth_test_guard();
         let (mut app, _dir) = sorafs_app_state_with_reputation_storage();
         attach_reputation_committed_projection(
             &mut app,
@@ -40146,18 +42586,23 @@ mod advert_tests {
             },
         );
 
+        let uri = Uri::from_static("/v1/sorafs/reputation/latest");
         let response = handle_get_sorafs_reputation_latest(
             State(app),
-            HeaderMap::new(),
+            reputation_signed_get_headers(&uri, &[]),
+            Method::GET,
+            uri,
             axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_reputation_terminal_response(&response, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
     async fn reputation_read_routes_return_retained_projection_and_proof() {
+        let _auth_guard = reputation_auth_test_guard();
         let (mut app, _dir) = sorafs_app_state_with_reputation_storage();
         let envelope = reputation_snapshot_fixture();
         let snapshot = envelope.snapshot.clone();
@@ -40177,10 +42622,14 @@ mod advert_tests {
                 .is_none()
         );
 
+        let latest_uri = Uri::from_static("/v1/sorafs/reputation/latest");
         let response = handle_get_sorafs_reputation_latest(
             State(app.clone()),
-            HeaderMap::new(),
+            reputation_signed_get_headers(&latest_uri, &[]),
+            Method::GET,
+            latest_uri,
             axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40219,10 +42668,14 @@ mod advert_tests {
             Some(false)
         );
 
+        let capped_uri = Uri::from_static("/v1/sorafs/reputation/latest?limit=1");
         let response = handle_get_sorafs_reputation_latest(
             State(app.clone()),
-            HeaderMap::new(),
+            reputation_signed_get_headers(&capped_uri, &[]),
+            Method::GET,
+            capped_uri,
             axum::extract::RawQuery(Some("limit=1".to_owned())),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40249,21 +42702,30 @@ mod advert_tests {
             .expect("capped providers array");
         assert_eq!(providers.len(), 1);
 
-        let mut conditional_headers = HeaderMap::new();
+        let conditional_uri = Uri::from_static("/v1/sorafs/reputation/latest");
+        let mut conditional_headers = reputation_signed_get_headers(&conditional_uri, &[]);
         conditional_headers.insert(IF_NONE_MATCH, latest_etag.clone());
         let response = handle_get_sorafs_reputation_latest(
             State(app.clone()),
             conditional_headers,
+            Method::GET,
+            conditional_uri,
             axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(response.headers().get(ETAG), Some(&latest_etag));
 
+        let provider_uri = Uri::from_static("/v1/sorafs/reputation/providers/provider-a");
         let response = handle_get_sorafs_reputation_provider(
             State(app.clone()),
-            HeaderMap::new(),
+            reputation_signed_get_headers(&provider_uri, &[]),
+            Method::GET,
+            provider_uri,
             Path("provider-a".to_owned()),
+            axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40291,17 +42753,68 @@ mod advert_tests {
             proof.get("leaf_index").and_then(Value::as_u64),
             Some(u64::from(expected_proof.leaf_index))
         );
+        assert_eq!(
+            proof.get("leaf_count").and_then(Value::as_u64),
+            Some(u64::from(expected_proof.leaf_count))
+        );
         let siblings = proof
             .get("siblings_hex")
             .and_then(Value::as_array)
             .expect("siblings array");
         assert_eq!(siblings.len(), expected_proof.siblings.len());
 
+        let reconstructed_proof = ReputationMerkleProofV1 {
+            provider_id: proof
+                .get("provider_id")
+                .and_then(Value::as_str)
+                .expect("proof provider id")
+                .to_owned(),
+            leaf_index: u32::try_from(
+                proof
+                    .get("leaf_index")
+                    .and_then(Value::as_u64)
+                    .expect("proof leaf index"),
+            )
+            .expect("proof leaf index fits u32"),
+            leaf_count: u32::try_from(
+                proof
+                    .get("leaf_count")
+                    .and_then(Value::as_u64)
+                    .expect("proof leaf count"),
+            )
+            .expect("proof leaf count fits u32"),
+            siblings: siblings
+                .iter()
+                .map(|value| {
+                    parse_canonical_hex_fixed::<32>(
+                        value.as_str().expect("proof sibling hex"),
+                        "siblings_hex",
+                    )
+                    .expect("canonical proof sibling")
+                })
+                .collect(),
+        };
+        let provider_record = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.provider_id == "provider-a")
+            .expect("provider record fixture");
+        reconstructed_proof
+            .verify(provider_record, snapshot.merkle_root)
+            .expect("JSON proof reconstructs and verifies natively");
+
+        let snapshot_id_hex = hex::encode(snapshot.snapshot_id);
+        let snapshot_uri: Uri = format!("/v1/sorafs/reputation/snapshots/{snapshot_id_hex}")
+            .parse()
+            .expect("snapshot URI");
         let response = handle_get_sorafs_reputation_snapshot(
             State(app.clone()),
-            HeaderMap::new(),
-            Path(hex::encode(snapshot.snapshot_id)),
+            reputation_signed_get_headers(&snapshot_uri, &[]),
+            Method::GET,
+            snapshot_uri,
+            Path(snapshot_id_hex),
             axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40314,8 +42827,16 @@ mod advert_tests {
             Some(hex::encode(snapshot.snapshot_id).as_str())
         );
 
-        let response =
-            handle_get_sorafs_reputation_weights(State(app.clone()), HeaderMap::new()).await;
+        let weights_uri = Uri::from_static("/v1/sorafs/reputation/weights");
+        let response = handle_get_sorafs_reputation_weights(
+            State(app.clone()),
+            reputation_signed_get_headers(&weights_uri, &[]),
+            Method::GET,
+            weights_uri,
+            axum::extract::RawQuery(None),
+            Bytes::new(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -40327,10 +42848,14 @@ mod advert_tests {
         );
         assert!(value.get("weights").and_then(Value::as_object).is_some());
 
+        let events_uri = Uri::from_static("/v1/sorafs/reputation/events?since=0&limit=1");
         let response = handle_get_sorafs_reputation_events(
             State(app.clone()),
-            HeaderMap::new(),
+            reputation_signed_get_headers(&events_uri, &[]),
+            Method::GET,
+            events_uri,
             axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40355,9 +42880,14 @@ mod advert_tests {
             Some(hex::encode(snapshot.snapshot_id).as_str())
         );
 
+        let stream_uri = Uri::from_static("/v1/sorafs/reputation/events/stream?since=0&limit=1");
         let response = handle_get_sorafs_reputation_events_stream(
             State(app.clone()),
+            reputation_signed_get_headers(&stream_uri, &[]),
+            Method::GET,
+            stream_uri,
             axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40367,6 +42897,13 @@ mod advert_tests {
                 .get(header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
                 .is_some_and(|value| value.contains("text/event-stream"))
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some(REPUTATION_STREAM_CACHE_CONTROL)
         );
         let mut body = response.into_body();
         let frame = tokio::time::timeout(std::time::Duration::from_secs(1), body.frame())
@@ -40380,12 +42917,17 @@ mod advert_tests {
         assert!(text.contains("id: 1"));
         assert!(text.contains(hex::encode(snapshot.snapshot_id).as_str()));
 
-        let mut conditional_headers = HeaderMap::new();
+        let conditional_events_uri =
+            Uri::from_static("/v1/sorafs/reputation/events?since=0&limit=1");
+        let mut conditional_headers = reputation_signed_get_headers(&conditional_events_uri, &[]);
         conditional_headers.insert(IF_NONE_MATCH, events_etag.clone());
         let response = handle_get_sorafs_reputation_events(
             State(app),
             conditional_headers,
+            Method::GET,
+            conditional_events_uri,
             axum::extract::RawQuery(Some("since=0&limit=1".to_owned())),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
@@ -40394,6 +42936,7 @@ mod advert_tests {
 
     #[tokio::test]
     async fn reputation_snapshot_route_returns_exact_retained_history_and_rejects_evicted_ids() {
+        let _auth_guard = reputation_auth_test_guard();
         let generated_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock after epoch")
@@ -40412,11 +42955,18 @@ mod advert_tests {
             vec![older.snapshot.clone(), newer.snapshot.clone()],
         );
 
+        let older_id_hex = hex::encode(older.snapshot.snapshot_id);
+        let older_uri: Uri = format!("/v1/sorafs/reputation/snapshots/{older_id_hex}")
+            .parse()
+            .expect("older snapshot URI");
         let response = handle_get_sorafs_reputation_snapshot(
             State(app.clone()),
-            HeaderMap::new(),
-            Path(hex::encode(older.snapshot.snapshot_id)),
+            reputation_signed_get_headers(&older_uri, &[]),
+            Method::GET,
+            older_uri.clone(),
+            Path(older_id_hex.clone()),
             axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -40443,12 +42993,15 @@ mod advert_tests {
         );
         let response = handle_get_sorafs_reputation_snapshot(
             State(evicted_app),
-            HeaderMap::new(),
-            Path(hex::encode(older.snapshot.snapshot_id)),
+            reputation_signed_get_headers(&older_uri, &[]),
+            Method::GET,
+            older_uri,
+            Path(older_id_hex),
             axum::extract::RawQuery(None),
+            Bytes::new(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_reputation_terminal_response(&response, StatusCode::NOT_FOUND);
     }
 
     #[test]
@@ -40457,8 +43010,9 @@ mod advert_tests {
         let event = ReputationSnapshotEventV1::from_snapshot(9, &snapshot.snapshot)
             .expect("snapshot event");
 
-        let frame: Value = norito::json::from_str(&reputation_snapshot_websocket_frame(&event))
-            .expect("decode websocket frame");
+        let frame_text =
+            reputation_snapshot_websocket_frame(&event).expect("serialize websocket frame");
+        let frame: Value = norito::json::from_str(&frame_text).expect("decode websocket frame");
         assert_eq!(
             frame.get("event").and_then(Value::as_str),
             Some("reputation_snapshot")
@@ -40473,35 +43027,175 @@ mod advert_tests {
             Some(hex::encode(snapshot.snapshot.snapshot_id).as_str())
         );
 
-        let lagged: Value = norito::json::from_str(&reputation_lagged_websocket_frame(3))
-            .expect("decode lagged websocket frame");
+        let lagged_text =
+            reputation_lagged_websocket_frame(3).expect("serialize lagged websocket frame");
+        let lagged: Value =
+            norito::json::from_str(&lagged_text).expect("decode lagged websocket frame");
         assert_eq!(lagged.get("event").and_then(Value::as_str), Some("lagged"));
         assert_eq!(lagged.get("skipped").and_then(Value::as_u64), Some(3));
     }
 
     #[tokio::test]
-    async fn reputation_stream_reports_initial_retention_gap_before_first_event() {
+    async fn reputation_stream_serialization_fails_closed_without_fallback_frames() {
+        let envelope = reputation_snapshot_fixture();
+        let mut invalid_event =
+            ReputationSnapshotEventV1::from_snapshot(9, &envelope.snapshot).expect("valid event");
+        invalid_event.version = 0;
+
+        assert!(
+            prepare_reputation_sse_backlog(std::slice::from_ref(&invalid_event), 0).is_err(),
+            "invalid initial SSE backlog must fail before response establishment"
+        );
+        assert!(
+            prepare_reputation_websocket_backlog(std::slice::from_ref(&invalid_event), 0,).is_err(),
+            "invalid initial WebSocket backlog must fail before upgrade"
+        );
+        let sse_error = reputation_snapshot_sse_event(&invalid_event)
+            .expect_err("invalid SSE event must not produce a fallback payload");
+        assert!(sse_error.contains("invalid reputation event"));
+        let websocket_error = reputation_snapshot_websocket_frame(&invalid_event)
+            .expect_err("invalid WebSocket event must not produce a fallback frame");
+        assert!(websocket_error.contains("invalid reputation event"));
+
+        let (mut sender, mut receiver) = futures::channel::mpsc::unbounded::<WsMessage>();
+        let live_error = send_reputation_websocket_stream_item(
+            &mut sender,
+            ReputationCommittedStreamItem::Event(invalid_event.clone()),
+        )
+        .await
+        .expect_err("invalid live WebSocket event must terminate");
+        assert!(live_error.contains("invalid reputation event"));
+        let close = receiver
+            .next()
+            .await
+            .expect("invalid live WebSocket event must send a close frame");
+        let WsMessage::Close(Some(close)) = close else {
+            panic!("live WebSocket serialization failure must emit a close frame");
+        };
+        assert_eq!(close.code, close_code::ERROR);
+        assert_eq!(
+            close.reason.as_str(),
+            REPUTATION_WEBSOCKET_FAILURE_CLOSE_REASON
+        );
+
+        let mut live_projection = committed_reputation_projection_fixture(envelope);
+        live_projection.events = vec![invalid_event];
+        let reader: Arc<dyn ReputationCommittedReadApiV1> =
+            Arc::new(StaticReputationCommittedReaderV1 {
+                projection: live_projection,
+                retained_snapshots: Vec::new(),
+            });
+        let stream = reputation_event_sse_stream(Vec::new(), reader, 8);
+        tokio::pin!(stream);
+        let event = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("live invalid SSE event must not stall");
+        assert!(
+            event.is_some_and(|event| event.is_err()),
+            "the invalid event must surface one terminal SSE body error"
+        );
+        assert!(
+            stream.next().await.is_none(),
+            "the SSE stream must terminate immediately after serialization failure"
+        );
+
+        let source = include_str!("api.rs");
+        let websocket_start = source
+            .find("async fn reputation_event_websocket_stream")
+            .expect("reputation WebSocket stream");
+        let websocket_end = source[websocket_start..]
+            .find("\nfn reputation_snapshot_sse_event")
+            .map(|offset| websocket_start + offset)
+            .expect("end of reputation WebSocket stream");
+        let websocket_stream = &source[websocket_start..websocket_end];
+        assert!(
+            websocket_stream.contains("reputation_websocket_failure_close_message()"),
+            "live WebSocket serialization failures must explicitly close with the stable frame"
+        );
+        assert!(!websocket_stream.contains("unwrap_or"));
+
+        for serializer in [
+            "fn reputation_snapshot_sse_event",
+            "fn reputation_snapshot_websocket_frame",
+            "fn reputation_lagged_websocket_frame",
+        ] {
+            let start = source.find(serializer).expect("stream serializer");
+            let tail = &source[start..];
+            let end = tail[serializer.len()..]
+                .find("\nfn ")
+                .map_or(tail.len(), |offset| serializer.len() + offset);
+            let body = &tail[..end];
+            assert!(!body.contains("unwrap_or"));
+            assert!(!body.contains("\"{}\""));
+            assert!(!body.contains("\"error\""));
+        }
+    }
+
+    #[tokio::test]
+    async fn reputation_live_reader_failure_terminates_sse_and_closes_websocket_1011() {
+        let reader: Arc<dyn ReputationCommittedReadApiV1> =
+            Arc::new(FailingReputationCommittedReaderV1);
+        let stream = reputation_event_sse_stream(Vec::new(), reader, 0);
+        tokio::pin!(stream);
+        let event = tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("failed committed SSE reader must not stall")
+            .expect("failed committed SSE reader must emit one terminal error");
+        assert_eq!(
+            event
+                .expect_err("failed committed SSE reader must terminate")
+                .to_string(),
+            REPUTATION_LIVE_READER_ERROR
+        );
+        assert!(
+            stream.next().await.is_none(),
+            "SSE must end immediately after a committed-reader failure"
+        );
+
+        let (mut sender, mut receiver) = futures::channel::mpsc::unbounded::<WsMessage>();
+        let error = send_reputation_websocket_stream_item(
+            &mut sender,
+            ReputationCommittedStreamItem::ReaderFailed,
+        )
+        .await
+        .expect_err("failed committed WebSocket reader must terminate");
+        assert_eq!(error, REPUTATION_LIVE_READER_ERROR);
+        let close = receiver
+            .next()
+            .await
+            .expect("failed committed WebSocket reader must send a close frame");
+        let WsMessage::Close(Some(close)) = close else {
+            panic!("failed committed WebSocket reader must send a close frame");
+        };
+        assert_eq!(close.code, close_code::ERROR);
+        assert_eq!(
+            close.reason.as_str(),
+            REPUTATION_WEBSOCKET_FAILURE_CLOSE_REASON
+        );
+    }
+
+    #[test]
+    fn reputation_stream_reports_initial_retention_gap_before_first_event() {
         let envelope = reputation_snapshot_fixture();
         let retained = ReputationSnapshotEventV1::from_snapshot(1_025, &envelope.snapshot)
             .expect("retained reputation event");
-        let reader: Arc<dyn ReputationCommittedReadApiV1> =
-            Arc::new(StaticReputationCommittedReaderV1 {
-                projection: committed_reputation_projection_fixture(envelope),
-                retained_snapshots: Vec::new(),
-            });
-        let stream = reputation_committed_event_stream(vec![retained.clone()], reader, 0);
-        tokio::pin!(stream);
-
-        assert!(matches!(
-            stream.next().await,
-            Some(ReputationCommittedStreamItem::Lagged(1_024))
-        ));
-        match stream.next().await {
-            Some(ReputationCommittedStreamItem::Event(event)) => {
-                assert_eq!(event, retained);
-            }
-            _ => panic!("retained event must follow the initial lag notification"),
-        }
+        let backlog = prepare_reputation_websocket_backlog(&[retained], 0)
+            .expect("prepare retained WebSocket backlog");
+        assert_eq!(backlog.cursor, 1_025);
+        assert_eq!(backlog.frames.len(), 2);
+        let lagged: Value =
+            norito::json::from_str(&backlog.frames[0]).expect("decode retained lag frame");
+        assert_eq!(lagged.get("event").and_then(Value::as_str), Some("lagged"));
+        assert_eq!(lagged.get("skipped").and_then(Value::as_u64), Some(1_024));
+        let event: Value =
+            norito::json::from_str(&backlog.frames[1]).expect("decode retained event frame");
+        assert_eq!(
+            event
+                .get("data")
+                .and_then(|data| data.get("sequence"))
+                .and_then(Value::as_u64),
+            Some(1_025)
+        );
     }
 
     #[test]
@@ -41086,6 +43780,14 @@ mod advert_tests {
         );
         assert_eq!(
             metrics
+                .sorafs_gateway_proof_verifications_total
+                .with_label_values(&[SORAFS_GATEWAY_PROFILE_VERSION, "success", "none"])
+                .get(),
+            1,
+            "proof verification is recorded independently of response-body delivery"
+        );
+        assert_eq!(
+            metrics
                 .torii_sorafs_proof_stream_inflight
                 .with_label_values(&["por"])
                 .get(),
@@ -41475,17 +44177,10 @@ mod advert_tests {
                         10,
                         16,
                     ),
+                    assignment_revision: 1,
                     provider_completions: vec![
-                        ReplicationOrderCompletionRecord {
-                            provider_id: ProviderId::new([0x21; 32]),
-                            completed_by: issuer.clone(),
-                            completion_epoch: 13,
-                        },
-                        ReplicationOrderCompletionRecord {
-                            provider_id: ProviderId::new([0x22; 32]),
-                            completed_by: issuer.clone(),
-                            completion_epoch: 13,
-                        },
+                        provider_ingest_completion([0x21; 32], issuer.clone(), 13),
+                        provider_ingest_completion([0x22; 32], issuer.clone(), 13),
                     ],
                     status: ReplicationOrderStatus::Completed(13),
                 },
@@ -41510,6 +44205,7 @@ mod advert_tests {
                         20,
                         25,
                     ),
+                    assignment_revision: 1,
                     provider_completions: Vec::new(),
                     status: ReplicationOrderStatus::Expired(32),
                 },
@@ -41534,6 +44230,7 @@ mod advert_tests {
                         40,
                         55,
                     ),
+                    assignment_revision: 1,
                     provider_completions: Vec::new(),
                     status: ReplicationOrderStatus::Pending,
                 },
@@ -41558,6 +44255,7 @@ mod advert_tests {
                         50,
                         60,
                     ),
+                    assignment_revision: 1,
                     provider_completions: Vec::new(),
                     status: ReplicationOrderStatus::Expired(62),
                 },
@@ -41649,6 +44347,32 @@ mod advert_tests {
             metadata: Vec::new(),
         };
         norito::to_bytes(&order).expect("encode replication order")
+    }
+
+    fn provider_ingest_completion(
+        provider_id: [u8; 32],
+        completed_by: AccountId,
+        completion_epoch: u64,
+    ) -> ReplicationOrderCompletionRecord {
+        ReplicationOrderCompletionRecord {
+            provider_id: ProviderId::new(provider_id),
+            completed_by: completed_by.clone(),
+            completion_epoch,
+            assignment_revision: 1,
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by,
+                ProviderIngestCompletionSignerPolicyV1 {
+                    policy_id: [0xA1; 32],
+                    revision: 1,
+                    predecessor_digest: None,
+                    policy_digest: [0xA2; 32],
+                },
+            ),
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: completion_epoch.max(1),
+                block_hash: [0xA3; 32],
+            },
+        }
     }
 
     fn encode_replication_order_bytes(
@@ -41783,11 +44507,8 @@ mod advert_tests {
                         8,
                         24,
                     ),
-                    provider_completions: vec![ReplicationOrderCompletionRecord {
-                        provider_id: ProviderId::new(provider_id),
-                        completed_by: issuer,
-                        completion_epoch: 9,
-                    }],
+                    assignment_revision: 1,
+                    provider_completions: vec![provider_ingest_completion(provider_id, issuer, 9)],
                     status: ReplicationOrderStatus::Completed(9),
                 },
             );
@@ -42145,6 +44866,20 @@ mod advert_tests {
     }
     use tokio::sync::RwLock;
 
+    const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
+    const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
+        ModerationQuarantineKeyProviderQualificationV1 =
+        ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
+
+    fn torii_test_quarantine_key_provider_config()
+    -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
+        iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
+            handle: TEST_QUARANTINE_KEY_PROVIDER_HANDLE.to_owned(),
+            revision: TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION.revision(),
+            policy_digest: TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION.policy_digest(),
+        }
+    }
+
     #[derive(Debug)]
     struct ToriiTestQuarantineKeyWrapper {
         key_id: String,
@@ -42164,21 +44899,44 @@ mod advert_tests {
     }
 
     impl ModerationQuarantineKeyWrapper for ToriiTestQuarantineKeyWrapper {
+        fn provider_handle(&self) -> &str {
+            TEST_QUARANTINE_KEY_PROVIDER_HANDLE
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ModerationQuarantineKeyProviderQualificationV1,
+            ModerationQuarantineKeyProviderReadinessErrorV1,
+        > {
+            Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
+        }
+
         fn active_key_id(&self) -> &str {
             &self.key_id
         }
 
-        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+        fn wrap_dek(
+            &self,
+            context_digest: [u8; 32],
+            dek: &[u8; 32],
+        ) -> Result<Vec<u8>, ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .encrypt(
                     self.nonce(context_digest).as_slice(),
                     context_digest.as_slice(),
                     dek.as_slice(),
                 )
-                .map_err(|error| error.to_string())
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })
         }
 
         fn unwrap_dek(
@@ -42186,22 +44944,28 @@ mod advert_tests {
             key_id: &str,
             context_digest: [u8; 32],
             wrapped_dek: &[u8],
-        ) -> Result<[u8; 32], String> {
+        ) -> Result<[u8; 32], ModerationQuarantineKeyOperationErrorV1> {
             use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
 
             if key_id != self.key_id {
-                return Err("unknown Torii test wrapping key handle".to_owned());
+                return Err(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked);
             }
             SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .decrypt(
                     self.nonce(context_digest).as_slice(),
                     context_digest.as_slice(),
                     wrapped_dek,
                 )
-                .map_err(|error| error.to_string())?
+                .map_err(|error| {
+                    ModerationQuarantineKeyOperationErrorV1::Rejected
+                        .after_scrubbing_provider_diagnostic(error.to_string())
+                })?
                 .try_into()
-                .map_err(|_| "unwrapped Torii test DEK is not 32 bytes".to_owned())
+                .map_err(|_| ModerationQuarantineKeyOperationErrorV1::Rejected)
         }
     }
 
@@ -42274,6 +45038,7 @@ mod advert_tests {
             .moderation_screening_authority_bundle_digest(Some(
                 *blake3::hash(&authority_bundle_bytes).as_bytes(),
             ))
+            .moderation_quarantine_key_provider(Some(torii_test_quarantine_key_provider_config()))
             .build();
         let repair_config = sorafs_node::config::RepairConfig::from(
             &iroha_config::parameters::actual::SorafsRepair {
@@ -42389,13 +45154,26 @@ mod advert_tests {
             ..iroha_config::parameters::actual::SorafsTokenConfig::default()
         };
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        StreamTokenIssuer::from_config(&cfg, Some(runtime_signer))
-            .expect("valid config")
-            .expect("issuer enabled")
+        StreamTokenIssuer::from_config(
+            &cfg,
+            &[String::from(TEST_STREAM_TOKEN_API_TOKEN)],
+            Some(runtime_signer),
+        )
+        .expect("valid config")
+        .expect("issuer enabled")
     }
 
     fn stream_token_issuer_for_tests() -> StreamTokenIssuer {
         stream_token_issuer_for_tests_with_mode(ApiTestStreamTokenSignerMode::Sign)
+    }
+
+    const TEST_STREAM_TOKEN_API_TOKEN: &str = "stream-token-api-credential";
+
+    fn insert_stream_token_api_credential(headers: &mut HeaderMap) {
+        headers.insert(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
+        );
     }
 
     fn token_enabled_state() -> (SharedAppState, TempDir, String) {
@@ -42422,6 +45200,9 @@ mod advert_tests {
         let issuer = stream_token_issuer_for_tests();
         inner.sorafs_node = node;
         inner.stream_token_issuer = Some(Arc::new(issuer));
+        inner.api_tokens_set = Arc::new(std::collections::HashSet::from([String::from(
+            TEST_STREAM_TOKEN_API_TOKEN,
+        )]));
 
         (Arc::new(inner), temp_dir, manifest_id)
     }
@@ -42550,13 +45331,22 @@ mod advert_tests {
         }
     }
 
+    fn canonical_fixture_car_stats(
+        plan: &CarBuildPlan,
+        payload: &[u8],
+    ) -> sorafs_car::CarWriteStats {
+        sorafs_car::CarWriter::new(plan, payload)
+            .expect("canonical fixture CAR writer")
+            .write_to(std::io::sink())
+            .expect("derive canonical fixture CAR archive stats")
+    }
+
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
         let plan = CarBuildPlan::single_file(payload).expect("canonical fixture chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(sorafs_manifest::canonical_manifest_root_cid(
-                [seed.max(1); 32],
-            ))
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -42566,9 +45356,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .push_alias(AliasClaim {
@@ -42576,9 +45366,28 @@ mod advert_tests {
                 namespace: "alias".into(),
                 proof: vec![0xAA; 16],
             })
+            .add_metadata("test.fixture_seed", format!("{seed:02x}"))
             .build()
             .expect("manifest");
         manifest
+    }
+
+    #[test]
+    fn canonical_manifest_fixture_separates_digest_domains() {
+        let payload = b"raw payload, CARv1 section, and CAR archive domains";
+        let plan = CarBuildPlan::single_file(payload).expect("canonical fixture chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
+
+        assert_ne!(plan.payload_digest, car_stats.car_payload_digest);
+        assert_ne!(plan.payload_digest, car_stats.car_archive_digest);
+        assert_ne!(car_stats.car_payload_digest, car_stats.car_archive_digest);
+
+        let manifest = manifest_for_payload(0xA5, payload);
+        assert_eq!(
+            manifest.car_digest,
+            *car_stats.car_archive_digest.as_bytes()
+        );
+        assert_eq!(manifest.car_size, car_stats.car_size);
     }
 
     fn seed_capacity_declaration(
@@ -42697,12 +45506,19 @@ mod advert_tests {
         };
 
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer;
-        let issuer = StreamTokenIssuer::from_config(&token_config, Some(runtime_signer))
-            .expect("token config valid")
-            .expect("stream token issuer enabled");
+        let issuer = StreamTokenIssuer::from_config(
+            &token_config,
+            &[String::from(TEST_STREAM_TOKEN_API_TOKEN)],
+            Some(runtime_signer),
+        )
+        .expect("token config valid")
+        .expect("stream token issuer enabled");
         let issuer = Arc::new(issuer);
         let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
         app.stream_token_issuer = Some(issuer);
+        app.api_tokens_set = Arc::new(std::collections::HashSet::from([String::from(
+            TEST_STREAM_TOKEN_API_TOKEN,
+        )]));
 
         let chunker_handle = format!(
             "{}.{}@{}",
@@ -42735,6 +45551,7 @@ mod advert_tests {
 
     async fn issue_token_base64(context: &TokenTestContext, overrides: TokenOverrides) -> String {
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
             header_value(&context.client_id, "X-SoraFS-Client"),
@@ -43432,23 +46249,40 @@ mod advert_tests {
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
 
-        let payload = b"sorafs manifest export payload";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "first.bin".to_owned()],
+                    data: b"first manifest export payload".to_vec(),
+                },
+                FileEntry {
+                    path: vec!["assets".to_owned(), "second.bin".to_owned()],
+                    data: b"second manifest export payload".to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: b"manifest export index".to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let car_stats = canonical_fixture_car_stats(&plan, &payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAB; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
             )
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .por_root(
-                sorafs_car::compute_por_root(payload, &plan)
+                sorafs_car::compute_por_root(&payload, &plan)
                     .expect("derive canonical manifest-export fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
@@ -43492,15 +46326,20 @@ mod advert_tests {
             value.get("content_length").and_then(Value::as_u64),
             Some(plan.content_length)
         );
-        assert_eq!(value.get("file_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("file_count").and_then(Value::as_u64), Some(3));
         assert_eq!(
             value.get("returned_file_count").and_then(Value::as_u64),
-            Some(1)
+            Some(3)
         );
-        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(value.get("limit").and_then(Value::as_u64), Some(3));
+        assert_eq!(value.get("offset").and_then(Value::as_u64), Some(0));
         assert_eq!(
             value.get("truncated_files").and_then(Value::as_bool),
             Some(false)
+        );
+        assert_eq!(
+            value.get("files").and_then(Value::as_array).map(Vec::len),
+            Some(3)
         );
         let manifest_b64 = value
             .get("manifest_b64")
@@ -43510,6 +46349,66 @@ mod advert_tests {
             .decode(manifest_b64.as_bytes())
             .expect("decode manifest");
         assert_eq!(decoded, manifest_bytes);
+
+        let paged_response = handle_get_sorafs_storage_manifest(
+            State(state.clone()),
+            Path(manifest_id.clone()),
+            axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(paged_response.status(), StatusCode::OK);
+        let paged_body = body::to_bytes(paged_response.into_body(), usize::MAX)
+            .await
+            .expect("collect paged manifest body");
+        let paged: Value =
+            norito::json::from_slice(&paged_body).expect("decode paged manifest response");
+        assert_eq!(paged.get("file_count").and_then(Value::as_u64), Some(3));
+        assert_eq!(
+            paged.get("returned_file_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(paged.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(paged.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            paged.get("truncated_files").and_then(Value::as_bool),
+            Some(true)
+        );
+        let paged_files = paged
+            .get("files")
+            .and_then(Value::as_array)
+            .expect("paged files");
+        assert_eq!(paged_files.len(), 1);
+        assert_eq!(
+            paged_files[0]
+                .get("path")
+                .and_then(Value::as_array)
+                .and_then(|path| path.last())
+                .and_then(Value::as_str),
+            Some("second.bin")
+        );
+
+        let remaining_response = handle_get_sorafs_storage_manifest(
+            State(state),
+            Path(manifest_id),
+            axum::extract::RawQuery(Some("offset=1".to_owned())),
+        )
+        .await;
+        assert_eq!(remaining_response.status(), StatusCode::OK);
+        let remaining_body = body::to_bytes(remaining_response.into_body(), usize::MAX)
+            .await
+            .expect("collect remaining manifest body");
+        let remaining: Value =
+            norito::json::from_slice(&remaining_body).expect("decode remaining manifest response");
+        assert_eq!(
+            remaining.get("returned_file_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(remaining.get("limit").and_then(Value::as_u64), Some(2));
+        assert_eq!(remaining.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            remaining.get("truncated_files").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[tokio::test]
@@ -44858,7 +47757,7 @@ mod advert_tests {
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         let (node, _dir) = sorafs_node_with_temp_storage();
 
-        let first_file = vec![0xA5; sorafs_chunker::ChunkProfile::DEFAULT.max_size + 17];
+        let first_file = vec![0xA5; sorafs_chunker::ChunkProfile::DEFAULT.max_size * 2 + 17];
         let second_file = b"sorafs chunk plan export tail".to_vec();
         let (plan, payload) = CarBuildPlan::from_files_with_profile(
             vec![
@@ -44874,9 +47773,10 @@ mod advert_tests {
             sorafs_chunker::ChunkProfile::DEFAULT,
         )
         .expect("plan");
+        let car_stats = canonical_fixture_car_stats(&plan, &payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xCD; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -44887,15 +47787,15 @@ mod advert_tests {
                     .expect("derive canonical multi-file fixture PoR root"),
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(&payload).into())
-            .car_size(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
             .expect("manifest");
         assert!(
-            plan.chunks.len() > 1,
-            "fixture should cover chunk truncation"
+            plan.chunks.len() > 2,
+            "fixture should cover nonzero-offset chunk truncation"
         );
 
         let chunker_handle = format!(
@@ -44947,6 +47847,12 @@ mod advert_tests {
             Some(plan.chunks.len() as u64)
         );
         assert_eq!(
+            plan_value
+                .get("returned_chunk_digest_count")
+                .and_then(Value::as_u64),
+            Some(plan.chunks.len() as u64)
+        );
+        assert_eq!(
             plan_value.get("file_count").and_then(Value::as_u64),
             Some(2)
         );
@@ -44960,8 +47866,15 @@ mod advert_tests {
             plan_value.get("limit").and_then(Value::as_u64),
             Some(DEFAULT_LIST_LIMIT as u64)
         );
+        assert_eq!(plan_value.get("offset").and_then(Value::as_u64), Some(0));
         assert_eq!(
             plan_value.get("truncated_chunks").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            plan_value
+                .get("truncated_chunk_digests")
+                .and_then(Value::as_bool),
             Some(false)
         );
         assert_eq!(
@@ -44977,6 +47890,20 @@ mod advert_tests {
             .and_then(Value::as_array)
             .expect("chunks array");
         assert_eq!(chunks.len(), plan.chunks.len());
+        assert_eq!(
+            plan_value
+                .get("chunk_digests_blake3")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(plan.chunks.len())
+        );
+        assert_eq!(
+            plan_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
 
         let capped_response = handle_get_sorafs_storage_plan(
             State(state.clone()),
@@ -44998,6 +47925,8 @@ mod advert_tests {
             capped_plan.get("chunk_count").and_then(Value::as_u64),
             Some(plan.chunks.len() as u64)
         );
+        assert_eq!(capped_plan.get("offset").and_then(Value::as_u64), Some(0));
+        assert_eq!(capped_plan.get("limit").and_then(Value::as_u64), Some(1));
         assert_eq!(
             capped_plan
                 .get("returned_chunk_count")
@@ -45048,6 +47977,89 @@ mod advert_tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(1)
+        );
+
+        let paged_response = handle_get_sorafs_storage_plan(
+            State(state),
+            Path(manifest_id),
+            axum::extract::RawQuery(Some("offset=1&limit=1".to_owned())),
+        )
+        .await;
+        assert_eq!(paged_response.status(), StatusCode::OK);
+        let paged_body = body::to_bytes(paged_response.into_body(), usize::MAX)
+            .await
+            .expect("collect paged plan body");
+        let paged_value: Value =
+            norito::json::from_slice(&paged_body).expect("decode paged plan response");
+        let paged_plan = paged_value
+            .get("plan")
+            .and_then(Value::as_object)
+            .expect("paged plan object");
+        assert_eq!(paged_plan.get("offset").and_then(Value::as_u64), Some(1));
+        assert_eq!(paged_plan.get("limit").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            paged_plan
+                .get("returned_chunk_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            paged_plan
+                .get("returned_chunk_digest_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            paged_plan
+                .get("returned_file_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            paged_plan.get("truncated_chunks").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            paged_plan
+                .get("truncated_chunk_digests")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            paged_plan.get("truncated_files").and_then(Value::as_bool),
+            Some(false)
+        );
+        let paged_chunks = paged_plan
+            .get("chunks")
+            .and_then(Value::as_array)
+            .expect("paged chunks");
+        assert_eq!(paged_chunks.len(), 1);
+        assert_eq!(
+            paged_chunks[0].get("chunk_index").and_then(Value::as_u64),
+            Some(1)
+        );
+        let paged_digests = paged_plan
+            .get("chunk_digests_blake3")
+            .and_then(Value::as_array)
+            .expect("paged chunk digests");
+        assert_eq!(paged_digests.len(), 1);
+        let expected_paged_digest = hex::encode(plan.chunks[1].digest);
+        assert_eq!(
+            paged_digests[0].as_str(),
+            Some(expected_paged_digest.as_str())
+        );
+        let paged_files = paged_plan
+            .get("files")
+            .and_then(Value::as_array)
+            .expect("paged files");
+        assert_eq!(paged_files.len(), 1);
+        assert_eq!(
+            paged_files[0]
+                .get("path")
+                .and_then(Value::as_array)
+                .and_then(|path| path.last())
+                .and_then(Value::as_str),
+            Some("index.html")
         );
     }
 
@@ -45321,6 +48333,7 @@ mod advert_tests {
     async fn storage_token_issues_signed_response() {
         let context = token_test_context();
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-token-1"),
@@ -45372,7 +48385,7 @@ mod advert_tests {
         assert!(!token_id.is_empty());
         assert_eq!(
             headers
-                .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok()),
             Some("2")
         );
@@ -45438,6 +48451,7 @@ mod advert_tests {
                 mode,
             );
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 HeaderValue::from_static("runtime-signer-failure"),
@@ -45515,6 +48529,7 @@ mod advert_tests {
             State(context.app.clone()),
             {
                 let mut headers = HeaderMap::new();
+                insert_stream_token_api_credential(&mut headers);
                 headers.insert(
                     header::HeaderName::from_static(HEADER_SORA_CLIENT),
                     header_value(&context.client_id, "X-SoraFS-Client"),
@@ -45558,6 +48573,7 @@ mod advert_tests {
             (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
         ] {
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
                 HeaderValue::from_static("client-a"),
@@ -45584,6 +48600,7 @@ mod advert_tests {
         }
 
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
             HeaderValue::from_static("client-a"),
@@ -45618,6 +48635,7 @@ mod advert_tests {
         let context = token_test_context();
         let headers = || {
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
                 HeaderValue::from_static("client-a"),
@@ -45771,7 +48789,102 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn storage_token_enforces_client_quota() {
+    async fn storage_token_requires_a_configured_valid_api_credential() {
+        let context = token_test_context();
+        let request = || StreamTokenRequestDto {
+            manifest_id_hex: context.manifest_id_hex.clone(),
+            provider_id_hex: context.provider_id_hex.clone(),
+            ttl_secs: None,
+            max_streams: None,
+            rate_limit_bytes: None,
+            requests_per_minute: None,
+        };
+        let headers = || {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                HeaderValue::from_static("credential-auth-test"),
+            );
+            headers.insert(
+                header::HeaderName::from_static(HEADER_SORA_NONCE),
+                HeaderValue::from_static("credential-auth-nonce"),
+            );
+            headers
+        };
+
+        let missing = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            headers(),
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+        assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
+
+        let mut invalid_headers = headers();
+        invalid_headers.insert(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static("invalid-credential"),
+        );
+        let invalid = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            invalid_headers,
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+
+        let mut duplicate_headers = headers();
+        duplicate_headers.append(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
+        );
+        duplicate_headers.append(
+            crate::HEADER_API_TOKEN,
+            HeaderValue::from_static(TEST_STREAM_TOKEN_API_TOKEN),
+        );
+        let duplicate = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            duplicate_headers,
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
+
+        let mut valid_headers = headers();
+        insert_stream_token_api_credential(&mut valid_headers);
+        let valid = handle_post_sorafs_storage_token(
+            State(context.app.clone()),
+            valid_headers.clone(),
+            JsonOnly(request()),
+        )
+        .await;
+        assert_eq!(valid.status(), StatusCode::OK);
+        assert_eq!(
+            valid
+                .headers()
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
+                .and_then(|value| value.to_str().ok()),
+            Some("2"),
+            "rejected credentials must not consume the authenticated quota"
+        );
+
+        let app_without_credentials = mk_app_state_for_tests();
+        let unavailable =
+            authenticated_stream_token_quota_subject(&app_without_credentials, &valid_headers)
+                .expect_err("missing server-side credential configuration must fail closed");
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            unavailable
+                .headers()
+                .get(RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_token_client_label_rotation_cannot_escape_credential_quota() {
         let context = token_test_context();
 
         let request_builder = || StreamTokenRequestDto {
@@ -45786,13 +48899,14 @@ mod advert_tests {
         let expected = ["2", "1", "0"];
         for (idx, quota_remaining) in expected.into_iter().enumerate() {
             let mut headers = HeaderMap::new();
+            insert_stream_token_api_credential(&mut headers);
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NONCE),
                 header_value(format!("nonce-quota-{idx}"), "X-SoraFS-Nonce"),
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                HeaderValue::from_static("gateway-alpha"),
+                header_value(format!("rotating-label-{idx}"), "X-SoraFS-Client"),
             );
 
             let response = handle_post_sorafs_storage_token(
@@ -45804,20 +48918,21 @@ mod advert_tests {
             assert_eq!(response.status(), StatusCode::OK);
             let remaining = response
                 .headers()
-                .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok())
                 .expect("quota header");
             assert_eq!(remaining, quota_remaining);
         }
 
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             header_value("nonce-quota-3", "X-SoraFS-Nonce"),
         );
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_CLIENT),
-            HeaderValue::from_static("gateway-alpha"),
+            HeaderValue::from_static("fresh-label-after-quota"),
         );
 
         let response = handle_post_sorafs_storage_token(
@@ -45835,7 +48950,7 @@ mod advert_tests {
         assert!(retry_after.parse::<u64>().unwrap_or(0) > 0);
         let quota_header = response
             .headers()
-            .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+            .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
             .and_then(|value| value.to_str().ok())
             .expect("quota header on 429");
         assert_eq!(quota_header, "0");
@@ -45896,6 +49011,7 @@ mod advert_tests {
     async fn storage_token_requires_client_header() {
         let (app, _dir, manifest_id) = token_enabled_state();
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-test"),
@@ -45925,6 +49041,7 @@ mod advert_tests {
             hex::encode(issuer.verifying_key_bytes())
         };
         let mut headers = HeaderMap::new();
+        insert_stream_token_api_credential(&mut headers);
         headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NONCE),
             HeaderValue::from_static("nonce-123"),
@@ -45975,7 +49092,7 @@ mod advert_tests {
         );
         assert_eq!(
             headers
-                .get(HEADER_SORA_CLIENT_QUOTA_REMAINING)
+                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
                 .and_then(|value| value.to_str().ok()),
             Some("2")
         );
@@ -46675,9 +49792,10 @@ mod advert_tests {
 
         let payload = b"sorafs fetch manifest envelope enforcement payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xCC; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -46687,9 +49805,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical envelope fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
@@ -46884,9 +50002,10 @@ mod advert_tests {
 
         let payload = b"sorafs fetch manifest envelope optional payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xCC; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -46896,9 +50015,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical optional-envelope fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()
@@ -47024,9 +50143,10 @@ mod advert_tests {
 
         let payload = b"sorafs capability enforcement payload";
         let plan = CarBuildPlan::single_file(payload).expect("canonical chunk plan");
+        let car_stats = canonical_fixture_car_stats(&plan, payload);
         let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xDC; 16])
-            .dag_codec(DagCodecId(0x71))
+            .root_cid(car_stats.root_cids[0].clone())
+            .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_from_profile(
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
@@ -47036,9 +50156,9 @@ mod advert_tests {
                 sorafs_car::compute_por_root(payload, &plan)
                     .expect("derive canonical capability fixture PoR root"),
             )
-            .content_length(payload.len() as u64)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(payload.len() as u64)
+            .content_length(plan.content_length)
+            .car_digest(car_stats.car_archive_digest.into())
+            .car_size(car_stats.car_size)
             .pin_policy(PinPolicy::default())
             .governance(test_governance_proofs())
             .build()

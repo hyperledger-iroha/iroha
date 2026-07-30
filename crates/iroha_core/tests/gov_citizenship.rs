@@ -12,7 +12,7 @@ use iroha_data_model::{
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
     domain::{Domain, DomainId},
-    isi::governance::{CouncilDerivationKind, RegisterCitizen, UnregisterCitizen},
+    isi::governance::{RegisterCitizen, UnregisterCitizen},
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
@@ -164,9 +164,6 @@ fn citizenship_gate_blocks_and_allows_governance() {
         epoch: 1,
         members: vec![ALICE_ID.clone()],
         alternates: Vec::new(),
-        verified: 0,
-        candidates_count: 1,
-        derived_by: CouncilDerivationKind::Fallback,
     }
     .execute(&ALICE_ID, &mut stx);
     assert!(matches!(
@@ -204,9 +201,6 @@ fn citizenship_gate_blocks_and_allows_governance() {
         epoch: 1,
         members: vec![ALICE_ID.clone()],
         alternates: Vec::new(),
-        verified: 0,
-        candidates_count: 1,
-        derived_by: CouncilDerivationKind::Fallback,
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("council persists after citizen bond");
@@ -273,9 +267,6 @@ fn citizenship_records_persist_across_transactions() {
         epoch: 1,
         members: vec![ALICE_ID.clone()],
         alternates: Vec::new(),
-        verified: 0,
-        candidates_count: 1,
-        derived_by: CouncilDerivationKind::Fallback,
     }
     .execute(&ALICE_ID, &mut stx_2)
     .expect("persist council should succeed when citizen record persisted");

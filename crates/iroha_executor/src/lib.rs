@@ -244,41 +244,12 @@ impl DataModelBuilder {
         self
     }
 
-    /// Set the data model of the executor via [`set_data_model`]
+    /// Set the data model of the executor via [`set_data_model`].
+    ///
+    /// Permission reconciliation is performed by the stateful host when it applies this model.
+    /// Migration executors intentionally do not query or mutate world state.
     #[cfg(not(test))]
-    pub fn build_and_set(self, host: &Iroha) {
-        let all_accounts = host.query(FindAccounts::new()).execute().unwrap();
-        let all_roles = host.query(FindRoles::new()).execute().unwrap();
-
-        for role in all_roles.into_iter().map(|role| role.unwrap()) {
-            for permission in role.permissions() {
-                if !self.permissions.contains(permission.name()) {
-                    host.submit(&Revoke::role_permission(
-                        permission.clone(),
-                        role.id().clone(),
-                    ))
-                    .unwrap();
-                }
-            }
-        }
-
-        for account in all_accounts.into_iter().map(|account| account.unwrap()) {
-            let account_permissions = host
-                .query(FindPermissionsByAccountId::new(account.id().clone()))
-                .execute()
-                .unwrap();
-
-            for permission in account_permissions.map(|permission| permission.unwrap()) {
-                if !self.permissions.contains(permission.name()) {
-                    host.submit(&Revoke::account_permission(
-                        permission,
-                        account.id().clone(),
-                    ))
-                    .unwrap();
-                }
-            }
-        }
-
+    pub fn build_and_set(self) {
         set_data_model(&ExecutorDataModel::new(
             self.parameters,
             self.instructions,

@@ -1,9 +1,9 @@
-//! Export Norito metadata for the Android codegen documentation pipeline (AND3).
+//! Export Norito metadata for SDK code generation and documentation.
 //!
-//! The current implementation focuses on surfacing a deterministic manifest of
-//! all built-in instructions plus placeholder builder metadata. Follow-ups will
-//! extend this binary with richer doc extraction, Kotlin references, and live
-//! Norito payload fixtures.
+//! This binary emits deterministic instruction and builder metadata. The
+//! package library also owns canonical Norito RPC fixture generation and
+//! verification so SDK pipelines and repository automation share one
+//! implementation.
 
 use std::{
     any::TypeId,
@@ -100,6 +100,12 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::sorafs::RegisterCapacityDispute);
         $macro!(iroha_data_model::isi::sorafs::IssueReplicationOrder);
         $macro!(iroha_data_model::isi::sorafs::CompleteReplicationOrder);
+        $macro!(iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments);
+        $macro!(iroha_data_model::isi::sorafs::ExpireReplicationOrder);
+        $macro!(iroha_data_model::isi::sorafs::RegisterProviderOwner);
+        $macro!(iroha_data_model::isi::sorafs::UnregisterProviderOwner);
+        $macro!(iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority);
+        $macro!(iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority);
         $macro!(iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode);
         $macro!(iroha_data_model::isi::smart_contract_code::DeactivateContractInstance);
         $macro!(iroha_data_model::isi::smart_contract_code::ActivateContractInstance);
@@ -931,6 +937,42 @@ mod tests {
                     )
             }),
             "retired Numeric asset instruction leaked into the exported manifest"
+        );
+    }
+
+    #[test]
+    fn provider_ingest_completion_export_is_the_six_field_hard_cut() {
+        let specs = gather_instruction_specs(&instruction_registry::default(), None);
+        let expected_type =
+            std::any::type_name::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>();
+        let spec = specs
+            .iter()
+            .find(|spec| spec.type_name == expected_type)
+            .expect("complete replication order export");
+        let fields = spec
+            .layout
+            .get("fields")
+            .and_then(Value::as_array)
+            .expect("complete replication order fields");
+        let field_names = fields
+            .iter()
+            .map(|field| {
+                field
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .expect("named completion field")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            field_names,
+            [
+                "order_id",
+                "provider_id",
+                "completion_epoch",
+                "expected_authority",
+                "expected_assignment_revision",
+                "finalized_anchor",
+            ]
         );
     }
 

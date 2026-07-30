@@ -228,12 +228,6 @@ Code Size Cap
   - Request: { "authority": "<account>", "chain_id": "...", "proposal_id": "<hex32>", "body": "PolicyJury", "decision": "approve|reject|abstain" }
   - Behavior: Builds a `CastParliamentBallot` instruction skeleton. The transaction authority must be the seated body member; alternates cannot vote until promoted into the roster.
 
-- POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
-  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
-  - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
-  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
-  - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
-
 ### Governance defaults (iroha_config `gov.*`)
 
 The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
@@ -378,7 +372,7 @@ Unlock Sweep (Operator/Audit)
     }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
 
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
+- POST `/v1/gov/ballots/zk-v1/ballot-proof`
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
   - Request:
     {
@@ -409,7 +403,7 @@ Unlock Sweep (Operator/Audit)
     - Supplying `private_key` is rejected; Torii returns only an unsigned instruction skeleton for local signing.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
     - The envelope bytes are re-encoded as base64 for the instruction payload.
-    - This endpoint is only available when the `zk-ballot` feature is enabled.
+    - This endpoint is part of every V1 app API build.
 
 CastZkBallot Verification Path
 - `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).

@@ -373,22 +373,10 @@ Oldin bloklangan barcha qabul qilish TODOlar amalga oshirildi va tasdiqlandi:- *
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` qoplamasi Rust, Python `ToriiClient`
   endi `decode_pdp_commitment_header` eksport qiladi va `IrohaSwift` mos keladigan yordamchilarni juda mobil yuboradi
   mijozlar kodlangan namuna olish jadvalini darhol saqlashi mumkin.【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii shuningdek `GET /v1/da/manifests/{storage_ticket}` ni ochib beradi, shuning uchun SDK va operatorlar manifestlarni olishlari mumkin
-  va tugunning spool katalogiga tegmasdan parcha rejalari. Javob Norito baytlarini qaytaradi
-  (base64), renderlangan manifest JSON, `chunk_plan` JSON blobi `sorafs fetch` uchun tayyor, shuningdek, tegishli
-  hex dayjestlar (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), shuning uchun quyi oqim asboblari
-  Dijestlarni qayta hisoblamasdan orkestrni ta'minlang va bir xil `Sora-PDP-Commitment` sarlavhasini chiqaradi
-  ko'zgu yutilish javoblari. `block_hash=<hex>` ni so'rov parametri sifatida o'tkazish deterministikni qaytaradi
-  `sampling_plan` ildizi `block_hash || client_blob_id` (validatorlar boʻylab taqsimlanadi) oʻz ichiga olgan
-  `assignment_hash`, soʻralgan `sample_window` va namunali `(index, role, group)` kortejlari
-  PoR namunalari va validatorlar bir xil indekslarni takrorlashi uchun butun 2D chiziqli tartibi. Namuna oluvchi
-  `client_blob_id`, `chunk_root` va `ipa_commitment` ni tayinlash xeshiga aralashtiradi; `iroha ilovasi yuklab olinadi
-  --block-hash ` now writes `sampling_plan_.json` manifest + chunk rejasi yonida
-  xesh saqlanib qoldi va JS/Swift Torii mijozlari bir xil `assignment_hash_hex` ni ko'rsatadi, shuning uchun validatorlar
-  va provers bitta deterministik prob to'plamini baham ko'radi. Torii namuna olish rejasini qaytarganda, `iroha app da
-  o'rniga isbot-availability` now reuses that deterministic probe set (seed derived from `sample_seed`).
-  vaqtinchalik namuna olish, shuning uchun PoR guvohlari operator topshiriqlarini bajarmagan bo'lsa ham
-  `--block-hash` bekor qiling.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】 【Javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Katta foydali yuk oqimiSozlangan yagona soʻrov chegarasidan kattaroq aktivlarni qabul qilishi kerak boʻlgan mijozlar
 `POST /v1/da/ingest/chunk/start` ga qo'ng'iroq qilish orqali oqim seansi. Torii a bilan javob beradi

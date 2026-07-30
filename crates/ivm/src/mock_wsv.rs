@@ -262,17 +262,21 @@ pub enum PermissionToken {
     TransferAsset(AssetDefinitionId),
     /// Permission to transfer one exact owner/dataspace balance bucket.
     TransferAssetBucket(AssetId),
-    /// Permission to set transfer-freeze state for one asset and exact account alias scope.
-    SetAssetTransferFreeze {
+    /// Permission to set transfer availability for one exact account and asset definition.
+    SetAssetTransferAvailability {
+        account: AccountId,
         asset_definition: AssetDefinitionId,
-        account_domain: Name,
-        account_dataspace: DataSpaceId,
     },
     /// Permission to set a daily transfer limit for one asset and exact account alias scope.
     SetAssetTransferDailyLimit {
         asset_definition: AssetDefinitionId,
         account_domain: Name,
         account_dataspace: DataSpaceId,
+    },
+    /// Permission to set a holding limit for one exact account and asset definition.
+    SetAssetHoldingLimit {
+        account: AccountId,
+        asset_definition: AssetDefinitionId,
     },
     /// Permission to add a signatory for the given account
     AddSignatory(AccountId),
@@ -364,8 +368,9 @@ pub struct MockWorldStateView {
     permissions: HashMap<AccountId, HashSet<PermissionToken>>,
     asset_definitions: HashMap<AssetDefinitionId, AssetDefinition>,
     balances: HashMap<(AccountId, AssetDefinitionId), Quantity>,
-    asset_transfer_freezes: HashMap<(AccountId, AssetDefinitionId), bool>,
+    asset_transfer_availability: HashMap<(AccountId, AssetDefinitionId), (u64, bool, bool)>,
     asset_transfer_daily_limits: HashMap<(AccountId, AssetDefinitionId), Option<Quantity>>,
+    asset_holding_limits: HashMap<(AccountId, AssetDefinitionId), Option<Quantity>>,
     nfts: HashMap<NftId, NftRecord>,
     peers: HashSet<Peer>,
     triggers: HashMap<String, bool>,
@@ -413,8 +418,9 @@ impl MockWorldStateView {
             permissions: HashMap::new(),
             asset_definitions: HashMap::new(),
             balances: HashMap::new(),
-            asset_transfer_freezes: HashMap::new(),
+            asset_transfer_availability: HashMap::new(),
             asset_transfer_daily_limits: HashMap::new(),
+            asset_holding_limits: HashMap::new(),
             nfts: HashMap::new(),
             peers: HashSet::new(),
             triggers: HashMap::new(),
@@ -1240,12 +1246,12 @@ impl MockWorldStateView {
     /// Initialize with a list of balances.
     pub fn with_balances(entries: &[((AccountId, AssetDefinitionId), Quantity)]) -> Self {
         let mut wsv = Self::new();
-        for ((account, asset), amount) in entries.iter().cloned() {
+        for ((account, asset), amount) in entries {
             assert!(
-                Self::is_scale0(&amount),
+                Self::is_scale0(amount),
                 "mock WSV balances must have scale=0"
             );
-            let subject = Self::account_subject(&account);
+            let subject = Self::account_subject(account);
             wsv.domains.entry(asset.domain().clone()).or_default();
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
@@ -1253,10 +1259,10 @@ impl MockWorldStateView {
                 .or_insert_with(|| AssetDefinition::new(Mintable::Infinitely));
             wsv.balances
                 .insert((subject, asset.clone()), amount.clone());
-            if let Some(def) = wsv.asset_definitions.get_mut(&asset) {
+            if let Some(def) = wsv.asset_definitions.get_mut(asset) {
                 def.total_supply = def
                     .total_supply
-                    .checked_add(&amount)
+                    .checked_add(amount)
                     .expect("mock total supply overflow");
             }
         }
@@ -1460,14 +1466,14 @@ impl MockWorldStateView {
         }
     }
 
-    /// Return the last native transfer-freeze value applied in this mock world.
+    /// Return the last native transfer-availability state applied in this mock world.
     #[must_use]
-    pub fn asset_transfer_freeze(
+    pub fn asset_transfer_availability(
         &self,
         account_id: &AccountId,
         asset_id: &AssetDefinitionId,
-    ) -> Option<bool> {
-        self.asset_transfer_freezes
+    ) -> Option<(u64, bool, bool)> {
+        self.asset_transfer_availability
             .get(&(Self::account_subject(account_id), asset_id.clone()))
             .copied()
     }
@@ -1480,6 +1486,18 @@ impl MockWorldStateView {
         asset_id: &AssetDefinitionId,
     ) -> Option<Option<Quantity>> {
         self.asset_transfer_daily_limits
+            .get(&(Self::account_subject(account_id), asset_id.clone()))
+            .cloned()
+    }
+
+    /// Return the last native holding limit applied in this mock world.
+    #[must_use]
+    pub fn asset_holding_limit(
+        &self,
+        account_id: &AccountId,
+        asset_id: &AssetDefinitionId,
+    ) -> Option<Option<Quantity>> {
+        self.asset_holding_limits
             .get(&(Self::account_subject(account_id), asset_id.clone()))
             .cloned()
     }
@@ -4568,20 +4586,32 @@ impl IVMHost for WsvHost {
                     Err(VMError::PermissionDenied)
                 }
             }
-            syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE => {
+            syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY => {
                 let account = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_definition = self.decode_asset_reg(vm, 11)?;
-                let frozen = match vm.register(12) {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(VMError::DecodeError),
-                };
-                let (account_domain, _dataspace_name, account_dataspace) =
-                    self.account_transfer_control_scope(&account)?;
-                let permission = PermissionToken::SetAssetTransferFreeze {
+                let expected_revision = vm.register(12);
+                let availability_flags = vm.register(13);
+                if availability_flags & !0b11 != 0 {
+                    return Err(VMError::DecodeError);
+                }
+                let incoming = availability_flags & 0b01 != 0;
+                let outgoing = availability_flags & 0b10 != 0;
+                let option_layout =
+                    crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+                let (has_reason, reason_words) =
+                    crate::sum::read_words(vm, vm.register(14), option_layout)?;
+                if has_reason {
+                    let reason_ptr = reason_words.first().copied().ok_or(VMError::DecodeError)?;
+                    let reason = vm.validate_tlv(reason_ptr)?;
+                    if reason.type_id != PointerType::Blob
+                        || core::str::from_utf8(reason.payload).is_err()
+                    {
+                        return Err(VMError::DecodeError);
+                    }
+                }
+                let permission = PermissionToken::SetAssetTransferAvailability {
+                    account: account.clone(),
                     asset_definition: asset_definition.clone(),
-                    account_domain,
-                    account_dataspace,
                 };
                 if !self.wsv.has_permission(&self.caller, &permission)
                     || !self.wsv.account_is_linked(&account)
@@ -4589,12 +4619,65 @@ impl IVMHost for WsvHost {
                 {
                     return Err(VMError::PermissionDenied);
                 }
-                self.wsv.asset_transfer_freezes.insert(
+                let key = (
+                    MockWorldStateView::account_subject(&account),
+                    asset_definition,
+                );
+                let (current_revision, current_incoming, current_outgoing) = self
+                    .wsv
+                    .asset_transfer_availability
+                    .get(&key)
+                    .copied()
+                    .unwrap_or((0, true, true));
+                if current_revision != expected_revision
+                    || (current_incoming == incoming && current_outgoing == outgoing)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
+                let next_revision = current_revision
+                    .checked_add(1)
+                    .ok_or(VMError::PermissionDenied)?;
+                self.wsv
+                    .asset_transfer_availability
+                    .insert(key, (next_revision, incoming, outgoing));
+                Ok(Self::mutation_gas(0))
+            }
+            syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT => {
+                let account = self.decode_canonical_account_reg(vm, 10)?;
+                let asset_definition = self.decode_asset_reg(vm, 11)?;
+                let layout =
+                    crate::sum::SumLayoutV1::option(1).map_err(|_| VMError::DecodeError)?;
+                let (is_some, words) = crate::sum::read_words(vm, vm.register(12), layout)?;
+                let limit = if is_some {
+                    let pointer = words.first().copied().ok_or(VMError::DecodeError)?;
+                    let tlv = vm.validate_tlv(pointer)?;
+                    if tlv.type_id != PointerType::Quantity {
+                        return Err(VMError::NoritoInvalid);
+                    }
+                    Some(
+                        QuantityValueV1::decode_frame(tlv.payload)
+                            .map(QuantityValueV1::into_quantity)
+                            .map_err(|_| VMError::DecodeError)?,
+                    )
+                } else {
+                    None
+                };
+                let permission = PermissionToken::SetAssetHoldingLimit {
+                    account: account.clone(),
+                    asset_definition: asset_definition.clone(),
+                };
+                if !self.wsv.has_permission(&self.caller, &permission)
+                    || !self.wsv.account_is_linked(&account)
+                    || !self.wsv.asset_definitions.contains_key(&asset_definition)
+                {
+                    return Err(VMError::PermissionDenied);
+                }
+                self.wsv.asset_holding_limits.insert(
                     (
                         MockWorldStateView::account_subject(&account),
                         asset_definition,
                     ),
-                    frozen,
+                    limit,
                 );
                 Ok(Self::mutation_gas(0))
             }
@@ -4654,8 +4737,11 @@ impl IVMHost for WsvHost {
                 Ok(DEBUG_GAS)
             }
             syscalls::SYSCALL_ABORT => {
-                // Preserve r10 as the stable contract-provided abort code.
                 vm.request_abort();
+                Ok(DEBUG_GAS)
+            }
+            syscalls::SYSCALL_CONTRACT_ABORT => {
+                vm.request_contract_abort(vm.register(10));
                 Ok(DEBUG_GAS)
             }
             syscalls::SYSCALL_DEBUG_LOG => {

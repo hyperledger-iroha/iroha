@@ -156,7 +156,7 @@ The meaning of each operand depends on the opcode (rd/rs1/rs2, immediates, sysca
 | 0x8C | `ECDSAVERIFY` | ECDSA (secp256k1) signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0) |
 | 0x8D | `DILITHIUMVERIFY` | Dilithium signature verification (rs1=&Blob(msg), rs2=&Blob(sig), rd=&Blob(pubkey) → rd=1/0) |
 | 0x8E | `PAIRING` | BLS12-381 pairing check |
-| 0x8F | `ED25519BATCHVERIFY` | Deterministic Ed25519 batch verification using a Norito-encoded request (rs1=&NoritoBytes(Ed25519BatchRequest), rd=result 1/0, rs2=failure index; max 512 entries; gas = base + per-entry charge) |
+| 0x8F | `ED25519BATCHVERIFY` | Ordered strict Ed25519 verification using `rs1=&NoritoBytes(Ed25519BatchRequest { entries })`; writes 1/0 to `rd` and the first failing index to `rs2`; accepts 1–512 entries and at most 512 KiB of encoded payload; gas = 500 base + 1 per payload byte + 1,000 per admitted entry |
 
 In ZK mode the inputs to either Poseidon form must have uniform visibility:
 all public or all private. A mixed public/private tuple traps with
@@ -166,6 +166,7 @@ hash operation is the explicit commitment/declassification boundary.
 Notes
 - Vector ops (`VADD*`/`VAND`/`VXOR`/`VOR`/`VROT32`, `LOAD128`/`STORE128`) are available only when the header `VECTOR` bit is set; otherwise a deterministic mode-disabled trap occurs. `SETVL` sets the logical vector length used for gas scaling and ILP vector helpers; it does not change the physical SIMD width.
 - Signature verify opcodes and hash/compression ops consume or produce data via TLV pointers when specified; see `syscalls.md` for pointer-ABI TLV layout and examples. Signature verification checks the privacy classification of the complete TLV envelope (header, payload, and checksum) before parsing. A private overlap traps with `PrivacyViolation` rather than being converted into a public false result.
+- `ED25519BATCHVERIFY` debits its byte charge before checksum hashing or bounded Norito decoding, then debits the complete entry charge before cryptographic work. It verifies each entry exactly once with strict CPU semantics in canonical input order; optional GPU helper results never participate in opcode acceptance.
 
 ## Reserved ISO 20022 Messaging Slots
 
@@ -187,10 +188,14 @@ to prevent accidental reuse of their assigned values.
 | 0x99 | `MSG_VALIDATE` | Validate ISO 20022 message (required-field, numeric, IBAN with country-length + mod-97 enforcement, and BIC checks; pacs.008 requires debtor/creditor accounts and agent BICs; camt.052/053/054 enforce account identifiers, currencies, and balanced entries; pacs.002/pain.002 demand original group identifiers and status codes; pacs.004 ensures original instruction linkage plus returned amount; pacs.007, pacs.028/029, and camt.056 require original references for recall/status flows) |
 | 0x9A | `MSG_SIGN` | Sign ISO 20022 message (Ed25519, secp256k1, or ML-DSA) |
 | 0x9B | `MSG_VERIFY_SIG` | Verify ISO 20022 message signature (Ed25519, secp256k1, or ML-DSA) |
-| 0x9C | `MSG_SEND` | Validate, serialize, and dispatch ISO 20022 message through channel |
+| 0x9C | `MSG_SEND` | Reserved transport slot; ABI v1 exposes no message-delivery implementation |
 | 0x9D | `ENCODE_STR` | Encode primitive or binary value to string (numeric amount, Base64) |
 | 0x9E | `DECODE_STR` | Decode string into typed or binary value (supports Base64) |
 | 0x9F | `VALIDATE_FORMAT` | Validate string against format (IBAN with country-length + mod-97 enforcement, BIC, numeric) |
+
+The deterministic ISO 20022 helpers parse, validate, sign, and serialize data
+only. Network egress belongs in a separately configured service outside the VM
+and consensus execution.
 
 ## Zero Knowledge
 
@@ -228,7 +233,7 @@ helpers are available:
 | Hex | Constant | Description |
 |----:|----------|-------------|
 | 0xF4 | `SYSCALL_PROVE_EXECUTION` | Return the deterministic execution-proof summary emitted by `DefaultHost` |
-| 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes |
+| 0xF5 | `SYSCALL_GROW_HEAP` | Increase heap size by `x10` bytes, without exceeding the host-installed runtime ceiling |
 | 0xF6 | `SYSCALL_VERIFY_PROOF` | Verify registry-bound proof envelopes in `CoreHost`; `DefaultHost` returns `NotImplemented` |
 | 0xF7 | `SYSCALL_GET_MERKLE_PATH` | Write the Merkle path for address `x10` to memory at `x11` |
 | 0x010000 | `SYSCALL_QUERY_EXECUTE_NORITO` | Execute a Norito-encoded read-only query request |

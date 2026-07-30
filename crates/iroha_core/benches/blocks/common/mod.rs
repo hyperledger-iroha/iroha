@@ -252,7 +252,9 @@ pub fn build_state(
             NonZeroU16::new(u16::MAX).expect("u16::MAX is non-zero"),
         );
         state_block.world.parameters.executor.fuel = NonZeroU64::MAX;
-        state_block.world.parameters.executor.memory = NonZeroU64::MAX;
+        state_block.world.parameters.executor.memory =
+            NonZeroU64::new(iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES)
+                .expect("ABI heap window is non-zero");
 
         let tx_hashes = unverified_block
             .transactions()

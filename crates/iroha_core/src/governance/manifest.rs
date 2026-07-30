@@ -1862,7 +1862,7 @@ mod tests {
         quorum: u32,
         allow_runtime_upgrade: bool,
     ) -> LaneManifestRegistry {
-        let peer_id = PeerId::from(validator.signatory().clone());
+        let peer_id = PeerId::from(validator.expect_single_signatory().clone());
         let rules = GovernanceRules {
             version: 1,
             validators: vec![validator.clone()],
@@ -2449,7 +2449,7 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
         fs::write(
             &path,
             format!(
@@ -2486,7 +2486,7 @@ mod tests {
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
         fs::write(
             &path,
             format!(
@@ -2524,8 +2524,8 @@ mod tests {
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
         let bob = account_id_literal(&BOB_ID);
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
-        let bob_peer = PeerId::from(BOB_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
+        let bob_peer = PeerId::from(BOB_ID.expect_single_signatory().clone());
         fs::write(
             &path,
             format!(
@@ -2684,8 +2684,8 @@ mod tests {
         let dir = tempdir().expect("tmp dir");
         let alice = account_id_literal(&ALICE_ID);
         let bob = account_id_literal(&BOB_ID);
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
-        let bob_peer = PeerId::from(BOB_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
+        let bob_peer = PeerId::from(BOB_ID.expect_single_signatory().clone());
         let manifest_body = format!(
             r#"{{
             "lane": "%ALIAS%",
@@ -2758,7 +2758,7 @@ mod tests {
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
         fs::write(
             &path,
             format!(
@@ -2831,8 +2831,8 @@ mod tests {
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
-        let bob_peer = PeerId::from(BOB_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
+        let bob_peer = PeerId::from(BOB_ID.expect_single_signatory().clone());
         fs::write(
             &path,
             format!(
@@ -2870,7 +2870,7 @@ mod tests {
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
         let bob = account_id_literal(&BOB_ID);
-        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone());
         fs::write(
             &path,
             format!(

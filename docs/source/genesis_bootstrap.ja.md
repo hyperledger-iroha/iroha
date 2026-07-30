@@ -24,8 +24,9 @@ Norito でエンコードされたブートストラップ プロトコルを使
   サイズキャップ(`genesis.bootstrap_max_bytes`)。ホワイトリスト外のリクエストは `NotAllowed` を受け取ります。
   間違った鍵で署名されたペイロードは `MismatchedPubkey` を受け取ります。
 - **リクエスター フロー:** ストレージが空で、`genesis.file` が設定されていない場合 (および
-  `genesis.bootstrap_enabled=true`)、ノードはオプションの
-  `genesis.expected_hash` は、ペイロードをフェッチし、`validate_genesis_block` 経由で署名を検証します。
+  `genesis.bootstrap_enabled=true`)、`genesis.expected_hash` で署名済みジェネシスブロックの
+  正確なハッシュを必ず固定します。ファイルもハッシュもない場合、リクエスト送信前に起動設定エラーとなります。
+  その後、ノードはペイロードを取得し、`validate_genesis_block` で署名を検証します。
   ブロックを適用する前に、Kura と一緒に `genesis.bootstrap.nrt` を永続化します。ブートストラップの再試行
   `genesis.bootstrap_request_timeout`、`genesis.bootstrap_retry_interval`、および
   `genesis.bootstrap_max_attempts`。
@@ -34,5 +35,6 @@ Norito でエンコードされたブートストラップ プロトコルを使
   ピア間ではフェッチが中止されます。レスポンダーなし/タイムアウトの場合は、ローカル構成にフォールバックします。
 - **オペレータの手順:** 少なくとも 1 つの信頼できるピアが有効なジェネシスで到達可能であることを確認し、設定します
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` および再試行ノブ、および
-  必要に応じて、`expected_hash` を固定して、不一致のペイロードの受け入れを回避します。永続化されたペイロードは、
+  リモートブートストラップを有効にする前に、正確なブロックを `expected_hash` に固定します。ローカルの
+  署名済み `genesis.file` はそれ自体が明示的な成果物なので、追加のハッシュ固定は不要です。永続化されたペイロードは、
   `genesis.file` を `genesis.bootstrap.nrt` に指定することで、後続のブートで再利用されます。

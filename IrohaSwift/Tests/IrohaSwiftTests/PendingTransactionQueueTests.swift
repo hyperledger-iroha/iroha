@@ -38,8 +38,10 @@ private final class QueueStubPipelineClient: ToriiTransactionSubmitting {
 
 final class PendingTransactionQueueTests: XCTestCase {
     private func requireNativeEncoder() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
-                      "Native transaction encoder unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+            "Native transaction encoder unavailable"
+        )
     }
 
     private func makeEnvelope() -> SignedTransactionEnvelope {

@@ -8,6 +8,10 @@ import okhttp3.OkHttpClient;
  * Provides a shared {@link OkHttpClient} instance so Android transports reuse the same connection
  * pool by default.
  *
+ * <p>The lazily created production default never follows HTTP/HTTPS redirects and never retries a
+ * connection failure, preventing replay of caller-signed requests. Explicitly injected clients
+ * retain their caller-selected policy.
+ *
  * <p>Factories use a lazily initialised singleton; tests may swap/reset the shared client to inject
  * instrumented instances.
  */
@@ -24,7 +28,12 @@ public final class OkHttpClientProvider {
       if (isUsable(existing)) {
         return existing;
       }
-      final OkHttpClient created = new OkHttpClient();
+      final OkHttpClient created =
+          new OkHttpClient.Builder()
+              .followRedirects(false)
+              .followSslRedirects(false)
+              .retryOnConnectionFailure(false)
+              .build();
       if (SHARED.compareAndSet(existing, created)) {
         return created;
       }

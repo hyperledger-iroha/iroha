@@ -16,11 +16,20 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+import check_sorafs_production_readiness as CHECKER  # noqa: E402
+from sorafs_resilience_test_support import (  # noqa: E402
+    DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
+    public_key_from_seed as resilience_public_key_from_seed,
+    write_resilience_summary,
+)
 
 CHECKER_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_production_readiness.py"
 FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX = "12" * 32
 FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256 = "34" * 32
 FOUNDATIONAL_RELEASE_SEQUENCE = 7
+RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
+    RESILIENCE_SIGNING_SEED
+)
 
 
 def write_json(path: Path) -> Path:
@@ -28,12 +37,70 @@ def write_json(path: Path) -> Path:
     return path
 
 
+def write_topology_qualification(path: Path) -> Path:
+    """Write one exact schema-qualified four-validator topology summary."""
+
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(b"runner-exact-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"runner-canonical-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": "sorafs-mainnet-2026-06",
+            "environment": "production",
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(MODULE.DEFAULT_REQUIRED_GATES),
+        "recognized_lane_slot_count": 17,
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def complete_args(tmp_path: Path) -> list[str]:
+    topology_path = write_topology_qualification(
+        tmp_path / "l1-topology-qualification.json"
+    )
+    topology_binding, topology_errors = MODULE.load_topology_qualification_binding(
+        topology_path,
+        expected_deployment_id="sorafs-mainnet-2026-06",
+        expected_environment="production",
+    )
+    assert topology_errors == []
+    assert topology_binding is not None
+    resilience_path, public_key, _binding = write_resilience_summary(
+        CHECKER,
+        tmp_path / "l1-resilience-qualification.summary",
+        deployment_id="sorafs-mainnet-2026-06",
+        environment="production",
+        topology_qualification=topology_binding,
+        generated_at_unix=1_800_799_970,
+        captured_at_unix=1_800_799_940,
+    )
+    assert public_key == RESILIENCE_SIGNER_PUBLIC_KEY
     args = [
         "--out-dir",
         str(tmp_path / "out"),
         "--verifier",
         str(CHECKER_PATH),
+        "--topology-qualification-summary",
+        str(topology_path),
+        "--resilience-qualification-summary",
+        str(resilience_path),
+        "--resilience-qualification-signer-public-key-hex",
+        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
         "--deployment-id",
         "sorafs-mainnet-2026-06",
         "--environment",
@@ -65,6 +132,14 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
         "deployment_id": "sorafs-mainnet-2026-06",
         "environment": "production",
     }
+    topology_path = tmp_path / "l1-topology-qualification.json"
+    assert payload["topology_qualification"]["summary"] == str(topology_path)
+    assert payload["topology_qualification"][
+        "qualification_summary_sha256"
+    ] == hashlib.sha256(topology_path.read_bytes()).hexdigest()
+    assert payload["resilience_qualification"] == MODULE.resilience_qualification_plan(
+        MODULE.parse_args(complete_args(tmp_path))
+    )
     assert set(payload["summary_contract"]) == set(MODULE.DEFAULT_REQUIRED_GATES)
     assert payload["foundational_prerequisite"] == {
         "schema": MODULE.FOUNDATIONAL_PREREQUISITE_SCHEMA,
@@ -77,8 +152,15 @@ def test_dry_run_prints_complete_aggregate_plan(tmp_path: Path, capsys) -> None:
         "previous_envelope_sha256": FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
     }
     assert payload["summary_contract"]["gateway_load"]["required_kinds"]
-    assert payload["steps"][0]["label"] == "sorafs_production_readiness_gate"
+    assert len(payload["steps"]) == 2
+    assert payload["steps"][0]["label"] == (
+        "sorafs_production_readiness_gate_first"
+    )
+    assert payload["steps"][1]["label"] == (
+        "sorafs_production_readiness_gate_replay"
+    )
     assert "check_sorafs_production_readiness.py" in payload["steps"][0]["command"][1]
+    assert payload["steps"][0]["artifact"] != payload["steps"][1]["artifact"]
 
 
 def test_foundational_prerequisite_runner_inputs_are_required_unique_and_distinct(
@@ -240,6 +322,45 @@ def test_now_unix_is_required_for_freshness_validation(
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "--now-unix must be positive" in captured.err
+
+
+def test_topology_qualification_is_non_optional(tmp_path: Path) -> None:
+    """The collection runner rejects omission before producing a plan."""
+
+    values = complete_args(tmp_path)
+    flag_index = values.index("--topology-qualification-summary")
+    del values[flag_index : flag_index + 2]
+    args = MODULE.parse_args(values)
+    assert "--topology-qualification-summary is required" in MODULE.validate_inputs(
+        args
+    )
+
+
+def test_substituted_verifier_is_rejected_before_execution(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    substitute = tmp_path / "alternate-checker.py"
+    substitute.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    values = complete_args(tmp_path)
+    verifier_index = values.index("--verifier") + 1
+    values[verifier_index] = str(substitute)
+    executed = False
+
+    def fake_run_command_plan(plan, out_dir):
+        nonlocal executed
+        executed = True
+        return 0
+
+    monkeypatch.setattr(MODULE, "run_command_plan", fake_run_command_plan)
+
+    assert MODULE.main(values) == 2
+    assert executed is False
+    assert (
+        "production readiness runner requires the bundled aggregate verifier"
+        in capsys.readouterr().err
+    )
 
 
 def test_malformed_integer_arguments_fail_before_validation(capsys) -> None:
@@ -618,6 +739,12 @@ def test_plan_json_external_summaries_shape_is_validated(tmp_path: Path) -> None
     reputation_summary = write_json(tmp_path / "reputation.json")
     args = MODULE.parse_args(
         [
+            "--topology-qualification-summary",
+            str(
+                write_topology_qualification(
+                    tmp_path / "l1-topology-qualification.json"
+                )
+            ),
             "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
@@ -1141,12 +1268,21 @@ def test_response_file_malformed_line_fails_before_validation(
     assert captured.out == ""
 
 
-def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
+def test_narrowed_required_gate_plan_is_rejected(
+    tmp_path: Path,
+    capsys,
+) -> None:
     gateway_summary = write_json(tmp_path / "gateway-load.json")
     foundational_summary = write_json(tmp_path / "foundational-prerequisites.json")
     exit_code = MODULE.main(
-        [
-            "--out-dir",
+            [
+                "--topology-qualification-summary",
+                str(
+                    write_topology_qualification(
+                        tmp_path / "l1-topology-qualification.json"
+                    )
+                ),
+                "--out-dir",
             str(tmp_path / "out"),
             "--verifier",
             str(CHECKER_PATH),
@@ -1172,16 +1308,33 @@ def test_narrowed_required_gate_plan(tmp_path: Path, capsys) -> None:
         ]
     )
 
-    assert exit_code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["required_gates"] == ["gateway_load"]
-    assert payload["external_summaries"] == {
-        "gateway_load": [str(gateway_summary)]
-    }
-    assert payload["deployment_context"] == {
-        "deployment_id": "sorafs-mainnet-2026-06",
-        "environment": "production",
-    }
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert MODULE.CANONICAL_GATE_INVENTORY_ERROR in captured.err
+
+
+def test_reordered_complete_required_gate_plan_is_rejected(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    reordered = ",".join(reversed(MODULE.DEFAULT_REQUIRED_GATES))
+
+    assert (
+        MODULE.main(
+            [
+                *complete_args(tmp_path),
+                "--require-gate",
+                reordered,
+                "--dry-run",
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert MODULE.CANONICAL_GATE_INVENTORY_ERROR in captured.err
 
 
 def test_partial_deployment_context_fails(tmp_path: Path, capsys) -> None:
@@ -1718,36 +1871,206 @@ def test_plan_rendered_path_safety_rejects_drive_prefix() -> None:
 
 
 def test_summary_input_path_safety_accepts_digest_labels(tmp_path: Path) -> None:
-    safe_summary = tmp_path / "gateway_load_digest.json"
-    write_json(safe_summary)
+    safe_summary = write_json(tmp_path / "gateway_load_digest.json")
     foundational_summary = write_json(
         tmp_path / "foundational_prerequisite_digest.json"
     )
-    args = MODULE.parse_args(
-        [
-            "--out-dir",
-            str(tmp_path / "out"),
-            "--verifier",
-            str(CHECKER_PATH),
-            "--now-unix",
-            "1800800000",
-            "--gateway-load-summary",
-            str(safe_summary),
-            "--foundational-prerequisite-summary",
-            str(foundational_summary),
-            "--foundational-prerequisite-signer-public-key-hex",
-            FOUNDATIONAL_SIGNER_PUBLIC_KEY_HEX,
-            "--foundational-prerequisite-release-sequence",
-            str(FOUNDATIONAL_RELEASE_SEQUENCE),
-            "--foundational-prerequisite-previous-envelope-sha256",
-            FOUNDATIONAL_PREVIOUS_ENVELOPE_SHA256,
-            "--require-gate",
-            "gateway_load",
-            "--deployment-id",
-            "sorafs-mainnet-2026-06",
-            "--environment",
-            "production",
-        ]
-    )
+    args = MODULE.parse_args(complete_args(tmp_path))
+    args.gateway_load_summary = [safe_summary]
+    args.foundational_prerequisite_summary = [foundational_summary]
 
     assert MODULE.validate_inputs(args) == []
+
+
+def replay_input_snapshot() -> MODULE.InputDigestSnapshot:
+    """Return topology/resilience/foundation plus the 17-lane snapshot."""
+
+    slots = (
+        "topology_qualification",
+        "resilience_qualification",
+        "foundational_prerequisite",
+        *MODULE.DEFAULT_REQUIRED_GATES,
+    )
+    return tuple(
+        (slot, hashlib.sha256(slot.encode("utf-8")).hexdigest())
+        for slot in slots
+    )
+
+
+def promotion_payload() -> dict:
+    """Return the explicit promotion fields enforced above aggregate validation."""
+
+    return {
+        "schema": MODULE.SUMMARY_SCHEMA,
+        "status": "ready",
+        "required_gates": list(MODULE.DEFAULT_REQUIRED_GATES),
+        "summary_file_count": 17,
+        "recognized_summary_count": 17,
+        "resilience_qualification": {
+            "present": True,
+            "valid": True,
+            "binding": {"schema": "trusted-test-binding"},
+            "errors": [],
+        },
+        "required": {
+            gate: {
+                "present": True,
+                "valid": True,
+                "errors": [],
+            }
+            for gate in MODULE.DEFAULT_REQUIRED_GATES
+        },
+        "foundational_prerequisites": {
+            "present": True,
+            "valid": True,
+            "errors": [],
+        },
+        "errors": [],
+    }
+
+
+def test_promotion_aggregate_requires_exact_ready_ordered_inventory(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "validate_aggregate_summary_output",
+        lambda payload, required_gates, errors: None,
+    )
+    payload = promotion_payload()
+
+    assert MODULE.validate_promotion_aggregate(payload) == []
+
+    payload.pop("resilience_qualification")
+    assert (
+        "replayed aggregate resilience qualification must be present, valid, "
+        "bound, and error-free"
+        in MODULE.validate_promotion_aggregate(payload)
+    )
+
+    payload = promotion_payload()
+    payload["required"] = dict(reversed(tuple(payload["required"].items())))
+    assert (
+        "replayed aggregate required rows must use the exact canonical ordered "
+        "17-gate inventory"
+        in MODULE.validate_promotion_aggregate(payload)
+    )
+
+    payload = promotion_payload()
+    payload["status"] = "partial"
+    assert (
+        "replayed aggregate status must be ready"
+        in MODULE.validate_promotion_aggregate(payload)
+    )
+
+
+def test_replay_manifest_is_schema_closed_digest_only() -> None:
+    snapshot = replay_input_snapshot()
+    payload = promotion_payload()
+    aggregate_digest = hashlib.sha256(b"aggregate").hexdigest()
+    replay = MODULE.ReplayAggregate(
+        payload=payload,
+        first_sha256=aggregate_digest,
+        second_sha256=aggregate_digest,
+        semantic_sha256=hashlib.sha256(b"semantic").hexdigest(),
+    )
+
+    manifest = MODULE.build_replay_manifest(snapshot, replay)
+
+    assert MODULE.validate_replay_manifest(manifest, snapshot, replay) == []
+    assert set(manifest) == MODULE.REPLAY_MANIFEST_FIELDS
+    assert len(manifest["input_sha256"]) == len(MODULE.REPLAY_INPUT_SLOTS) == 20
+    assert all(
+        set(row) == MODULE.REPLAY_INPUT_DIGEST_FIELDS
+        for row in manifest["input_sha256"]
+    )
+    rendered = json.dumps(manifest)
+    assert "payload" not in rendered
+    assert "path" not in rendered
+
+    manifest["raw_payload"] = "runtime-only-material"
+    diagnostics = "\n".join(
+        MODULE.validate_replay_manifest(manifest, snapshot, replay)
+    )
+    assert "schema-closed contract" in diagnostics
+    assert "runtime-only-material" not in diagnostics
+
+
+def test_deterministic_replay_hashes_before_between_and_after(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    snapshot = replay_input_snapshot()
+    aggregate_digest = hashlib.sha256(b"aggregate").hexdigest()
+    replay = MODULE.ReplayAggregate(
+        payload=promotion_payload(),
+        first_sha256=aggregate_digest,
+        second_sha256=aggregate_digest,
+        semantic_sha256=hashlib.sha256(b"semantic").hexdigest(),
+    )
+    hash_calls = 0
+    executed: list[str] = []
+    written: list[tuple[Path, dict[str, object]]] = []
+
+    def fake_digest(_args):
+        nonlocal hash_calls
+        hash_calls += 1
+        return snapshot
+
+    def fake_run(step_plan, out_dir):
+        assert out_dir == args.out_dir
+        assert len(step_plan) == 1
+        executed.append(step_plan[0].label)
+        return 0
+
+    def fake_write(path, manifest):
+        written.append((path, manifest))
+        return "manifest", []
+
+    monkeypatch.setattr(MODULE, "digest_production_inputs", fake_digest)
+    monkeypatch.setattr(MODULE, "run_command_plan", fake_run)
+    monkeypatch.setattr(
+        MODULE,
+        "load_and_validate_replayed_aggregates",
+        lambda first, second: (replay, []),
+    )
+    monkeypatch.setattr(MODULE, "render_and_write_checker_summary", fake_write)
+
+    assert MODULE.execute_deterministic_replay(args, plan) == 0
+    assert hash_calls == 3
+    assert executed == [
+        "sorafs_production_readiness_gate_first",
+        "sorafs_production_readiness_gate_replay",
+    ]
+    assert written[0][0] == MODULE.replay_manifest_path(args)
+    assert MODULE.validate_replay_manifest(written[0][1], snapshot, replay) == []
+
+
+def test_deterministic_replay_stops_on_between_execution_input_drift(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    args = MODULE.parse_args(complete_args(tmp_path))
+    plan = MODULE.build_command_plan(args)
+    before = replay_input_snapshot()
+    changed = (*before[:-1], (before[-1][0], "00" * 32))
+    snapshots = iter((before, changed))
+    executed: list[str] = []
+
+    monkeypatch.setattr(
+        MODULE,
+        "digest_production_inputs",
+        lambda _args: next(snapshots),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "run_command_plan",
+        lambda step_plan, out_dir: executed.append(step_plan[0].label) or 0,
+    )
+
+    assert MODULE.execute_deterministic_replay(args, plan) == 1
+    assert executed == ["sorafs_production_readiness_gate_first"]
+    assert "input set changed after first execution" in capsys.readouterr().err

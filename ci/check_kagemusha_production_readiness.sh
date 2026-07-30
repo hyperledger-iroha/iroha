@@ -32,6 +32,7 @@ mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
+PRIVACY = "crates/iroha_data_model/src/privacy.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
@@ -46,6 +47,7 @@ NODE = "crates/irohad/src/main.rs"
 KAGAMI = "crates/iroha_kagami/src/kagemusha.rs"
 ROUTES = "crates/iroha_torii_shared/src/route_catalog.rs"
 WORKFLOW = ".github/workflows/pr_kagemusha_payload_bench.yml"
+IOS_EVIDENCE_CHECKER = "scripts/check_kagemusha_candidate_ios_evidence.py"
 
 ARTIFACTS = (
     "step-eq.params-ipa.krv4",
@@ -75,7 +77,8 @@ MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024
 MAX_BENCHMARK_EVIDENCE_BYTES = 16 * 1024 * 1024
 MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024
 MAX_PROMOTION_RECORD_BYTES = 1024 * 1024
-MAX_DECLARED_ARTIFACT_BYTES = 256 * 1024 * 1024
+MAX_DECLARED_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024 * 1024
+MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 10 * 1024 * 1024 * 1024
 READ_CHUNK_BYTES = 1024 * 1024
 ROUTE_LITERALS = (
     "/v1/offline/readiness",
@@ -251,6 +254,26 @@ def inspect_regular_prefix(
         os.close(descriptor)
 
 
+def checked_declared_artifact_total(declared_artifacts: dict[str, int]) -> int:
+    """Validate each exact artifact size and its aggregate release inventory."""
+
+    total = 0
+    for name in ARTIFACTS:
+        size_bytes = declared_artifacts[name]
+        if size_bytes <= 0 or size_bytes > MAX_DECLARED_ARTIFACT_FILE_BYTES:
+            raise ValueError(
+                f"artifact {name} violates its "
+                f"{MAX_DECLARED_ARTIFACT_FILE_BYTES}-byte size limit"
+            )
+        total += size_bytes
+        if total > MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES:
+            raise ValueError(
+                "declared artifacts exceed the "
+                f"{MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES}-byte aggregate limit"
+            )
+    return total
+
+
 def evidence_is_non_placeholder(path: Path, maximum_bytes: int, label: str) -> bool:
     """Scan bounded evidence without retaining the complete file in memory."""
 
@@ -325,6 +348,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         path: overrides.get(path, read(path, errors))
         for path in (
             MODEL,
+            PRIVACY,
             BRIDGE,
             HEADER,
             CATALOG,
@@ -396,10 +420,16 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         )
 
     require(
+        texts[PRIVACY],
+        PRIVACY,
+        errors,
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
+    )
+    require(
         texts[BRIDGE],
         BRIDGE,
         errors,
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
         "promotion_record_norito_ptr",
@@ -488,12 +518,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"const\s+KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4:\s*usize\s*=\s*"
             r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4\.len\(\)\s*;\s*"
             r"[\s\S]*?"
-            r"let\s+(?P<descriptors>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*manifest\s*"
+            r"if\s+manifest\s*"
             r"\.profiles\s*\.iter\(\)\s*"
-            r"\.flat_map\(\|profile\|\s*profile\.artifacts\.iter\(\)\)\s*"
-            r"\.collect::<Vec<_>>\(\)\s*;\s*"
-            r"if\s+(?P=descriptors)\.len\(\)\s*!=\s*"
-            r"KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4\s*\{"
+            r"\.map\(\|profile\|\s*profile\.artifacts\.len\(\)\)\s*"
+            r"\.sum::<usize>\(\)\s*"
+            r"!=\s*KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4\s*\{"
         ),
         "exact-eight manifest inventory check",
     )
@@ -515,7 +544,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         r'instruction_count\":1',
     )
     require(
-        texts[CONFIG] + texts[NODE],
+        texts[CONFIG] + texts[NODE] + texts[CORE],
         "configured V4 runtime",
         errors,
         "kagemusha_release_policy_path",
@@ -582,6 +611,13 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
 
 
 def strict_json(path: Path) -> dict[str, object]:
+    return strict_json_bytes(
+        read_regular_bounded(path, MAX_MANIFEST_BYTES, "manifest JSON"),
+        "manifest JSON",
+    )
+
+
+def strict_json_bytes(payload: bytes, label: str) -> dict[str, object]:
     def object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
         result: dict[str, object] = {}
         for key, value in pairs:
@@ -591,11 +627,14 @@ def strict_json(path: Path) -> dict[str, object]:
         return result
 
     value = json.loads(
-        read_regular_bounded(path, MAX_MANIFEST_BYTES, "manifest JSON").decode("utf-8"),
+        payload.decode("utf-8"),
         object_pairs_hook=object_pairs,
+        parse_constant=lambda value: (_ for _ in ()).throw(
+            ValueError(f"{label} contains non-finite value {value!r}")
+        ),
     )
     if not isinstance(value, dict):
-        raise ValueError("manifest JSON must be an object")
+        raise ValueError(f"{label} must be an object")
     return value
 
 
@@ -622,6 +661,104 @@ def release_verifier_command(directory: Path, policy: Path) -> list[str]:
     ]
 
 
+def ios_evidence_configuration(
+    errors: list[str],
+) -> tuple[Path, str, Path] | None:
+    """Return the complete opt-in physical-iOS evidence configuration."""
+
+    root_text = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", "")
+    key_id = os.environ.get("KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID", "")
+    public_key_text = os.environ.get(
+        "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY", ""
+    )
+    present = tuple(bool(value) for value in (root_text, key_id, public_key_text))
+    if not any(present):
+        return None
+    if not all(present):
+        errors.append(
+            "physical-iOS evidence requires KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT, "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_KEY_ID, and "
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY together"
+        )
+        return None
+    ios_root = Path(root_text)
+    if not ios_root.is_dir() or ios_root.is_symlink():
+        errors.append("physical-iOS evidence root must be a real directory")
+        return None
+    return ios_root, key_id, Path(public_key_text)
+
+
+def verify_ios_evidence(
+    directory: Path,
+    ios_configuration: tuple[Path, str, Path],
+) -> tuple[str | None, str | None]:
+    """Verify one signed raw physical-iOS slot and return its candidate digest."""
+
+    ios_root, key_id, public_key = ios_configuration
+    release_root = ios_root / directory.name
+    raw_root = release_root / "raw"
+    if (
+        not release_root.is_dir()
+        or release_root.is_symlink()
+        or not raw_root.is_dir()
+        or raw_root.is_symlink()
+    ):
+        return None, (
+            f"{directory.name}: physical-iOS evidence must use "
+            f"{ios_root}/<manifest-sha256>/raw"
+        )
+    evidence_path = directory / "physical-device-benchmark.evidence"
+    command = [
+        sys.executable,
+        "-I",
+        str(root / IOS_EVIDENCE_CHECKER),
+        "--evidence",
+        str(evidence_path),
+        "--artifact-root",
+        str(raw_root),
+        "--trusted-key-id",
+        key_id,
+        "--trusted-public-key",
+        str(public_key),
+    ]
+    checked = subprocess.run(
+        command,
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if checked.returncode != 0:
+        detail = (checked.stderr or checked.stdout).strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        return None, f"{directory.name}: physical-iOS evidence verification failed{suffix}"
+    try:
+        evidence = strict_json_bytes(
+            read_regular_bounded(
+                evidence_path,
+                MAX_BENCHMARK_EVIDENCE_BYTES,
+                "signed physical-iOS evidence",
+            ),
+            "signed physical-iOS evidence",
+        )
+        artifact_digests = evidence.get("artifact_digests")
+        if not isinstance(artifact_digests, dict):
+            raise ValueError("artifact_digests is not an object")
+        candidate = artifact_digests.get("input/candidate-v4.norito")
+        if not isinstance(candidate, dict):
+            raise ValueError("candidate artifact binding is missing")
+        candidate_sha256 = candidate.get("sha256")
+        if (
+            not isinstance(candidate_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", candidate_sha256) is None
+            or candidate_sha256 == "0" * 64
+        ):
+            raise ValueError("candidate artifact digest is not canonical")
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+        return None, f"{directory.name}: invalid signed physical-iOS evidence: {error}"
+    return candidate_sha256, None
+
+
 def promotion_errors() -> list[str]:
     errors: list[str] = []
     policy_text = os.environ.get("KAGEMUSHA_V4_RELEASE_POLICY_PATH", "")
@@ -642,6 +779,7 @@ def promotion_errors() -> list[str]:
     if not artifact_root.is_dir() or artifact_root.is_symlink():
         errors.append("promotion artifact root must be a real directory")
         return errors
+    ios_configuration = ios_evidence_configuration(errors)
 
     source_identity: dict[str, object] | None = None
     reviewed_closure_text = os.environ.get(
@@ -719,9 +857,29 @@ def promotion_errors() -> list[str]:
     if not directories:
         errors.append("promotion artifact root contains no manifest-digest releases")
         return errors
+    if ios_configuration is not None:
+        ios_root = ios_configuration[0]
+        ios_directories = []
+        for path in ios_root.iterdir():
+            ios_directories.append(path)
+            if len(ios_directories) > MAX_RELEASE_DIRECTORIES:
+                errors.append(
+                    "physical-iOS evidence root exceeds "
+                    f"{MAX_RELEASE_DIRECTORIES} releases"
+                )
+                return errors
+        if {path.name for path in ios_directories} != {
+            path.name for path in directories
+        }:
+            errors.append(
+                "physical-iOS evidence root must contain exactly one "
+                "manifest-digest directory for every promoted release"
+            )
+            return errors
     expected_inventory = set(ARTIFACTS + FINAL_METADATA)
     for directory in directories:
         directory_error_count = len(errors)
+        ios_candidate_sha256: str | None = None
         if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", directory.name):
             errors.append(f"noncanonical release entry: {directory.name}")
             continue
@@ -793,24 +951,25 @@ def promotion_errors() -> list[str]:
                 declared_artifacts[name] = size_bytes
         if set(declared_artifacts) != set(ARTIFACTS):
             errors.append(f"{directory.name}: manifest artifact names are not exact")
-        elif sum(declared_artifacts.values()) > MAX_DECLARED_ARTIFACT_BYTES:
-            errors.append(
-                f"{directory.name}: declared artifacts exceed {MAX_DECLARED_ARTIFACT_BYTES} bytes"
-            )
         else:
-            for name in ARTIFACTS:
-                try:
-                    prefix = inspect_regular_prefix(
-                        directory / name,
-                        declared_artifacts[name],
-                        MAX_DECLARED_ARTIFACT_BYTES,
-                        8,
-                        f"artifact {name}",
-                    )
-                    if prefix != b"KRV4KEY\0":
-                        errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
-                except (OSError, ValueError) as error:
-                    errors.append(f"{directory.name}/{name}: invalid artifact: {error}")
+            try:
+                checked_declared_artifact_total(declared_artifacts)
+            except ValueError as error:
+                errors.append(f"{directory.name}: {error}")
+            else:
+                for name in ARTIFACTS:
+                    try:
+                        prefix = inspect_regular_prefix(
+                            directory / name,
+                            declared_artifacts[name],
+                            MAX_DECLARED_ARTIFACT_FILE_BYTES,
+                            8,
+                            f"artifact {name}",
+                        )
+                        if prefix != b"KRV4KEY\0":
+                            errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
+                    except (OSError, ValueError) as error:
+                        errors.append(f"{directory.name}/{name}: invalid artifact: {error}")
         evidence_limits = (
             ("release-attestation-v4.norito", MAX_RELEASE_ATTESTATION_BYTES),
             ("physical-device-benchmark.evidence", MAX_BENCHMARK_EVIDENCE_BYTES),
@@ -825,6 +984,12 @@ def promotion_errors() -> list[str]:
                     )
             except (OSError, ValueError) as error:
                 errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
+        if ios_configuration is not None and len(errors) == directory_error_count:
+            ios_candidate_sha256, ios_error = verify_ios_evidence(
+                directory, ios_configuration
+            )
+            if ios_error is not None:
+                errors.append(ios_error)
         if authenticated_verification_allowed and len(errors) == directory_error_count:
             command = release_verifier_command(directory, policy)
             verified = subprocess.run(
@@ -840,6 +1005,22 @@ def promotion_errors() -> list[str]:
                 errors.append(
                     f"{directory.name}: authenticated V4 release verification failed{suffix}"
                 )
+            elif ios_candidate_sha256 is not None:
+                try:
+                    report = strict_json_bytes(
+                        verified.stdout.encode("utf-8"),
+                        "Kagami V4 verification report",
+                    )
+                    reconstructed_candidate = report.get("candidate_sha256")
+                    if reconstructed_candidate != ios_candidate_sha256:
+                        raise ValueError(
+                            "signed physical-iOS candidate differs from "
+                            "Kagami's reconstructed immutable release candidate"
+                        )
+                except (UnicodeError, ValueError, json.JSONDecodeError) as error:
+                    errors.append(
+                        f"{directory.name}: physical-iOS release binding failed: {error}"
+                    )
     return errors
 
 
@@ -850,6 +1031,7 @@ if mode == "promotion":
 if self_test:
     baseline = {
         MODEL: read(MODEL, []),
+        PRIVACY: read(PRIVACY, []),
         CATALOG: read(CATALOG, []),
         CORE: read(CORE, []),
         WORKFLOW: read(WORKFLOW, []),
@@ -860,6 +1042,13 @@ if self_test:
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-19 substitution")
+    shared_bridge_abi_drift = baseline[PRIVACY].replace(
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 20;",
+        1,
+    )
+    if not static_errors({PRIVACY: shared_bridge_abi_drift}):
+        errors.append("self-test failed to reject shared bridge ABI-20 substitution")
     flipped_availability = baseline[MODEL].replace(
         'cfg!(feature = "kagemusha-production-enabled")',
         "true",
@@ -897,6 +1086,38 @@ if self_test:
         for error in missing_frontier_filter_errors
     ):
         errors.append("self-test failed to reject a missing frontier-test workflow filter")
+    boundary_artifacts = {
+        name: MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES // len(ARTIFACTS)
+        for name in ARTIFACTS
+    }
+    if (
+        checked_declared_artifact_total(boundary_artifacts)
+        != MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES
+    ):
+        errors.append("self-test failed to accept the exact artifact aggregate limit")
+    exact_file_artifacts = {name: 1 for name in ARTIFACTS}
+    exact_file_artifacts[ARTIFACTS[0]] = MAX_DECLARED_ARTIFACT_FILE_BYTES
+    if (
+        checked_declared_artifact_total(exact_file_artifacts)
+        != MAX_DECLARED_ARTIFACT_FILE_BYTES + len(ARTIFACTS) - 1
+    ):
+        errors.append("self-test failed to accept the exact artifact file limit")
+    oversized_file_artifacts = dict(boundary_artifacts)
+    oversized_file_artifacts[ARTIFACTS[0]] = MAX_DECLARED_ARTIFACT_FILE_BYTES + 1
+    try:
+        checked_declared_artifact_total(oversized_file_artifacts)
+    except ValueError:
+        pass
+    else:
+        errors.append("self-test failed to reject an oversized artifact file")
+    oversized_aggregate_artifacts = dict(boundary_artifacts)
+    oversized_aggregate_artifacts[ARTIFACTS[0]] += 1
+    try:
+        checked_declared_artifact_total(oversized_aggregate_artifacts)
+    except ValueError:
+        pass
+    else:
+        errors.append("self-test failed to reject an oversized artifact aggregate")
     verifier_override_name = "KAGEMUSHA_V4_RELEASE_" + "VERIFIER_BIN"
     readiness_source = (root / "ci/check_kagemusha_production_readiness.sh").read_text(
         encoding="utf-8"

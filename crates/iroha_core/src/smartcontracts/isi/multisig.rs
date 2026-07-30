@@ -11,7 +11,7 @@ use iroha_data_model::{
     ValidationFail,
     account::{AccountId, MultisigMember, MultisigPolicy},
     isi::{
-        AddSignatory, CustomInstruction, InstructionBox, RemoveSignatory, SetAccountQuorum,
+        AddSignatory, InstructionBox, RemoveSignatory, SetAccountQuorum,
         error::{InstructionExecutionError, InvalidParameterError},
     },
     metadata::Metadata,
@@ -48,6 +48,8 @@ const MULTISIG_APPROVAL_OUTCOME_STATE: &str = "approval-outcome";
 const MULTISIG_SIGNATORY_INDEX_STATE: &str = "signatory";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
 const DOMAINLESS_NAMESPACE: &str = "domainless";
+const MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH: usize = 64;
+type MultisigDeferredExecutionId = (AccountId, HashOf<Vec<InstructionBox>>);
 static MULTISIG_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {
     "iroha:created_via"
         .parse()
@@ -1989,81 +1991,88 @@ fn execute_approve(
         )
         .map_err(|reason| ValidationFail::NotPermitted(reason.to_string()))?;
 
-        match proposal_state.is_relayed {
-            None => {
-                iroha_logger::info!(
-                    multisig_account = %multisig_account,
-                    instructions_hash = %instructions_hash,
-                    "multisig approval pruning proposal tree"
-                );
-                maybe_store_terminal_proposal_state(
-                    state_transaction,
-                    &proposal_state,
-                    MultisigProposalTerminalStatus::Finalized,
-                    &instruction.account,
-                )?;
-                prune_down(state_transaction, &multisig_account, &instructions_hash)?;
-                iroha_logger::info!(
-                    multisig_account = %multisig_account,
-                    instructions_hash = %instructions_hash,
-                    "multisig approval pruned proposal tree"
-                );
+        let execution_id = (multisig_account.clone(), instructions_hash);
+        begin_multisig_deferred_execution(
+            &mut state_transaction.multisig_deferred_execution_stack,
+            &execution_id,
+        )?;
+        let executor = state_transaction.world.executor.clone();
+        let execution_result = (|| {
+            match proposal_state.is_relayed {
+                None => {
+                    iroha_logger::info!(
+                        multisig_account = %multisig_account,
+                        instructions_hash = %instructions_hash,
+                        "multisig approval pruning proposal tree"
+                    );
+                    maybe_store_terminal_proposal_state(
+                        state_transaction,
+                        &proposal_state,
+                        MultisigProposalTerminalStatus::Finalized,
+                        &instruction.account,
+                    )?;
+                    prune_down(state_transaction, &multisig_account, &instructions_hash)?;
+                    iroha_logger::info!(
+                        multisig_account = %multisig_account,
+                        instructions_hash = %instructions_hash,
+                        "multisig approval pruned proposal tree"
+                    );
+                }
+                Some(false) => {
+                    proposal_state.is_relayed = Some(true);
+                    maybe_store_relayed_proposal_execution_state(
+                        state_transaction,
+                        &proposal_state,
+                        &instruction.account,
+                    )?;
+                    store_multisig_proposal_state(state_transaction, &proposal_state)?;
+                }
+                _ => unreachable!("proposal_state.is_relayed checked above"),
             }
-            Some(false) => {
-                proposal_state.is_relayed = Some(true);
-                maybe_store_relayed_proposal_execution_state(
-                    state_transaction,
-                    &proposal_state,
-                    &instruction.account,
-                )?;
-                store_multisig_proposal_state(state_transaction, &proposal_state)?;
-            }
-            _ => unreachable!("proposal_state.is_relayed checked above"),
-        }
 
-        for instruction in proposal_state.instructions {
-            let instruction_debug = format!("{instruction:?}");
-            iroha_logger::info!(
-                multisig_account = %multisig_account,
-                instructions_hash = %instructions_hash,
-                approver = %authority,
-                instruction = %instruction_debug,
-                "multisig approval executing authenticated instruction"
-            );
-            let execution_result =
-                if let Ok(multisig) = MultisigInstructionBox::try_from(&instruction) {
-                    execute_multisig_instruction(state_transaction, &multisig_account, multisig)
-                } else {
-                    instruction
-                        .execute(&multisig_account, state_transaction)
-                        .map_err(ValidationFail::from)
-                };
-            if let Err(err) = execution_result {
-                iroha_logger::error!(
+            for instruction in proposal_state.instructions {
+                let instruction_debug = format!("{instruction:?}");
+                iroha_logger::info!(
                     multisig_account = %multisig_account,
                     instructions_hash = %instructions_hash,
                     approver = %authority,
                     instruction = %instruction_debug,
-                    error = ?err,
-                    "multisig approval authenticated instruction failed"
+                    "multisig approval executing authenticated instruction"
                 );
-                return Err(err);
+                if let Err(err) =
+                    executor.execute_instruction(state_transaction, &multisig_account, instruction)
+                {
+                    iroha_logger::error!(
+                        multisig_account = %multisig_account,
+                        instructions_hash = %instructions_hash,
+                        approver = %authority,
+                        instruction = %instruction_debug,
+                        error = ?err,
+                        "multisig approval authenticated instruction failed"
+                    );
+                    return Err(err);
+                }
+                iroha_logger::info!(
+                    multisig_account = %multisig_account,
+                    instructions_hash = %instructions_hash,
+                    approver = %authority,
+                    "multisig approval finished authenticated instruction"
+                );
             }
-            iroha_logger::info!(
-                multisig_account = %multisig_account,
-                instructions_hash = %instructions_hash,
-                approver = %authority,
-                "multisig approval finished authenticated instruction"
-            );
-        }
 
-        store_multisig_approval_outcome(
-            state_transaction,
-            &instruction.account,
-            &multisig_account,
-            &instructions_hash,
-            MultisigApprovalOutcomeStatusV1::Executed,
-        )?;
+            store_multisig_approval_outcome(
+                state_transaction,
+                &instruction.account,
+                &multisig_account,
+                &instructions_hash,
+                MultisigApprovalOutcomeStatusV1::Executed,
+            )
+        })();
+        finish_multisig_deferred_execution(
+            &mut state_transaction.multisig_deferred_execution_stack,
+            &execution_id,
+        );
+        execution_result?;
     }
 
     Ok(())
@@ -2163,38 +2172,98 @@ fn capped_relay_expiry(now_ms: u64, parent_expires_at_ms: u64, relayer_ttl_ms: u
     local_expiry.min(parent_expires_at_ms)
 }
 
+fn begin_multisig_deferred_execution(
+    execution_stack: &mut Vec<MultisigDeferredExecutionId>,
+    execution_id: &MultisigDeferredExecutionId,
+) -> Result<(), ValidationFail> {
+    if execution_stack.iter().any(|active| active == execution_id) {
+        return Err(ValidationFail::NotPermitted(
+            "multisig deferred execution contains a proposal cycle".to_owned(),
+        ));
+    }
+    if execution_stack.len() >= MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH {
+        return Err(ValidationFail::TooComplex);
+    }
+    execution_stack.push(execution_id.clone());
+    Ok(())
+}
+
+fn finish_multisig_deferred_execution(
+    execution_stack: &mut Vec<MultisigDeferredExecutionId>,
+    execution_id: &MultisigDeferredExecutionId,
+) {
+    let finished = execution_stack.pop();
+    debug_assert_eq!(finished.as_ref(), Some(execution_id));
+}
+
 fn prune_expired(
     state_transaction: &mut StateTransaction<'_, '_>,
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
     entrypoint_account: &AccountId,
 ) -> Result<(), ValidationFail> {
-    let proposal_state = proposal_state(state_transaction, multisig_account, instructions_hash)?;
-
-    if now_ms(state_transaction) < proposal_state.expires_at_ms {
-        return Ok(());
-    }
-
-    for instruction in &proposal_state.instructions {
-        if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>()
-            && let Ok(MultisigInstructionBox::Approve(approve)) = custom.payload().try_into()
-        {
-            return prune_expired(
-                state_transaction,
-                &approve.account,
-                &approve.instructions_hash,
-                &approve.account,
-            );
-        }
-    }
-
-    maybe_store_terminal_proposal_state(
+    prune_expired_with_guard(
         state_transaction,
-        &proposal_state,
-        MultisigProposalTerminalStatus::Expired,
+        multisig_account,
+        instructions_hash,
         entrypoint_account,
-    )?;
-    prune_down(state_transaction, multisig_account, instructions_hash)
+        0,
+        &mut BTreeSet::new(),
+    )
+}
+
+fn prune_expired_with_guard(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    multisig_account: &AccountId,
+    instructions_hash: &HashOf<Vec<InstructionBox>>,
+    entrypoint_account: &AccountId,
+    depth: usize,
+    active_path: &mut BTreeSet<MultisigDeferredExecutionId>,
+) -> Result<(), ValidationFail> {
+    if depth >= MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH {
+        return Err(ValidationFail::TooComplex);
+    }
+    let proposal_state = proposal_state(state_transaction, multisig_account, instructions_hash)?;
+    let execution_id = (
+        proposal_state.multisig_account_id.clone(),
+        proposal_state.instructions_hash,
+    );
+    if !active_path.insert(execution_id.clone()) {
+        return Err(ValidationFail::NotPermitted(
+            "multisig proposal expiry traversal contains a cycle".to_owned(),
+        ));
+    }
+
+    let result = (|| {
+        if now_ms(state_transaction) < proposal_state.expires_at_ms {
+            return Ok(());
+        }
+
+        for instruction in &proposal_state.instructions {
+            if let Ok(MultisigInstructionBox::Approve(approve)) =
+                MultisigInstructionBox::try_from(instruction)
+            {
+                prune_expired_with_guard(
+                    state_transaction,
+                    &approve.account,
+                    &approve.instructions_hash,
+                    &approve.account,
+                    depth.saturating_add(1),
+                    active_path,
+                )?;
+            }
+        }
+
+        maybe_store_terminal_proposal_state(
+            state_transaction,
+            &proposal_state,
+            MultisigProposalTerminalStatus::Expired,
+            entrypoint_account,
+        )?;
+        prune_down(state_transaction, multisig_account, instructions_hash)
+    })();
+    active_path.remove(&execution_id);
+    result
 }
 
 fn prune_down(
@@ -3128,7 +3197,7 @@ mod tests {
         domain::DomainId,
         isi::{
             AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
-            alias_setup::EnsureAlias,
+            SetKeyValue, alias_setup::EnsureAlias,
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
@@ -5609,7 +5678,9 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: valid_lane,
                 validator: old_account.clone(),
-                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                peer_id: iroha_data_model::peer::PeerId::from(
+                    old_account.expect_single_signatory().clone(),
+                ),
                 stake_account: old_account.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
@@ -5625,7 +5696,9 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: malformed_lane,
                 validator: old_account.clone(),
-                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                peer_id: iroha_data_model::peer::PeerId::from(
+                    old_account.expect_single_signatory().clone(),
+                ),
                 stake_account: old_account.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(2_u32),
@@ -7297,7 +7370,8 @@ seiyaku TriggerDispatch {
             multisig_id = multisig_id,
         );
         let instructions = vec![InstructionBox::from(
-            ExecuteTrigger::new(trigger_id).with_args(Json::from_string_unchecked(args_json)),
+            ExecuteTrigger::new(trigger_id)
+                .with_args(Json::from_raw_json(args_json).expect("valid event arguments JSON")),
         )];
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(
@@ -7792,6 +7866,265 @@ seiyaku TriggerDispatch {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn multisig_deferred_execution_reenters_active_executor_and_preserves_valid_flow() {
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-deferred-active-executor"),
+        );
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id = DomainId::try_new("deferred", "universal").expect("domain id");
+        let signer_id = new_account_id(&checked_keypair());
+
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer_id,
+            &domain_id,
+            "register deferred-execution domain",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer_id,
+            &domain_id,
+            &signer_id,
+            "register deferred-execution signer",
+        );
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer_id.clone(), 1)]),
+            quorum: NonZeroU16::new(1).expect("non-zero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("non-zero ttl"),
+        };
+        let multisig_id = register_multisig_account(
+            &mut state_transaction,
+            &signer_id,
+            &domain_id,
+            &spec,
+            "register deferred-execution multisig",
+        );
+
+        let metadata_key: Name = "deferred_executor_valid".parse().expect("metadata key");
+        let metadata_value = Json::new("validated");
+        let valid_instructions = vec![InstructionBox::from(SetKeyValue::account(
+            multisig_id.clone(),
+            metadata_key.clone(),
+            metadata_value.clone(),
+        ))];
+        let valid_hash = HashOf::new(&valid_instructions);
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer_id,
+                MultisigPropose::new(multisig_id.clone(), valid_instructions, None).into(),
+            )
+            .expect("propose valid deferred instruction");
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer_id,
+                MultisigApprove::new(multisig_id.clone(), valid_hash).into(),
+            )
+            .expect("active initial executor should allow self-owned metadata mutation");
+        assert_eq!(
+            state_transaction
+                .world
+                .account(&multisig_id)
+                .expect("multisig account")
+                .metadata()
+                .get(&metadata_key),
+            Some(&metadata_value),
+            "a valid deferred instruction should still execute"
+        );
+
+        let privileged_permission: Permission =
+            iroha_executor_data_model::permission::executor::CanUpgradeExecutor.into();
+        let privileged_instructions = vec![InstructionBox::from(Grant::account_permission(
+            privileged_permission.clone(),
+            signer_id.clone(),
+        ))];
+        let privileged_hash = HashOf::new(&privileged_instructions);
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer_id,
+                MultisigPropose::new(multisig_id.clone(), privileged_instructions, None).into(),
+            )
+            .expect("propose privileged deferred instruction");
+        let privileged_error = Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer_id,
+                MultisigApprove::new(multisig_id.clone(), privileged_hash).into(),
+            )
+            .expect_err("multisig must not bypass genesis-only permission delegation");
+        assert!(
+            matches!(&privileged_error, ValidationFail::NotPermitted(_)),
+            "unexpected privileged-instruction error: {privileged_error:?}"
+        );
+        assert!(
+            !state_transaction
+                .world
+                .account_permissions_iter(&signer_id)
+                .expect("signer permissions")
+                .any(|permission| permission == &privileged_permission),
+            "denied deferred grant must not mutate permissions"
+        );
+
+        let denied_instructions = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "deferred instruction must reach the active executor".to_owned(),
+        ))];
+        let denied_hash = HashOf::new(&denied_instructions);
+        Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &signer_id,
+                MultisigPropose::new(multisig_id.clone(), denied_instructions, None).into(),
+            )
+            .expect("propose instruction before executor replacement");
+        *state_transaction.world.executor.get_mut() =
+            crate::executor::denying_executor_for_testing("deferred instruction denied");
+        let denied_error = execute_approve(
+            &mut state_transaction,
+            &signer_id,
+            &MultisigApprove::new(multisig_id, denied_hash),
+        )
+        .expect_err("final approval must submit stored instructions to the active executor");
+        assert_eq!(
+            denied_error,
+            ValidationFail::NotPermitted("deferred instruction denied".to_owned())
+        );
+        assert!(
+            state_transaction
+                .multisig_deferred_execution_stack
+                .is_empty(),
+            "failed deferred execution must unwind its recursion guard"
+        );
+    }
+
+    #[test]
+    fn multisig_deferred_execution_guard_rejects_cycles_and_excessive_depth() {
+        let account = new_account_id(&checked_keypair());
+        let first_hash = HashOf::new(&vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "cycle".to_owned(),
+        ))]);
+        let first_id = (account.clone(), first_hash);
+        let mut execution_stack = Vec::new();
+        begin_multisig_deferred_execution(&mut execution_stack, &first_id)
+            .expect("first proposal may execute");
+        let cycle_error = begin_multisig_deferred_execution(&mut execution_stack, &first_id)
+            .expect_err("an active proposal may not recursively execute itself");
+        assert!(matches!(cycle_error, ValidationFail::NotPermitted(_)));
+        finish_multisig_deferred_execution(&mut execution_stack, &first_id);
+
+        let mut execution_ids = Vec::with_capacity(MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH);
+        for depth in 0..MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH {
+            let hash = HashOf::new(&vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("depth-{depth}"),
+            ))]);
+            let execution_id = (account.clone(), hash);
+            begin_multisig_deferred_execution(&mut execution_stack, &execution_id)
+                .expect("proposal within the deferred execution depth bound");
+            execution_ids.push(execution_id);
+        }
+        let beyond_limit = (
+            account,
+            HashOf::new(&vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "beyond-limit".to_owned(),
+            ))]),
+        );
+        assert_eq!(
+            begin_multisig_deferred_execution(&mut execution_stack, &beyond_limit),
+            Err(ValidationFail::TooComplex)
+        );
+        for execution_id in execution_ids.iter().rev() {
+            finish_multisig_deferred_execution(&mut execution_stack, execution_id);
+        }
+        assert!(execution_stack.is_empty());
+    }
+
+    #[test]
+    fn multisig_expiry_traversal_rejects_cycles_and_excessive_depth() {
+        let member_key = checked_keypair();
+        let member =
+            MultisigMember::new(member_key.public_key().clone(), 1).expect("multisig member");
+        let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy");
+        let multisig_id = AccountId::new_multisig(policy);
+        let owner_id = new_account_id(&checked_keypair());
+        let world = World::with([], [Account::new(multisig_id.clone()).build(&owner_id)], []);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-expiry-traversal-guard"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let cycle_hash = HashOf::new(&Vec::<InstructionBox>::new());
+        let cycle_instruction = MultisigApprove::new(multisig_id.clone(), cycle_hash);
+        store_multisig_proposal_state(
+            &mut state_transaction,
+            &MultisigProposalState::new(
+                multisig_id.clone(),
+                cycle_hash,
+                vec![cycle_instruction.into()],
+                0,
+                0,
+                BTreeSet::new(),
+                None,
+            ),
+        )
+        .expect("store cyclic proposal state");
+        let cycle_error = prune_expired(
+            &mut state_transaction,
+            &multisig_id,
+            &cycle_hash,
+            &multisig_id,
+        )
+        .expect_err("cyclic expiry traversal must fail closed");
+        assert!(matches!(cycle_error, ValidationFail::NotPermitted(_)));
+
+        let chain_hashes: Vec<_> = (0..=MAX_MULTISIG_DEFERRED_EXECUTION_DEPTH)
+            .map(|depth| {
+                HashOf::new(&vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    format!("expiry-depth-{depth}"),
+                ))])
+            })
+            .collect();
+        for pair in chain_hashes.windows(2) {
+            store_multisig_proposal_state(
+                &mut state_transaction,
+                &MultisigProposalState::new(
+                    multisig_id.clone(),
+                    pair[0],
+                    vec![MultisigApprove::new(multisig_id.clone(), pair[1]).into()],
+                    0,
+                    0,
+                    BTreeSet::new(),
+                    None,
+                ),
+            )
+            .expect("store deep proposal state");
+        }
+        let depth_error = prune_expired(
+            &mut state_transaction,
+            &multisig_id,
+            &chain_hashes[0],
+            &multisig_id,
+        )
+        .expect_err("expiry traversal beyond the deterministic depth bound must fail");
+        assert_eq!(depth_error, ValidationFail::TooComplex);
     }
 
     #[test]

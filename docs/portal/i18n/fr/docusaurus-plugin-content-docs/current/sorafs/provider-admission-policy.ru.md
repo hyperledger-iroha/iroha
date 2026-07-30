@@ -37,7 +37,7 @@ Procédez à votre recherche, en consultant l'architecture RFC SoraFS, et lancez
 ## Processus de copie
 
 1. **Prévisions**
-   - CLI : ajouter `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
+   - CLI : ajouter `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      formulaire `ProviderAdmissionProposalV1` + bande d'attestation.
    - Validation : sélectionnez le poteau de l'appareil, mise > 0, poignée de chunker canonique dans `profile_id`.
 2. **Gouvernance améliorée**
@@ -64,7 +64,7 @@ Avant de connecter `--council-signature-public-key` à `--council-signature-file
 
 ### CLI principal
 
-Utilisez la commande `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+Utilisez la commande `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Drapeaux d'affichage : `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, et comme minime `--endpoint=<kind:host>`.
@@ -109,7 +109,7 @@ Utilisez la commande `cargo run -p sorafs_manifest --bin sorafs_manifest_builder
    увеличив `--retention-epoch` и обновив pieu/эндпоинты по необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -130,7 +130,7 @@ Utilisez la commande `cargo run -p sorafs_manifest --bin sorafs_manifest_builder
 #### Divers résultats
 1. Ouvrir l'enveloppe commerciale et choisir les éléments suivants :
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

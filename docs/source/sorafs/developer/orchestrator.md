@@ -46,7 +46,7 @@ automation.
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 
@@ -143,7 +143,7 @@ new flags control the workflow:
 
 | Flag | Purpose |
 |------|---------|
-| `--guard-directory <PATH>` | Points to a JSON file describing the latest relay consensus (subset shown below). Passing the directory refreshes the guard cache before executing the fetch. |
+| `--guard-directory <PATH>` / `--guard-directory-digest <HEX>` | Points to the Norito snapshot and supplies the independently distributed, domain-separated BLAKE3 digest of those exact bytes. Both are required before the directory may refresh the guard cache. |
 | `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
 | `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
 | `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
@@ -166,6 +166,12 @@ The `--guard-directory` flag now expects a Norito-encoded
   signatures.
 Snapshots are rejected if the version or validation phase is unknown or if the validity window is
 inconsistent (`valid_after_unix > valid_until_unix` or `published_at_unix > valid_until_unix`).
+Runtime authentication also requires `valid_after_unix <= now < valid_until_unix`.
+Embedded issuer keys prove only signature self-consistency; the independently
+obtained exact snapshot digest authenticates the issuer set. SRCv2 decoding
+rejects oversized containers before allocation: at most 16 endpoints, 8 tags
+per endpoint, 2 handshake suites, 2,048 UTF-8 bytes per URL, 64 bytes per tag,
+56 KiB per certificate, and 64 KiB per signed bundle.
 
 The CLI verifies every bundle against the declared issuer keys before merging the directory with
 
@@ -206,19 +212,22 @@ Use the CLI subcommands to keep snapshots in sync with the directory publisher:
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./state/guard_directory.norito \
-  --expected-directory-hash <directory-hash-hex>
+  --expected-snapshot-digest <trusted-snapshot-digest-hex>
 
 # Re-verify a snapshot shipped by another team or via an artefact repository
 sorafs_cli guard-directory verify \
   --path ./state/guard_directory.norito \
-  --expected-directory-hash <directory-hash-hex>
+  --expected-snapshot-digest <trusted-snapshot-digest-hex>
 ```
 
-Fetch verifies every SRCv2 bundle and enforces the supplied `directory_hash`
-before writing to disk, ensuring the material passed via `--guard-directory`
-matches the published consensus artefact. Verification emits a structured
-summary (`version`, validity window, relay counts, PQ ratios) so operators can
-capture audit logs alongside the snapshot itself.
+Fetch verifies every SRCv2 bundle, exact snapshot digest, and current validity
+window before writing to disk. The embedded `directory_hash` binds relay
+certificates to consensus metadata but is not an authentication pin.
+`guard-directory inspect --path ...` is available for local structural
+diagnostics and digest calculation; its summary is explicitly labelled
+`structural_inspection_only`. Verification emits a structured summary
+(`version`, snapshot digest, authentication state, validity window, relay
+counts, PQ ratios) so operators can capture audit logs alongside the snapshot.
 
 ### 1.5 Circuit Lifecycle Manager
 

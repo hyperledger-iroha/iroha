@@ -48,6 +48,11 @@ Repository = "https://github.com/hyperledger/iroha"
 python-source = "src"
 manifest-path = "iroha_python_rs/Cargo.toml"
 module-name = "iroha_python._crypto"
+exclude = [
+  "src/**/*.so",
+  "src/**/*.dylib",
+  "src/**/*.pyd",
+]
 include = [
   "src/iroha_python/examples/connect_app_metadata.json",
 ]

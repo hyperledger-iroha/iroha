@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 | نقطة التصديق | قد تحتاج أي نقطة توصيل خاصة إلى الحصول على شهادة mTLS أو QUIC رائعة. | قم بتفضيل الحمولة Norito `EndpointAttestationV1` واشحنها عبر نقطة النهاية في النطاق. |
 
 ## عملية التسليم1. **اقتراحات الرسالة**
-   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`،
+   - سطر الأوامر: إضافة `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`،
      نموذج `ProviderAdmissionProposalV1` + شهادة النطاق.
    - التحقق من الصحة: ​​يتم التحقق من خلال شريط ممتد، حصة > 0، مقبض مقسم قياسي في `profile_id`.
 2. **الحوكمة الجيدة**
@@ -60,7 +60,7 @@ translation_last_reviewed: 2026-02-07
 
 ### CLI الصحيح
 
-اضغط على الأمر من خلال `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+اضغط على الأمر من خلال `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام المخصصة: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، والحد الأدنى هو `--endpoint=<kind:host>`.
@@ -102,7 +102,7 @@ translation_last_reviewed: 2026-02-07
    `--retention-epoch` ممتاز واحصل على حصة/نقاط جديدة حسب الحاجة.
 2. اختر
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -121,7 +121,7 @@ translation_last_reviewed: 2026-02-07
    يتحقق CI (`ci/check_sorafs_fixtures.sh`) من استقرار Norito.#### ملاحظة Аvarийный отзыв
 1. قم بتقديم المغلف المخصص للكمبيوتر وأدخل الملاحظة:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

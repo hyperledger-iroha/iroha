@@ -220,7 +220,8 @@ pub mod prelude {
             ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
             ReputationJournalSourceHeadV1, ReputationJournalSourceIdV1,
             ReputationJournalSourceKindV1, ReputationJournalValidationError,
-            StreamTokenExcludedKindV1, StreamTokenValidationOutcomeV1,
+            STREAM_TOKEN_VALIDATION_ID_DOMAIN_V1, StreamTokenExcludedKindV1,
+            StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
             StreamTokenValidationStatusV1, StreamTokenViolationKindV1,
         },
         reserve::{

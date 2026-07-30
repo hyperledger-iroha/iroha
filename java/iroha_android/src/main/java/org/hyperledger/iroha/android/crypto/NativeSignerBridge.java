@@ -13,6 +13,7 @@ import org.hyperledger.iroha.android.model.instructions.UnshieldInstruction;
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 1;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -300,7 +301,8 @@ public final class NativeSignerBridge {
   private static boolean loadLibrary() {
     try {
       System.loadLibrary(LIBRARY_NAME);
-      return nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION;
+      return nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION
+          && nativeSignerContractRevision() == REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -392,6 +394,8 @@ public final class NativeSignerBridge {
   }
 
   private static native int nativeBridgeAbiVersion();
+
+  private static native int nativeSignerContractRevision();
 
   private static native byte[] nativePublicKeyFromPrivate(int algorithmCode, byte[] privateKey);
 

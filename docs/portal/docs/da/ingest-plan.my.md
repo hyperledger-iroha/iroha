@@ -284,14 +284,10 @@ pub struct DaIngestReceipt {
   သံချေးသေတ္တာသည် `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`၊ Python ကို တင်ပို့သည်။
   ယခု `ToriiClient` တွင် `decode_pdp_commitment_header` နှင့် `IrohaSwift` သင်္ဘောများ ပါ၀င်သည် ။
   ခေါင်းစီးမြေပုံကြမ်းများ သို့မဟုတ် `HTTPURLResponse` သာဓကများအတွက် `decodePdpCommitmentHeader` လွန်ဆွဲနေပါသည်။ 【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources】/IrohaSwift။
-- Torii သည် `GET /v1/da/manifests/{storage_ticket}` ကိုလည်း ဖော်ထုတ်ပေးသောကြောင့် SDK နှင့် အော်ပရေတာများသည် မန်နီးဖက်စ်များကို ရယူနိုင်ပါသည်။
-  နှင့် node ၏ spool directory ကိုမထိဘဲ အစီအစဥ်များကို အပိုင်းပိုင်းဖြတ်ပါ။ တုံ့ပြန်မှုသည် Norito bytes ကို ပြန်ပေးသည်။
-  (base64)၊ ထင်ရှားစွာပြန်ဆိုထားသော JSON၊ `chunk_plan` JSON blob `sorafs fetch` အတွက် အဆင်သင့်ဖြစ်ပြီ သက်ဆိုင်ရာ၊
-  hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) နှင့် mirrors
-  တန်းတူညီမျှမှုအတွက် ထည့်သွင်းထားသော တုံ့ပြန်မှုများမှ `Sora-PDP-Commitment` ခေါင်းစီး။ `block_hash=<hex>` ကို ထောက်ပံ့ပေးနေပါသည်။
-  query string သည် အဆုံးအဖြတ်ပေးသော `sampling_plan` (assignment hash၊ `sample_window`၊ နှင့် နမူနာကို ပြန်ပေးသည်
-  `(index, role, group)` tuples များသည် 2D အပြင်အဆင်ကို လွှမ်းခြုံထားသည်) ထို့ကြောင့် validator နှင့် PoR ကိရိယာများသည် အတူတူပင်ဖြစ်သည်
-  အညွှန်းကိန်းများ
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### ကြီးမားသော Payload Streaming Flow
 

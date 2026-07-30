@@ -66,7 +66,7 @@ fn space_directory_ed25519_fixture_uses_checked_key_generation() {
 fn space_directory_account_fixture_uses_checked_ed25519_key_generation() {
     let account = checked_space_directory_account_fixture();
     let algorithm = account
-        .signatory()
+        .expect_single_signatory()
         .try_algorithm()
         .expect("fixture space directory account public key has a valid algorithm");
 

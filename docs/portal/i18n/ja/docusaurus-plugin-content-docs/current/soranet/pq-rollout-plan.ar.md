@@ -101,11 +101,11 @@ rollout_phase = "default"
 
 |ああ |カナリア (ステージ A) |ランプ(ステージB) |デフォルト (ステージ C) |
 |-------|-------|----------------|---------------------|
-| `sorafs_cli` フェッチ | `--anonymity-policy stage-a` 認証済み | 認証済み`--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` フェッチ | `--anonymity-policy anon-guard-pq` 認証済み | 認証済み`--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 |オーケストレーター構成 JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust クライアント設定 (`iroha.toml`) | `rollout_phase = "canary"` (デフォルト) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` 署名付きコマンド | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`、オプションの `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`、オプションの `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`、オプションの `.ANON_STRICT_PQ` |
+| `iroha_cli` 署名付きコマンド | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`、オプションの `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`、オプションの `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`、オプションの `.ANON_STRICT_PQ` |
 | JavaScript オーケストレーター ヘルパー | `rolloutPhase: "canary"` | `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 |スイフト `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ SDK の切り替えとステージ パーサーの切り替え、オーケスト
 
 3. **クライアント/SDK カナリア (T プラス 1 週間)**
 
-   - `rollout_phase = "ramp"` クライアントは、`stage-b` SDK をオーバーライドします。
+   - `rollout_phase = "ramp"` クライアントは、`anon-majority-pq` SDK をオーバーライドします。
    - テレメトリ (`sorafs_orchestrator_policy_events_total` مجمعة حسب `client_id` و`region`) ロールアウト。
 
 4. **デフォルトのプロモーション (T プラス 3 週間)**
@@ -162,7 +162,7 @@ SDK の切り替えとステージ パーサーの切り替え、オーケスト
 ### ランプ -> カナリア (ステージ B -> ステージ A)
 
 1. スナップショット ガード ディレクトリ `sorafs_cli guard-directory import --guard-directory guards.json` ガード ディレクトリ`sorafs_cli guard-directory verify` パケットのハッシュ。
-2. `rollout_phase = "canary"` (`anonymity_policy stage-a` をオーバーライド) オーケストレーターとクライアントの設定を変更する PQ ラチェット ドリル [PQ ラチェット] Runbook](./pq-ratchet-runbook.md) ダウングレード。
+2. `rollout_phase = "canary"` (`anonymity_policy anon-guard-pq` をオーバーライド) オーケストレーターとクライアントの設定を変更する PQ ラチェット ドリル [PQ ラチェット] Runbook](./pq-ratchet-runbook.md) ダウングレード。
 3. PQ ラチェットとテレメトリー SN16 の管理とガバナンスの管理。
 
 ### ガードレール

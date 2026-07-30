@@ -175,12 +175,6 @@ _REFERENCE_SDK_BUNDLE_PROFILES = (
         ),
     ),
 )
-try:
-    _HAS_GOVERNANCE_LOG_NODE_NATIVE = callable(
-        sorafs_module._crypto.sorafs_validate_governance_log_node_json
-    )
-except (AttributeError, RuntimeError):
-    _HAS_GOVERNANCE_LOG_NODE_NATIVE = False
 _ORDERBOOK_PRIVATE_KEY = bytes([0xB7]) * 32
 _ORDERBOOK_OWNER_ACCOUNT = b"merchant@paynet"
 _MAX_SCALED_XOR = (
@@ -983,10 +977,6 @@ def test_reference_validation_rejects_bad_arguments_before_native_validation() -
         validate_pdp_payload("proof", "not-bytes")  # type: ignore[arg-type]
 
 
-@pytest.mark.skipif(
-    not _HAS_GOVERNANCE_LOG_NODE_NATIVE,
-    reason="native governance log-node validator has not been rebuilt",
-)
 def test_validate_governance_log_node_matches_moderation_outcome_byte_for_byte() -> None:
     node_metadata = json.loads(
         (_MODERATION_FIXTURES / "governance_node_v1.json").read_text(encoding="utf-8")

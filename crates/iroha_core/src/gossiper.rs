@@ -9,9 +9,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use iroha_config::parameters::actual::{
-    DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
-    Nexus, RestrictedPublicPayload, TransactionGossiper as Config,
+use iroha_config::parameters::{
+    actual::{
+        DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry,
+        Network as NetworkConfig, Nexus, RestrictedPublicPayload, TransactionGossiper as Config,
+    },
+    defaults::network::TRANSACTION_GOSSIP_MAX_SIZE,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -289,8 +292,8 @@ pub struct TransactionGossiper {
     /// The time between gossip messages. More frequent gossiping shortens
     /// the time to sync, but can overload the network.
     gossip_period: Duration,
-    /// Maximum size of a batch that is being gossiped. Smaller size leads
-    /// to longer time to synchronise, useful if you have high packet loss.
+    /// Maximum transaction count for both outgoing and accepted gossip batches. Smaller values
+    /// reduce synchronization throughput and bound per-message verification work.
     gossip_size: NonZeroU32,
     /// Number of gossip periods to wait before re-sending the same transactions.
     gossip_resend_ticks: NonZeroU32,
@@ -345,6 +348,10 @@ impl TransactionGossiper {
         queue: Arc<Queue>,
         state: Arc<State>,
     ) -> Self {
+        assert!(
+            gossip_size <= TRANSACTION_GOSSIP_MAX_SIZE,
+            "configured transaction gossip size {gossip_size} exceeds the canonical per-message maximum {TRANSACTION_GOSSIP_MAX_SIZE}"
+        );
         let now = Instant::now();
         let dataspace_cfg = dataspace;
         let public_seed = GossipTargetSeed::new(
@@ -1428,6 +1435,35 @@ impl TransactionGossiper {
         }
     }
 
+    fn reject_oversized_incoming_batch(
+        &self,
+        plane: GossipPlane,
+        transaction_count: usize,
+    ) -> bool {
+        let max_transactions = self.gossip_size.get() as usize;
+        if transaction_count <= max_transactions {
+            return false;
+        }
+        iroha_logger::warn!(
+            transaction_count,
+            max_transactions,
+            "dropping transaction gossip batch above the configured transaction-count limit"
+        );
+        self.record_drop_metric(
+            plane,
+            DataSpaceId::UNIVERSAL,
+            &[],
+            "transaction_count_limit",
+            false,
+            None,
+            &[],
+            self.target_cap_for_plane(plane),
+            transaction_count,
+            0,
+        );
+        true
+    }
+
     #[allow(clippy::too_many_lines)]
     fn handle_transaction_gossip_owned(
         &self,
@@ -1440,6 +1476,9 @@ impl TransactionGossiper {
     ) {
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
+        if self.reject_oversized_incoming_batch(plane, batch_txs) {
+            return;
+        }
 
         if routes.is_empty() {
             iroha_logger::warn!("dropping transaction gossip without routing metadata");
@@ -2090,6 +2129,9 @@ impl TransactionGossiper {
 
         iroha_logger::debug!(size = txs.len(), "received transaction gossip batch");
         let batch_txs = txs.len();
+        if self.reject_oversized_incoming_batch(plane, batch_txs) {
+            return;
+        }
 
         if routes.is_empty() {
             iroha_logger::warn!("dropping transaction gossip without routing metadata");
@@ -2722,10 +2764,23 @@ impl TransactionGossip {
     }
 }
 
-fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
-where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
-{
+fn transaction_gossip_sequence_limit() -> usize {
+    usize::try_from(TRANSACTION_GOSSIP_MAX_SIZE.get())
+        .expect("the u32 transaction gossip limit must fit usize")
+}
+
+fn ensure_transaction_gossip_sequence_len(length: usize) -> Result<(), ncore::Error> {
+    let limit = transaction_gossip_sequence_limit();
+    if length <= limit {
+        return Ok(());
+    }
+    Err(ncore::Error::SequenceLengthExceeded {
+        length: u64::try_from(length).map_err(|_| ncore::Error::LengthMismatch)?,
+        limit: u64::try_from(limit).map_err(|_| ncore::Error::LengthMismatch)?,
+    })
+}
+
+fn len_prefixed_field_payload(bytes: &[u8], offset: usize) -> Result<(&[u8], usize), ncore::Error> {
     let field = bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?;
     let (field_len, header_len) = ncore::read_len_from_slice(field)?;
     let payload_start = offset
@@ -2737,8 +2792,33 @@ where
     let payload = bytes
         .get(payload_start..payload_end)
         .ok_or(ncore::Error::LengthMismatch)?;
+    Ok((payload, payload_end))
+}
+
+fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
-    if used != field_len {
+    if used != payload.len() {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    Ok((value, payload_end))
+}
+
+fn decode_bounded_len_prefixed_sequence<T>(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<(Vec<T>, usize), ncore::Error>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
+    let (sequence_len, _) = ncore::inspect_seq_len_slice(payload)?;
+    ensure_transaction_gossip_sequence_len(sequence_len)?;
+    let (value, used) = ncore::decode_field_canonical::<Vec<T>>(payload)?;
+    if used != payload.len() {
         return Err(ncore::Error::LengthMismatch);
     }
     Ok((value, payload_end))
@@ -2747,9 +2827,9 @@ where
 fn decode_transaction_gossip_payload(
     bytes: &[u8],
 ) -> Result<(TransactionGossip, usize), ncore::Error> {
-    let (txs, offset) = decode_len_prefixed_field::<Vec<GossipTransaction>>(bytes, 0)?;
-    let (routes, offset) = decode_len_prefixed_field::<Vec<GossipRoute>>(bytes, offset)?;
-    let (plans, offset) = decode_len_prefixed_field::<Vec<RoutingPlan>>(bytes, offset)?;
+    let (txs, offset) = decode_bounded_len_prefixed_sequence::<GossipTransaction>(bytes, 0)?;
+    let (routes, offset) = decode_bounded_len_prefixed_sequence::<GossipRoute>(bytes, offset)?;
+    let (plans, offset) = decode_bounded_len_prefixed_sequence::<RoutingPlan>(bytes, offset)?;
     let (plane, offset) = decode_len_prefixed_field::<GossipPlane>(bytes, offset)?;
     Ok((
         TransactionGossip {
@@ -2764,6 +2844,9 @@ fn decode_transaction_gossip_payload(
 
 impl NoritoSerialize for TransactionGossip {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
+        ensure_transaction_gossip_sequence_len(self.txs.len())?;
+        ensure_transaction_gossip_sequence_len(self.routes.len())?;
+        ensure_transaction_gossip_sequence_len(self.plans.len())?;
         let mut tmp = ncore::DeriveSmallBuf::new();
         ncore::write_len_prefixed_exact(&mut writer, &self.txs, &mut tmp)?;
         ncore::write_len_prefixed_exact(&mut writer, &self.routes, &mut tmp)?;
@@ -2777,6 +2860,10 @@ impl NoritoSerialize for TransactionGossip {
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
+        let limit = transaction_gossip_sequence_limit();
+        if self.txs.len() > limit || self.routes.len() > limit || self.plans.len() > limit {
+            return None;
+        }
         let txs_payload_len = gossip_vec_payload_len_cached(self.txs.iter())
             .or_else(|| gossip_vec_payload_len_exact(self.txs.iter()))?;
         let routes_payload_len = gossip_routes_payload_len(self.routes.len())?;
@@ -3090,9 +3177,7 @@ impl GossipTransaction {
         encoded: Arc<Vec<u8>>,
     ) -> Self {
         let entrypoint = entrypoint.into();
-        let tx_hash = crate::tx::entrypoint_hash_from_framed_bytes(encoded.as_slice())
-            .map(signed_hash_from_entrypoint_hash)
-            .unwrap_or_else(|_| signed_hash_from_entrypoint_hash(entrypoint.hash()));
+        let tx_hash = signed_hash_from_entrypoint_hash(entrypoint.hash());
         let entrypoint_cache = OnceLock::new();
         let _ = entrypoint_cache.set(Arc::new(entrypoint));
         Self {
@@ -3491,6 +3576,7 @@ mod tests {
     };
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
+        account::{AccountDetails, AccountValue},
         domain::{Domain, DomainId},
         identifier::IdentifierPolicyId,
         isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
@@ -3535,6 +3621,15 @@ mod tests {
         .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         (signed, accepted)
+    }
+
+    fn world_with_alice() -> World {
+        let mut world = World::new();
+        world.accounts.insert(
+            (*ALICE_ID).clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world
     }
 
     fn install_active_single_lane_nexus(state: &State) {
@@ -3601,6 +3696,24 @@ mod tests {
         assert_eq!(hash, entrypoint.hash());
         let gossip_tx = GossipTransaction::with_encoded(entrypoint, payload);
         assert_eq!(gossip_tx.hash_as_entrypoint(), hash);
+    }
+
+    #[test]
+    fn gossip_transaction_hash_rejects_zero_filled_logical_frame_tail() {
+        let (signed, _accepted) = build_transaction("framed-entrypoint-zero-tail");
+        let canonical = encode_transaction_entrypoint(&TransactionEntrypoint::External(signed));
+        let view = ncore::from_bytes_view(&canonical).expect("canonical entrypoint frame");
+        let flags = view.flags();
+        let mut tailed_payload = view.as_bytes().to_vec();
+        tailed_payload.push(0);
+        let reframed =
+            ncore::frame_bare_with_header_flags::<TransactionEntrypoint>(&tailed_payload, flags)
+                .expect("reframe checksummed tailed payload");
+
+        assert!(matches!(
+            crate::tx::entrypoint_hash_from_framed_bytes(&reframed),
+            Err(ncore::Error::LengthMismatch)
+        ));
     }
 
     fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
@@ -3953,7 +4066,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         };
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -3963,7 +4076,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: defaults::network::TRANSACTION_GOSSIP_SIZE,
             gossip_resend_ticks: resend_ticks,
             gossip_tick: 0,
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
@@ -4499,6 +4612,79 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             norito::codec::Encode::encode(&partitioned.message).len()
         );
         assert_eq!(partitioned.requeue, vec![large_signed.hash()]);
+    }
+
+    #[test]
+    fn transaction_gossip_decode_accepts_canonical_sequence_limit() {
+        let limit = transaction_gossip_sequence_limit();
+        let (signed, _accepted) = build_transaction("canonical-gossip-count-boundary");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let message = TransactionGossip {
+            txs: vec![GossipTransaction::with_encoded(signed.clone(), payload_for(&signed)); limit],
+            routes: vec![route; limit],
+            plans: vec![plan_for_route(route); limit],
+            plane: GossipPlane::Public,
+        };
+
+        let decoded = decode_gossip_message(&message);
+
+        assert_eq!(decoded.txs.len(), limit);
+        assert_eq!(decoded.routes.len(), limit);
+        assert_eq!(decoded.plans.len(), limit);
+    }
+
+    #[test]
+    fn transaction_gossip_serialize_rejects_count_above_canonical_limit() {
+        let limit = transaction_gossip_sequence_limit();
+        let (signed, _accepted) = build_transaction("oversized-gossip-encode");
+        let message = TransactionGossip {
+            txs: vec![
+                GossipTransaction::with_encoded(signed.clone(), payload_for(&signed));
+                limit + 1
+            ],
+            routes: Vec::new(),
+            plans: Vec::new(),
+            plane: GossipPlane::Public,
+        };
+
+        let error = message
+            .serialize(Vec::new())
+            .expect_err("an oversized transaction sequence must not be serialized");
+
+        assert!(matches!(
+            error,
+            ncore::Error::SequenceLengthExceeded {
+                length,
+                limit: encoded_limit,
+            } if length == u64::try_from(limit + 1).expect("test length fits u64")
+                && encoded_limit == u64::try_from(limit).expect("test limit fits u64")
+        ));
+    }
+
+    #[test]
+    fn transaction_gossip_decode_rejects_oversized_count_before_sequence_planning() {
+        let limit = u64::from(TRANSACTION_GOSSIP_MAX_SIZE.get());
+        let declared_count = limit + 1;
+        let mut payload = Vec::new();
+        ncore::write_len_header_to_vec(
+            &mut payload,
+            u64::try_from(core::mem::size_of::<u64>()).expect("u64 width fits u64"),
+        );
+        payload.extend_from_slice(&declared_count.to_le_bytes());
+
+        let error = decode_transaction_gossip_payload(&payload)
+            .expect_err("an oversized declared count must fail before element planning");
+
+        assert!(matches!(
+            error,
+            ncore::Error::SequenceLengthExceeded {
+                length,
+                limit: encoded_limit,
+            } if length == declared_count && encoded_limit == limit
+        ));
     }
 
     #[test]
@@ -5721,6 +5907,64 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
     }
 
     #[test]
+    fn gossip_drops_owned_batch_above_transaction_count_limit() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        gossiper.gossip_size = NonZeroU32::new(1).expect("nonzero batch limit");
+        let (first, _) = build_transaction("owned-count-limit-first");
+        let (second, _) = build_transaction("owned-count-limit-second");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+
+        assert_eq!(gossiper.queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn gossip_drops_shared_batch_above_transaction_count_limit_before_materialization() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        gossiper.gossip_size = NonZeroU32::new(1).expect("nonzero batch limit");
+        let (first, _) = build_transaction("shared-count-limit-first");
+        let (second, _) = build_transaction("shared-count-limit-second");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let decoded = decode_gossip_message(&TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![route, route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        });
+        assert!(
+            decoded
+                .txs
+                .iter()
+                .all(|transaction| !transaction.is_entrypoint_materialized())
+        );
+        let message = Arc::new(decoded);
+        let retained = Arc::clone(&message);
+
+        gossiper.handle_transaction_gossip(message);
+
+        assert_eq!(gossiper.queue.queued_len(), 0);
+        assert!(
+            retained
+                .txs
+                .iter()
+                .all(|transaction| !transaction.is_entrypoint_materialized()),
+            "count rejection must happen before entrypoint decoding"
+        );
+    }
+
+    #[test]
     fn shared_gossip_accepts_valid_prefix_when_route_metadata_is_short() {
         let gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
         let (valid, _) = build_transaction("shared-valid-before-missing-route");
@@ -6455,7 +6699,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         };
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
 
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -6574,7 +6818,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             gossip_tick: 0,
             gossip_deferred: vec![

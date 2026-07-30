@@ -79,6 +79,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI21ParityTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/Fixtures/offline_device_attestation_abi21.json"
       - "IrohaSwift/Tests/IrohaSwiftTests/ToriiKagemushaAPIModelsTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift"
@@ -633,29 +634,6 @@ on:
       - "javascript/iroha_js/src/toriiClient.js"
       - "javascript/iroha_js/src/toriiBrowserClient.js"
       - "javascript/iroha_js/src/transaction.js"
-      - "javascript/iroha_js/dist/address.js"
-      - "javascript/iroha_js/dist/canonicalRequest.js"
-      - "javascript/iroha_js/dist/connect.browser.js"
-      - "javascript/iroha_js/dist/connectError.js"
-      - "javascript/iroha_js/dist/connectJournalRecord.js"
-      - "javascript/iroha_js/dist/connectPreviewFlow.js"
-      - "javascript/iroha_js/dist/connectQueueDiagnostics.js"
-      - "javascript/iroha_js/dist/connectQueueJournal.js"
-      - "javascript/iroha_js/dist/connectRetryPolicy.js"
-      - "javascript/iroha_js/dist/connectSession.js"
-      - "javascript/iroha_js/dist/curveRegistry.js"
-      - "javascript/iroha_js/dist/crypto.js"
-      - "javascript/iroha_js/dist/crypto.browser.js"
-      - "javascript/iroha_js/dist/index.js"
-      - "javascript/iroha_js/dist/instructionBuilders.js"
-      - "javascript/iroha_js/dist/kagemushaOffline.js"
-      - "javascript/iroha_js/dist/native.js"
-      - "javascript/iroha_js/dist/nexusApp.js"
-      - "javascript/iroha_js/dist/offlineCashLifecycle.js"
-      - "javascript/iroha_js/dist/privacyAlgorithms.js"
-      - "javascript/iroha_js/dist/toriiClient.js"
-      - "javascript/iroha_js/dist/toriiBrowserClient.js"
-      - "javascript/iroha_js/dist/transaction.js"
       - "javascript/iroha_js/index.d.ts"
       - "javascript/iroha_js/nexus-app.d.ts"
       - "javascript/iroha_js/package.json"
@@ -727,6 +705,8 @@ on:
       - "python/iroha_python/src/iroha_python/tx.py"
       - "python/iroha_python/iroha_python_rs/Cargo.toml"
       - "python/iroha_python/iroha_python_rs/src/lib.rs"
+      - "python/iroha_python/pyproject.toml"
+      - "python/iroha_python/requirements-ci.lock"
       - "python/iroha_python/tests/client_ledger_helpers_test.py"
       - "python/iroha_python/tests/kagemusha_test.py"
       - "python/iroha_python/tests/test_nexus_app.py"
@@ -761,9 +741,12 @@ on:
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/check_swift_offline_device_attestation_fixture.py"
+      - "scripts/tests/check_swift_offline_device_attestation_fixture_test.py"
       - "scripts/norito_bridge_source_seal.py"
       - "scripts/run_mobile_hermetic_command.py"
       - "scripts/build_kagemusha_candidate_android_native.sh"
+      - "tools/kotlin-fixture-gen/src/bin/swift_kagemusha_peer_payment_v4.rs"
       - "scripts/run_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
@@ -788,12 +771,28 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: python -m pip install -e python/iroha_torii_client pytest
+      - name: Install pinned Python SDK test dependencies
+        run: >-
+          python -m pip install
+          --require-hashes
+          --only-binary=:all:
+          -r python/iroha_python/requirements-ci.lock
+      - name: Build and install the exact native Python SDK
+        run: |
+          python -m pip install --no-deps -e python/norito_py -e python/iroha_torii_client
+          wheel_dir="$(mktemp -d)"
+          (
+            cd python/iroha_python
+            python -m maturin build --locked --release --interpreter python --out "${wheel_dir}"
+          )
+          python -m pip install --no-deps "${wheel_dir}"/iroha_python-*.whl
       - run: ci/check_connect_norito_bridge_header.sh
       - run: ci/check_connect_norito_bridge_header.sh --self-test
+      - run: python3 scripts/check_swift_offline_device_attestation_fixture.py
+      - run: python3 -m pytest -q scripts/tests/check_swift_offline_device_attestation_fixture_test.py
       - run: ci/check_kagemusha_production_readiness.sh candidate
       - run: ci/check_kagemusha_production_readiness.sh candidate --self-test
       - run: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh

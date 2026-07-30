@@ -10,7 +10,7 @@ use std::{
 };
 
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountId, address::ChainDiscriminantGuard},
     offline::{
         KagemushaRecipientPaymentRequestV2, KagemushaRecursiveSpendCandidateV4,
         KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2, KagemushaTopUpFinalityProofV2,
@@ -32,7 +32,7 @@ const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024;
 const MAX_ROSTER_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_SCENARIO_BYTES: u64 = 16 * 1024 * 1024;
 
-const SCENARIO_FILES: [&str; 33] = [
+pub(super) const SCENARIO_FILES: [&str; 33] = [
     "init-top-up-anchor-v4.norito",
     "init-top-up-finality-proof-v2.norito",
     "init-top-up-finality-roster-artifact-v2.norito",
@@ -69,7 +69,7 @@ const SCENARIO_FILES: [&str; 33] = [
 ];
 
 #[derive(Default)]
-struct ScenarioPayloads(BTreeMap<String, Vec<u8>>);
+pub(super) struct ScenarioPayloads(pub(super) BTreeMap<String, Vec<u8>>);
 
 impl Deref for ScenarioPayloads {
     type Target = BTreeMap<String, Vec<u8>>;
@@ -101,7 +101,7 @@ fn metadata_identity(metadata: &fs::Metadata) -> (u64, u64, u32, u64, u32, u64, 
     )
 }
 
-fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
+pub(super) fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     if !path.is_absolute() {
         return Err(format!("input path must be absolute: {}", path.display()));
     }
@@ -149,7 +149,7 @@ fn read_private_regular(path: &Path, maximum: u64) -> Result<Vec<u8>, String> {
     Ok(std::mem::take(&mut *bytes))
 }
 
-fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
+pub(super) fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
     if !directory.is_absolute() {
         return Err("scenario directory path must be absolute".to_owned());
     }
@@ -197,7 +197,10 @@ fn load_scenario(directory: &Path) -> Result<ScenarioPayloads, String> {
     Ok(files)
 }
 
-fn bytes<'a>(files: &'a BTreeMap<String, Vec<u8>>, name: &str) -> Result<&'a [u8], String> {
+pub(super) fn bytes<'a>(
+    files: &'a BTreeMap<String, Vec<u8>>,
+    name: &str,
+) -> Result<&'a [u8], String> {
     files
         .get(name)
         .map(Vec::as_slice)
@@ -213,13 +216,16 @@ where
         .map_err(|_| format!("{label} is not one canonical typed Norito archive"))
 }
 
-fn digest32(files: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<[u8; 32], String> {
+pub(super) fn digest32(files: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<[u8; 32], String> {
     bytes(files, name)?
         .try_into()
         .map_err(|_| format!("{name} must contain exactly 32 bytes"))
 }
 
-fn positive_decimal(files: &BTreeMap<String, Vec<u8>>, name: &str) -> Result<u64, String> {
+pub(super) fn positive_decimal(
+    files: &BTreeMap<String, Vec<u8>>,
+    name: &str,
+) -> Result<u64, String> {
     let payload = bytes(files, name)?;
     let line = payload
         .strip_suffix(b"\n")
@@ -313,7 +319,25 @@ fn validate_request_material_without_opening(
     Ok(())
 }
 
-fn scenario_inventory_sha256(files: &BTreeMap<String, Vec<u8>>) -> Result<[u8; 32], String> {
+fn parse_canonical_account_id_for_chain(
+    account_text: &str,
+    account_chain_discriminant: u16,
+) -> Result<AccountId, String> {
+    // Parsing and canonical spelling both consult the thread-local network
+    // context. Keep one explicit scope around the complete roundtrip so a
+    // Taira literal cannot be silently re-rendered with SORA's default.
+    let _chain_discriminant = ChainDiscriminantGuard::enter(account_chain_discriminant);
+    let parsed = AccountId::parse_encoded(account_text)
+        .map_err(|_| "redemption account is not a typed AccountId".to_owned())?;
+    if parsed.canonical() != account_text {
+        return Err("redemption account is not in canonical AccountId spelling".to_owned());
+    }
+    Ok(parsed.into_account_id())
+}
+
+pub(super) fn scenario_inventory_sha256(
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<[u8; 32], String> {
     let mut hasher = Sha256::new();
     hasher.update(INVENTORY_DOMAIN);
     hasher.update(
@@ -349,6 +373,7 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
     candidate_record_path: &Path,
     candidate_roster_path: &Path,
     scenario_directory: &Path,
+    account_chain_discriminant: u16,
 ) -> Result<Vec<u8>, String> {
     let candidate_bytes = read_private_regular(candidate_record_path, MAX_CANDIDATE_BYTES)?;
     let candidate: KagemushaRecursiveSpendCandidateV4 =
@@ -683,11 +708,7 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
         .ok_or_else(|| "redemption account must be one newline-terminated line".to_owned())?;
     let account_text = std::str::from_utf8(account_line)
         .map_err(|_| "redemption account is not UTF-8".to_owned())?;
-    let account = AccountId::parse_encoded(account_text)
-        .map_err(|_| "redemption account is not a typed AccountId".to_owned())?;
-    if account.canonical() != account_text {
-        return Err("redemption account is not in canonical AccountId spelling".to_owned());
-    }
+    let _account = parse_canonical_account_id_for_chain(account_text, account_chain_discriminant)?;
 
     let inventory_sha256 = scenario_inventory_sha256(&files)?;
     Ok(format!(
@@ -705,10 +726,43 @@ pub fn validate_kagemusha_candidate_scenario_directory_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
 
     #[test]
     fn arbitrary_ascii_is_not_a_typed_norito_seed() {
         assert!(decode::<KagemushaNoteOpeningV2>(b"not norito\n", "opening").is_err());
         assert!(decode::<KagemushaRecipientPaymentRequestV2>(b"{}\n", "request").is_err());
+    }
+
+    #[test]
+    fn account_canonical_roundtrip_uses_the_explicit_chain_discriminant() {
+        const TAIRA: u16 = 369;
+        const SORA: u16 = 753;
+        let account = AccountId::new(
+            KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+                .expect("derive account fixture")
+                .public_key()
+                .clone(),
+        );
+        let taira_literal = {
+            let _taira = ChainDiscriminantGuard::enter(TAIRA);
+            account.to_string()
+        };
+
+        let _ambient_sora = ChainDiscriminantGuard::enter(SORA);
+        assert_eq!(
+            parse_canonical_account_id_for_chain(&taira_literal, TAIRA)
+                .expect("Taira literal under explicit Taira scope"),
+            account
+        );
+        assert!(
+            parse_canonical_account_id_for_chain(&taira_literal, SORA).is_err(),
+            "Taira input must not roundtrip as a SORA account"
+        );
+        assert_eq!(
+            iroha_data_model::account::address::chain_discriminant(),
+            SORA,
+            "validation must restore the caller's ambient scope"
+        );
     }
 }

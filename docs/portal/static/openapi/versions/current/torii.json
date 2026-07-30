@@ -7324,7 +7324,7 @@
           "max_proof_bytes": {
             "description": "Authenticated upper bound for one canonical ABI-21 V4 proof-pair payload.",
             "format": "uint32",
-            "maximum": 21764,
+            "maximum": 65536,
             "minimum": 1,
             "type": "integer"
           },
@@ -31613,38 +31613,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/gov/council/derive-vrf": {
-      "post": {
-        "description": "Derive VRF inputs for council selection.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Derive council VRF inputs.",
-        "tags": [
-          "Governance"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/gov/council/persist": {
       "post": {
         "description": "Persist a governance council roster for an epoch.",
@@ -43075,11 +43043,12 @@
                 "maxLength": 69632,
                 "minLength": 1,
                 "type": "string",
-                "x-iroha-norito-schema": "BillingAcknowledgementProofBodyV1"
+                "x-iroha-norito-schema": "iroha.torii.v1.sorafs.billing.acknowledgement_proof",
+                "x-iroha-norito-schema-hash": "fe75acabe03d788012f2e7c556319997"
               }
             }
           },
-          "description": "Exact canonical Norito `BillingAcknowledgementProofBodyV1`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
+          "description": "Exact canonical Norito `BillingAcknowledgementProofV1` under schema `iroha.torii.v1.sorafs.billing.acknowledgement_proof`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
           "required": true
         },
         "responses": {

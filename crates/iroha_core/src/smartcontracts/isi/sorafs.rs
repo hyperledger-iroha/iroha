@@ -45,6 +45,7 @@ use iroha_data_model::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, PinFeePayment, PinManifestFinalizedCursorV1,
             PinManifestFinalizedRecordV1, PinManifestRecord, PinPolicy, PinStatus,
+            ProviderIngestCompletionAuthorityV1, ProviderIngestFinalizedAnchorV1,
             ReplicationOrderCompletionRecord, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus, StorageClass,
         },
@@ -481,7 +482,142 @@ impl Execute for iroha_data_model::isi::sorafs::UnregisterProviderOwner {
             )));
         };
         revoke_repair_worker_permission(state_transaction, &owner, self.provider_id);
+        state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .remove(self.provider_id);
 
+        Ok(())
+    }
+}
+
+fn validate_provider_ingest_completion_authority_successor(
+    current: Option<&ProviderIngestCompletionAuthorityV1>,
+    next: &ProviderIngestCompletionAuthorityV1,
+) -> Result<(), InstructionExecutionError> {
+    if !next.is_valid() {
+        return Err(invalid_parameter(
+            "provider-ingest completion authority has a zero policy identity, revision, or digest",
+        ));
+    }
+    let Some(current) = current else {
+        if next.signer_policy.revision != 1 || next.signer_policy.predecessor_digest.is_some() {
+            return Err(invalid_parameter(
+                "initial provider-ingest completion signer-policy identity must begin at revision 1 without a predecessor",
+            ));
+        }
+        return Ok(());
+    };
+    if current == next {
+        return Ok(());
+    }
+    let current_policy = current.signer_policy;
+    let next_policy = next.signer_policy;
+    if current_policy.policy_id == next_policy.policy_id {
+        let expected_revision = current_policy.revision.checked_add(1).ok_or_else(|| {
+            invalid_parameter("provider-ingest completion signer-policy revision overflow")
+        })?;
+        if next_policy.revision != expected_revision
+            || next_policy.predecessor_digest != Some(current_policy.policy_digest)
+            || next_policy.policy_digest == current_policy.policy_digest
+        {
+            return Err(invalid_parameter(
+                "provider-ingest completion signer policy must be an exact predecessor-bound monotonic successor",
+            ));
+        }
+    } else if next_policy.revision != 1 || next_policy.predecessor_digest.is_some() {
+        return Err(invalid_parameter(
+            "replacement provider-ingest completion signer-policy identity must begin at revision 1 without a predecessor",
+        ));
+    }
+    Ok(())
+}
+
+impl Execute for iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            "CanRegisterSorafsProviderOwner",
+        )?;
+
+        let provider_owner = state_transaction
+            .world
+            .provider_owners
+            .get(&self.provider_id)
+            .ok_or_else(|| {
+                invalid_parameter(format!(
+                    "provider {} has no registered owner",
+                    hex::encode(self.provider_id.as_bytes())
+                ))
+            })?;
+        if provider_owner != &self.next.provider_owner {
+            return Err(invalid_parameter(
+                "provider-ingest completion authority owner does not match the registered provider owner",
+            )
+            .into());
+        }
+        state_transaction.world.account(&self.next.provider_owner)?;
+
+        let current = state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .get(&self.provider_id)
+            .cloned();
+        if current.as_ref() == Some(&self.next) {
+            validate_provider_ingest_completion_authority_successor(current.as_ref(), &self.next)?;
+            return Ok(());
+        }
+        if current != self.expected_current {
+            return Err(invalid_parameter(
+                "provider-ingest completion authority compare-and-set predecessor mismatch",
+            )
+            .into());
+        }
+        validate_provider_ingest_completion_authority_successor(current.as_ref(), &self.next)?;
+        state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .insert(self.provider_id, self.next);
+        Ok(())
+    }
+}
+
+impl Execute for iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            "CanUnregisterSorafsProviderOwner",
+        )?;
+        if !self.expected_current.is_valid() {
+            return Err(invalid_parameter(
+                "provider-ingest completion authority revocation is noncanonical",
+            )
+            .into());
+        }
+        let current = state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .get(&self.provider_id);
+        if current != Some(&self.expected_current) {
+            return Err(invalid_parameter(
+                "provider-ingest completion authority compare-and-remove predecessor mismatch",
+            )
+            .into());
+        }
+        state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .remove(self.provider_id);
         Ok(())
     }
 }
@@ -1459,11 +1595,18 @@ fn select_auto_replication_providers(
             continue;
         }
 
-        if state_transaction
+        let Some(provider_owner) = state_transaction.world.provider_owners.get(provider_id) else {
+            continue;
+        };
+        let Some(completion_authority) = state_transaction
             .world
-            .provider_owners
+            .provider_ingest_completion_authorities
             .get(provider_id)
-            .is_none()
+        else {
+            continue;
+        };
+        if !completion_authority.is_valid()
+            || &completion_authority.provider_owner != provider_owner
         {
             continue;
         }
@@ -1576,6 +1719,7 @@ fn build_auto_replication_order(
         issued_epoch,
         deadline_epoch,
         canonical_order,
+        assignment_revision: 1,
         provider_completions: Vec::new(),
         status: ReplicationOrderStatus::Pending,
     }))
@@ -2797,14 +2941,31 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
 
         for assignment in &order_payload.assignments {
             let provider = ProviderId::new(assignment.provider_id);
-            if state_transaction
+            let provider_owner = state_transaction
                 .world
                 .provider_owners
                 .get(&provider)
-                .is_none()
+                .ok_or_else(|| {
+                    invalid_parameter(format!(
+                    "replication order {order_label} references provider {} with no registered owner",
+                    hex::encode(provider.as_bytes())
+                    ))
+                })?;
+            let completion_authority = state_transaction
+                .world
+                .provider_ingest_completion_authorities
+                .get(&provider)
+                .ok_or_else(|| {
+                    invalid_parameter(format!(
+                        "replication order {order_label} references provider {} with no active completion authority",
+                        hex::encode(provider.as_bytes())
+                    ))
+                })?;
+            if !completion_authority.is_valid()
+                || &completion_authority.provider_owner != provider_owner
             {
                 return Err(invalid_parameter(format!(
-                    "replication order {order_label} references provider {} with no registered owner",
+                    "replication order {order_label} provider {} has an invalid or owner-mismatched completion authority",
                     hex::encode(provider.as_bytes())
                 )));
             }
@@ -2818,6 +2979,7 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             issued_epoch: self.issued_epoch,
             deadline_epoch: self.deadline_epoch,
             canonical_order: self.order_payload,
+            assignment_revision: 1,
             provider_completions: Vec::new(),
             status: ReplicationOrderStatus::Pending,
         };
@@ -2827,6 +2989,120 @@ impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
             .replication_orders
             .insert(self.order_id, record);
 
+        Ok(())
+    }
+}
+
+impl Execute for iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        require_permission(
+            state_transaction,
+            authority,
+            "CanIssueSorafsReplicationOrder",
+        )?;
+        let order_label = order_hex(&self.order_id);
+        let expected_successor = self
+            .expected_assignment_revision
+            .checked_add(1)
+            .ok_or_else(|| invalid_parameter("replication assignment revision overflow"))?;
+        if self.expected_assignment_revision == 0
+            || self.next_assignment_revision != expected_successor
+        {
+            return Err(invalid_parameter(
+                "replication assignment revision must be an exact nonzero monotonic successor",
+            )
+            .into());
+        }
+
+        let mut record = state_transaction
+            .world
+            .replication_orders
+            .get(&self.order_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("replication order {order_label} not found").into(),
+                )
+            })?;
+        if record.assignment_revision != self.expected_assignment_revision {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} assignment revision compare-and-set mismatch"
+            ))
+            .into());
+        }
+        if !matches!(record.status, ReplicationOrderStatus::Pending)
+            || !record.provider_completions.is_empty()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} assignments cannot change after completion processing starts"
+                )
+                .into(),
+            ));
+        }
+
+        let mut canonical_order = validate_stored_replication_order(&record, &order_label)?;
+        if canonical_order.assignments == self.assignments {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} assignment revision does not change assignments"
+            ))
+            .into());
+        }
+        canonical_order.assignments = self.assignments;
+        canonical_order.validate().map_err(|error| {
+            invalid_parameter(format!(
+                "replication order {order_label} replacement assignments are invalid: {error}"
+            ))
+        })?;
+        for assignment in &canonical_order.assignments {
+            let provider = ProviderId::new(assignment.provider_id);
+            let provider_owner = state_transaction
+                .world
+                .provider_owners
+                .get(&provider)
+                .ok_or_else(|| {
+                    invalid_parameter(format!(
+                        "replication order {order_label} replacement provider {} has no registered owner",
+                        hex::encode(provider.as_bytes())
+                    ))
+                })?;
+            let completion_authority = state_transaction
+                .world
+                .provider_ingest_completion_authorities
+                .get(&provider)
+                .ok_or_else(|| {
+                    invalid_parameter(format!(
+                        "replication order {order_label} replacement provider {} has no active completion authority",
+                        hex::encode(provider.as_bytes())
+                    ))
+                })?;
+            if !completion_authority.is_valid()
+                || &completion_authority.provider_owner != provider_owner
+            {
+                return Err(invalid_parameter(format!(
+                    "replication order {order_label} replacement provider {} has an invalid or owner-mismatched completion authority",
+                    hex::encode(provider.as_bytes())
+                ))
+                .into());
+            }
+        }
+        record.canonical_order = norito::to_bytes(&canonical_order).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} replacement assignments could not be canonicalized: {error}"
+                )
+                .into(),
+            )
+        })?;
+        record.assignment_revision = self.next_assignment_revision;
+        state_transaction
+            .world
+            .replication_orders
+            .insert(self.order_id, record);
         Ok(())
     }
 }
@@ -2896,6 +3172,11 @@ fn validate_stored_replication_order(
             .into(),
         ));
     }
+    if record.assignment_revision == 0 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("replication order {order_label} has a zero assignment revision").into(),
+        ));
+    }
 
     let target_replicas = usize::from(canonical_payload.target_replicas);
     if record.provider_completions.len() > target_replicas {
@@ -2932,13 +3213,15 @@ fn validate_stored_replication_order(
         }
         if completion.completion_epoch < record.issued_epoch
             || completion.completion_epoch > record.deadline_epoch
+            || completion.assignment_revision != record.assignment_revision
+            || !completion.completion_authority.is_valid()
+            || completion.completion_authority.provider_owner != completion.completed_by
+            || !completion.finalized_anchor.is_valid()
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "replication order {order_label} stores provider completion epoch {} outside its ledger epoch window {}..={}",
-                    completion.completion_epoch, record.issued_epoch, record.deadline_epoch
-                )
-                .into(),
+                    "replication order {order_label} stores a completion with invalid epoch, assignment revision, authority, or finalized anchor"
+                ).into(),
             ));
         }
     }
@@ -2963,6 +3246,25 @@ fn validate_stored_replication_order(
     Ok(canonical_payload)
 }
 
+fn provider_ingest_anchor_matches_committed_prefix(
+    anchor: ProviderIngestFinalizedAnchorV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> bool {
+    if !anchor.is_valid() {
+        return false;
+    }
+    let Some(index) = usize::try_from(anchor.height)
+        .ok()
+        .and_then(|height| height.checked_sub(1))
+    else {
+        return false;
+    };
+    state_transaction
+        .block_hashes()
+        .get(index)
+        .is_some_and(|hash| *hash.as_ref() == anchor.block_hash)
+}
+
 impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
     fn execute(
         self,
@@ -2974,6 +3276,18 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
             authority,
             "CanCompleteSorafsReplicationOrder",
         )?;
+        if self.expected_assignment_revision == 0
+            || !self.expected_authority.is_valid()
+            || !provider_ingest_anchor_matches_committed_prefix(
+                self.finalized_anchor,
+                state_transaction,
+            )
+        {
+            return Err(invalid_parameter(
+                "replication completion authority, assignment revision, or finalized anchor is noncanonical or stale",
+            )
+            .into());
+        }
 
         let order_label = order_hex(&self.order_id);
         let mut record = state_transaction
@@ -2987,6 +3301,12 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                 )
             })?;
         let canonical_order = validate_stored_replication_order(&record, &order_label)?;
+        if record.assignment_revision != self.expected_assignment_revision {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} assignment revision changed before completion commit"
+            ))
+            .into());
+        }
 
         if !canonical_order
             .assignments
@@ -2997,6 +3317,26 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                 "provider {} is not assigned to replication order {order_label}",
                 hex::encode(self.provider_id.as_bytes())
             )));
+        }
+        let retained_completion = ReplicationOrderCompletionRecord {
+            provider_id: self.provider_id,
+            completed_by: authority.clone(),
+            completion_epoch: self.completion_epoch,
+            assignment_revision: self.expected_assignment_revision,
+            completion_authority: self.expected_authority.clone(),
+            finalized_anchor: self.finalized_anchor,
+        };
+        if let Some(completion) = record.provider_completion(self.provider_id) {
+            if completion == &retained_completion {
+                return Ok(());
+            }
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "replication order {order_label} provider {} already has a different retained completion context",
+                    hex::encode(self.provider_id.as_bytes())
+                )
+                .into(),
+            ));
         }
         let provider_owner = state_transaction
             .world
@@ -3011,27 +3351,28 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                     .into(),
                 )
             })?;
-        if provider_owner != authority {
+        if provider_owner != authority || provider_owner != &self.expected_authority.provider_owner
+        {
             return Err(invalid_parameter(format!(
                 "replication order {order_label} completion for provider {} must be authorized by its registered owner",
                 hex::encode(self.provider_id.as_bytes())
             )));
         }
-
-        if let Some(completion) = record.provider_completion(self.provider_id) {
-            if completion.completion_epoch == self.completion_epoch
-                && &completion.completed_by == authority
-            {
-                return Ok(());
-            }
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "replication order {order_label} provider {} already completed at epoch {}",
-                    hex::encode(self.provider_id.as_bytes()),
-                    completion.completion_epoch
-                )
-                .into(),
-            ));
+        let completion_authority = state_transaction
+            .world
+            .provider_ingest_completion_authorities
+            .get(&self.provider_id)
+            .ok_or_else(|| {
+                invalid_parameter(format!(
+                    "replication order {order_label} provider {} has no active completion authority",
+                    hex::encode(self.provider_id.as_bytes())
+                ))
+            })?;
+        if completion_authority != &self.expected_authority {
+            return Err(invalid_parameter(format!(
+                "replication order {order_label} provider {} completion authority changed before commit",
+                hex::encode(self.provider_id.as_bytes())
+            )));
         }
 
         match record.status {
@@ -3102,13 +3443,7 @@ impl Execute for iroha_data_model::isi::sorafs::CompleteReplicationOrder {
                     .into(),
                 )
             })?;
-        record
-            .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: self.provider_id,
-                completed_by: authority.clone(),
-                completion_epoch: self.completion_epoch,
-            });
+        record.provider_completions.push(retained_completion);
         if record.provider_completions.len() == usize::from(canonical_order.target_replicas) {
             record.status = ReplicationOrderStatus::Completed(self.completion_epoch);
         }
@@ -5550,11 +5885,28 @@ impl ValidSingularQuery for FindSorafsRepairEvents {
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<RepairFinalizedEventPageV1, QueryExecutionFail> {
-        read_repair_status(state_ro.world())
-            .map_err(repair_query_failure)?
-            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        let status =
+            read_repair_status_or_prove_empty(state_ro.world()).map_err(repair_query_failure)?;
         let finalized_cursor =
             resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        if status.tasks == 0 {
+            checked_repair_query_limit(self.limit)?;
+            if self.after.is_some() {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let page = RepairFinalizedEventPageV1 {
+                finalized_cursor,
+                events: Vec::new(),
+                has_more: false,
+                next_after: None,
+            };
+            ensure_repair_query_encoded_budget(
+                &page,
+                REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+                "committed repair event page",
+            )?;
+            return Ok(page);
+        }
         query_repair_event_page(self, state_ro, finalized_cursor)
     }
 }
@@ -5575,11 +5927,13 @@ mod sorafs_tests {
                 ApplySorafsRepairTaskAction, ApprovePinManifest, BindManifestAlias,
                 CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder,
                 RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
-                SetSorafsReputationJournalAuthorityPolicy, SorafsRepairClaimV1,
-                SorafsRepairCompleteV1, SorafsRepairEscalateV1, SorafsRepairFailV1,
-                SorafsRepairRenewV1, SorafsRepairTaskActionV1, SubmitSorafsRepairAppeal,
-                SubmitSorafsRepairTask, UnregisterProviderOwner, UpsertProviderCredit,
+                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest,
+                ReviseReplicationOrderAssignments, SetPricingSchedule,
+                SetProviderIngestCompletionAuthority, SetSorafsReputationJournalAuthorityPolicy,
+                SorafsRepairClaimV1, SorafsRepairCompleteV1, SorafsRepairEscalateV1,
+                SorafsRepairFailV1, SorafsRepairRenewV1, SorafsRepairTaskActionV1,
+                SubmitSorafsRepairAppeal, SubmitSorafsRepairTask, UnregisterProviderOwner,
+                UpsertProviderCredit,
             },
         },
         metadata::Metadata,
@@ -5594,8 +5948,9 @@ mod sorafs_tests {
             },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestDigest,
-                PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-                ReplicationOrderStatus, StorageClass,
+                PinManifestRecord, PinPolicy, PinStatus, ProviderIngestCompletionAuthorityV1,
+                ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
+                ReplicationOrderId, ReplicationOrderStatus, StorageClass,
             },
             pricing::{
                 CollateralPolicy, CreditPolicy, PricingScheduleRecord, ProviderCreditRecord,
@@ -5992,6 +6347,24 @@ mod sorafs_tests {
         state
     }
 
+    #[test]
+    fn repair_committed_event_query_returns_anchored_empty_page_for_proven_empty_state() {
+        let mut state = make_state();
+        let header = repair_block_header(1, 4_000_000);
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        state.push_block_hash_for_testing(block_hash);
+
+        let page = FindSorafsRepairEvents::new(None, None, 10)
+            .execute(&state.view())
+            .expect("proven-empty repair state has an anchored empty event page");
+
+        assert_eq!(page.finalized_cursor.height, 1);
+        assert_eq!(page.finalized_cursor.block_hash, *block_hash.as_ref());
+        assert!(page.events.is_empty());
+        assert!(!page.has_more);
+        assert!(page.next_after.is_none());
+    }
+
     fn repair_report(
         ticket_id: &str,
         provider_id: ProviderId,
@@ -6110,6 +6483,58 @@ mod sorafs_tests {
         state
     }
 
+    fn completion_anchor_hash() -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> {
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 42, 0);
+        iroha_crypto::HashOf::new(&header)
+    }
+
+    fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
+        ProviderIngestFinalizedAnchorV1 {
+            height: 1,
+            block_hash: *completion_anchor_hash().as_ref(),
+        }
+    }
+
+    fn make_state_with_completion_anchor() -> State {
+        let mut state = make_state();
+        state.push_block_hash_for_testing(completion_anchor_hash());
+        state
+    }
+
+    fn completion_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
+        let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0xA1; 32],
+            revision,
+            predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
+            policy_digest: [digest_byte; 32],
+        }
+    }
+
+    fn completion_authority(
+        owner: &AccountId,
+        revision: u64,
+    ) -> ProviderIngestCompletionAuthorityV1 {
+        ProviderIngestCompletionAuthorityV1::new(owner.clone(), completion_signer_policy(revision))
+    }
+
+    fn completion_instruction(
+        order_id: ReplicationOrderId,
+        provider_id: ProviderId,
+        completion_epoch: u64,
+        owner: &AccountId,
+    ) -> CompleteReplicationOrder {
+        CompleteReplicationOrder {
+            order_id,
+            provider_id,
+            completion_epoch,
+            expected_authority: completion_authority(owner, 1),
+            expected_assignment_revision: 1,
+            finalized_anchor: completion_anchor(),
+        }
+    }
+
     fn seed_public_pin_fee_accounts(state: &mut State) {
         let fee_asset_id = state.gov.sorafs_pin_fee_asset_id.clone();
         if let Some(domain_id) = fee_asset_id.try_domain().cloned() {
@@ -6212,6 +6637,9 @@ mod sorafs_tests {
     ) {
         for provider in providers {
             stx.world.provider_owners.insert(*provider, owner.clone());
+            stx.world
+                .provider_ingest_completion_authorities
+                .insert(*provider, completion_authority(owner, 1));
         }
     }
 
@@ -7317,8 +7745,14 @@ mod sorafs_tests {
 
     #[test]
     fn sorafs_account_fixtures_are_distinct_valid_ed25519_identities() {
-        assert_eq!(alice().signatory().algorithm(), Algorithm::Ed25519);
-        assert_eq!(bob().signatory().algorithm(), Algorithm::Ed25519);
+        assert_eq!(
+            alice().expect_single_signatory().algorithm(),
+            Algorithm::Ed25519
+        );
+        assert_eq!(
+            bob().expect_single_signatory().algorithm(),
+            Algorithm::Ed25519
+        );
         assert_ne!(alice(), bob());
     }
 
@@ -7859,7 +8293,7 @@ mod sorafs_tests {
         let (provider, mut declaration) = capacity_record_with_owner(&alice());
         declaration.valid_from_epoch = 4;
         declaration.valid_until_epoch = 20;
-        stx.world.provider_owners.insert(provider, alice());
+        seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
@@ -8328,7 +8762,7 @@ mod sorafs_tests {
         let (provider, mut declaration) = capacity_record_with_owner(&alice());
         declaration.valid_from_epoch = 4;
         declaration.valid_until_epoch = 20;
-        stx.world.provider_owners.insert(provider, alice());
+        seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
@@ -8365,6 +8799,37 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn automatic_replication_skips_provider_without_completion_authority() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let (provider, mut declaration) = capacity_record_with_owner(&alice());
+        declaration.valid_from_epoch = 4;
+        declaration.valid_until_epoch = 20;
+        stx.world.provider_owners.insert(provider, alice());
+        stx.world
+            .capacity_declarations
+            .insert(provider, declaration);
+
+        let mut manifest = manifest_fixture(0xAA);
+        manifest.pin_policy.min_replicas = 1;
+        RegisterPinManifest {
+            manifest_payload: manifest.encode().expect("encode manifest"),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("manifest registration remains valid without an eligible replication provider");
+
+        assert!(
+            stx.world.replication_orders.iter().next().is_none(),
+            "automatic replication must not assign a provider without a completion authority"
+        );
+    }
+
+    #[test]
     fn automatic_replication_timestamp_overflow_fails_before_fee_or_state_mutation() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -8373,7 +8838,7 @@ mod sorafs_tests {
         let (provider, mut declaration) = capacity_record_with_owner(&alice());
         declaration.valid_from_epoch = 0;
         declaration.valid_until_epoch = u64::MAX;
-        stx.world.provider_owners.insert(provider, alice());
+        seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
@@ -8418,7 +8883,7 @@ mod sorafs_tests {
         let (provider, mut declaration) = capacity_record_with_owner(&alice());
         declaration.valid_from_epoch = 0;
         declaration.valid_until_epoch = u64::MAX;
-        stx.world.provider_owners.insert(provider, alice());
+        seed_provider_owners(&mut stx, &[provider], &alice());
         stx.world
             .capacity_declarations
             .insert(provider, declaration);
@@ -10962,11 +11427,12 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
         remove_permission(&mut stx, "CanCompleteSorafsReplicationOrder");
 
-        let complete = CompleteReplicationOrder {
-            order_id: ReplicationOrderId::new([0x55; 32]),
-            provider_id: ProviderId::new([0x56; 32]),
-            completion_epoch: 5,
-        };
+        let complete = completion_instruction(
+            ReplicationOrderId::new([0x55; 32]),
+            ProviderId::new([0x56; 32]),
+            5,
+            &alice(),
+        );
 
         let err = complete
             .execute(&alice(), &mut stx)
@@ -11454,7 +11920,7 @@ mod sorafs_tests {
 
     #[test]
     fn complete_replication_order_updates_status() {
-        let state = make_state();
+        let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
@@ -11480,32 +11946,27 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
 
-        let complete = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 45,
-        };
+        let complete = completion_instruction(order_id, providers[0], 45, &alice());
         complete
             .execute(&alice(), &mut stx)
             .expect("complete replication order");
-        CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 45,
-        }
+        SetProviderIngestCompletionAuthority::new(
+            providers[0],
+            Some(completion_authority(&alice(), 1)),
+            completion_authority(&alice(), 2),
+        )
         .execute(&alice(), &mut stx)
-        .expect("exact completion replay is idempotent");
-        let conflicting_replay = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 46,
-        }
-        .execute(&alice(), &mut stx)
-        .expect_err("completion replay at a different epoch must fail");
+        .expect("rotate completion authority after the retained completion");
+        completion_instruction(order_id, providers[0], 45, &alice())
+            .execute(&alice(), &mut stx)
+            .expect("exact retained completion replay remains idempotent after policy rotation");
+        let conflicting_replay = completion_instruction(order_id, providers[0], 46, &alice())
+            .execute(&alice(), &mut stx)
+            .expect_err("completion replay at a different epoch must fail");
         assert!(matches!(
             conflicting_replay,
             InstructionExecutionError::InvariantViolation(message)
-                if message.contains("already completed at epoch 45")
+                if message.contains("different retained completion context")
         ));
 
         let partial_record = stx
@@ -11516,13 +11977,9 @@ mod sorafs_tests {
         assert_eq!(partial_record.provider_completions.len(), 1);
         assert_eq!(partial_record.status, ReplicationOrderStatus::Pending);
 
-        CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[1],
-            completion_epoch: 46,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("second provider completion");
+        completion_instruction(order_id, providers[1], 46, &alice())
+            .execute(&alice(), &mut stx)
+            .expect("second provider completion");
         assert_eq!(
             stx.world
                 .replication_orders
@@ -11531,20 +11988,12 @@ mod sorafs_tests {
                 .status,
             ReplicationOrderStatus::Pending
         );
-        CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[2],
-            completion_epoch: 47,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("target provider completion");
-        let surplus_completion = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[3],
-            completion_epoch: 48,
-        }
-        .execute(&alice(), &mut stx)
-        .expect_err("completed redundancy target must reject surplus completion");
+        completion_instruction(order_id, providers[2], 47, &alice())
+            .execute(&alice(), &mut stx)
+            .expect("target provider completion");
+        let surplus_completion = completion_instruction(order_id, providers[3], 48, &alice())
+            .execute(&alice(), &mut stx)
+            .expect_err("completed redundancy target must reject surplus completion");
         assert!(matches!(
             surplus_completion,
             InstructionExecutionError::InvariantViolation(message)
@@ -11564,8 +12013,120 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn completion_revalidates_policy_assignment_and_finalized_anchor_at_commit() {
+        let state = make_state_with_completion_anchor();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x7B; 32]);
+        let original_provider = ProviderId::new([0x3A; 32]);
+        let replacement_provider = ProviderId::new([0x3B; 32]);
+        seed_provider_owners(
+            &mut stx,
+            &[original_provider, replacement_provider],
+            &alice(),
+        );
+        let payload = encode_replication_order(&replication_order_struct(
+            order_id,
+            default_digest(),
+            &[original_provider],
+            1,
+        ));
+        IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 30,
+            deadline_epoch: 60,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("issue replication order");
+
+        let revision_one = completion_authority(&alice(), 1);
+        let revision_two = completion_authority(&alice(), 2);
+        let prepared_under_revision_one =
+            completion_instruction(order_id, original_provider, 45, &alice());
+        SetProviderIngestCompletionAuthority::new(
+            original_provider,
+            Some(revision_one),
+            revision_two,
+        )
+        .execute(&alice(), &mut stx)
+        .expect("rotate original provider completion policy");
+        let stale_policy = prepared_under_revision_one
+            .execute(&alice(), &mut stx)
+            .expect_err("completion prepared under the old policy must fail after rotation");
+        assert!(matches!(
+            stale_policy,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("completion authority")
+        ));
+
+        let prepared_before_reassignment =
+            completion_instruction(order_id, original_provider, 45, &alice());
+        ReviseReplicationOrderAssignments::new(
+            order_id,
+            1,
+            2,
+            vec![ReplicationAssignmentV1 {
+                provider_id: *replacement_provider.as_bytes(),
+                slice_gib: 512,
+                lane: None,
+            }],
+        )
+        .execute(&alice(), &mut stx)
+        .expect("atomically reassign pending order");
+
+        let stale_assignment = prepared_before_reassignment
+            .execute(&alice(), &mut stx)
+            .expect_err("completion prepared before reassignment must fail");
+        assert!(matches!(
+            stale_assignment,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("assignment revision")
+        ));
+
+        let mut stale_anchor = completion_instruction(order_id, replacement_provider, 46, &alice());
+        stale_anchor.expected_assignment_revision = 2;
+        stale_anchor.finalized_anchor.block_hash = [0xEE; 32];
+        let stale_anchor = stale_anchor
+            .execute(&alice(), &mut stx)
+            .expect_err("completion anchored to another committed prefix must fail");
+        assert!(matches!(
+            stale_anchor,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("finalized anchor")
+        ));
+
+        let mut valid = completion_instruction(order_id, replacement_provider, 46, &alice());
+        valid.expected_assignment_revision = 2;
+        valid
+            .execute(&alice(), &mut stx)
+            .expect("current authority, assignment revision, and anchor must complete");
+
+        let record = stx
+            .world
+            .replication_orders
+            .get(&order_id)
+            .expect("completed order retained");
+        let completion = record
+            .provider_completion(replacement_provider)
+            .expect("completion audit context retained");
+        assert_eq!(completion.assignment_revision, 2);
+        assert_eq!(
+            completion.completion_authority,
+            completion_authority(&alice(), 1)
+        );
+        assert_eq!(completion.finalized_anchor, completion_anchor());
+    }
+
+    #[test]
     fn completion_after_deadline_fails_without_changing_pending_order() {
-        let state = make_state();
+        let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
@@ -11593,13 +12154,9 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect("issue order");
 
-        let error = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 16,
-        }
-        .execute(&alice(), &mut stx)
-        .expect_err("late completion must fail");
+        let error = completion_instruction(order_id, providers[0], 16, &alice())
+            .execute(&alice(), &mut stx)
+            .expect_err("late completion must fail");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
@@ -11618,7 +12175,7 @@ mod sorafs_tests {
 
     #[test]
     fn expire_replication_order_is_deadline_bound_and_idempotent() {
-        let state = make_state();
+        let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
@@ -11698,13 +12255,9 @@ mod sorafs_tests {
                 .status,
             ReplicationOrderStatus::Expired(16)
         );
-        let completion = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 15,
-        }
-        .execute(&alice(), &mut stx)
-        .expect_err("expired order cannot complete");
+        let completion = completion_instruction(order_id, providers[0], 15, &alice())
+            .execute(&alice(), &mut stx)
+            .expect_err("expired order cannot complete");
         assert!(matches!(
             completion,
             InstructionExecutionError::InvariantViolation(message)
@@ -11714,7 +12267,7 @@ mod sorafs_tests {
 
     #[test]
     fn expire_replication_order_rejects_completed_order_and_missing_permission() {
-        let state = make_state();
+        let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
@@ -11755,13 +12308,9 @@ mod sorafs_tests {
         ));
         grant_permission(&mut stx, "CanIssueSorafsReplicationOrder");
         for provider_id in providers {
-            CompleteReplicationOrder {
-                order_id,
-                provider_id,
-                completion_epoch: 15,
-            }
-            .execute(&alice(), &mut stx)
-            .expect("complete provider assignment at deadline");
+            completion_instruction(order_id, provider_id, 15, &alice())
+                .execute(&alice(), &mut stx)
+                .expect("complete provider assignment at deadline");
         }
         let completed = ExpireReplicationOrder {
             order_id,
@@ -11778,7 +12327,7 @@ mod sorafs_tests {
 
     #[test]
     fn retiring_manifest_expires_its_pending_replication_orders() {
-        let state = make_state();
+        let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
@@ -11821,13 +12370,9 @@ mod sorafs_tests {
                 .status,
             ReplicationOrderStatus::Expired(10)
         );
-        let error = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 10,
-        }
-        .execute(&alice(), &mut stx)
-        .expect_err("expired order must not complete");
+        let error = completion_instruction(order_id, providers[0], 10, &alice())
+            .execute(&alice(), &mut stx)
+            .expect_err("expired order must not complete");
         assert!(matches!(
             error,
             InstructionExecutionError::InvariantViolation(message)
@@ -11864,11 +12409,7 @@ mod sorafs_tests {
 
         remove_permission(&mut stx, "CanCompleteSorafsReplicationOrder");
 
-        let complete = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 45,
-        };
+        let complete = completion_instruction(order_id, providers[0], 45, &alice());
         let err = complete
             .execute(&alice(), &mut stx)
             .expect_err("missing permission should reject completion");
@@ -11880,7 +12421,7 @@ mod sorafs_tests {
 
     #[test]
     fn complete_replication_order_rejects_permissioned_non_owner_governance() {
-        let mut state = make_state();
+        let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -11906,11 +12447,7 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
 
-        let complete = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 10,
-        };
+        let complete = completion_instruction(order_id, providers[0], 10, &alice());
         let error = complete
             .execute(&bob(), &mut stx)
             .expect_err("governance cannot impersonate the assigned provider owner");
@@ -11931,8 +12468,8 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn complete_replication_order_allows_current_owner_after_transfer() {
-        let mut state = make_state();
+    fn complete_replication_order_rejects_stale_authority_after_owner_transfer() {
+        let mut state = make_state_with_completion_anchor();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -11958,18 +12495,30 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect("issue replication order");
 
-        for provider in &providers {
-            stx.world.provider_owners.insert(*provider, bob().clone());
-        }
+        UnregisterProviderOwner::new(providers[0])
+            .execute(&alice(), &mut stx)
+            .expect("remove the old provider owner and completion authority");
+        RegisterProviderOwner::new(providers[0], bob())
+            .execute(&alice(), &mut stx)
+            .expect("register the replacement provider owner");
+        SetProviderIngestCompletionAuthority::new(
+            providers[0],
+            None,
+            completion_authority(&bob(), 1),
+        )
+        .execute(&alice(), &mut stx)
+        .expect("install the replacement owner's completion authority");
 
-        let complete = CompleteReplicationOrder {
-            order_id,
-            provider_id: providers[0],
-            completion_epoch: 12,
-        };
-        complete
+        let complete = completion_instruction(order_id, providers[0], 12, &alice());
+        let error = complete
             .execute(&bob(), &mut stx)
-            .expect("current owner should complete order");
+            .expect_err("owner transfer without completion-authority rotation must fail");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must be authorized by its registered owner")
+        ));
     }
 
     #[test]
@@ -14300,6 +14849,120 @@ mod sorafs_tests {
         assert!(
             message.contains("already owned"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn provider_ingest_completion_authority_requires_exact_predecessor_chain() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let provider = ProviderId::new([0xA6; 32]);
+        stx.world.provider_owners.insert(provider, alice());
+
+        let revision_one = completion_authority(&alice(), 1);
+        let error = SetProviderIngestCompletionAuthority::new(
+            provider,
+            None,
+            completion_authority(&alice(), 2),
+        )
+        .execute(&alice(), &mut stx)
+        .expect_err("initial policy must begin at revision one");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("must begin at revision 1")
+        ));
+        SetProviderIngestCompletionAuthority::new(provider, None, revision_one.clone())
+            .execute(&alice(), &mut stx)
+            .expect("install initial completion authority");
+        SetProviderIngestCompletionAuthority::new(provider, None, revision_one.clone())
+            .execute(&alice(), &mut stx)
+            .expect("exact initial authority replay is idempotent");
+        SetProviderIngestCompletionAuthority::new(
+            provider,
+            Some(revision_one.clone()),
+            revision_one.clone(),
+        )
+        .execute(&alice(), &mut stx)
+        .expect("exact policy replay is idempotent");
+
+        let mut wrong_predecessor = completion_authority(&alice(), 2);
+        wrong_predecessor.signer_policy.predecessor_digest = Some([0xEE; 32]);
+        let error = SetProviderIngestCompletionAuthority::new(
+            provider,
+            Some(revision_one.clone()),
+            wrong_predecessor,
+        )
+        .execute(&alice(), &mut stx)
+        .expect_err("substituted predecessor digest must fail");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("predecessor-bound")
+        ));
+        assert_eq!(
+            stx.world
+                .provider_ingest_completion_authorities
+                .get(&provider),
+            Some(&revision_one)
+        );
+
+        let revision_two = completion_authority(&alice(), 2);
+        SetProviderIngestCompletionAuthority::new(
+            provider,
+            Some(revision_one),
+            revision_two.clone(),
+        )
+        .execute(&alice(), &mut stx)
+        .expect("install exact predecessor-bound successor");
+        assert_eq!(
+            stx.world
+                .provider_ingest_completion_authorities
+                .get(&provider),
+            Some(&revision_two)
+        );
+
+        let mut malformed_replacement = completion_authority(&alice(), 2);
+        malformed_replacement.signer_policy.policy_id = [0xB1; 32];
+        let error = SetProviderIngestCompletionAuthority::new(
+            provider,
+            Some(revision_two.clone()),
+            malformed_replacement,
+        )
+        .execute(&alice(), &mut stx)
+        .expect_err("replacement policy identity must restart at revision one");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("replacement") && message.contains("revision 1")
+        ));
+
+        let replacement = ProviderIngestCompletionAuthorityV1::new(
+            alice(),
+            ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0xB1; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0xB2; 32],
+            },
+        );
+        SetProviderIngestCompletionAuthority::new(
+            provider,
+            Some(revision_two),
+            replacement.clone(),
+        )
+        .execute(&alice(), &mut stx)
+        .expect("canonical replacement policy identity starts at revision one");
+        assert_eq!(
+            stx.world
+                .provider_ingest_completion_authorities
+                .get(&provider),
+            Some(&replacement)
         );
     }
 

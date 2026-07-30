@@ -5,9 +5,7 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 /// callers can choose between classical Ed25519 and post-quantum ML-DSA
 /// (Crystals Dilithium) verification.
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
-use iroha_crypto::{
-    EcdsaSecp256k1Sha256, ed25519_parse_public_key, ed25519_verify_batch_deterministic,
-};
+use iroha_crypto::{EcdsaSecp256k1Sha256, ed25519_parse_public_key};
 use pqcrypto_mldsa::mldsa65 as dilithium;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 use sha2::{Digest as _, Sha512};
@@ -23,11 +21,9 @@ pub struct Ed25519BatchEntry {
     pub public_key: Vec<u8>,
 }
 
-/// Norito-encoded request for deterministic Ed25519 batch verification.
+/// Norito-encoded request for ordered strict Ed25519 verification.
 #[derive(Debug, Clone, norito::Encode, norito::Decode, PartialEq, Eq)]
 pub struct Ed25519BatchRequest {
-    /// Domain-separation seed used by the deterministic batch verifier.
-    pub seed: [u8; 32],
     /// Entries to verify, evaluated in order.
     pub entries: Vec<Ed25519BatchEntry>,
 }
@@ -197,8 +193,8 @@ pub fn verify_signature(
     }
 }
 
-/// Deterministically verify a batch of Ed25519 signatures, returning the first
-/// failing entry index on error.
+/// Strictly verify ordered Ed25519 signatures, returning the first failing
+/// entry index on error.
 pub fn verify_ed25519_batch(
     request: &Ed25519BatchRequest,
     max_entries: usize,
@@ -227,56 +223,16 @@ pub fn verify_ed25519_batch(
             .as_slice()
             .try_into()
             .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
-        if ed25519_public_key_bytes_are_invalid(pk_bytes) {
+        let Some(pk) = parse_ed25519_public_key_for_verification(pk_bytes) else {
             return Err(Ed25519BatchError::InvalidEntry { index });
+        };
+        let sig = Ed25519Signature::from_slice(entry.signature.as_slice())
+            .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
+        if pk.verify_strict(entry.message.as_slice(), &sig).is_err() {
+            return Err(Ed25519BatchError::SignatureFailed { index });
         }
     }
-
-    let messages: Vec<&[u8]> = request
-        .entries
-        .iter()
-        .map(|entry| entry.message.as_slice())
-        .collect();
-    let signatures: Vec<&[u8]> = request
-        .entries
-        .iter()
-        .map(|entry| entry.signature.as_slice())
-        .collect();
-    let public_keys: Vec<&[u8]> = request
-        .entries
-        .iter()
-        .map(|entry| entry.public_key.as_slice())
-        .collect();
-
-    match ed25519_verify_batch_deterministic(&messages, &signatures, &public_keys, request.seed) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            for (index, entry) in request.entries.iter().enumerate() {
-                if signature_bytes_are_all_zero(&entry.signature) {
-                    return Err(Ed25519BatchError::SignatureFailed { index });
-                }
-                if signature_has_invalid_ed25519_r(&entry.signature) {
-                    return Err(Ed25519BatchError::SignatureFailed { index });
-                }
-                let sig = match Ed25519Signature::from_slice(entry.signature.as_slice()) {
-                    Ok(sig) => sig,
-                    Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
-                };
-                let pk_bytes: &[u8; 32] = entry
-                    .public_key
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
-                let Some(pk) = parse_ed25519_public_key_for_verification(pk_bytes) else {
-                    return Err(Ed25519BatchError::InvalidEntry { index });
-                };
-                if pk.verify_strict(entry.message.as_slice(), &sig).is_err() {
-                    return Err(Ed25519BatchError::SignatureFailed { index });
-                }
-            }
-            Err(Ed25519BatchError::SignatureFailed { index: 0 })
-        }
-    }
+    Ok(())
 }
 
 /// Verify a batch of Ed25519 signatures. Entries that fail to parse are marked
@@ -349,18 +305,16 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
-    if let Some((sigs, pks, hrams, map)) = metal_inputs {
-        if !sigs.is_empty() {
-            if let Some(out) = crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
-                if out.len() == map.len() {
-                    let mut results = vec![false; items.len()];
-                    for (idx, ok) in map.into_iter().zip(out.into_iter()) {
-                        results[idx] = ok;
-                    }
-                    return results;
-                }
-            }
+    if let Some((sigs, pks, hrams, map)) = metal_inputs
+        && !sigs.is_empty()
+        && let Some(out) = crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams)
+        && out.len() == map.len()
+    {
+        let mut results = vec![false; items.len()];
+        for (idx, ok) in map.into_iter().zip(out.into_iter()) {
+            results[idx] = ok;
         }
+        return results;
     }
 
     #[cfg(feature = "cuda")]
@@ -459,7 +413,6 @@ mod tests {
         ));
 
         let request = Ed25519BatchRequest {
-            seed: [0xA5; 32],
             entries: vec![Ed25519BatchEntry {
                 message: message.to_vec(),
                 signature: signature.to_vec(),
@@ -499,7 +452,6 @@ mod tests {
             );
 
             let request = Ed25519BatchRequest {
-                seed: [0xC3; 32],
                 entries: vec![Ed25519BatchEntry {
                     message: message.to_vec(),
                     signature: signature.to_vec(),
@@ -544,7 +496,6 @@ mod tests {
             );
 
             let request = Ed25519BatchRequest {
-                seed: [0x5A; 32],
                 entries: vec![Ed25519BatchEntry {
                     message: message.to_vec(),
                     signature: signature.to_vec(),

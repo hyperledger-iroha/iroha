@@ -33,9 +33,7 @@ use iroha::data_model::{
     query::parameters::Pagination,
     sorafs::pin_registry::ManifestDigest,
 };
-use iroha_crypto::Hash;
 use iroha_primitives::numeric::XorQuantity;
-use iroha_torii_shared::da::sampling::build_sampling_plan;
 use norito::{
     decode_from_bytes,
     json::{self, Map, Number, Value},
@@ -53,7 +51,6 @@ use std::{
     fs,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -215,9 +212,6 @@ pub struct GetBlobArgs {
     /// Storage ticket identifier (hex string) issued by Torii.
     #[arg(long = "storage-ticket", value_name = "HEX")]
     pub storage_ticket: String,
-    /// Optional block hash used to seed deterministic sampling in the manifest response.
-    #[arg(long = "block-hash", value_name = "HEX")]
-    pub block_hash: Option<String>,
     /// Optional override for the Torii manifest endpoint (defaults to `$TORII/v1/da/manifests/`).
     #[arg(long = "endpoint", value_name = "URL")]
     pub endpoint: Option<String>,
@@ -229,13 +223,8 @@ pub struct GetBlobArgs {
 impl GetBlobArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let normalized_ticket = normalize_ticket_hex(&self.storage_ticket)?;
-        let normalized_block_hash = if let Some(block_hash) = self.block_hash {
-            Some(normalize_block_hash_hex(&block_hash)?)
-        } else {
-            None
-        };
         let fetcher = DaManifestFetcher::new(context.config(), self.endpoint.as_deref())?;
-        let bundle = fetcher.fetch(&normalized_ticket, normalized_block_hash.as_deref())?;
+        let bundle = fetcher.fetch(&normalized_ticket)?;
         let manifest_label = bundle.manifest_hash_hex.to_ascii_lowercase();
         let persisted =
             persist_manifest_bundle(context, &bundle, self.output_dir, &manifest_label)?;
@@ -565,9 +554,6 @@ pub struct ProveArgs {
     /// Seed used for deterministic `PoR` sampling.
     #[arg(long = "sample-seed", default_value_t = 0)]
     pub sample_seed: u64,
-    /// Optional block hash used to derive deterministic sampling (overrides sample-count/seed).
-    #[arg(long = "block-hash", value_name = "HEX")]
-    pub block_hash: Option<String>,
     /// Explicit `PoR` leaf indexes to prove (0-based flattened index).
     #[arg(long = "leaf-index", value_name = "INDEX")]
     pub leaf_indexes: Vec<usize>,
@@ -593,7 +579,10 @@ impl ProveArgs {
                 self.payload.display()
             )
         })?;
-        let sampling = self.resolve_sampling(&manifest)?;
+        let sampling = ProofSampling {
+            sample_count: self.sample_count,
+            sample_seed: self.sample_seed,
+        };
         let por_root = chunk_store.por_tree().root().to_owned();
         let root_hex = hex::encode(por_root);
         let leaf_total = chunk_store.por_tree().leaf_count();
@@ -636,27 +625,6 @@ impl ProveArgs {
         }
 
         Ok(())
-    }
-
-    fn resolve_sampling(&self, manifest: &DaManifestV1) -> Result<ProofSampling> {
-        if let Some(block_hash_hex) = &self.block_hash {
-            let normalized = normalize_block_hash_hex(block_hash_hex)?;
-            let block_hash =
-                Hash::from_str(&normalized).map_err(|err| eyre!("invalid block hash: {err}"))?;
-            let plan = build_sampling_plan(manifest, &block_hash);
-            if plan.samples.is_empty() {
-                return Err(eyre!("sampling plan produced no chunks for manifest"));
-            }
-            return Ok(ProofSampling {
-                sample_count: plan.samples.len(),
-                sample_seed: plan.por_seed(),
-            });
-        }
-
-        Ok(ProofSampling {
-            sample_count: self.sample_count,
-            sample_seed: self.sample_seed,
-        })
     }
 
     fn collect_proofs(
@@ -777,37 +745,14 @@ impl ProveAvailabilityArgs {
             .manifest_cache_dir
             .clone()
             .unwrap_or_else(|| artifact_root.clone());
-        let normalized_block_hash = if let Some(block_hash) = self.block_hash.as_ref() {
-            Some(normalize_block_hash_hex(block_hash)?)
-        } else {
-            None
-        };
         let fetcher = DaManifestFetcher::new(context.config(), self.manifest_endpoint.as_deref())?;
-        let bundle = fetcher.fetch(&normalized_ticket, normalized_block_hash.as_deref())?;
-        let plan_sampling = if normalized_block_hash.is_none() {
-            bundle
-                .sampling_plan_typed
-                .as_ref()
-                .map(sampling_from_plan)
-                .transpose()?
-        } else {
-            None
-        };
+        let bundle = fetcher.fetch(&normalized_ticket)?;
         let persisted = persist_manifest_bundle(
             context,
             &bundle,
             Some(manifest_target_dir.clone()),
             &normalized_ticket,
         )?;
-        if matches!(context.output_format(), CliOutputFormat::Text) {
-            if let Some(path) = &persisted.sampling_plan {
-                context.println(format_args!(
-                    "sampling plan JSON saved to `{}`",
-                    path.display()
-                ))?;
-            }
-        }
-
         let payload_path = artifact_root.join("payload.car");
         let scoreboard_path = self
             .scoreboard_out
@@ -849,6 +794,7 @@ impl ProveAvailabilityArgs {
             guard_cache: None,
             guard_cache_key: None,
             guard_directory: None,
+            guard_directory_digest: None,
             guard_target: None,
             guard_retention_days: None,
             output: Some(payload_path.clone()),
@@ -866,21 +812,14 @@ impl ProveAvailabilityArgs {
                 payload_path.display(),
                 scoreboard_path.display()
             ))?;
-            if let Some(sampling) = plan_sampling {
-                context.println(format_args!(
-                    "using Torii sampling plan: samples={} seed=0x{:016x}",
-                    sampling.sample_count, sampling.sample_seed
-                ))?;
-            }
         }
 
         let prove_args = ProveArgs {
             manifest: persisted.manifest,
             payload: payload_path,
             json_out: self.json_out,
-            sample_count: plan_sampling.map_or(self.sample_count, |sampling| sampling.sample_count),
-            sample_seed: plan_sampling.map_or(self.sample_seed, |sampling| sampling.sample_seed),
-            block_hash: normalized_block_hash,
+            sample_count: self.sample_count,
+            sample_seed: self.sample_seed,
             leaf_indexes: self.leaf_indexes,
         };
         prove_args.run(context)
@@ -916,9 +855,6 @@ pub struct ProveAvailabilityArgs {
     /// Seed used for deterministic `PoR` sampling during verification.
     #[arg(long = "sample-seed", default_value_t = 0)]
     pub sample_seed: u64,
-    /// Optional block hash used to derive deterministic sampling (overrides sample-count/seed).
-    #[arg(long = "block-hash", value_name = "HEX")]
-    pub block_hash: Option<String>,
     /// Explicit `PoR` leaf indexes to verify in addition to sampled values.
     #[arg(long = "leaf-index", value_name = "INDEX")]
     pub leaf_indexes: Vec<usize>,
@@ -1139,30 +1075,11 @@ pub(super) fn normalize_ticket_hex(input: &str) -> Result<String> {
     Ok(trimmed.to_ascii_lowercase())
 }
 
-fn normalize_block_hash_hex(input: &str) -> Result<String> {
-    if input.trim().is_empty() {
-        return Err(eyre!("--block-hash must be provided when set"));
-    }
-    let trimmed = input
-        .trim()
-        .trim_start_matches("0x")
-        .trim_start_matches("0X");
-    if trimmed.len() != 64 {
-        return Err(eyre!(
-            "--block-hash must contain 64 hexadecimal characters (got {})",
-            trimmed.len()
-        ));
-    }
-    hex::decode(trimmed).map_err(|err| eyre!("invalid block hash hex: {err}"))?;
-    Ok(trimmed.to_ascii_lowercase())
-}
-
 #[derive(Debug)]
 pub(super) struct PersistedManifestPaths {
     pub(super) manifest: PathBuf,
     pub(super) manifest_json: PathBuf,
     pub(super) chunk_plan: PathBuf,
-    pub(super) sampling_plan: Option<PathBuf>,
 }
 
 pub(super) fn persist_manifest_bundle<C: RunContext>(
@@ -1188,10 +1105,6 @@ pub(super) fn persist_manifest_bundle<C: RunContext>(
     let manifest_path = root.join(format!("manifest_{ticket_label}.norito"));
     let manifest_json_path = root.join(format!("manifest_{ticket_label}.json"));
     let chunk_plan_path = root.join(format!("chunk_plan_{ticket_label}.json"));
-    let sampling_plan_path = bundle
-        .sampling_plan
-        .as_ref()
-        .map(|_| root.join(format!("sampling_plan_{ticket_label}.json")));
 
     fs::write(&manifest_path, &bundle.manifest_bytes)
         .wrap_err_with(|| format!("failed to write `{}`", manifest_path.display()))?;
@@ -1203,18 +1116,10 @@ pub(super) fn persist_manifest_bundle<C: RunContext>(
         .wrap_err("failed to render chunk plan JSON")?;
     fs::write(&chunk_plan_path, chunk_plan_json)
         .wrap_err_with(|| format!("failed to write `{}`", chunk_plan_path.display()))?;
-    if let Some(path) = sampling_plan_path.as_ref() {
-        let sampling_json =
-            norito::json::to_json_pretty(bundle.sampling_plan.as_ref().unwrap_or(&Value::Null))
-                .wrap_err("failed to render sampling plan JSON")?;
-        fs::write(path, sampling_json)
-            .wrap_err_with(|| format!("failed to write `{}`", path.display()))?;
-    }
     Ok(PersistedManifestPaths {
         manifest: manifest_path,
         manifest_json: manifest_json_path,
         chunk_plan: chunk_plan_path,
-        sampling_plan: sampling_plan_path,
     })
 }
 
@@ -1247,16 +1152,8 @@ fn build_manifest_fetch_value(
         "chunk_plan_path".into(),
         Value::from(path_to_string(&persisted.chunk_plan)),
     );
-    map.insert(
-        "sampling_plan_path".into(),
-        optional_path_value(persisted.sampling_plan.as_deref()),
-    );
     map.insert("manifest".into(), bundle.manifest_json.clone());
     map.insert("chunk_plan".into(), bundle.chunk_plan.clone());
-    map.insert(
-        "sampling_plan".into(),
-        bundle.sampling_plan.clone().unwrap_or(Value::Null),
-    );
     Value::Object(map)
 }
 
@@ -1272,9 +1169,6 @@ fn render_manifest_fetch_text(
     let _ = writeln!(out, "manifest: {}", persisted.manifest.display());
     let _ = writeln!(out, "manifest_json: {}", persisted.manifest_json.display());
     let _ = writeln!(out, "chunk_plan: {}", persisted.chunk_plan.display());
-    if let Some(path) = persisted.sampling_plan.as_ref() {
-        let _ = writeln!(out, "sampling_plan: {}", path.display());
-    }
     out
 }
 
@@ -1551,23 +1445,6 @@ struct ProofReport {
 struct ProofSampling {
     sample_count: usize,
     sample_seed: u64,
-}
-
-fn sampling_from_plan(plan: &da::DaSamplingPlan) -> Result<ProofSampling> {
-    let seed_bytes = plan
-        .sample_seed
-        .ok_or_else(|| eyre!("sampling plan missing sample_seed"))?;
-    let seed_prefix: [u8; 8] = seed_bytes[..8]
-        .try_into()
-        .expect("sample_seed length enforced");
-    let sample_count = plan.samples.len();
-    if sample_count == 0 {
-        return Err(eyre!("sampling plan contained no samples"));
-    }
-    Ok(ProofSampling {
-        sample_count,
-        sample_seed: u64::from_le_bytes(seed_prefix),
-    })
 }
 
 struct ProofSummaryInputs<'a> {
@@ -1927,10 +1804,6 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn optional_path_value(path: Option<&Path>) -> Value {
-    path.map_or(Value::Null, |path| Value::from(path_to_string(path)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1942,7 +1815,7 @@ mod tests {
             prelude::{AccountId, ChainId},
         },
     };
-    use iroha_crypto::{Algorithm, Hash};
+    use iroha_crypto::Algorithm;
     use iroha_data_model::da::{
         commitment::DaProofPolicyBundle,
         manifest::{ChunkCommitment, ChunkRole},
@@ -1954,7 +1827,6 @@ mod tests {
     };
     use iroha_data_model::sorafs::pin_registry::StorageClass;
     use iroha_i18n::{Bundle, Language, Localizer};
-    use iroha_torii_shared::da::sampling::{build_sampling_plan, sampling_plan_to_value};
     use norito::{json::JsonSerialize, to_bytes};
     use std::{
         fmt::Display,
@@ -2379,54 +2251,6 @@ mod tests {
     }
 
     #[test]
-    fn persist_manifest_bundle_writes_sampling_plan() {
-        let manifest = sample_manifest();
-        let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
-        let manifest_json = norito::json::to_value(&manifest).expect("manifest JSON");
-        let sampling_plan = sampling_plan_to_value(&build_sampling_plan(
-            &manifest,
-            &Hash::new(b"sampling-plan-test"),
-        ));
-        let manifest_hash_hex = hex::encode(blake3_hash(&manifest_bytes).as_bytes());
-        let bundle = DaManifestFetchBundle {
-            manifest_bytes: manifest_bytes.clone(),
-            manifest_json,
-            chunk_plan: sample_chunk_fetch_plan(&manifest),
-            storage_ticket_hex: "feedface".repeat(8),
-            manifest_hash_hex,
-            blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
-            sampling_plan: Some(sampling_plan.clone()),
-            sampling_plan_typed: None,
-        };
-
-        let dir = tempdir().expect("tempdir");
-        let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let paths = persist_manifest_bundle(
-            &mut ctx,
-            &bundle,
-            Some(dir.path().to_path_buf()),
-            "ticket123",
-        )
-        .expect("persist manifest bundle");
-
-        let sampling_path = paths
-            .sampling_plan
-            .expect("sampling plan path should be set");
-        let saved = fs::read_to_string(sampling_path).expect("sampling plan file");
-        let saved_value: Value = norito::json::from_str(&saved).expect("parse sampling plan");
-        let expected_assignment = sampling_plan
-            .get("assignment_hash")
-            .and_then(Value::as_str)
-            .expect("assignment hash field");
-
-        assert_eq!(
-            saved_value.get("assignment_hash").and_then(Value::as_str),
-            Some(expected_assignment),
-            "persisted sampling plan should retain assignment hash"
-        );
-    }
-
-    #[test]
     fn manifest_fetch_value_includes_paths() {
         let manifest = sample_manifest();
         let manifest_bytes = to_bytes(&manifest).expect("encode manifest");
@@ -2439,14 +2263,11 @@ mod tests {
             storage_ticket_hex: storage_ticket.clone(),
             manifest_hash_hex: "aa".repeat(32),
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
-            sampling_plan: None,
-            sampling_plan_typed: None,
         };
         let persisted = PersistedManifestPaths {
             manifest: PathBuf::from("/tmp/manifest.norito"),
             manifest_json: PathBuf::from("/tmp/manifest.json"),
             chunk_plan: PathBuf::from("/tmp/chunk_plan.json"),
-            sampling_plan: None,
         };
 
         let value = build_manifest_fetch_value(&bundle, &persisted);
@@ -2479,14 +2300,11 @@ mod tests {
             storage_ticket_hex: "feedface".repeat(8),
             manifest_hash_hex: "aa".repeat(32),
             blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
-            sampling_plan: None,
-            sampling_plan_typed: None,
         };
         let persisted = PersistedManifestPaths {
             manifest: PathBuf::from("/tmp/manifest.norito"),
             manifest_json: PathBuf::from("/tmp/manifest.json"),
             chunk_plan: PathBuf::from("/tmp/chunk_plan.json"),
-            sampling_plan: None,
         };
         let text = render_manifest_fetch_text(&bundle, &persisted);
         assert!(text.contains("manifest: /tmp/manifest.norito"));
@@ -2665,33 +2483,6 @@ mod tests {
     }
 
     #[test]
-    fn sampling_from_plan_derives_seed_and_count() {
-        let mut sample_seed = [0u8; 32];
-        sample_seed[..8].copy_from_slice(&0x1122_3344_5566_7788_u64.to_le_bytes());
-        let plan = da::DaSamplingPlan {
-            assignment_hash: BlobDigest::new([0x11; 32]),
-            sample_window: 2,
-            sample_seed: Some(sample_seed),
-            samples: vec![
-                da::DaSampledChunk {
-                    index: 1,
-                    role: ChunkRole::Data,
-                    group: 0,
-                },
-                da::DaSampledChunk {
-                    index: 2,
-                    role: ChunkRole::GlobalParity,
-                    group: 0,
-                },
-            ],
-        };
-
-        let sampling = sampling_from_plan(&plan).expect("sampling from plan");
-        assert_eq!(sampling.sample_count, 2);
-        assert_eq!(sampling.sample_seed, 0x1122_3344_5566_7788_u64);
-    }
-
-    #[test]
     fn fixture_key_pair_uses_checked_seed_derivation() {
         assert_eq!(fixture_key_pair(1).algorithm(), Algorithm::Ed25519);
         assert!(
@@ -2773,27 +2564,6 @@ mod tests {
     fn policy_label_defaults_when_override_missing() {
         let label = policy_label_or_default(None, "embedded".into()).expect("label");
         assert_eq!(label, "embedded");
-    }
-
-    #[test]
-    fn resolve_sampling_prefers_block_hash_plan() {
-        let manifest = sample_manifest();
-        let block_hash = Hash::new(b"da-block-hash");
-        let args = ProveArgs {
-            manifest: PathBuf::new(),
-            payload: PathBuf::new(),
-            json_out: None,
-            sample_count: 99,
-            sample_seed: 777,
-            block_hash: Some(hex::encode(block_hash.as_ref())),
-            leaf_indexes: Vec::new(),
-        };
-
-        let sampling = args.resolve_sampling(&manifest).expect("sampling plan");
-        let plan = build_sampling_plan(&manifest, &block_hash);
-
-        assert_eq!(sampling.sample_count, plan.samples.len());
-        assert_eq!(sampling.sample_seed, plan.por_seed());
     }
 
     fn sample_manifest() -> DaManifestV1 {

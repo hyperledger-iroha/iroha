@@ -1,0 +1,16 @@
+{
+  "iroha_data_model_lib": {
+    "artifact_scope": "workspace",
+    "budget_min_growth": 3,
+    "budget_percent": 2,
+    "cargo_locked": true,
+    "compile_units": 41,
+    "manifest_path": "Cargo.toml",
+    "packages": [
+      "iroha_data_model"
+    ],
+    "target": "lib",
+    "toolchain": "1.93.1"
+  },
+  "schema_version": 1
+}

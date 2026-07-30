@@ -4620,7 +4620,7 @@ BY AsyncSpecAlwaysStrongTypeInvariant,
    LeaderWirePhysicalLifecycleOrdinalRankIsInCarrier,
    LeaderWirePhysicalIngressDependencyRankIsInCarrier,
    AsyncLeaderWireIngressTicketExcludesLaterLocalWork,
-   AsyncLeaderWireProtectedRecordBoundsIngressScheduler,
+   AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler,
    AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced,
    AsyncHeldChunkReceiptTombstonesExactProducerEpisode,
    LeaderWirePacketAdmissionPreservesExactResolution,
@@ -5531,12 +5531,14 @@ AdequateLeaderFreshNodeServiceWindow(
 \* established separately by the corridor-entry refinement.
 AdequateLeaderProtectedIngressLifecycleOwned(
     node, leaderContext, leaderView) ==
-  \E record \in AsyncLeaderWireIngressProtectedRecordsAt(node):
-    /\ record.context = leaderContext
-    /\ record.height = leaderContext.height
-    /\ record.view = leaderView
-    /\ record.schedulerOrdinal
-         < AsyncEffectiveTimeoutLifecycleOrdinal(node)
+  /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
+  /\ LET record ==
+           AsyncLeaderWireEarliestPhysicalIngressRecord(node)
+     IN /\ record.context = leaderContext
+        /\ record.height = leaderContext.height
+        /\ record.view = leaderView
+        /\ record.schedulerOrdinal
+             < AsyncEffectiveTimeoutLifecycleOrdinal(node)
 
 AdequateLeaderProtectedNodeServiceWindow(
     node, leaderContext, leaderView) ==
@@ -5598,7 +5600,7 @@ THEOREM AdequateLeaderProtectedIngressLifecyclePrecedesTimeout ==
        /\ AsyncIngressSchedulerBarrierActive(node)
        /\ AsyncEarliestIngressSchedulerOrdinal(node)
             < AsyncEffectiveTimeoutLifecycleOrdinal(node)
-BY AsyncLeaderWireProtectedRecordBoundsIngressScheduler, IsaT(120)
+BY AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler, IsaT(120)
    DEF AdequateLeaderProtectedNodeServiceWindow,
        AdequateLeaderProtectedIngressLifecycleOwned
 

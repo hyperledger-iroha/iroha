@@ -6,8 +6,8 @@ direction: ltr
 source: docs/portal/static/openapi/README.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 97a0d9a250d5d9cedd09453f613a61bd5b532f55592fa802983058f0b98bfa1f
-source_last_modified: "2026-07-25T18:42:25.944339+00:00"
+source_hash: b0e57aa9bb5d1a8847455f2b8ad4601a5850c6dae53386175dfa565180cd6b1d
+source_last_modified: "2026-07-26T20:28:54.864667+00:00"
 translation_last_reviewed: null
 ---
 

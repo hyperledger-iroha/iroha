@@ -18,13 +18,21 @@ feed-transport boundary with HTTPS allowlists, public-address validation, DNS
 revalidation, SPKI pins, redirect, size, time, and decompression limits.
 
 `iroha_config` now carries the non-secret controller policy, feed allowlists and
-pins, resource bounds, checkpoint path, governed signer identities, and the
-canonical region and gateway deployment identities. Torii accepts
-runtime-injected ACME and authenticated feed transports, transfers them through
-`IrohaRuntimeDeps` and `ToriiRuntimeDeps`, constructs the durable controller
-from the exact resolved configuration, retains it in `AppState`, and fails
-closed when an enabled runtime dependency is absent or mismatched. This
-controller/runtime integration ships locally.
+pins, resource bounds, checkpoint path, governed signer identities, canonical
+region and gateway deployment identities, and an independent exact
+handle/revision/policy-digest binding for the feed transport. ACME has its own
+separate exact provider binding. Torii accepts runtime-injected ACME and
+authenticated feed transports, transfers them through `IrohaRuntimeDeps` and
+`ToriiRuntimeDeps`, constructs the durable controller from the exact resolved
+configuration, retains it in `AppState`, and fails closed when an enabled
+runtime dependency is absent, unavailable, substituted, stale, test-marked, or
+only partially configured. Each DNS resolution, HTTPS fetch, and ACME order is
+fenced by identity checks before and after the operation; returned addresses,
+response bytes, certificates, and keys are discarded on drift. This
+controller/runtime integration ships locally. The standard launcher does not
+construct a process-local feed transport or ACME fallback: configured provider
+bindings require the exact deployment-owned injected instances before Torii
+startup.
 
 Torii now exposes six canonical, account-signed, governed-operator routes:
 authenticated feed fetch and durable status reads plus canonical-Norito-JSON
@@ -63,7 +71,11 @@ evidence and cannot mark gateway compliance ready.
   controller-pinned public DNS answers. The core revalidates DNS after each
   response, verifies the connected address and configured SPKI digest, validates
   every redirect against the exact HTTPS host allowlist, and bounds encoded,
-  decoded, redirect, DNS-answer, and elapsed-time inputs.
+  decoded, redirect, DNS-answer, and elapsed-time inputs. Its independent
+  `iroha_config` binding pins a production handle, non-zero revision, and the
+  non-zero digest of the exact canonical hostname/SPKI inventory. Startup and
+  every individual resolve/fetch operation check that identity before and
+  after use.
 - `FileGatewayComplianceStore` uses bounded canonical checkpoints, no-follow
   opens, regular-file checks, fsync, and atomic rename. Catalog signing keys,
   feed credentials, bearer tokens, and DNS-provider credentials are not owned by
@@ -74,10 +86,12 @@ evidence and cannot mark gateway compliance ready.
 - `IrohaRuntimeDeps` and `ToriiRuntimeDeps` accept runtime-owned ACME and
   authenticated feed-transport implementations. The standard daemon forwards
   those runtime-only dependencies without putting credentials in
-  `iroha_config`. Torii maps every resolved field into the ACME/controller
-  runtime, constructs the durable controller, retains the controller and
-  transport in `AppState`, rejects dependencies injected while their feature is
-  disabled, and refuses startup when an enabled dependency is missing.
+  `iroha_config`. Only stable handles, non-zero revisions, and lowercase
+  non-zero public-policy digests are configured. Torii maps every resolved
+  field into the ACME/controller runtime, constructs the durable controller,
+  retains the controller and transport in `AppState`, rejects dependencies
+  injected while their feature is disabled, and refuses startup when an
+  enabled dependency or exact provider binding is missing or mismatched.
 - The control surface provides authenticated
   `GET /v1/sorafs/gateway/compliance/feeds/{feed_id}` and
   `GET /v1/sorafs/gateway/compliance/status` reads plus

@@ -1,0 +1,181 @@
+# Registry for generated source that intentionally remains checked in.
+#
+# Each repository-owned generator must provide a read-only drift-check command.
+# External entries record pinned provenance when the upstream input is not part
+# of this repository. Package, portal, cache, and build outputs are forbidden
+# below and must be regenerated in ignored staging directories.
+schema_version = 1
+
+[policy]
+forbidden_tracked_globs = [
+  "dist/**",
+  "javascript/iroha_js/dist/**",
+  ".swiftpm-build/**",
+  "build/**",
+  "**/build/**",
+  "target/**",
+  "**/target/**",
+  "**/node_modules/**",
+  "**/__pycache__/**",
+  "**/.pytest_cache/**",
+  "**/.ruff_cache/**",
+  "**/.gradle/**",
+  "**/.swiftpm/**",
+  "**/.cache/**",
+  "**/*.pyc",
+  "**/*.pyo",
+  "**/*.class",
+]
+allowed_tracked_paths = ["dist/.gitkeep"]
+generated_source_extensions = [
+  ".go",
+  ".java",
+  ".js",
+  ".kt",
+  ".mjs",
+  ".py",
+  ".rs",
+  ".swift",
+  ".ts",
+  ".yaml",
+  ".yml",
+]
+
+[[generated]]
+name = "data-model-public-api"
+kind = "file"
+outputs = [
+  "crates/iroha_data_model/non_transparent_api.rs",
+  "crates/iroha_data_model/transparent_api.rs",
+]
+# TODO: Repair the legacy extractor before using it to regenerate this
+# curated public API facade, then replace this exception with a drift check.
+generator = "historical scripts/generate_data_model_api; currently non-authoritative"
+generator_sources = []
+inputs = []
+check = "cargo test --locked -p iroha_data_model"
+external = true
+provenance = "checked-in public API facade; legacy generator requires repair before regeneration"
+
+[[generated]]
+name = "ivm-syscall-rust-assets"
+kind = "file"
+outputs = [
+  "crates/ivm_abi/src/gas_spec.rs",
+  "crates/ivm_abi/src/syscalls_doc_gen.rs",
+]
+generator = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write"
+generator_sources = [
+  "crates/ivm/src/bin/gen_syscalls_doc.rs",
+  "crates/ivm/src/bin/support/mod.rs",
+]
+inputs = [
+  "crates/ivm/spec/syscalls.toml",
+  "crates/ivm/src/syscalls.rs",
+  "crates/ivm_abi/src/syscalls.rs",
+]
+check = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --check"
+
+[[generated]]
+name = "ivm-syscall-documentation-regions"
+kind = "regions"
+outputs = [
+  "crates/ivm/docs/syscalls.md",
+  "crates/ivm/tests/abi_syscall_list_golden.rs",
+]
+generator = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --write"
+generator_sources = [
+  "crates/ivm/src/bin/gen_syscalls_doc.rs",
+  "crates/ivm/src/bin/support/mod.rs",
+]
+inputs = [
+  "crates/ivm/spec/syscalls.toml",
+  "crates/ivm/src/syscalls.rs",
+  "crates/ivm_abi/src/syscalls.rs",
+]
+check = "cargo run --locked -p ivm --bin gen_syscalls_doc -- --check"
+
+[[generated]]
+name = "kotodama-v1-policy-regions"
+kind = "regions"
+outputs = [
+  "crates/ivm_abi/src/access_hints.rs",
+  "crates/kotodama_lang/src/semantic.rs",
+  "docs/source/kotodama_grammar.md",
+  "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json",
+  "javascript/iroha_js/src/numericV1.js",
+  "javascript/iroha_js/index.d.ts",
+  "python/iroha_python/src/iroha_python/numeric_v1.py",
+  "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/numeric/NumericV1.kt",
+  "java/iroha_android/src/main/java/org/hyperledger/iroha/android/numeric/NumericV1.java",
+  "IrohaSwift/Sources/IrohaSwift/NumericV1.swift",
+  "csharp/src/Hyperledger.Iroha.Sdk/Numeric/NumericV1.cs",
+  "javascript/iroha_js/src/kotodamaIdentifiers.js",
+  "python/iroha_python/src/iroha_python/client.py",
+  "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractManifestModels.kt",
+  "java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractManifestJsonParser.java",
+  "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+  "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiContractManifestJson.cs",
+]
+generator = "python3 scripts/regenerate_kotodama_syntax.py --write"
+generator_sources = ["scripts/regenerate_kotodama_syntax.py"]
+inputs = [
+  "fixtures/kotodama_v1_policy.json",
+  "crates/kotodama_lang/grammar/v1.lex",
+  "crates/ivm_abi/src/pointer_abi.rs",
+  "crates/iroha_primitives/src/numeric_abi.rs",
+]
+check = "python3 scripts/regenerate_kotodama_syntax.py"
+
+[[generated]]
+name = "sorafs-sf1-fixtures"
+kind = "file"
+outputs = [
+  "fixtures/sorafs_chunker/manifest_blake3.json",
+  "fixtures/sorafs_chunker/sf1_profile_v1.go",
+  "fixtures/sorafs_chunker/sf1_profile_v1.json",
+  "fixtures/sorafs_chunker/sf1_profile_v1.rs",
+  "fixtures/sorafs_chunker/sf1_profile_v1.ts",
+  "fuzz/sorafs_chunker/sf1_profile_v1_backpressure.json",
+  "fuzz/sorafs_chunker/sf1_profile_v1_input.bin",
+]
+generator = "cargo run --locked -p sorafs_chunker --bin export_vectors -- --allow-unsigned"
+generator_sources = ["crates/sorafs_chunker/src/bin/export_vectors.rs"]
+inputs = [
+  "crates/sorafs_chunker/Cargo.toml",
+  "crates/sorafs_chunker/src/*.rs",
+  "crates/sorafs_chunker/src/**/*.rs",
+]
+check = "node scripts/check_sf1_vectors.mjs"
+
+[[generated]]
+name = "default-docker-compose"
+kind = "file"
+outputs = [
+  "defaults/docker-compose.local.yml",
+  "defaults/docker-compose.single.yml",
+  "defaults/docker-compose.yml",
+]
+generator = "cargo run --locked -p iroha_kagami -- docker"
+generator_sources = [
+  "crates/iroha_kagami/src/main.rs",
+  "crates/iroha_kagami/src/swarm.rs",
+]
+inputs = [
+  "defaults/*.json",
+  "defaults/*.toml",
+]
+check = "bash scripts/tests/consistency.sh"
+
+# TODO: Restore scripts/etenraku_analysis.py and the licensed reference
+# recording so this historical trace can be reproduced inside the repository.
+[[generated]]
+name = "iroha-monitor-etenraku-reference-trace"
+kind = "file"
+outputs = ["crates/iroha_monitor/src/etenraku_trace.rs"]
+generator = "historical scripts/etenraku_analysis.py reference-recording analysis"
+generator_sources = []
+inputs = []
+check = "cargo test --locked -p iroha_monitor"
+external = true
+provenance = "historical reference trace; the original generator and recording are not tracked"

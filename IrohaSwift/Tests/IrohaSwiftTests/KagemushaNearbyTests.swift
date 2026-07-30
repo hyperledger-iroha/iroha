@@ -56,6 +56,10 @@ final class KagemushaNearbyTests: XCTestCase {
     }
 
     func testNearbyEnvelopeRoundTripsEveryTypedMessage() throws {
+        try requireNativeTestCapability(
+            KagemushaRecursiveSpend.hasRequiredNativeSymbols,
+            "ABI-21 Kagemusha bridge is not linked in this test host"
+        )
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let request = try offer.project(
             chainDiscriminant: SccpV1.tairaI105DiscriminantV1
@@ -82,21 +86,12 @@ final class KagemushaNearbyTests: XCTestCase {
         XCTAssertEqual(decodedRequest.pairingChallenge, challenge)
 
         let encodedPayment = try KagemushaNearbyEnvelopeCodec.encode(.payment(payment))
-        if KagemushaRecursiveSpend.hasRequiredNativeSymbols {
-            let decodedPayment = try KagemushaNearbyEnvelopeCodec.decode(
-                encodedPayment,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )
-            XCTAssertEqual(decodedPayment.payload, .payment(payment))
-            XCTAssertNil(decodedPayment.pairingChallenge)
-        } else {
-            XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
-                encodedPayment,
-                chainDiscriminant: SccpV1.tairaI105DiscriminantV1
-            )) { error in
-                XCTAssertEqual(error as? KagemushaNearbyError, .invalidMessage)
-            }
-        }
+        let decodedPayment = try KagemushaNearbyEnvelopeCodec.decode(
+            encodedPayment,
+            chainDiscriminant: SccpV1.tairaI105DiscriminantV1
+        )
+        XCTAssertEqual(decodedPayment.payload, .payment(payment))
+        XCTAssertNil(decodedPayment.pairingChallenge)
 
         let decodedAcknowledgement = try KagemushaNearbyEnvelopeCodec.decode(
             KagemushaNearbyEnvelopeCodec.encode(.acknowledgement(acknowledgement)),

@@ -6,11 +6,40 @@ on:
     paths:
       - ".github/workflows/sorafs-orchestrator-sdk.yml"
       - "ci/sdk_sorafs_orchestrator.sh"
+      - "ci/check_sorafs_python_native_sdk.sh"
+      - "scripts/build_norito_xcframework.sh"
+      - "scripts/exec_with_file_lock.py"
+      - "scripts/check_mobile_sdk_artifact_pin_commit.py"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/norito_bridge_source_seal.py"
+      - "scripts/run_mobile_hermetic_command.py"
+      - "crates/connect_norito_bridge/**"
+      - "crates/iroha_js_host/**"
+      - "crates/iroha_core/src/smartcontracts/isi/mod.rs"
+      - "crates/iroha_core/src/smartcontracts/isi/escrow.rs"
+      - "crates/iroha_data_model/src/bin/cancel_asset_lock_fixtures.rs"
+      - "crates/iroha_data_model/src/escrow.rs"
+      - "crates/iroha_data_model/src/events/data/escrow.rs"
+      - "crates/iroha_data_model/src/isi/mod.rs"
+      - "crates/iroha_data_model/src/isi/escrow.rs"
+      - "crates/iroha_data_model/src/isi/registry.rs"
+      - "crates/iroha_data_model/src/testing/cancel_asset_lock.rs"
+      - "crates/kotodama_lang/src/samples/native_escrow.ko"
+      - "crates/kotodama_lang/src/samples/native_escrow.to"
+      - "crates/sorafs_manifest/**"
       - "crates/sorafs_orchestrator/**"
       - "python/iroha_python/**"
       - "javascript/iroha_js/**"
       - "IrohaSwift/**"
+      - "fixtures/sorafs_manifest/appeal_finance/**"
+      - "fixtures/sorafs_manifest/reference_sdk/**"
+      - "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json"
       - "fixtures/sorafs_orchestrator/multi_peer_parity_v1/**"
+      - "integration_tests/tests/native_escrow.rs"
+      - "scripts/check_sorafs_reference_sdk_fixtures.py"
+      - "scripts/check_native_sdk_abi21_artifact.py"
+      - "scripts/tests/check_native_sdk_abi21_artifact_test.py"
+      - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -32,11 +61,27 @@ jobs:
     env:
       CARGO_NET_OFFLINE: "false"
       CARGO_TERM_COLOR: never
+      IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
+      - name: Bind the canonical mobile Python
+        run: |
+          mobile_python="$(python3 -I -S -c '
+          import sys
+          sys.path.insert(0, "scripts")
+          from pathlib import Path
+          from sorafs_path_identity import resolve_path_identity
+          errors = []
+          identity = resolve_path_identity(Path(sys.executable), errors, label="mobile SDK Python")
+          if identity is None or errors:
+              raise SystemExit("mobile SDK Python path identity could not be resolved")
+          print(identity)
+          ')"
+          [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
+          echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -46,6 +91,27 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install Apple Rust targets
+        run: |
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+          cargo fetch --locked
+      - name: Prepare external Apple native artifact roots
+        run: |
+          artifact_dir="$RUNNER_TEMP/iroha-sorafs-sdk-apple-artifacts"
+          build_dir="$RUNNER_TEMP/iroha-sorafs-sdk-apple-build"
+          mkdir -p "$artifact_dir" "$build_dir"
+          echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
+          echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
+      - name: Build exact ABI-21 NoritoBridge XCFramework
+        run: NORITO_BRIDGE_PRESERVE_CARGO_TARGETS=1 scripts/build_norito_xcframework.sh
+      - name: Authenticate Apple native artifact
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+      - name: Run exact Python 3.12 ABI-21 native reference parity
+        env:
+          SORAFS_PYTHON_SDK_PYTHON_BIN: python3
+        run: bash ci/check_sorafs_python_native_sdk.sh
       - name: Run Rust, Python, JavaScript, and Swift fixture parity
         run: bash ci/sdk_sorafs_orchestrator.sh
       - name: Upload parity evidence

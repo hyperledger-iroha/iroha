@@ -48,6 +48,7 @@ pub enum VegaWireError {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 pub struct VegaScalarWireV1 {
     bytes: [u8; 32],
@@ -113,6 +114,7 @@ impl VegaScalarWireV1 {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
 pub struct VegaPointWireV1 {
     bytes: [u8; 33],
@@ -192,6 +194,7 @@ mod tests {
         norito::derive::NoritoSerialize,
         norito::derive::NoritoDeserialize,
     )]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     #[norito(decode_from_slice)]
     struct PrimitiveFixture {
         scalar: VegaScalarWireV1,

@@ -197,6 +197,21 @@ fn capacity_specs_reject_noncanonical_public_fields() {
             "leading zeros",
         ),
         (
+            "declaration",
+            "declaration_profile_alias.json",
+            SPEC_JSON.replace("sorafs.sf1@1.0.0", "sorafs/sf1@1.0.0"),
+            "not canonical",
+        ),
+        (
+            "declaration",
+            "declaration_capability_alias.json",
+            SPEC_JSON.replace(
+                "\"torii_gateway\", \"chunk_range_fetch\"",
+                "\"torii\", \"chunk_range_fetch\"",
+            ),
+            "unknown capability name",
+        ),
+        (
             "telemetry",
             "telemetry_padded_effective.json",
             TELEMETRY_JSON.replace(

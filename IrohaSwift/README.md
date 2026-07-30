@@ -1109,13 +1109,17 @@ archive. Do not reconstruct or mutate proof material outside the typed codecs.
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` is capability-only.
+`PrivacyNativeBridge` is selector-free.
 `capabilitiesArchiveV1()` returns the canonical typed
 `PrivacyCapabilitySnapshotV1` Norito archive, while `protocolsV1` exposes the
-closed `PrivacyProtocolIdV1` enum in exact wire order. ABI 21 availability
-requires only the capability and zeroizing-free symbols plus a valid capability
-probe. Generic request/build/verify dispatch and free-form selectors are absent;
-proofs use protocol-specific typed APIs.
+closed `PrivacyProtocolIdV1` enum in exact wire order.
+`exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
+and envelopes for all twelve rows; `validateExact12FixtureBundleV1(_:)`
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 21
+availability requires both capability symbols, both exact-12 fixture symbols,
+the zeroizing-free symbol, and successful typed probes. Generic
+request/build/verify dispatch and free-form selectors are absent; proofs use
+protocol-specific typed APIs.
 
 The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
@@ -1812,7 +1816,21 @@ let issue = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
 let complete = try SorafsReplicationInstructionBuilders.completeReplicationOrder(
     orderId: orderId,
     providerId: providerId,
-    completionEpoch: 27
+    completionEpoch: 27,
+    expectedAuthority: try SorafsProviderIngestCompletionAuthorityV1(
+        providerOwner: providerOwner,
+        signerPolicy: try SorafsProviderIngestCompletionSignerPolicyV1(
+            policyId: policyId,
+            revision: 2,
+            predecessorDigest: predecessorDigest,
+            policyDigest: policyDigest
+        )
+    ),
+    expectedAssignmentRevision: 3,
+    finalizedAnchor: try SorafsProviderIngestFinalizedAnchorV1(
+        height: 41,
+        blockHash: blockHash
+    )
 )
 let expire = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
     orderId: orderId,
@@ -1822,9 +1840,11 @@ let expire = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
 
 IDs must be non-zero lowercase 64-hex strings. Issue validates canonical,
 bounded `ReplicationOrderV1` framing, the embedded order ID, target/provider
-assignment policy, and deadline ordering. Completion is provider-specific and
-always contains `order_id`, `provider_id`, and `completion_epoch`; missing,
-legacy, or unknown fields are rejected by the decoder.
+assignment policy, and deadline ordering. Completion requires the exact
+six-field hard cut: `order_id`, `provider_id`, `completion_epoch`,
+`expected_authority`, `expected_assignment_revision`, and `finalized_anchor`.
+The authority retains the provider owner and four-part signer-policy chain;
+missing, retired three-field, alias, or unknown shapes are rejected.
 
 ## NoritoBridge packaging
 

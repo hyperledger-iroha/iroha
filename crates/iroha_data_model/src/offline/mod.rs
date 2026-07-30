@@ -86,6 +86,11 @@ pub const KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
 pub const KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2: u32 = 1 << KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2;
 /// Maximum canonical top-up shield proof envelope accepted at typed ingress.
 pub const KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2: usize = 192 * 1024;
+/// Absolute canonical byte ceiling for one ABI-21 unshield-v3 proof.
+///
+/// The installed verifier record may advertise a lower limit, but no
+/// Kagemusha redemption archive may carry a larger proof.
+pub const KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4: usize = 192 * 1024;
 /// Maximum number of branch decisions carried by one recursive spend lineage.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2: u8 = 64;
 /// Maximum number of device-to-device transfers in one recursive spend lineage.
@@ -123,10 +128,10 @@ pub const KAGEMUSHA_TOPUP_FINALITY_MAX_VALIDATORS_V2: usize = MAX_VALIDATORS_PER
 pub const KAGEMUSHA_TOPUP_FINALITY_MAX_ROSTER_WINDOWS_V2: usize = 1;
 /// Maximum canonical Norito bytes accepted for one compact top-up finality proof.
 ///
-/// The epoch-boundary case retains the complete next-epoch identity snapshot,
-/// including all 4,096 bounded `PoPs` plus maximum current and parent signer
-/// lists. The exact maximum wire-shape test below pins the encoded size below
-/// this 2 MiB ingress cap.
+/// The epoch-boundary case can retain the complete next-epoch identity
+/// snapshot, including all 4,096 bounded `PoPs` plus current and parent signer
+/// lists. Canonical ingress enforces this 2 MiB cap before reconstruction and
+/// uses a frame-scaled allocation ceiling for the nested collections.
 pub const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Native-width mirror of [`KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2`].
 const KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_USIZE_V2: usize = 2 * 1024 * 1024;
@@ -385,7 +390,7 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 16;
 pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 16;
 /// Minimum unusable-row reservation required by the Halo2 base circuit.
 pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
-/// Exact supported challenge-phase vector length.
+/// Exact supported advice challenge-phase vector length.
 ///
 /// The compact V5 Kagemusha profile has no challenge-dependent witness work. Admitting empty
 /// second/third advice phases makes Halo2 re-synthesise the phase-zero circuit
@@ -394,11 +399,15 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 /// constrained instead of reserving speculative future phases.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
-pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 256;
+pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 443;
 /// Reviewed first-release advice-column profile for compact degree-16 generation.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [8];
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [443];
 /// Reviewed first-release lookup-column profile for compact degree-16 generation.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 1] = [1];
+///
+/// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as
+/// zero-width suffixes even though the authenticated advice profile has only
+/// the populated phase-zero entry.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [47, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:step-circuit-params:compact-v5";
@@ -416,11 +425,22 @@ pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
 /// Public selector required by every ordinary live V4 Step proof.
 pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
 /// Absolute defensive ceiling for one measured V4 Step proof transcript.
-pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 8 * 1024;
+///
+/// The 128 KiB bound leaves substantial headroom for the reviewed compact
+/// profile while still rejecting unbounded or profile-incompatible proof
+/// payloads. Release promotion separately pins the candidate's measured size.
+pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 128 * 1024;
 /// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 21_764;
+///
+/// The canonical pair owns a separate 256 KiB bound. Release promotion
+/// separately pins the candidate's measured Eq/Ep pair size beneath it.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 256 * 1024;
 /// Maximum processed proving-key payload admitted by the compact V5 profile.
-pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 96 * 1024 * 1024;
+///
+/// The first-release circuit includes five authenticated Table16 SHA lanes.
+/// Its processed key is intentionally file-backed and is bounded independently
+/// from the much smaller decoded verifier-resident budget.
+pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 5 * 1024 * 1024 * 1024;
 /// Maximum serialized `ParamsIPA` payload admitted by the compact V5 profile.
 pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 8 * 1024 * 1024;
 /// Exact cryptographic profile embedded inside the ABI-21/V4 lifecycle.
@@ -465,7 +485,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4: u16 = 4;
 /// Defensive upper bound for the canonical Norito header preceding a V4 payload.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4: u32 = 64 * 1024;
 /// Maximum size of any one V4 content-addressed artifact file.
-pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 256 * 1024 * 1024;
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 5 * 1024 * 1024 * 1024;
 /// Canonical Eq `ParamsIPA` package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4: &str =
     "step-eq.params-ipa.krv4";
@@ -1624,7 +1644,10 @@ mod model {
     #[norito(deny_unknown_fields)]
     pub struct KagemushaReviewedSourceClosureManifestEntryV1 {
         /// SHA-256 of the exact regular-file bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub blob_sha256: [u8; 32],
         /// Canonical lowercase SHA-1 Git blob object id of the same bytes.
         pub git_blob_oid: String,
@@ -1637,6 +1660,9 @@ mod model {
     }
 
     /// Canonical independently reviewed dirty source closure for one candidate.
+    ///
+    /// Its JSON representation matches the reviewed descriptor: SHA-256 fields,
+    /// including those in untracked-file entries, are lowercase hex strings.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -1653,10 +1679,16 @@ mod model {
         /// Derived dirty state; first release requires `true`.
         pub source_repo_dirty: bool,
         /// Producer full-tree SHA-256 of tracked, untracked, and `Cargo.lock` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub source_tree_sha256: [u8; 32],
         /// SHA-256 of the canonical full-index binary Git diff from `source_commit`.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub tracked_binary_diff_sha256: [u8; 32],
         /// Exact number of raw-byte-sorted untracked manifest entries.
         pub untracked_file_count: u64,
@@ -1664,15 +1696,24 @@ mod model {
         pub untracked_path_mode_blob_oid_manifest:
             Vec<KagemushaReviewedSourceClosureManifestEntryV1>,
         /// SHA-256 of each entry's canonical compact sorted-key JSON plus LF.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub untracked_path_mode_blob_oid_manifest_sha256: [u8; 32],
         /// Exact ignored root `Cargo.lock` byte length.
         pub ignored_cargo_lock_size_bytes: u64,
         /// SHA-256 of the exact ignored root `Cargo.lock` bytes.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub ignored_cargo_lock_sha256: [u8; 32],
         /// Cross-repository tracked-diff/untracked-manifest fingerprint.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes_hex")
+        )]
         pub combined_source_fingerprint_sha256: [u8; 32],
     }
 
@@ -4905,12 +4946,10 @@ impl KagemushaStepCircuitParamsV4 {
                 .contains(&self.k)
             || phase_count != 1
             || phase_count > KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4
-            || phase_count != self.num_lookup_advice_per_phase.len()
-            || self.num_advice_per_phase.iter().any(|count| *count != 8)
-            || self
-                .num_lookup_advice_per_phase
-                .iter()
-                .any(|count| *count != 1)
+            || self.num_advice_per_phase.as_slice()
+                != KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4
+            || self.num_lookup_advice_per_phase.as_slice()
+                != KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4
             || self.num_fixed != 1
             || self.lookup_bits != self.k - 1
             || self.num_instance_columns != 1
@@ -7193,6 +7232,25 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
 
+    #[test]
+    fn reviewed_source_closure_json_matches_canonical_hex_descriptor() {
+        let closure = reviewed_source_closure();
+        let json = norito::json::to_json(&closure).expect("serialize reviewed source closure JSON");
+
+        assert!(json.contains(&format!(
+            "\"source_tree_sha256\":\"{}\"",
+            hex::encode(closure.source_tree_sha256)
+        )));
+        assert!(json.contains(&format!(
+            "\"blob_sha256\":\"{}\"",
+            hex::encode(closure.untracked_path_mode_blob_oid_manifest[0].blob_sha256)
+        )));
+
+        let decoded: KagemushaReviewedSourceClosureV1 =
+            norito::json::from_str(&json).expect("decode canonical hex descriptor JSON");
+        assert_eq!(decoded, closure);
+    }
+
     fn circuit_params() -> KagemushaStepCircuitParamsV4 {
         let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
         let layout =
@@ -7200,8 +7258,8 @@ mod kagemusha_v4_artifact_contract_tests {
         KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8],
-            num_lookup_advice_per_phase: vec![1],
+            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,
@@ -8979,7 +9037,7 @@ mod device_authority_p256_tests {
     }
 
     #[test]
-    fn redeem_result_rejects_structurally_decodable_alternate_layout_archive() {
+    fn redeem_result_rejects_alternate_layout_and_compressed_expansion_archives() {
         let receiver_request =
             recipient_payment_request(&signing_key(15), 1_800_000_000_000, 1_800_000_030_000);
         let bundle = recipient_payment_bundle(&receiver_request);
@@ -9063,6 +9121,166 @@ mod device_authority_p256_tests {
                 field: "redeem_result.v4.request_archive",
             })
         ));
+
+        const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
+        const NORITO_UNCOMPRESSED_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
+        let mut compressed_expansion_archive = canonical_request_archive;
+        compressed_expansion_archive[NORITO_COMPRESSION_OFFSET] = norito::Compression::Zstd as u8;
+        compressed_expansion_archive[NORITO_UNCOMPRESSED_LENGTH_OFFSET
+            ..NORITO_UNCOMPRESSED_LENGTH_OFFSET + std::mem::size_of::<u64>()]
+            .copy_from_slice(
+                &u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4)
+                    .expect("redeem ceiling fits u64")
+                    .to_le_bytes(),
+            );
+        let compressed_expansion_result = KagemushaRecursiveSpendRedeemResultV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            redeem_request_archive: compressed_expansion_archive,
+            offline_change_bundle: None,
+            offline_change_membership_witness: None,
+            offline_change_topup_provenance: None,
+            operation_id: request.operation_id,
+        };
+        assert!(matches!(
+            compressed_expansion_result.validate_public_binding(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_result.v4.request_archive",
+            })
+        ));
+
+        let unshield_backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into();
+        let mut semantic_unshield = ProofAttachment::new_ref(
+            unshield_backend.clone(),
+            ProofBox::new(
+                unshield_backend.clone(),
+                vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4],
+            ),
+            VerifyingKeyId::new(unshield_backend, "unshield-v3-wire-limit"),
+        );
+        semantic_unshield.vk_commitment = Some([0x68; 32]);
+        validate_kagemusha_redeem_proof_attachment_v2(&semantic_unshield)
+            .expect("maximum-sized unshield proof remains structurally valid");
+        semantic_unshield.proof.bytes.push(0x65);
+        assert!(matches!(
+            validate_kagemusha_redeem_proof_attachment_v2(&semantic_unshield),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_proof",
+            })
+        ));
+
+        let mut maximum_unshield = request.clone();
+        maximum_unshield.redeem_proof.proof.bytes =
+            vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
+        let maximum_unshield_archive = norito::encode_canonical(&maximum_unshield)
+            .expect("encode maximum-sized unshield request");
+        preflight_kagemusha_redeem_request_archive_v4(&maximum_unshield_archive)
+            .expect("wire preflight accepts the exact unshield limit");
+        let maximum_unsigned = maximum_unshield.unsigned_payload();
+        let maximum_unsigned_archive = norito::encode_canonical(&maximum_unsigned)
+            .expect("encode maximum-sized unsigned unshield fixture");
+        preflight_kagemusha_redeem_unsigned_archive_v4(&maximum_unsigned_archive)
+            .expect("unsigned wire preflight accepts the exact unshield limit");
+        let maximum_build_result = KagemushaRecursiveSpendRedeemBuildResultV4 {
+            operation_id: maximum_unsigned.operation_id,
+            unsigned: maximum_unsigned,
+            authorization_digest: [0x67; 32],
+            offline_change_bundle: None,
+            offline_change_membership_witness: None,
+            offline_change_topup_provenance: None,
+        };
+        let maximum_build_result_archive = norito::encode_canonical(&maximum_build_result)
+            .expect("encode maximum-sized redemption-build result fixture");
+        preflight_kagemusha_redeem_build_result_archive_v4(&maximum_build_result_archive)
+            .expect("build-result wire preflight accepts the exact unshield limit");
+        maximum_unshield.redeem_proof.proof.bytes.push(0x65);
+        let oversized_request_archive = norito::encode_canonical(&maximum_unshield)
+            .expect("encode oversized unshield request fixture");
+        assert!(matches!(
+            preflight_kagemusha_redeem_request_archive_v4(&oversized_request_archive),
+            Err(norito::Error::FieldLengthExceeded { length, limit })
+                if length == (KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 + 1) as u64
+                    && limit == KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 as u64
+        ));
+        let oversized_unsigned = maximum_unshield.unsigned_payload();
+        let oversized_unsigned_archive = norito::encode_canonical(&oversized_unsigned)
+            .expect("encode oversized unsigned unshield fixture");
+        assert!(matches!(
+            preflight_kagemusha_redeem_unsigned_archive_v4(&oversized_unsigned_archive),
+            Err(norito::Error::FieldLengthExceeded { .. })
+        ));
+        let oversized_build_result = KagemushaRecursiveSpendRedeemBuildResultV4 {
+            operation_id: oversized_unsigned.operation_id,
+            unsigned: oversized_unsigned,
+            authorization_digest: [0x67; 32],
+            offline_change_bundle: None,
+            offline_change_membership_witness: None,
+            offline_change_topup_provenance: None,
+        };
+        let oversized_build_result_archive = norito::encode_canonical(&oversized_build_result)
+            .expect("encode oversized redemption-build result fixture");
+        assert!(matches!(
+            preflight_kagemusha_redeem_build_result_archive_v4(&oversized_build_result_archive),
+            Err(norito::Error::FieldLengthExceeded { .. })
+        ));
+
+        let mut maximum_request = request;
+        maximum_request
+            .bundle
+            .recursive_proof
+            .proof_envelope
+            .proof
+            .bytes =
+            vec![0x64; KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize];
+        maximum_request.redeem_proof.proof.bytes =
+            vec![0x65; KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4];
+        let mut change_bundle = maximum_request.bundle.clone();
+        change_bundle.recursive_proof.proof_envelope.proof.bytes =
+            vec![0x66; KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize];
+        maximum_request.offline_change = Some(KagemushaRecursiveSpendRedeemChangeBranchV4 {
+            output: change_bundle.statement.current_note.clone(),
+            branch_claims: change_bundle.statement.branch_claims.clone(),
+            bundle: change_bundle,
+        });
+        let maximum_archive =
+            norito::encode_canonical(&maximum_request).expect("maximum-shaped redeem request");
+        assert!(maximum_archive.len() <= KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4);
+        let decoded =
+            norito::decode_canonical_with_limits::<KagemushaRecursiveSpendRedeemRequestV4>(
+                &maximum_archive,
+                kagemusha_recursive_spend_redeem_decode_limits_v4(maximum_archive.len()),
+            )
+            .expect("maximum-shaped redeem request must fit the schema-bounded allocation budget");
+        assert_eq!(decoded, maximum_request);
+    }
+
+    #[test]
+    fn redeem_result_decode_limits_cover_the_exact_archive_ceiling() {
+        let limits = kagemusha_recursive_spend_redeem_decode_limits_v4(
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
+        );
+        assert_eq!(
+            limits.max_sequence_elements(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        );
+        assert_eq!(
+            limits.max_field_bytes(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        );
+        assert_eq!(
+            limits.max_total_elements(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4 * 2
+        );
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+                * (KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4
+                    + KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4)
+                + KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4
+        );
+        assert_eq!(
+            limits.max_nesting_depth(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4
+        );
     }
 
     #[test]
@@ -9416,6 +9634,7 @@ fn validate_kagemusha_redeem_proof_attachment_v2(
         || proof.vk_ref.backend.as_str() != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
         || proof.vk_ref.name.is_empty()
         || proof.proof.bytes.is_empty()
+        || proof.proof.bytes.len() > KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
         || proof
             .vk_commitment
             .is_none_or(|commitment| commitment == [0; 32])
@@ -10255,6 +10474,224 @@ pub const KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4: &str =
 pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4: usize = 64 * 1024 * 1024;
 /// Maximum canonical ABI-21 redemption request archive size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4: usize = 48 * 1024 * 1024;
+/// Frame-derived base multiplier for bounded ABI-21 request reconstruction.
+pub const KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4: usize = 4;
+/// Extra frame-derived multiplier for an untrusted redemption proof field.
+///
+/// Canonical wire preflight rejects an oversized unshield proof before its
+/// `Vec<u8>` is materialized, so no frame-scaled allowance remains necessary.
+pub const KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4: usize = 0;
+/// Extra frame-derived multiplier for a native redemption-build result.
+///
+/// Canonical wire preflight rejects its nested oversized unshield proof before
+/// reconstruction, so the exact fixed allowance accounts for the remaining
+/// charged copies.
+pub const KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4: usize = 0;
+/// Fixed allocation allowance for a maximum-shaped ABI-21 top-up request.
+pub const KAGEMUSHA_TOPUP_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    6 * KAGEMUSHA_TOPUP_SHIELD_MAX_PROOF_BYTES_V2 + 64 * 1024;
+/// Fixed allocation allowance for one root ABI-21 recursive bundle.
+pub const KAGEMUSHA_BUNDLE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    8 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for one nested ABI-21 recursive bundle.
+///
+/// This profile covers peer payments, initialization results, and local
+/// wrappers containing one bundle.
+pub const KAGEMUSHA_SINGLE_RECURSIVE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    11 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a maximum-shaped ABI-21 split result.
+pub const KAGEMUSHA_SPLIT_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    24 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a two-parent ABI-21 change-preparation request.
+pub const KAGEMUSHA_PEER_SPLIT_PREPARE_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    28 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a two-parent ABI-21 local append request.
+pub const KAGEMUSHA_APPEND_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    34 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a nested ABI-21 terminal-verification request.
+pub const KAGEMUSHA_VERIFY_LOCAL_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize =
+    14 * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize + 1024 * 1024;
+/// Fixed allocation allowance for a maximum-shaped ABI-21 redemption request.
+pub const KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize = 27
+    * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize
+    + 3 * KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
+    + 1024 * 1024;
+/// Fixed allocation allowance for a maximum-shaped native redemption result.
+pub const KAGEMUSHA_REDEEM_BUILD_RESULT_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4: usize = 46
+    * KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize
+    + 6 * KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4
+    + 1024 * 1024;
+const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4: usize = 64;
+
+fn canonical_kagemusha_archive_payload_v4<T: norito::NoritoSerialize>(
+    frame: &[u8],
+) -> Result<&[u8], norito::Error> {
+    let header = norito::core::Header::read(std::io::Cursor::new(frame))?;
+    if header.compression != norito::Compression::None
+        || header.flags != norito::core::default_encode_flags()
+    {
+        return Err(norito::Error::NonCanonicalEncoding);
+    }
+    if header.schema != <T as norito::NoritoSerialize>::schema_hash() {
+        return Err(norito::Error::SchemaMismatch);
+    }
+
+    let archive_limit = norito::core::max_archive_len().min(usize::MAX as u64);
+    if header.length > archive_limit {
+        return Err(norito::Error::ArchiveLengthExceeded {
+            length: header.length,
+            limit: archive_limit,
+        });
+    }
+    let payload_len =
+        usize::try_from(header.length).map_err(|_| norito::Error::ArchiveLengthExceeded {
+            length: header.length,
+            limit: archive_limit,
+        })?;
+    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    let remainder = norito::core::Header::SIZE % align;
+    let padding = if remainder == 0 { 0 } else { align - remainder };
+    let payload_start = norito::core::Header::SIZE
+        .checked_add(padding)
+        .ok_or(norito::Error::LengthMismatch)?;
+    let frame_end = payload_start
+        .checked_add(payload_len)
+        .ok_or(norito::Error::LengthMismatch)?;
+    if frame_end != frame.len() {
+        return Err(norito::Error::LengthMismatch);
+    }
+    if frame[norito::core::Header::SIZE..payload_start]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return Err(norito::Error::LengthMismatch);
+    }
+    let payload = &frame[payload_start..frame_end];
+    if norito::hardware_crc64(payload) != header.checksum {
+        return Err(norito::Error::ChecksumMismatch);
+    }
+    Ok(payload)
+}
+
+fn canonical_kagemusha_compact_field_v4(
+    bytes: &[u8],
+    index: usize,
+) -> Result<&[u8], norito::Error> {
+    let mut offset = 0usize;
+    for field_index in 0..=index {
+        let tail = bytes.get(offset..).ok_or(norito::Error::LengthMismatch)?;
+        let (field_len, header_len) = norito::core::read_len_from_slice_with_flags(
+            tail,
+            norito::core::default_encode_flags(),
+        )?;
+        let start = offset
+            .checked_add(header_len)
+            .ok_or(norito::Error::LengthMismatch)?;
+        let end = start
+            .checked_add(field_len)
+            .ok_or(norito::Error::LengthMismatch)?;
+        let field = bytes.get(start..end).ok_or(norito::Error::LengthMismatch)?;
+        if field_index == index {
+            return Ok(field);
+        }
+        offset = end;
+    }
+    Err(norito::Error::LengthMismatch)
+}
+
+fn preflight_kagemusha_unshield_proof_archive_v4<T: norito::NoritoSerialize>(
+    frame: &[u8],
+    field_path: &[usize],
+) -> Result<(), norito::Error> {
+    let mut field = canonical_kagemusha_archive_payload_v4::<T>(frame)?;
+    for &index in field_path {
+        field = canonical_kagemusha_compact_field_v4(field, index)?;
+    }
+    let count_bytes = field.get(..8).ok_or(norito::Error::LengthMismatch)?;
+    let proof_len = u64::from_le_bytes(
+        count_bytes
+            .try_into()
+            .map_err(|_| norito::Error::LengthMismatch)?,
+    );
+    let maximum = KAGEMUSHA_UNSHIELD_MAX_PROOF_BYTES_V4 as u64;
+    if proof_len > maximum {
+        return Err(norito::Error::FieldLengthExceeded {
+            length: proof_len,
+            limit: maximum,
+        });
+    }
+    let proof_len = usize::try_from(proof_len).map_err(|_| norito::Error::LengthMismatch)?;
+    if field.len() != 8usize.saturating_add(proof_len) {
+        return Err(norito::Error::LengthMismatch);
+    }
+    Ok(())
+}
+
+/// Reject an oversized unshield proof in a canonical redemption request before
+/// materializing its `ProofAttachment` byte vector.
+///
+/// # Errors
+///
+/// Returns a Norito framing, layout, schema, checksum, length, or field-limit
+/// error when the archive cannot be safely classified or the proof exceeds the
+/// ABI-21 limit.
+pub fn preflight_kagemusha_redeem_request_archive_v4(frame: &[u8]) -> Result<(), norito::Error> {
+    preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemRequestV4>(
+        frame,
+        &[4, 1, 1],
+    )
+}
+
+/// Reject an oversized unshield proof in canonical unsigned redemption fields
+/// before materializing its `ProofAttachment` byte vector.
+///
+/// # Errors
+///
+/// Returns a Norito framing, layout, schema, checksum, length, or field-limit
+/// error when the archive cannot be safely classified or the proof exceeds the
+/// ABI-21 limit.
+pub fn preflight_kagemusha_redeem_unsigned_archive_v4(frame: &[u8]) -> Result<(), norito::Error> {
+    preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemUnsignedV4>(
+        frame,
+        &[4, 1, 1],
+    )
+}
+
+/// Reject an oversized nested unshield proof in a canonical redemption-build
+/// result before materializing its `ProofAttachment` byte vector.
+///
+/// # Errors
+///
+/// Returns a Norito framing, layout, schema, checksum, length, or field-limit
+/// error when the archive cannot be safely classified or the proof exceeds the
+/// ABI-21 limit.
+pub fn preflight_kagemusha_redeem_build_result_archive_v4(
+    frame: &[u8],
+) -> Result<(), norito::Error> {
+    preflight_kagemusha_unshield_proof_archive_v4::<KagemushaRecursiveSpendRedeemBuildResultV4>(
+        frame,
+        &[0, 4, 1, 1],
+    )
+}
+
+fn kagemusha_recursive_spend_redeem_decode_limits_v4(encoded_len: usize) -> norito::DecodeLimits {
+    // The canonical wire preflight enforces the unshield cap before Vec
+    // reconstruction. The fourfold base covers decoded structures and ordinary
+    // collection storage; the fixed allowance covers the bounded unshield,
+    // main, and optional-change proofs plus one MiB of structural headroom.
+    norito::DecodeLimits::new(
+        encoded_len,
+        encoded_len,
+        encoded_len.saturating_mul(2),
+        encoded_len
+            .saturating_mul(
+                KAGEMUSHA_CANONICAL_DECODE_BASE_ALLOCATION_MULTIPLIER_V4
+                    + KAGEMUSHA_REDEEM_CANONICAL_DECODE_EXTRA_ALLOCATION_MULTIPLIER_V4,
+            )
+            .saturating_add(KAGEMUSHA_REDEEM_CANONICAL_DECODE_FIXED_ALLOCATION_ALLOWANCE_V4),
+        KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4,
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecursiveSpendBundleDigestPreimageV4 {
@@ -11881,12 +12318,18 @@ impl KagemushaRecursiveSpendRedeemResultV4 {
                 field: "redeem_result.v4",
             });
         }
-        let request: KagemushaRecursiveSpendRedeemRequestV4 =
-            norito::decode_canonical(&self.redeem_request_archive).map_err(|_| {
-                KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "redeem_result.v4.request_archive",
-                }
-            })?;
+        preflight_kagemusha_redeem_request_archive_v4(&self.redeem_request_archive).map_err(
+            |_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_result.v4.request_archive",
+            },
+        )?;
+        let request: KagemushaRecursiveSpendRedeemRequestV4 = norito::decode_canonical_with_limits(
+            &self.redeem_request_archive,
+            kagemusha_recursive_spend_redeem_decode_limits_v4(self.redeem_request_archive.len()),
+        )
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "redeem_result.v4.request_archive",
+        })?;
         request.validate_public_binding()?;
         if request.operation_id != self.operation_id {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {

@@ -21,3 +21,4 @@ ingest_service,publisher_service,mirror_datastore,operator_recovery,dashboard_ap
 4
 --min-payload-kinds
 6
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

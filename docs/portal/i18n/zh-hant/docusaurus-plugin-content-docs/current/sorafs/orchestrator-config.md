@@ -55,7 +55,7 @@ SoraFS 多源獲取協調器驅動確定性並行
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 

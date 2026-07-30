@@ -44,12 +44,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \
   --chunk-fetch-plan-out artifacts/docs/book/2025-11-01/docs.fetch_plan.json \
-  --car-digest=13fa919c67e55a2e95a13ff8b0c6b40b2e51d6ef505568990f3bc7754e6cc482 \
+  --car-digest=<expected-full-carv2-blake3-hex> \
   --car-size=429391872 \
   --root-cid=f40101... \
   --dag-codec=0x71

@@ -191,6 +191,9 @@ final class CancelAssetLockV1Tests: XCTestCase {
             """
             {"CancelAssetLock":{"escrow_id":"\(Self.merchantEscrowId)","expected_remaining_amount":"1","expected_remaining_amount":"2"}}
             """,
+            """
+            {"CancelAssetLock":{"escrow_id":["\(Self.merchantEscrowId)"],"expected_remaining_amount":"1"}}
+            """,
         ]
         for json in invalidJSON {
             let payload = try NoritoJSON(data: Data(json.utf8))
@@ -199,6 +202,16 @@ final class CancelAssetLockV1Tests: XCTestCase {
                 "accepted noncanonical JSON: \(json)"
             )
         }
+
+        let retiredBareArray = Data(
+            """
+            {"escrow_id":["\(Self.merchantEscrowId)"],"expected_remaining_amount":"1"}
+            """.utf8
+        )
+        XCTAssertThrowsError(
+            try CancelAssetLockInstructionV1.decodeBareJSON(retiredBareArray),
+            "accepted the retired one-element EscrowId array"
+        )
     }
 
     func testNoritoDecoderRejectsLegacyZeroNoncanonicalAndTrailingForms() throws {
@@ -268,9 +281,10 @@ final class CancelAssetLockV1Tests: XCTestCase {
         let root = fixtureRoot()
         let canonicalJSON = root.appendingPathComponent("cancel_asset_lock_v1.json")
         guard FileManager.default.fileExists(atPath: canonicalJSON.path) else {
-            throw XCTSkip(
-                "CancelAssetLock fixtures await native generator publication after the shared Cargo build clears"
+            XCTFail(
+                "Missing required canonical CancelAssetLock fixture at \(canonicalJSON.path)"
             )
+            return
         }
 
         let decodedJSON = try CancelAssetLockInstructionV1.decodeBareJSON(
@@ -279,6 +293,16 @@ final class CancelAssetLockV1Tests: XCTestCase {
         let canonicalNorito = try Data(
             contentsOf: root.appendingPathComponent("cancel_asset_lock_v1.to")
         )
+        let exactCanonicalNorito = try XCTUnwrap(
+            Data(
+                hexString:
+                    "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002d00000000000000"
+                        + "d5f0a9bf0af707a1022073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11bdc"
+                        + "799dfdb7ea29851f0b0501000000140400000000"
+            )
+        )
+        XCTAssertEqual(canonicalNorito.count, 85)
+        XCTAssertEqual(canonicalNorito, exactCanonicalNorito)
         XCTAssertEqual(try decodedJSON.noritoArchive(), canonicalNorito)
         XCTAssertEqual(
             try CancelAssetLockInstructionV1.decodeNoritoArchive(canonicalNorito),
@@ -299,9 +323,25 @@ final class CancelAssetLockV1Tests: XCTestCase {
                 "accepted negative JSON fixture \(name)"
             )
         }
+        let retiredNestedNorito = try Data(
+            contentsOf: root
+                .appendingPathComponent("negative")
+                .appendingPathComponent("cancel_asset_lock_nested_escrow_id_v1.to")
+        )
+        let exactRetiredNestedNorito = try XCTUnwrap(
+            Data(
+                hexString:
+                    "4e5254300000b5c8a665a7de80e2eef75ccb287078fa002e00000000000000"
+                        + "0e55fb7ed463b87302212073ccd4e0dd69ad434db75056b600aa4f74c8fc5556b11b"
+                        + "dc799dfdb7ea29851f0b0501000000140400000000"
+            )
+        )
+        XCTAssertEqual(retiredNestedNorito.count, 86)
+        XCTAssertEqual(retiredNestedNorito, exactRetiredNestedNorito)
+        XCTAssertEqual(Array(retiredNestedNorito[40 ..< 42]), [0x21, 0x20])
         for name in [
             "cancel_asset_lock_legacy_missing_expected_v1.to",
-            "cancel_asset_lock_trailing_bytes_v1.to",
+            "cancel_asset_lock_nested_escrow_id_v1.to",
             "cancel_asset_lock_zero_expected_v1.to",
         ] {
             XCTAssertThrowsError(

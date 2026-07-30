@@ -1,77 +1,18 @@
+<!-- Auto-generated stub for Bashkir (ba) translation. Replace this content with the full translation. -->
+
 ---
 lang: ba
 direction: ltr
 source: docs/examples/finance/repo_custodian_ack_template.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: c52d7f2c5ec9dc4cda81895561bc1261659935c94bf3f7febb0867f4981fe616
-source_last_modified: "2026-01-22T16:26:46.472177+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: cae3a781a826a07a0420bd941a366c549fc3197a83f9a3c5b19bf29869e67bab
+source_last_modified: "2026-07-30T18:01:50.052428+00:00"
+translation_last_reviewed: null
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+# Translation In Progress
 
-# Репо опека таныу ҡалып
+This file is a placeholder for the Bashkir translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
 
-Был ҡалыпты ҡулланыу, ҡасан репо (ике яҡлы йәки три-партия) һылтанмалар опекун
-`RepoAgreement::custodian` аша. Маҡсат – опека SLA яҙып алыу, маршрутлаштырыу
-иҫәптәр, һәм быраулау контакттар активтар күсеп киткәнсе. Ҡалыпты күсерергә һеҙҙең
-дәлилдәр каталогы (мәҫәлән,
-`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), тултырырға
-урын хужалары, һәм хеш файл өлөшө булараҡ, идара итеү пакеты һүрәтләнгән .
-`docs/source/finance/repo_ops.md` §2,8.
-
-## 1. Метадата
-
-| Ялан | Ҡиммәте |
-|------|-------|
-| Килешеү идентификаторы | `<repo-yyMMdd-XX>` |
-| Һаҡлаусы иҫәп id | `<i105...>` |
-| / дата менән әҙерләнгән | I18NI0000007X |
-| Өҫтәл контакттар танылған | `<desk lead + counterparty>` |
-| Дәлилдәр каталогы | ``artifacts/finance/repo/<slug>/`` |
-
-## 2. Һаҡлау даирәһе
-
-- **Баллы аңлатмалар:** `<list of asset definition ids>`
-- **Аҡса аяҡ валютаһы / ҡасаба тимер юл:** `<xor#sora / other>`
-- **Тәҙрә опека:** `<start/end timestamps or SLA summary>`
-- **Төҙөү күрһәтмәләре:** `<hash + path to standing instruction document>`
-- **Автоматлаштырыу шарттары:** `<scripts, configs, or runbooks custodian will invoke>`
-
-## 3. Маршрутлаштырыу & Мониторинг
-
-| Элемент | Ҡиммәте |
-|------|-------|
-| Һаҡлау янсыҡы / баш китабы иҫәбенә | `<asset ids or ledger path>` |
-| Мониторинг каналы | `<Slack/phone/on-call rotation>` |
-| Дренаж контакт | `<primary + backup>` |
-| Кәрәкле иҫкәртмәләр | `<PagerDuty service, Grafana board, etc.>` |
-
-## 4. Һөйләмдәр
-
-1. *Мәҡәләмгә әҙерлек:* “Беҙ сәхнәләштерелгән I18NI000000019X faceboud менән ҡарап сыҡтыҡ.
-   идентификаторҙар өҫтә һәм әҙер ҡабул итеү өсөн залог буйынса SLA исемлегенә
-   §2-лә».
-2. *Роллбек йөкләмәһе:* “Беҙ өҫтә аталған кире ҡайтарыу плейбукты үтәйәсәкбеҙ, әгәр ҙә
-   режиссеры инцидент командиры, һәм CLI журналдары плюс хештар менән тәьмин итәсәк.
-   `governance/drills/<timestamp>.log`.”
-3. *Дәлилдәр һаҡлау:* “Беҙ таныуҙы һаҡларбыҙ, торған
-   күрһәтмәләр, һәм CLI журналдар өсөн кәмендә I18NI000000021X һәм уларҙы тәьмин итеү өсөн
-   финанс советы үтенес буйынса».
-
-Түбәндәге билдә (электрон ҡултамғалар ҡабул итеү ваҡытында идара итеү аша идара итеү
-трекер).
-
-| Исем | Роль | Ҡултамға / дата |
-|-----|------|-------------------|
-| `<custodian ops lead>` | Һаҡлаусы оператор | `<signature>` |
-| `<desk lead>` | Өҫтәл | `<signature>` |
-| `<counterparty>` | Контраст | `<signature>` |
-
-> Бер тапҡыр ҡул ҡуйылған, хеш файл (миҫал: I18NI000000028X) һәм
-> яҙып алыу дигест идара итеү пакет таблицаһында шулай рецензенттар раҫлай ала
-> таныу байттары тауыш биргәндә һылтанма яһалған.
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

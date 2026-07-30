@@ -10,6 +10,16 @@ repository = "https://github.com/hyperledger/ivm"
 documentation = "https://docs.rs/ivm"
 build = "build.rs"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("iroha_telemetry"))',
+    'cfg(feature, values("ivm_halo2_real"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("schema-structural"))',
+    'cfg(feature, values("zk-halo2-ipa-poseidon"))',
+] }
+
 [dependencies]
 poseidon-primitives = "0.2.0"
 sha2 = { version = "0.10.9" }
@@ -26,8 +36,8 @@ likely_stable = "0.1.3"
 parking_lot = "0.12.5"
 indexmap = "2.12.0"
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance", "bls"] }
-iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
-norito = {path = "../norito"}
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["node-crypto", "rayon", "sm"] }
+norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 iroha_primitives = { path = "../iroha_primitives" }
 iroha_telemetry = { path = "../iroha_telemetry", features = ["metric-instrumentation"] }
@@ -82,7 +92,12 @@ hex-literal = "1.1.0"
 # selected at runtime based on hardware capabilities.
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
-default = ["halo2"]
+default = ["runtime"]
+# Portable VM runtime. Syscalls, opcodes, pointer ABI, and CPU fallbacks are
+# unconditional; only external acceleration backends remain separate.
+runtime = ["halo2"]
+# Expose benchmark-only backend selection hooks. Production builds must leave
+# this disabled so field dispatch is immutable after hardware selection.
 bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []
@@ -103,10 +118,6 @@ metal = [
 halo2-params = []
 ## Feature gate for the register-file incremental Merkle update path.
 merkle_incremental = []
-## Accepts Norito derive internal cfg used to pick schema-hash strategy.
-## This is a noop here; present only to silence unexpected-cfg warnings from
-## proc-macros that reference `feature = "schema-structural"`.
-schema-structural = []
 ## Dev-only test gate used by poseidon_simd.rs; declared to silence unexpected-cfg warnings.
 ivm_zk_tests = []
 ## Dev-only test gate used by vrf_verify_chain.rs; declared to silence unexpected-cfg warnings.
@@ -173,6 +184,7 @@ harness = false
 name = "bench_field"
 path = "benches/bench_field.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "bench_registers_merkle"
@@ -213,6 +225,7 @@ harness = false
 name = "bench_bn254_cuda"
 path = "benches/bench_bn254_cuda.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "bench_vm_aes"

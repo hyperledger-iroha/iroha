@@ -24,7 +24,7 @@ pub mod state_value;
 pub mod sum;
 pub mod syscalls;
 
-pub use error::{Perm, VMError};
+pub use error::{HostOutputResource, Perm, VMError};
 
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

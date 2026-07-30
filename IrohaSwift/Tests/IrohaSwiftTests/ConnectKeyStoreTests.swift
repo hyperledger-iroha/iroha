@@ -11,8 +11,10 @@ final class ConnectKeyStoreTests: XCTestCase {
     }
 
     func testGeneratePersistsKeypairAndAttestation() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto symbols not linked"
+        )
         let dir = try temporaryDirectory()
         let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
 
@@ -66,8 +68,10 @@ final class ConnectKeyStoreTests: XCTestCase {
     }
 
     func testDeleteRemovesEntry() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto symbols not linked"
+        )
         let dir = try temporaryDirectory()
         let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
 
@@ -81,8 +85,10 @@ final class ConnectKeyStoreTests: XCTestCase {
     }
 
     func testTamperDetectionRejectsModifiedRecord() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto symbols not linked"
+        )
         let dir = try temporaryDirectory()
         let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
         let label = "secure-wallet"
@@ -110,8 +116,10 @@ final class ConnectKeyStoreTests: XCTestCase {
     }
 
     func testNonCanonicalHmacOrderingRejected() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto symbols not linked"
+        )
         let dir = try temporaryDirectory()
         let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
         let label = "wallet"

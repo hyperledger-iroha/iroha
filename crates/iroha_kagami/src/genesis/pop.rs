@@ -15,8 +15,10 @@ pub struct Args {
     /// Private key hex (multihash payload, not prefixed)
     #[clap(long, conflicts_with = "seed")]
     private_key: Option<String>,
-    /// Seed string to derive the key pair (for testing)
-    #[clap(long, conflicts_with = "private_key")]
+    /// A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
+    ///
+    /// This is for reproducible fixtures. Omit it for OS-random validator keys.
+    #[clap(long = "seed-hex", conflicts_with = "private_key", value_name = "HEX")]
     seed: Option<String>,
     /// Output JSON instead of plain text
     #[clap(long)]
@@ -45,11 +47,13 @@ impl<T: std::io::Write> RunArgs<T> for Args {
                     false,
                 )
             }
-            (None, Some(seed)) => (
-                KeyPair::try_from_seed(seed.into_bytes(), alg)
-                    .wrap_err("derive seeded key pair")?,
-                false,
-            ),
+            (None, Some(seed)) => {
+                let seed = crate::crypto::parse_keygen_seed_hex(&seed)?;
+                (
+                    KeyPair::try_from_seed(seed, alg).wrap_err("derive seeded key pair")?,
+                    false,
+                )
+            }
             (None, None) => (
                 KeyPair::try_random_with_algorithm(alg).wrap_err("generate random BLS key pair")?,
                 true,
@@ -104,7 +108,7 @@ mod tests {
         let args = Args {
             algorithm: "bls_normal".to_string(),
             private_key: None,
-            seed: Some("unit-seed".to_string()),
+            seed: Some("11".repeat(32)),
             json: true,
             expose_private_key: false,
         };
@@ -129,7 +133,7 @@ mod tests {
         let args = Args {
             algorithm: "bls_normal".to_string(),
             private_key: None,
-            seed: Some("omit-seed".to_string()),
+            seed: Some("22".repeat(32)),
             json: false,
             expose_private_key: false,
         };
@@ -150,7 +154,7 @@ mod tests {
         let args = Args {
             algorithm: "bls_normal".to_string(),
             private_key: None,
-            seed: Some("expose-seed".to_string()),
+            seed: Some("33".repeat(32)),
             json: false,
             expose_private_key: true,
         };

@@ -45,3 +45,4 @@ appeal_intake,sortition_roster,evidence_viewer,operator_workflow,juror_notificat
 /runtime/sorafs/moderation-panel/metrics-alerts-canary.json
 --governance-approval-evidence
 /runtime/sorafs/moderation-panel/governance-approval.json
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

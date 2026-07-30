@@ -99,15 +99,19 @@ def test_repo_agreement_readback_rejects_noncanonical_quantities(quantity: objec
                 "counterparty": "bob@is",
                 "custodian": None,
                 "cash_leg": {"asset_definition_id": "cash#is", "quantity": quantity},
+                "cash_source": "cash#is::bob@is",
                 "collateral_leg": {
                     "asset_definition_id": "bond#is",
                     "quantity": "120",
                 },
+                "collateral_custody_asset": "bond#is::bob@is",
                 "rate_bps": 250,
                 "maturity_timestamp_ms": 2_000,
                 "initiated_timestamp_ms": 1_000,
                 "last_margin_check_timestamp_ms": 1_000,
                 "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+                "settlement_timestamp_ms": None,
+                "status": "active",
             }
         ]
     }
@@ -123,12 +127,16 @@ def test_repo_agreement_readback_requires_quantity_fields() -> None:
         "counterparty": "bob@is",
         "custodian": None,
         "cash_leg": {"asset_definition_id": "cash#is"},
+        "cash_source": "cash#is::bob@is",
         "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+        "collateral_custody_asset": "bond#is::bob@is",
         "rate_bps": 250,
         "maturity_timestamp_ms": 2_000,
         "initiated_timestamp_ms": 1_000,
         "last_margin_check_timestamp_ms": 1_000,
         "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+        "settlement_timestamp_ms": None,
+        "status": "active",
     }
 
     with pytest.raises(KeyError, match="quantity"):

@@ -14,7 +14,10 @@
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+};
 
 use super::{
     ConsensusMessageV2, ContextId, Digest, DurableState, HeightContext, Reducer, Round,
@@ -6717,6 +6720,114 @@ fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
         TransitionClassificationFacts,
         TransitionDeltaFacts,
     )
+}
+
+/// Predicate-level evidence for a transition rejected by [`accepts`].
+///
+/// This is diagnostic-only: every field is derived from the same primitive
+/// projection and production predicates as the commit gate. It neither grants
+/// capabilities nor participates in acceptance.
+#[derive(Clone, Copy)]
+pub(crate) struct TransitionDiagnostic {
+    facts: TransitionFacts,
+    safety_before: SafetyProjection,
+    safety_after: SafetyProjection,
+    volatile_before_well_formed: bool,
+    volatile_after_well_formed: bool,
+    signed_message_class_valid: bool,
+    selected_action_valid: bool,
+    effect_slots_authorized: bool,
+    effect_order_valid: bool,
+    transition_branch_valid: bool,
+    enter_view_effective_lock_valid: bool,
+}
+
+impl fmt::Debug for TransitionDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransitionDiagnostic")
+            .field("facts", &self.facts)
+            .field("safety_before", &self.safety_before)
+            .field("safety_after", &self.safety_after)
+            .field(
+                "volatile_before_well_formed",
+                &self.volatile_before_well_formed,
+            )
+            .field(
+                "volatile_after_well_formed",
+                &self.volatile_after_well_formed,
+            )
+            .field(
+                "signed_message_class_valid",
+                &self.signed_message_class_valid,
+            )
+            .field("selected_action_valid", &self.selected_action_valid)
+            .field("effect_slots_authorized", &self.effect_slots_authorized)
+            .field("effect_order_valid", &self.effect_order_valid)
+            .field("transition_branch_valid", &self.transition_branch_valid)
+            .field(
+                "enter_view_effective_lock_valid",
+                &self.enter_view_effective_lock_valid,
+            )
+            .finish()
+    }
+}
+
+/// Derive predicate-level diagnostics without weakening the production gate.
+#[must_use]
+pub(crate) fn diagnose(projection: TransitionProjection<'_>) -> TransitionDiagnostic {
+    let facts = transition_facts(projection);
+    let enter_view_effective_lock_valid = if projection.enter_view.active {
+        let enter_view = projection.enter_view;
+        let protected_after = u64::from(enter_view.durable_lock_after.present);
+        let ownership_after = u64::from(enter_view.following_fetch_lock.present);
+        let trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_ENTER_VIEW,
+            relation_exact: enter_view_projection_gate_body!(enter_view)
+                && enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+                && enter_view.fetch_count == effect_count_body!(projection.effects, 2u8),
+            protected_before: protected_after,
+            protected_after: u64::from(enter_view.effect_protected_lock.present),
+            owner_before: enter_view.fetch_count,
+            owner_after: ownership_after,
+            owner_reused: false,
+            ready_before: 0,
+            retired_retained: 0,
+            retired_ready: 0,
+            ready_after: 0,
+            store_before: 0,
+            retired_store: 0,
+            store_after: 0,
+            cursor_before: 0,
+            completion_ready: false,
+            progress_ready: false,
+            normal_ready: false,
+            selected: 0,
+            cursor_after: 0,
+        };
+        production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view)
+    } else {
+        true
+    };
+    TransitionDiagnostic {
+        facts,
+        safety_before: projection.safety_before,
+        safety_after: projection.safety_after,
+        volatile_before_well_formed: volatile_summary_is_well_formed(
+            facts.volatile_before,
+            facts.validator_count,
+        ),
+        volatile_after_well_formed: volatile_summary_is_well_formed(
+            facts.volatile_after,
+            facts.validator_count,
+        ),
+        signed_message_class_valid: signed_message_class_is_valid(facts),
+        selected_action_valid: action_kind_is_valid(facts),
+        effect_slots_authorized: effect_slots_are_authorized(facts.effects),
+        effect_order_valid: effect_order_is_valid(facts.effects, facts.event_kind),
+        transition_branch_valid: transition_branch_accepts(facts),
+        enter_view_effective_lock_valid,
+    }
 }
 
 /// Execute the verified transition kernel used as the production commit gate.

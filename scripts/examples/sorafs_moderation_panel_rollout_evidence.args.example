@@ -19,3 +19,4 @@ appeal_intake,sortition_roster,evidence_viewer,operator_workflow,juror_notificat
 7
 --min-peers
 4
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

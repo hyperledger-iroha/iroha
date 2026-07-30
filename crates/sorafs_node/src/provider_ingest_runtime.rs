@@ -6,20 +6,24 @@
 //! completion before considering transaction-level delivery state.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    fmt,
     future::Future,
     pin::Pin,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use iroha_config::parameters::is_production_runtime_handle;
+use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{
-            PinManifestFinalizedRecordV1, PinStatus, ReplicationOrderRecord, ReplicationOrderStatus,
+            PinManifestFinalizedRecordV1, PinStatus, ProviderIngestCompletionAuthorityV1,
+            ProviderIngestCompletionSignerPolicyV1, ReplicationOrderRecord, ReplicationOrderStatus,
         },
     },
     transaction::{SignedTransaction, TransactionPayload},
@@ -34,15 +38,17 @@ use tokio::sync::watch;
 use crate::provider_ingest_outbox::{
     FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_STATUS_PAGE_MAX_V1,
     ProviderIngestCancellationReasonV1, ProviderIngestClaimOwnerV1,
-    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSigningContextV1,
-    ProviderIngestCompletionStateV1, ProviderIngestDeadLetterReasonV1,
-    ProviderIngestDeliveryStateV1, ProviderIngestFailureClassV1,
+    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
+    ProviderIngestDeadLetterReasonV1, ProviderIngestDeliveryStateV1,
+    ProviderIngestExposedCompletionExpiryV1, ProviderIngestFailureClassV1,
     ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
     ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxError,
     ProviderIngestSignerPolicyObservationV1, ProviderIngestSourceClaimV1,
 };
 
 const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+const PROVIDER_INGEST_SOURCE_QUALIFICATION_VERSION_V1: u8 = 1;
+const PROVIDER_INGEST_COMPLETION_SIGNER_QUALIFICATION_VERSION_V1: u8 = 1;
 const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     MAX_CAPACITY_METADATA_VALUE_BYTES,
     REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
@@ -128,6 +134,8 @@ pub struct ProviderIngestFinalizedAssignmentV1 {
     pub order: ReplicationOrderRecord,
     /// Current registered owner of this runtime's provider identity.
     pub provider_owner: Option<AccountId>,
+    /// Exact current chain-authoritative completion owner and signer policy.
+    pub completion_authority: Option<ProviderIngestCompletionAuthorityV1>,
     /// Current authoritative epoch to use for a new completion transaction.
     pub completion_epoch: Option<u64>,
     /// Exact committed transaction hash, when the finalized reader exposes it.
@@ -188,8 +196,117 @@ pub struct ProviderIngestSourceRequestV1 {
 pub enum ProviderIngestSourceFetchErrorV1 {
     /// No currently admitted authenticated source was reachable.
     Unavailable,
-    /// A source returned malformed, noncanonical, or mismatched material.
+    /// A source returned malformed, noncanonical, or authorization-mismatched material.
+    ContentRejected,
+    /// A source identity, public policy, or qualification binding was rejected.
     Rejected,
+}
+
+/// Public, non-secret qualification for a top-level provider-ingest adapter.
+///
+/// The source-pool and governed signer-resolver roles each expose an
+/// independently configured value. Credentials, endpoint material, grants,
+/// private keys, and payload data are never represented by this type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderIngestRuntimeProviderQualificationV1 {
+    /// Non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the exact public adapter policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl ProviderIngestRuntimeProviderQualificationV1 {
+    /// Construct one first-release public adapter qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Return whether both required public qualification pins are non-zero.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.revision != 0 && self.policy_digest != [0; 32]
+    }
+}
+
+/// Payload-free public qualification of one authenticated provider source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderIngestSourceQualificationV1 {
+    /// Qualification schema version.
+    pub version: u8,
+    /// Non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Non-zero digest of the exact public source policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl ProviderIngestSourceQualificationV1 {
+    /// Construct a first-release source qualification.
+    #[must_use]
+    pub const fn new(revision: u64, policy_digest: [u8; 32]) -> Self {
+        Self {
+            version: PROVIDER_INGEST_SOURCE_QUALIFICATION_VERSION_V1,
+            revision,
+            policy_digest,
+        }
+    }
+
+    /// Validate the qualification schema and non-zero binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema or zero revision/digest.
+    pub fn validate(self) -> Result<(), ProviderIngestAuthenticatedSourcePoolErrorV1> {
+        if self.version != PROVIDER_INGEST_SOURCE_QUALIFICATION_VERSION_V1
+            || self.revision == 0
+            || self.policy_digest == [0; 32]
+        {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceQualification);
+        }
+        Ok(())
+    }
+}
+
+/// Independently configured public binding for one authenticated provider source.
+///
+/// The binding contains no endpoint credentials, grants, tokens, private keys,
+/// or payload material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestAuthenticatedSourceBindingV1 {
+    /// Exact governed provider identity served by the source.
+    pub provider_id: [u8; 32],
+    /// Stable opaque identity of the provider-specific transport.
+    pub runtime_handle: String,
+    /// Exact non-zero adapter and public-policy revision.
+    pub revision: u64,
+    /// Exact non-zero digest of the public source policy.
+    pub policy_digest: [u8; 32],
+}
+
+impl ProviderIngestAuthenticatedSourceBindingV1 {
+    /// Return the exact qualification required from the injected source.
+    #[must_use]
+    pub const fn qualification(&self) -> ProviderIngestSourceQualificationV1 {
+        ProviderIngestSourceQualificationV1::new(self.revision, self.policy_digest)
+    }
+
+    fn validate(
+        &self,
+        pool_runtime_handle: &str,
+    ) -> Result<(), ProviderIngestAuthenticatedSourcePoolErrorV1> {
+        if self.provider_id == [0; 32] {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidProviderId);
+        }
+        if !is_production_runtime_handle(&self.runtime_handle)
+            || self.runtime_handle == pool_runtime_handle
+        {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceHandle);
+        }
+        self.qualification().validate()
+    }
 }
 
 /// Authenticated source fetch boundary.
@@ -210,6 +327,388 @@ pub trait ProviderIngestAuthenticatedSourceFetchV1: Send + Sync + 'static {
         &'a self,
         request: ProviderIngestSourceRequestV1,
     ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>;
+}
+
+/// One independently authenticated provider source used by the production pool.
+///
+/// Implementations own their runtime-only endpoint, grant, credential, and
+/// pinned-trust material. The stable handle and provider identity are public
+/// policy identifiers only. A fetch must use a hard transport deadline, reject
+/// redirects and implicit decompression, and verify the exact finalized
+/// authorization before returning.
+pub trait ProviderIngestAuthenticatedProviderSourceV1: Send + Sync + 'static {
+    /// Verified material returned by this source.
+    type Fetched: Send + 'static;
+
+    /// Exact governed provider identity served by this source.
+    fn provider_id(&self) -> [u8; 32];
+
+    /// Stable public identity of this provider-specific transport.
+    fn runtime_handle(&self) -> &str;
+
+    /// Current payload-free adapter and public-policy qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free source failure when the qualification
+    /// cannot be authenticated.
+    fn qualification(
+        &self,
+    ) -> Result<ProviderIngestSourceQualificationV1, ProviderIngestSourceFetchErrorV1>;
+
+    /// Non-mutating authenticated readiness check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free source failure when the source is not
+    /// currently ready or its public policy is rejected.
+    fn check_readiness(&self) -> Result<(), ProviderIngestSourceFetchErrorV1>;
+
+    /// Fetch exact material for one finalized authorization.
+    fn fetch_provider<'a>(
+        &'a self,
+        authorization: FinalizedProviderIngestAuthorizationV1,
+    ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>;
+}
+
+/// Invalid construction of an authenticated multi-provider source pool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProviderIngestAuthenticatedSourcePoolErrorV1 {
+    /// The pool's public runtime identity is not production-safe.
+    #[error("provider-ingest source-pool handle is invalid")]
+    InvalidPoolHandle,
+    /// The pool's top-level public qualification is zero or otherwise invalid.
+    #[error("provider-ingest source-pool qualification is invalid")]
+    InvalidPoolQualification,
+    /// The per-request source bound is outside the V1 protocol range.
+    #[error("provider-ingest source-pool request bound is invalid")]
+    InvalidSourceLimit,
+    /// A production pool must contain at least two and at most the V1 maximum sources.
+    #[error("provider-ingest source-pool size is invalid")]
+    InvalidSourceCount,
+    /// A source exposed a zero provider identity.
+    #[error("provider-ingest source-pool provider identity is invalid")]
+    InvalidProviderId,
+    /// A source's public runtime identity is invalid or aliases the pool.
+    #[error("provider-ingest provider-source handle is invalid")]
+    InvalidSourceHandle,
+    /// A configured source qualification is unsupported or contains a zero pin.
+    #[error("provider-ingest provider-source qualification is invalid")]
+    InvalidSourceQualification,
+    /// An injected source does not match its independent public binding.
+    #[error("provider-ingest provider-source identity or qualification does not match")]
+    SourceBindingMismatch,
+    /// Two sources claimed the same governed provider.
+    #[error("provider-ingest source-pool contains a duplicate provider")]
+    DuplicateProvider,
+    /// Two independently administered sources reused one runtime identity.
+    #[error("provider-ingest source-pool contains a duplicate source handle")]
+    DuplicateSourceHandle,
+}
+
+/// One independently bound authenticated provider source.
+pub struct ProviderIngestAuthenticatedSourceRegistrationV1<Fetched: Send + 'static> {
+    binding: ProviderIngestAuthenticatedSourceBindingV1,
+    source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
+}
+
+impl<Fetched: Send + 'static> fmt::Debug
+    for ProviderIngestAuthenticatedSourceRegistrationV1<Fetched>
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderIngestAuthenticatedSourceRegistrationV1")
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceRegistrationV1<Fetched> {
+    /// Pair an independently configured public binding with one injected source.
+    #[must_use]
+    pub fn new(
+        binding: ProviderIngestAuthenticatedSourceBindingV1,
+        source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
+    ) -> Self {
+        Self { binding, source }
+    }
+}
+
+struct PinnedProviderIngestSourceV1<Fetched: Send + 'static> {
+    binding: ProviderIngestAuthenticatedSourceBindingV1,
+    source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Fetched>>,
+}
+
+/// Bounded, identity-pinned authenticated multi-provider source coordinator.
+///
+/// The pool freezes a canonical public provider inventory at construction,
+/// retains an independent top-level revision/policy-digest qualification,
+/// rejects missing or substituted sources before contacting any transport, and
+/// tries only the exact canonical source list carried by finalized assignment
+/// state. Each selected source is rechecked before and after its fetch. Source
+/// locations, grants, credentials, and payload bytes remain inside the child
+/// adapters and are never copied into pool metadata or durable state.
+pub struct ProviderIngestAuthenticatedSourcePoolV1<Fetched: Send + 'static> {
+    runtime_handle: String,
+    qualification: ProviderIngestRuntimeProviderQualificationV1,
+    max_sources_per_fetch: usize,
+    provider_ids: Vec<[u8; 32]>,
+    sources: BTreeMap<[u8; 32], PinnedProviderIngestSourceV1<Fetched>>,
+}
+
+impl<Fetched: Send + 'static> fmt::Debug for ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProviderIngestAuthenticatedSourcePoolV1")
+            .field("runtime_handle", &self.runtime_handle)
+            .field("qualification", &self.qualification)
+            .field("max_sources_per_fetch", &self.max_sources_per_fetch)
+            .field("provider_ids", &self.provider_ids)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourcePoolV1<Fetched> {
+    /// Construct a production pool from independently configured source bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the pool bounds or any independently configured
+    /// source identity, handle, qualification, or injected adapter is invalid.
+    pub fn new(
+        runtime_handle: impl Into<String>,
+        qualification: ProviderIngestRuntimeProviderQualificationV1,
+        max_sources_per_fetch: usize,
+        sources: Vec<ProviderIngestAuthenticatedSourceRegistrationV1<Fetched>>,
+    ) -> Result<Self, ProviderIngestAuthenticatedSourcePoolErrorV1> {
+        let runtime_handle = runtime_handle.into();
+        if !is_production_runtime_handle(&runtime_handle) {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidPoolHandle);
+        }
+        if !qualification.is_valid() {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidPoolQualification);
+        }
+        if max_sources_per_fetch == 0 || max_sources_per_fetch > MAX_REPLICATION_ORDER_ASSIGNMENTS {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceLimit);
+        }
+        if sources.len() < 2 || sources.len() > MAX_REPLICATION_ORDER_ASSIGNMENTS {
+            return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceCount);
+        }
+
+        let mut pinned_handles = BTreeSet::new();
+        let mut pinned_sources = BTreeMap::new();
+        for registration in sources {
+            let binding = registration.binding;
+            binding.validate(&runtime_handle)?;
+            if !pinned_handles.insert(binding.runtime_handle.clone()) {
+                return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::DuplicateSourceHandle);
+            }
+            let source = registration.source;
+            let qualification = source
+                .qualification()
+                .map_err(|_| ProviderIngestAuthenticatedSourcePoolErrorV1::SourceBindingMismatch)?;
+            if source.provider_id() != binding.provider_id
+                || source.runtime_handle() != binding.runtime_handle.as_str()
+                || qualification != binding.qualification()
+            {
+                return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::SourceBindingMismatch);
+            }
+            let provider_id = binding.provider_id;
+            let pinned = PinnedProviderIngestSourceV1 { binding, source };
+            if pinned_sources.insert(provider_id, pinned).is_some() {
+                return Err(ProviderIngestAuthenticatedSourcePoolErrorV1::DuplicateProvider);
+            }
+        }
+        let provider_ids = pinned_sources.keys().copied().collect();
+        Ok(Self {
+            runtime_handle,
+            qualification,
+            max_sources_per_fetch,
+            provider_ids,
+            sources: pinned_sources,
+        })
+    }
+
+    /// Stable public identity of the complete source pool.
+    #[must_use]
+    pub fn runtime_handle(&self) -> &str {
+        &self.runtime_handle
+    }
+
+    /// Return the pool's exact top-level adapter qualification.
+    #[must_use]
+    pub const fn qualification(&self) -> ProviderIngestRuntimeProviderQualificationV1 {
+        self.qualification
+    }
+
+    /// Canonical identity-pinned provider inventory.
+    #[must_use]
+    pub fn source_provider_ids(&self) -> &[[u8; 32]] {
+        &self.provider_ids
+    }
+
+    /// Maximum sources admitted in one finalized fetch request.
+    #[must_use]
+    pub const fn max_sources_per_fetch(&self) -> usize {
+        self.max_sources_per_fetch
+    }
+
+    /// Revalidate every pinned source without exposing request material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderIngestSourceFetchErrorV1::Unavailable`] when no
+    /// independently qualified source is currently ready, or
+    /// [`ProviderIngestSourceFetchErrorV1::Rejected`] when any pinned source is
+    /// substituted, stale, or policy-rejected.
+    pub fn check_readiness(&self) -> Result<(), ProviderIngestSourceFetchErrorV1> {
+        if !is_production_runtime_handle(&self.runtime_handle)
+            || !self.qualification.is_valid()
+            || self.provider_ids.len() < 2
+            || self.provider_ids.len() != self.sources.len()
+            || self.max_sources_per_fetch == 0
+            || self.max_sources_per_fetch > MAX_REPLICATION_ORDER_ASSIGNMENTS
+        {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        let mut ready = false;
+        for provider_id in &self.provider_ids {
+            let source = self
+                .sources
+                .get(provider_id)
+                .ok_or(ProviderIngestSourceFetchErrorV1::Rejected)?;
+            if self.source_is_ready(source)? {
+                ready = true;
+            }
+        }
+        if !ready {
+            return Err(ProviderIngestSourceFetchErrorV1::Unavailable);
+        }
+        Ok(())
+    }
+
+    fn source_is_ready(
+        &self,
+        source: &PinnedProviderIngestSourceV1<Fetched>,
+    ) -> Result<bool, ProviderIngestSourceFetchErrorV1> {
+        let before_ready = match self.validate_source(source) {
+            Ok(()) => true,
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable) => false,
+            Err(
+                ProviderIngestSourceFetchErrorV1::ContentRejected
+                | ProviderIngestSourceFetchErrorV1::Rejected,
+            ) => return Err(ProviderIngestSourceFetchErrorV1::Rejected),
+        };
+        let readiness = source.source.check_readiness();
+        let after = self.validate_source(source);
+        if matches!(
+            readiness,
+            Err(ProviderIngestSourceFetchErrorV1::ContentRejected
+                | ProviderIngestSourceFetchErrorV1::Rejected)
+        ) || matches!(
+            after,
+            Err(ProviderIngestSourceFetchErrorV1::ContentRejected
+                | ProviderIngestSourceFetchErrorV1::Rejected)
+        ) {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        Ok(before_ready && readiness.is_ok() && after.is_ok())
+    }
+
+    fn validate_source(
+        &self,
+        source: &PinnedProviderIngestSourceV1<Fetched>,
+    ) -> Result<(), ProviderIngestSourceFetchErrorV1> {
+        let actual_handle = source.source.runtime_handle();
+        if source.binding.validate(&self.runtime_handle).is_err()
+            || source.source.provider_id() != source.binding.provider_id
+            || !is_production_runtime_handle(actual_handle)
+            || actual_handle != source.binding.runtime_handle.as_str()
+        {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        let actual_qualification = match source.source.qualification() {
+            Ok(qualification) => qualification,
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable) => {
+                return Err(ProviderIngestSourceFetchErrorV1::Unavailable);
+            }
+            Err(
+                ProviderIngestSourceFetchErrorV1::ContentRejected
+                | ProviderIngestSourceFetchErrorV1::Rejected,
+            ) => return Err(ProviderIngestSourceFetchErrorV1::Rejected),
+        };
+        if actual_qualification != source.binding.qualification() {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        Ok(())
+    }
+
+    fn validate_request(
+        &self,
+        request: &ProviderIngestSourceRequestV1,
+    ) -> Result<(), ProviderIngestSourceFetchErrorV1> {
+        if request.source_provider_ids.is_empty()
+            || request.source_provider_ids.len() > self.max_sources_per_fetch
+            || request.source_provider_ids.iter().any(|provider_id| {
+                *provider_id == [0; 32]
+                    || *provider_id == request.authorization.provider_id()
+                    || !self.sources.contains_key(provider_id)
+            })
+            || request
+                .source_provider_ids
+                .windows(2)
+                .any(|pair| pair[0] >= pair[1])
+        {
+            return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+        }
+        Ok(())
+    }
+}
+
+impl<Fetched: Send + 'static> ProviderIngestAuthenticatedSourceFetchV1
+    for ProviderIngestAuthenticatedSourcePoolV1<Fetched>
+{
+    type Fetched = Fetched;
+
+    fn fetch<'a>(
+        &'a self,
+        request: ProviderIngestSourceRequestV1,
+    ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>> {
+        Box::pin(async move {
+            self.validate_request(&request)?;
+            let mut content_rejected = false;
+            for provider_id in &request.source_provider_ids {
+                let source = self
+                    .sources
+                    .get(provider_id)
+                    .ok_or(ProviderIngestSourceFetchErrorV1::Rejected)?;
+                if !self.source_is_ready(source)? {
+                    continue;
+                }
+                let result = source
+                    .source
+                    .fetch_provider(request.authorization.clone())
+                    .await;
+                let post_fetch_ready = self.source_is_ready(source)?;
+                match result {
+                    Ok(fetched) if post_fetch_ready => return Ok(fetched),
+                    Ok(_) => {}
+                    Err(ProviderIngestSourceFetchErrorV1::Unavailable) => {}
+                    Err(ProviderIngestSourceFetchErrorV1::ContentRejected) => {
+                        content_rejected = true;
+                    }
+                    Err(ProviderIngestSourceFetchErrorV1::Rejected) => {
+                        return Err(ProviderIngestSourceFetchErrorV1::Rejected);
+                    }
+                }
+            }
+            Err(if content_rejected {
+                ProviderIngestSourceFetchErrorV1::ContentRejected
+            } else {
+                ProviderIngestSourceFetchErrorV1::Unavailable
+            })
+        })
+    }
 }
 
 /// Local storage verification/persistence failure.
@@ -244,6 +743,10 @@ pub struct ProviderIngestCompletionPayloadRequestV1 {
     pub authorization: FinalizedProviderIngestAuthorizationV1,
     /// Current finalized provider owner.
     pub provider_owner: AccountId,
+    /// Exact finalized completion authority to compare again at commit.
+    pub expected_authority: ProviderIngestCompletionAuthorityV1,
+    /// Exact order-scoped assignment revision to compare again at commit.
+    pub expected_assignment_revision: u64,
     /// Exact configured production chain identity.
     pub chain_id: ChainId,
     /// Authoritative completion epoch.
@@ -282,10 +785,176 @@ pub enum ProviderIngestCompletionSignerErrorV1 {
     Rejected,
 }
 
+/// Exact finalized authorization independently pinned while resolving a signer.
+///
+/// The context is carried separately from the transaction payload so an
+/// isolated signer can reject payloads whose owner, signer policy, assignment
+/// revision, or finalized anchor was substituted after resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestCompletionSignerResolutionContextV1 {
+    /// Exact finalized provider owner authorized to sign.
+    pub provider_owner: AccountId,
+    /// Exact finalized signer-policy identity and digest lineage.
+    pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    /// Exact non-zero order-scoped assignment revision.
+    pub expected_assignment_revision: u64,
+    /// Exact finalized baseline whose anchor must appear in the completion.
+    pub finalized_cursor: ProviderIngestFinalizedCursorV1,
+}
+
+impl ProviderIngestCompletionSignerResolutionContextV1 {
+    /// Construct one exact signer-resolution context.
+    #[must_use]
+    pub fn new(
+        provider_owner: AccountId,
+        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        expected_assignment_revision: u64,
+        finalized_cursor: ProviderIngestFinalizedCursorV1,
+    ) -> Self {
+        Self {
+            provider_owner,
+            signer_policy,
+            expected_assignment_revision,
+            finalized_cursor,
+        }
+    }
+
+    /// Return whether every independently pinned field is production-shaped.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.signer_policy.is_valid()
+            && self.expected_assignment_revision != 0
+            && self.finalized_cursor.height != 0
+            && self.finalized_cursor.block_hash != [0; 32]
+    }
+}
+
+/// Payload-free public qualification of one provider-ingest completion signer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestCompletionSignerQualificationV1 {
+    /// Qualification schema version.
+    pub version: u8,
+    /// Non-zero signer adapter and public-policy revision.
+    pub adapter_revision: u64,
+    /// Exact chain-authoritative signer policy identity and digest lineage.
+    pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    /// Exact admitted signature algorithm.
+    pub algorithm: Algorithm,
+    /// Exact public key controlled by the external signer.
+    pub public_key: PublicKey,
+}
+
+impl ProviderIngestCompletionSignerQualificationV1 {
+    /// Construct a first-release completion-signer qualification.
+    #[must_use]
+    pub fn new(
+        adapter_revision: u64,
+        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        algorithm: Algorithm,
+        public_key: PublicKey,
+    ) -> Self {
+        Self {
+            version: PROVIDER_INGEST_COMPLETION_SIGNER_QUALIFICATION_VERSION_V1,
+            adapter_revision,
+            signer_policy,
+            algorithm,
+            public_key,
+        }
+    }
+
+    /// Validate the schema, revision, policy lineage, algorithm, and public key.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported schema, zero revision, invalid
+    /// signer policy, unapproved algorithm, or algorithm/key mismatch.
+    pub fn validate(&self) -> Result<(), ProviderIngestCompletionSignerBindingErrorV1> {
+        let public_key = self.public_key.try_to_bytes().ok();
+        if self.version != PROVIDER_INGEST_COMPLETION_SIGNER_QUALIFICATION_VERSION_V1
+            || self.adapter_revision == 0
+            || !self.signer_policy.is_valid()
+            || !matches!(self.algorithm, Algorithm::Ed25519 | Algorithm::MlDsa)
+            || public_key.is_none_or(|(algorithm, bytes)| {
+                algorithm != self.algorithm
+                    || bytes.is_empty()
+                    || bytes.iter().all(|byte| *byte == 0)
+            })
+        {
+            return Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerQualification);
+        }
+        Ok(())
+    }
+
+    /// Return whether the qualified public key is the exact single-key authority.
+    #[must_use]
+    pub fn matches_authority(&self, authority: &AccountId) -> bool {
+        authority.try_signatory() == Some(&self.public_key)
+    }
+}
+
+/// Independently configured public binding for one completion signer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestCompletionSignerBindingV1 {
+    /// Stable opaque HSM/KMS signer or key handle.
+    pub runtime_handle: String,
+    /// Exact payload-free signer qualification.
+    pub qualification: ProviderIngestCompletionSignerQualificationV1,
+}
+
+impl ProviderIngestCompletionSignerBindingV1 {
+    /// Pair a stable public handle with the required signer qualification.
+    #[must_use]
+    pub fn new(
+        runtime_handle: impl Into<String>,
+        qualification: ProviderIngestCompletionSignerQualificationV1,
+    ) -> Self {
+        Self {
+            runtime_handle: runtime_handle.into(),
+            qualification,
+        }
+    }
+
+    /// Validate the complete configured signer binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-production handle or invalid qualification.
+    pub fn validate(&self) -> Result<(), ProviderIngestCompletionSignerBindingErrorV1> {
+        if !is_production_runtime_handle(&self.runtime_handle) {
+            return Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerHandle);
+        }
+        self.qualification.validate()
+    }
+}
+
+/// Invalid public binding for a provider-ingest completion signer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProviderIngestCompletionSignerBindingErrorV1 {
+    /// The signer handle is missing, test-marked, or otherwise not production-safe.
+    #[error("provider-ingest completion-signer handle is invalid")]
+    InvalidSignerHandle,
+    /// The signer qualification is unsupported, zero, malformed, or inconsistent.
+    #[error("provider-ingest completion-signer qualification is invalid")]
+    InvalidSignerQualification,
+}
+
 /// Isolated runtime signer that has no queue or outbox access.
 pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
+    /// Stable public HSM/KMS signer or key handle.
+    fn runtime_handle(&self) -> &str;
+
     /// Account controlled by this signer.
     fn authority(&self) -> &AccountId;
+
+    /// Current payload-free signer qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns a fixed payload-free signer failure when the signer
+    /// qualification cannot be authenticated.
+    fn qualification(
+        &self,
+    ) -> Result<ProviderIngestCompletionSignerQualificationV1, ProviderIngestCompletionSignerErrorV1>;
 
     /// Exact governed policy identity under which this signer is currently
     /// eligible. Implementations must change this value on key rotation and
@@ -295,8 +964,12 @@ pub trait ProviderIngestCompletionSignerV1: Send + Sync + 'static {
     /// Revalidate the live owner/key/policy authority represented by this
     /// signer and return its exact current policy identity.
     ///
-    /// Implementations must fail closed when the authority is unavailable,
-    /// revoked, rotated, or no longer matches the signer instance.
+    /// This method runs on the async worker thread and therefore must be a
+    /// bounded, non-blocking read of a locally maintained eligibility snapshot;
+    /// it must never perform HSM/KMS, network, filesystem, or other blocking
+    /// I/O. Implementations must update that snapshot on revocation/rotation
+    /// and fail closed when it is stale or unavailable. The timed [`Self::sign`]
+    /// operation remains responsible for the HSM/KMS-side atomic check.
     fn current_eligibility(
         &self,
     ) -> Result<ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerErrorV1>;
@@ -319,17 +992,31 @@ fn exact_current_signer_policy<Signer: ProviderIngestCompletionSignerV1>(
     signer: &Signer,
     expected_owner: &AccountId,
 ) -> Result<ProviderIngestCompletionSignerPolicyV1, CurrentSignerPolicyErrorV1> {
-    if signer.authority() != expected_owner {
+    if signer.authority() != expected_owner
+        || !is_production_runtime_handle(signer.runtime_handle())
+    {
         return Err(CurrentSignerPolicyErrorV1::ProtocolViolation);
     }
+    let qualification = signer.qualification().map_err(|error| match error {
+        ProviderIngestCompletionSignerErrorV1::Unavailable => {
+            CurrentSignerPolicyErrorV1::Unavailable
+        }
+        ProviderIngestCompletionSignerErrorV1::Rejected => CurrentSignerPolicyErrorV1::Ineligible,
+    })?;
     let policy = signer.current_eligibility().map_err(|error| match error {
         ProviderIngestCompletionSignerErrorV1::Unavailable => {
             CurrentSignerPolicyErrorV1::Unavailable
         }
         ProviderIngestCompletionSignerErrorV1::Rejected => CurrentSignerPolicyErrorV1::Ineligible,
     })?;
-    if !policy.is_valid() || signer.signer_policy() != policy {
+    if qualification.validate().is_err()
+        || !qualification.matches_authority(expected_owner)
+        || !policy.is_valid()
+    {
         return Err(CurrentSignerPolicyErrorV1::ProtocolViolation);
+    }
+    if signer.signer_policy() != policy || qualification.signer_policy != policy {
+        return Err(CurrentSignerPolicyErrorV1::Ineligible);
     }
     Ok(policy)
 }
@@ -343,16 +1030,19 @@ pub enum ProviderIngestCompletionSignerResolverErrorV1 {
     Rejected,
 }
 
-/// Resolves the signer for the exact current finalized provider owner.
+/// Resolves the signer for one exact finalized completion authorization.
+///
+/// Implementations must authenticate every field in the resolution context
+/// independently of the transaction payload and bind the returned signer to
+/// that context for the lifetime of the signing operation.
 pub trait ProviderIngestCompletionSignerResolverV1: Send + Sync + 'static {
     /// Isolated signer implementation.
     type Signer: ProviderIngestCompletionSignerV1;
 
-    /// Resolve an eligible signer for `provider_owner` at `finalized_cursor`.
+    /// Resolve an eligible signer for one exact finalized authorization.
     fn resolve<'a>(
         &'a self,
-        provider_owner: AccountId,
-        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        context: ProviderIngestCompletionSignerResolutionContextV1,
     ) -> ProviderIngestFutureV1<
         'a,
         Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
@@ -891,7 +1581,9 @@ where
                 )?;
                 return Ok(true);
             }
-            LeaseOperationOutcomeV1::Completed(Err(ProviderIngestSourceFetchErrorV1::Rejected)) => {
+            LeaseOperationOutcomeV1::Completed(Err(
+                ProviderIngestSourceFetchErrorV1::ContentRejected,
+            )) => {
                 self.outbox.schedule_source_retry(
                     &claim,
                     self.clock.now_ms(),
@@ -899,6 +1591,15 @@ where
                     ProviderIngestFailureClassV1::SourceRejected,
                 )?;
                 return Ok(true);
+            }
+            LeaseOperationOutcomeV1::Completed(Err(ProviderIngestSourceFetchErrorV1::Rejected)) => {
+                self.outbox.schedule_source_retry(
+                    &claim,
+                    self.clock.now_ms(),
+                    cursor,
+                    ProviderIngestFailureClassV1::SourceRejected,
+                )?;
+                return Err(ProviderIngestRuntimeErrorV1::SourceProtocolViolation);
             }
         };
 
@@ -1074,6 +1775,9 @@ where
     ) -> Result<(), ProviderIngestRuntimeErrorV1> {
         let mut completion = completion;
         let mut exposed_absent_transaction = None;
+        let completion_authority = row.completion_authority.as_ref().filter(|binding| {
+            binding.is_valid() && row.provider_owner.as_ref() == Some(&binding.provider_owner)
+        });
 
         // Bytes that may already have crossed the queue boundary are always
         // reconciled by exact hash before any signer/HSM dependency is queried.
@@ -1158,6 +1862,16 @@ where
             ProviderIngestCompletionStateV1::Signing { .. }
                 | ProviderIngestCompletionStateV1::Signed { .. }
         ) {
+            if completion_authority.is_none() {
+                self.outbox.invalidate_stale_completion_authority(
+                    job_id,
+                    row.provider_owner.as_ref(),
+                    ProviderIngestSignerPolicyObservationV1::Missing,
+                    self.clock.now_ms(),
+                    cursor,
+                )?;
+                return Ok(());
+            }
             self.outbox.invalidate_stale_completion_authority(
                 job_id,
                 row.provider_owner.as_ref(),
@@ -1181,17 +1895,31 @@ where
                 | ProviderIngestCompletionStateV1::Signed { .. }
         ) {
             if let Some(provider_owner) = row.provider_owner.clone() {
+                let Some(expected_policy) =
+                    completion_authority.map(|binding| binding.signer_policy)
+                else {
+                    return Ok(());
+                };
                 let signer_policy_observation = match tokio::time::timeout(
                     Duration::from_millis(self.policy.signer_timeout_ms),
-                    self.signer_resolver.resolve(provider_owner.clone(), cursor),
+                    self.signer_resolver.resolve(
+                        ProviderIngestCompletionSignerResolutionContextV1::new(
+                            provider_owner.clone(),
+                            expected_policy,
+                            row.order.assignment_revision,
+                            cursor,
+                        ),
+                    ),
                 )
                 .await
                 {
                     Ok(Ok(Some(signer))) => {
                         match exact_current_signer_policy(&signer, &provider_owner) {
                             Ok(signer_policy) => {
-                                submission_authority =
-                                    Some((provider_owner.clone(), signer_policy));
+                                if signer_policy == expected_policy {
+                                    submission_authority =
+                                        Some((provider_owner.clone(), signer_policy));
+                                }
                                 ProviderIngestSignerPolicyObservationV1::Active(signer_policy)
                             }
                             Err(CurrentSignerPolicyErrorV1::Ineligible) => {
@@ -1236,16 +1964,16 @@ where
         if let Some(transaction_hash) = exposed_absent_transaction
             && self
                 .outbox
-                .expire_absent_exposed_completion(
+                .expire_absent_exposed_completion(ProviderIngestExposedCompletionExpiryV1 {
                     job_id,
-                    transaction_hash,
-                    row.provider_owner.as_ref(),
-                    checked_signer_policy
+                    expected_transaction_hash: transaction_hash,
+                    current_provider_owner: row.provider_owner.as_ref(),
+                    current_signer_policy: checked_signer_policy
                         .unwrap_or(ProviderIngestSignerPolicyObservationV1::NotChecked),
-                    self.clock.now_ms(),
+                    runtime_now_ms: self.clock.now_ms(),
                     finalized_block_time_ms,
-                    cursor,
-                )?
+                    observed_finalized_cursor: cursor,
+                })?
                 .is_some()
         {
             return Ok(());
@@ -1254,11 +1982,12 @@ where
             ProviderIngestCompletionStateV1::Ready {
                 next_attempt_at_ms, ..
             } => {
-                let (Some(provider_owner), Some(completion_epoch)) =
-                    (row.provider_owner.clone(), row.completion_epoch)
+                let (Some(completion_authority), Some(completion_epoch)) =
+                    (completion_authority.cloned(), row.completion_epoch)
                 else {
                     return Ok(());
                 };
+                let provider_owner = completion_authority.provider_owner.clone();
                 if completion_epoch < row.order.issued_epoch
                     || completion_epoch > row.order.deadline_epoch
                 {
@@ -1274,7 +2003,14 @@ where
                 }
                 let signer = match tokio::time::timeout(
                     Duration::from_millis(self.policy.signer_timeout_ms),
-                    self.signer_resolver.resolve(provider_owner.clone(), cursor),
+                    self.signer_resolver.resolve(
+                        ProviderIngestCompletionSignerResolutionContextV1::new(
+                            provider_owner.clone(),
+                            completion_authority.signer_policy,
+                            row.order.assignment_revision,
+                            cursor,
+                        ),
+                    ),
                 )
                 .await
                 {
@@ -1327,6 +2063,15 @@ where
                         return Err(ProviderIngestRuntimeErrorV1::SignerProtocolViolation);
                     }
                 };
+                if signer_policy != completion_authority.signer_policy {
+                    self.outbox.record_completion_signer_policy_missing(
+                        job_id,
+                        &provider_owner,
+                        self.clock.now_ms(),
+                        cursor,
+                    )?;
+                    return Ok(());
+                }
                 if let Err(error) = self.outbox.validate_ready_completion_signer_policy(
                     job_id,
                     &provider_owner,
@@ -1344,6 +2089,8 @@ where
                 let request = ProviderIngestCompletionPayloadRequestV1 {
                     authorization: authorization_from_status_and_row(&status, row, cursor)?,
                     provider_owner: provider_owner.clone(),
+                    expected_authority: completion_authority,
+                    expected_assignment_revision: row.order.assignment_revision,
                     chain_id: self.chain_id.clone(),
                     completion_epoch,
                     finalized_cursor: cursor,
@@ -1373,6 +2120,7 @@ where
                     chain_id: self.chain_id.clone(),
                     provider_owner: provider_owner.clone(),
                     signer_policy,
+                    assignment_revision: row.order.assignment_revision,
                     completion_epoch,
                     expected_payload: payload,
                 };
@@ -1480,8 +2228,15 @@ where
                     ..
                 } = status.state
                 {
-                    self.submit_signed(job_id, &provider_owner, signer_policy, cursor, outcome)
-                        .await?;
+                    self.submit_signed(
+                        job_id,
+                        &provider_owner,
+                        signer_policy,
+                        row.order.assignment_revision,
+                        cursor,
+                        outcome,
+                    )
+                    .await?;
                 }
             }
             ProviderIngestCompletionStateV1::Signing { .. } => {}
@@ -1492,8 +2247,15 @@ where
                     let Some((provider_owner, signer_policy)) = submission_authority else {
                         return Ok(());
                     };
-                    self.submit_signed(job_id, &provider_owner, signer_policy, cursor, outcome)
-                        .await?;
+                    self.submit_signed(
+                        job_id,
+                        &provider_owner,
+                        signer_policy,
+                        row.order.assignment_revision,
+                        cursor,
+                        outcome,
+                    )
+                    .await?;
                 }
             }
             ProviderIngestCompletionStateV1::Ambiguous {
@@ -1533,14 +2295,15 @@ where
         &self,
         job_id: [u8; 32],
         provider_owner: &AccountId,
-        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        expected_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        expected_assignment_revision: u64,
         cursor: ProviderIngestFinalizedCursorV1,
         outcome: &mut ProviderIngestTickOutcomeV1,
     ) -> Result<(), ProviderIngestRuntimeErrorV1> {
         let exact = match self.outbox.completion_transaction_for_authorized_preflight(
             job_id,
             provider_owner,
-            signer_policy,
+            expected_signer_policy,
             cursor,
             self.clock.now_ms(),
         ) {
@@ -1582,7 +2345,13 @@ where
         };
         let signer = match tokio::time::timeout(
             Duration::from_millis(self.policy.signer_timeout_ms),
-            self.signer_resolver.resolve(provider_owner.clone(), cursor),
+            self.signer_resolver
+                .resolve(ProviderIngestCompletionSignerResolutionContextV1::new(
+                    provider_owner.clone(),
+                    expected_signer_policy,
+                    expected_assignment_revision,
+                    cursor,
+                )),
         )
         .await
         {
@@ -1618,6 +2387,16 @@ where
                 return Err(ProviderIngestRuntimeErrorV1::SignerProtocolViolation);
             }
         };
+        if signer_policy != expected_signer_policy {
+            self.outbox.invalidate_stale_completion_authority(
+                job_id,
+                Some(provider_owner),
+                ProviderIngestSignerPolicyObservationV1::Active(signer_policy),
+                self.clock.now_ms(),
+                cursor,
+            )?;
+            return Ok(());
+        }
         self.outbox.invalidate_stale_completion_authority(
             job_id,
             Some(provider_owner),
@@ -1813,8 +2592,13 @@ fn validate_assignment(
         || row
             .committed_transaction_hash
             .is_some_and(|hash| hash == [0; 32])
+        || row.order.assignment_revision == 0
         || row.order.canonical_order.is_empty()
         || row.order.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+        || row.completion_authority.as_ref().is_some_and(|authority| {
+            !authority.is_valid() || row.provider_owner.as_ref() != Some(&authority.provider_owner)
+        })
+        || row.provider_owner.is_none() && row.completion_authority.is_some()
     {
         return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
     }
@@ -1867,6 +2651,13 @@ fn validate_assignment(
             .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
             || completion.completion_epoch < row.order.issued_epoch
             || completion.completion_epoch > row.order.deadline_epoch
+            || completion.assignment_revision != row.order.assignment_revision
+            || !completion.completion_authority.is_valid()
+            || completion.completion_authority.provider_owner != completion.completed_by
+            || !completion.finalized_anchor.is_valid()
+            || completion.finalized_anchor.height > cursor.height
+            || completion.finalized_anchor.height == cursor.height
+                && completion.finalized_anchor.block_hash != cursor.block_hash
             || !completions.insert(*completion.provider_id.as_bytes())
         {
             return Err(ProviderIngestRuntimeErrorV1::InvalidFinalizedBinding);
@@ -1966,6 +2757,9 @@ pub enum ProviderIngestRuntimeErrorV1 {
     /// Local storage returned a manifest identity that violates its exact contract.
     #[error("provider-ingest local storage violated the exact binding")]
     StorageProtocolViolation,
+    /// Authenticated source identity, policy, or qualification drifted.
+    #[error("provider-ingest authenticated source violated its exact binding")]
+    SourceProtocolViolation,
     /// Resolved signer or signed transaction violated the prepared context.
     #[error("provider-ingest signer violated the prepared operation")]
     SignerProtocolViolation,
@@ -1994,7 +2788,8 @@ mod tests {
         metadata::Metadata,
         sorafs::pin_registry::{
             ChunkerProfileHandle, ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1,
-            PinManifestRecord, PinPolicy, ReplicationOrderCompletionRecord, ReplicationOrderId,
+            PinManifestRecord, PinPolicy, ProviderIngestFinalizedAnchorV1,
+            ReplicationOrderCompletionRecord, ReplicationOrderId,
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
@@ -2024,10 +2819,77 @@ mod tests {
     }
 
     fn completion_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
+        let digest_byte = u8::try_from(revision).unwrap_or(0xFE);
         ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
             revision,
-            policy_digest: [u8::try_from(revision).unwrap_or(0xFE); 32],
+            predecessor_digest: (revision > 1).then(|| [digest_byte.saturating_sub(1); 32]),
+            policy_digest: [digest_byte; 32],
+        }
+    }
+
+    #[test]
+    fn completion_signer_binding_rejects_test_handles_stale_revisions_and_key_mismatch() {
+        let key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519)
+            .expect("completion signer key");
+        let authority = AccountId::new(key.public_key().clone());
+        let qualification = ProviderIngestCompletionSignerQualificationV1::new(
+            1,
+            completion_signer_policy(1),
+            Algorithm::Ed25519,
+            key.public_key().clone(),
+        );
+        assert!(qualification.matches_authority(&authority));
+        assert_eq!(qualification.validate(), Ok(()));
+        assert_eq!(
+            ProviderIngestCompletionSignerBindingV1::new(
+                "pkcs11:sorafs-provider-ingest-primary",
+                qualification.clone(),
+            )
+            .validate(),
+            Ok(())
+        );
+        assert_eq!(
+            ProviderIngestCompletionSignerBindingV1::new(
+                "pkcs11:sorafs-provider-ingest-test",
+                qualification.clone(),
+            )
+            .validate(),
+            Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerHandle)
+        );
+
+        let mut stale = qualification.clone();
+        stale.adapter_revision = 0;
+        assert_eq!(
+            stale.validate(),
+            Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerQualification)
+        );
+        let mut mismatched_algorithm = qualification;
+        mismatched_algorithm.algorithm = Algorithm::MlDsa;
+        assert_eq!(
+            mismatched_algorithm.validate(),
+            Err(ProviderIngestCompletionSignerBindingErrorV1::InvalidSignerQualification)
+        );
+    }
+
+    fn completion_record(
+        provider_id: ProviderId,
+        completed_by: AccountId,
+        completion_epoch: u64,
+    ) -> ReplicationOrderCompletionRecord {
+        ReplicationOrderCompletionRecord {
+            provider_id,
+            completed_by: completed_by.clone(),
+            completion_epoch,
+            assignment_revision: 1,
+            completion_authority: ProviderIngestCompletionAuthorityV1::new(
+                completed_by,
+                completion_signer_policy(1),
+            ),
+            finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                height: completion_epoch,
+                block_hash: cursor(completion_epoch).block_hash,
+            },
         }
     }
 
@@ -2103,10 +2965,15 @@ mod tests {
                 issued_epoch: 7,
                 deadline_epoch: 20,
                 canonical_order: norito::to_bytes(&order_body).expect("order bytes"),
+                assignment_revision: 1,
                 provider_completions: Vec::new(),
                 status: ReplicationOrderStatus::Pending,
             },
             provider_owner: Some(account(8)),
+            completion_authority: Some(ProviderIngestCompletionAuthorityV1::new(
+                account(8),
+                completion_signer_policy(1),
+            )),
             completion_epoch: Some(8),
             committed_transaction_hash: None,
         }
@@ -2115,9 +2982,13 @@ mod tests {
     fn fixture_page(
         row: ProviderIngestFinalizedAssignmentV1,
     ) -> ProviderIngestFinalizedAssignmentPageV1 {
+        let finalized_cursor = ProviderIngestFinalizedCursorV1 {
+            height: row.pin.finalized_cursor.height,
+            block_hash: row.pin.finalized_cursor.block_hash,
+        };
         ProviderIngestFinalizedAssignmentPageV1 {
-            finalized_cursor: cursor(8),
-            finalized_block_time_ms: 8_000,
+            finalized_cursor,
+            finalized_block_time_ms: finalized_cursor.height.saturating_mul(1_000),
             rows: vec![row],
             next_after_order_id: None,
         }
@@ -2128,7 +2999,8 @@ mod tests {
             max_active_entries: 32,
             max_terminal_entries: 32,
             max_attempts: 4,
-            checkpoint_max_bytes: 8 * 1024 * 1024,
+            checkpoint_max_bytes: 16 * 1024 * 1024,
+            checkpoint_operation_timeout_ms: 250,
             source_lease_ttl_ms: 20,
             retry_base_delay_ms: 10_000,
             retry_max_delay_ms: 100_000,
@@ -2212,6 +3084,528 @@ mod tests {
         }
     }
 
+    struct TestProviderSource {
+        provider_id: [u8; 32],
+        runtime_handle: &'static str,
+        drifted_runtime_handle: &'static str,
+        drift_after_fetch: bool,
+        drifted: AtomicBool,
+        qualification: Mutex<ProviderIngestSourceQualificationV1>,
+        qualification_after_fetch: Mutex<Option<ProviderIngestSourceQualificationV1>>,
+        readiness: Mutex<Result<(), ProviderIngestSourceFetchErrorV1>>,
+        result: Mutex<Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>>,
+        calls: Arc<Mutex<Vec<[u8; 32]>>>,
+    }
+
+    impl ProviderIngestAuthenticatedProviderSourceV1 for TestProviderSource {
+        type Fetched = Vec<u8>;
+
+        fn provider_id(&self) -> [u8; 32] {
+            self.provider_id
+        }
+
+        fn runtime_handle(&self) -> &str {
+            if self.drifted.load(Ordering::SeqCst) {
+                self.drifted_runtime_handle
+            } else {
+                self.runtime_handle
+            }
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<ProviderIngestSourceQualificationV1, ProviderIngestSourceFetchErrorV1> {
+            Ok(*self.qualification.lock().unwrap())
+        }
+
+        fn check_readiness(&self) -> Result<(), ProviderIngestSourceFetchErrorV1> {
+            *self.readiness.lock().unwrap()
+        }
+
+        fn fetch_provider<'a>(
+            &'a self,
+            authorization: FinalizedProviderIngestAuthorizationV1,
+        ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>>
+        {
+            assert_eq!(authorization.provider_id(), LOCAL_PROVIDER);
+            self.calls.lock().unwrap().push(self.provider_id);
+            let result = self.result.lock().unwrap().clone();
+            let qualification_after_fetch = self.qualification_after_fetch.lock().unwrap().take();
+            if let Some(qualification) = qualification_after_fetch {
+                *self.qualification.lock().unwrap() = qualification;
+            }
+            if self.drift_after_fetch {
+                self.drifted.store(true, Ordering::SeqCst);
+            }
+            Box::pin(async move { result })
+        }
+    }
+
+    fn test_provider_source(
+        provider_id: [u8; 32],
+        runtime_handle: &'static str,
+        readiness: Result<(), ProviderIngestSourceFetchErrorV1>,
+        result: Result<Vec<u8>, ProviderIngestSourceFetchErrorV1>,
+        drift_after_fetch: bool,
+        calls: Arc<Mutex<Vec<[u8; 32]>>>,
+    ) -> Arc<TestProviderSource> {
+        Arc::new(TestProviderSource {
+            provider_id,
+            runtime_handle,
+            drifted_runtime_handle: "https-pinned:provider-substituted",
+            drift_after_fetch,
+            drifted: AtomicBool::new(false),
+            qualification: Mutex::new(ProviderIngestSourceQualificationV1::new(1, provider_id)),
+            qualification_after_fetch: Mutex::new(None),
+            readiness: Mutex::new(readiness),
+            result: Mutex::new(result),
+            calls,
+        })
+    }
+
+    fn test_source_binding(
+        provider_id: [u8; 32],
+        runtime_handle: impl Into<String>,
+    ) -> ProviderIngestAuthenticatedSourceBindingV1 {
+        ProviderIngestAuthenticatedSourceBindingV1 {
+            provider_id,
+            runtime_handle: runtime_handle.into(),
+            revision: 1,
+            policy_digest: provider_id,
+        }
+    }
+
+    fn test_source_registration(
+        source: Arc<TestProviderSource>,
+        binding: ProviderIngestAuthenticatedSourceBindingV1,
+    ) -> ProviderIngestAuthenticatedSourceRegistrationV1<Vec<u8>> {
+        let source: Arc<dyn ProviderIngestAuthenticatedProviderSourceV1<Fetched = Vec<u8>>> =
+            source;
+        ProviderIngestAuthenticatedSourceRegistrationV1::new(binding, source)
+    }
+
+    fn test_source_pool(
+        sources: Vec<Arc<TestProviderSource>>,
+    ) -> Result<
+        ProviderIngestAuthenticatedSourcePoolV1<Vec<u8>>,
+        ProviderIngestAuthenticatedSourcePoolErrorV1,
+    > {
+        let sources = sources
+            .into_iter()
+            .map(|source| {
+                let binding = test_source_binding(source.provider_id, source.runtime_handle);
+                test_source_registration(source, binding)
+            })
+            .collect();
+        ProviderIngestAuthenticatedSourcePoolV1::new(
+            "https-pinned-source-pool:region-a",
+            ProviderIngestRuntimeProviderQualificationV1::new(9, [0xA9; 32]),
+            4,
+            sources,
+        )
+    }
+
+    fn test_source_request(source_provider_ids: Vec<[u8; 32]>) -> ProviderIngestSourceRequestV1 {
+        let row = fixture_row(0x31);
+        let validated =
+            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).unwrap();
+        ProviderIngestSourceRequestV1 {
+            authorization: validated.authorization,
+            source_provider_ids,
+        }
+    }
+
+    #[test]
+    fn authenticated_source_qualification_rejects_unsupported_or_zero_pins() {
+        let valid = ProviderIngestSourceQualificationV1::new(1, [0x22; 32]);
+        assert_eq!(valid.validate(), Ok(()));
+
+        let mut unsupported = valid;
+        unsupported.version = 2;
+        for invalid in [
+            unsupported,
+            ProviderIngestSourceQualificationV1::new(0, [0x22; 32]),
+            ProviderIngestSourceQualificationV1::new(1, [0; 32]),
+        ] {
+            assert_eq!(
+                invalid.validate(),
+                Err(ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceQualification)
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_provider_qualification_requires_both_public_pins() {
+        assert!(ProviderIngestRuntimeProviderQualificationV1::new(9, [0xA9; 32]).is_valid());
+        assert!(!ProviderIngestRuntimeProviderQualificationV1::new(0, [0xA9; 32]).is_valid());
+        assert!(!ProviderIngestRuntimeProviderQualificationV1::new(9, [0; 32]).is_valid());
+    }
+
+    #[test]
+    fn authenticated_source_pool_rejects_incomplete_duplicate_and_test_marked_inventory() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        assert_eq!(
+            test_source_pool(vec![Arc::clone(&source_a)]).unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceCount
+        );
+
+        let duplicate_provider = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        assert_eq!(
+            test_source_pool(vec![Arc::clone(&source_a), duplicate_provider]).unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::DuplicateProvider
+        );
+
+        let duplicate_handle = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        assert_eq!(
+            test_source_pool(vec![Arc::clone(&source_a), duplicate_handle]).unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::DuplicateSourceHandle
+        );
+
+        let credential_handle = test_provider_source(
+            [0x33; 32],
+            "https://operator:secret@provider.example",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        assert_eq!(
+            test_source_pool(vec![Arc::clone(&source_a), credential_handle]).unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceHandle
+        );
+
+        let test_marked = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-test",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            calls,
+        );
+        assert_eq!(
+            test_source_pool(vec![source_a, test_marked]).unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceHandle
+        );
+    }
+
+    #[test]
+    fn authenticated_source_pool_requires_independent_valid_qualification_pins() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            calls,
+        );
+
+        for invalid_pool_qualification in [
+            ProviderIngestRuntimeProviderQualificationV1::new(0, [0xA9; 32]),
+            ProviderIngestRuntimeProviderQualificationV1::new(9, [0; 32]),
+        ] {
+            assert_eq!(
+                ProviderIngestAuthenticatedSourcePoolV1::new(
+                    "https-pinned-source-pool:region-a",
+                    invalid_pool_qualification,
+                    4,
+                    vec![
+                        test_source_registration(
+                            Arc::clone(&source_a),
+                            test_source_binding(source_a.provider_id, source_a.runtime_handle),
+                        ),
+                        test_source_registration(
+                            Arc::clone(&source_b),
+                            test_source_binding(source_b.provider_id, source_b.runtime_handle),
+                        ),
+                    ],
+                )
+                .unwrap_err(),
+                ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidPoolQualification
+            );
+        }
+
+        let mut invalid_binding =
+            test_source_binding(source_b.provider_id, source_b.runtime_handle);
+        invalid_binding.revision = 0;
+        assert_eq!(
+            ProviderIngestAuthenticatedSourcePoolV1::new(
+                "https-pinned-source-pool:region-a",
+                ProviderIngestRuntimeProviderQualificationV1::new(9, [0xA9; 32]),
+                4,
+                vec![
+                    test_source_registration(
+                        Arc::clone(&source_a),
+                        test_source_binding(source_a.provider_id, source_a.runtime_handle),
+                    ),
+                    test_source_registration(Arc::clone(&source_b), invalid_binding),
+                ],
+            )
+            .unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::InvalidSourceQualification
+        );
+
+        let mut substituted_binding =
+            test_source_binding(source_b.provider_id, source_b.runtime_handle);
+        substituted_binding.revision = 2;
+        assert_eq!(
+            ProviderIngestAuthenticatedSourcePoolV1::new(
+                "https-pinned-source-pool:region-a",
+                ProviderIngestRuntimeProviderQualificationV1::new(9, [0xA9; 32]),
+                4,
+                vec![
+                    test_source_registration(
+                        Arc::clone(&source_a),
+                        test_source_binding(source_a.provider_id, source_a.runtime_handle),
+                    ),
+                    test_source_registration(source_b, substituted_binding),
+                ],
+            )
+            .unwrap_err(),
+            ProviderIngestAuthenticatedSourcePoolErrorV1::SourceBindingMismatch
+        );
+    }
+
+    #[test]
+    fn authenticated_source_pool_rejects_qualification_drift_at_readiness() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        let pool = test_source_pool(vec![Arc::clone(&source_a), source_b]).unwrap();
+        *source_a.qualification.lock().unwrap() =
+            ProviderIngestSourceQualificationV1::new(2, [0x22; 32]);
+
+        assert_eq!(
+            pool.check_readiness(),
+            Err(ProviderIngestSourceFetchErrorV1::Rejected)
+        );
+        assert!(calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn authenticated_source_pool_is_ready_when_one_qualified_source_is_available() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            calls,
+        );
+        let pool = test_source_pool(vec![source_a, source_b]).unwrap();
+
+        assert_eq!(pool.check_readiness(), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn authenticated_source_pool_fails_over_in_canonical_provider_order() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+            false,
+            Arc::clone(&calls),
+        );
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Ok(vec![0xA5]),
+            false,
+            Arc::clone(&calls),
+        );
+        let pool = test_source_pool(vec![source_a, source_b]).unwrap();
+
+        assert_eq!(pool.runtime_handle(), "https-pinned-source-pool:region-a");
+        assert_eq!(pool.source_provider_ids(), &[[0x22; 32], [0x33; 32]]);
+        assert_eq!(pool.max_sources_per_fetch(), 4);
+        assert!(pool.check_readiness().is_ok());
+        assert_eq!(
+            pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
+                .await,
+            Ok(vec![0xA5])
+        );
+        assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32], [0x33; 32]]);
+    }
+
+    #[tokio::test]
+    async fn authenticated_source_pool_fails_over_after_content_rejection() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Err(ProviderIngestSourceFetchErrorV1::ContentRejected),
+            false,
+            Arc::clone(&calls),
+        );
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Ok(vec![0xA5]),
+            false,
+            Arc::clone(&calls),
+        );
+        let pool = test_source_pool(vec![source_a, source_b]).unwrap();
+
+        assert_eq!(
+            pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
+                .await,
+            Ok(vec![0xA5])
+        );
+        assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32], [0x33; 32]]);
+    }
+
+    #[tokio::test]
+    async fn authenticated_source_pool_rejects_noncanonical_or_unpinned_requests_before_io() {
+        for source_provider_ids in [
+            vec![[0x33; 32], [0x22; 32]],
+            vec![[0x22; 32], [0x44; 32]],
+            vec![LOCAL_PROVIDER, [0x22; 32]],
+        ] {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let source_a = test_provider_source(
+                [0x22; 32],
+                "https-pinned:provider-a",
+                Ok(()),
+                Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+                false,
+                Arc::clone(&calls),
+            );
+            let source_b = test_provider_source(
+                [0x33; 32],
+                "https-pinned:provider-b",
+                Ok(()),
+                Err(ProviderIngestSourceFetchErrorV1::Unavailable),
+                false,
+                Arc::clone(&calls),
+            );
+            let pool = test_source_pool(vec![source_a, source_b]).unwrap();
+
+            assert_eq!(
+                pool.fetch(test_source_request(source_provider_ids)).await,
+                Err(ProviderIngestSourceFetchErrorV1::Rejected)
+            );
+            assert!(calls.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticated_source_pool_does_not_mask_identity_drift_with_later_success() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Ok(vec![0xA5]),
+            true,
+            Arc::clone(&calls),
+        );
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Ok(vec![0xB6]),
+            false,
+            Arc::clone(&calls),
+        );
+        let pool = test_source_pool(vec![source_a, source_b]).unwrap();
+
+        assert_eq!(
+            pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
+                .await,
+            Err(ProviderIngestSourceFetchErrorV1::Rejected)
+        );
+        assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32]]);
+    }
+
+    #[tokio::test]
+    async fn authenticated_source_pool_does_not_mask_qualification_drift_with_later_success() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let source_a = test_provider_source(
+            [0x22; 32],
+            "https-pinned:provider-a",
+            Ok(()),
+            Ok(vec![0xA5]),
+            false,
+            Arc::clone(&calls),
+        );
+        *source_a.qualification_after_fetch.lock().unwrap() =
+            Some(ProviderIngestSourceQualificationV1::new(2, [0x22; 32]));
+        let source_b = test_provider_source(
+            [0x33; 32],
+            "https-pinned:provider-b",
+            Ok(()),
+            Ok(vec![0xB6]),
+            false,
+            Arc::clone(&calls),
+        );
+        let pool = test_source_pool(vec![source_a, source_b]).unwrap();
+
+        assert_eq!(
+            pool.fetch(test_source_request(vec![[0x22; 32], [0x33; 32]]))
+                .await,
+            Err(ProviderIngestSourceFetchErrorV1::Rejected)
+        );
+        assert_eq!(*calls.lock().unwrap(), vec![[0x22; 32]]);
+    }
+
     struct TestStorage {
         existing: AtomicBool,
     }
@@ -2269,6 +3663,12 @@ mod tests {
                         order_id: ReplicationOrderId::new(request.authorization.order_id()),
                         provider_id: ProviderId::new(request.authorization.provider_id()),
                         completion_epoch: request.completion_epoch,
+                        expected_authority: request.expected_authority,
+                        expected_assignment_revision: request.expected_assignment_revision,
+                        finalized_anchor: ProviderIngestFinalizedAnchorV1 {
+                            height: request.finalized_cursor.height,
+                            block_hash: request.finalized_cursor.block_hash,
+                        },
                     },
                 )]);
                 builder.set_creation_time(Duration::from_millis(1_000));
@@ -2290,8 +3690,26 @@ mod tests {
     }
 
     impl ProviderIngestCompletionSignerV1 for TestSigner {
+        fn runtime_handle(&self) -> &str {
+            "pkcs11:sorafs-provider-ingest-unit"
+        }
+
         fn authority(&self) -> &AccountId {
             &self.authority
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            ProviderIngestCompletionSignerQualificationV1,
+            ProviderIngestCompletionSignerErrorV1,
+        > {
+            Ok(ProviderIngestCompletionSignerQualificationV1::new(
+                1,
+                self.signer_policy(),
+                self.key.public_key().algorithm(),
+                self.key.public_key().clone(),
+            ))
         }
 
         fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
@@ -2345,8 +3763,7 @@ mod tests {
 
         fn resolve<'a>(
             &'a self,
-            _provider_owner: AccountId,
-            _finalized_cursor: ProviderIngestFinalizedCursorV1,
+            _context: ProviderIngestCompletionSignerResolutionContextV1,
         ) -> ProviderIngestFutureV1<
             'a,
             Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
@@ -2478,6 +3895,7 @@ mod tests {
         Arc<TestIngress>,
     ) {
         let page = fixture_page(row.clone());
+        let finalized_cursor = page.finalized_cursor;
         let ledger = Arc::new(TestLedger {
             page: Mutex::new(page),
         });
@@ -2491,7 +3909,7 @@ mod tests {
         });
         let outbox = ProviderIngestOutbox::in_memory(outbox_policy()).expect("outbox");
         let validated =
-            validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy()).unwrap();
+            validate_assignment(&row, finalized_cursor, LOCAL_PROVIDER, runtime_policy()).unwrap();
         let ingress = Arc::new(TestIngress {
             outbox: outbox.clone(),
             job_id: validated.authorization.job_id(),
@@ -2576,11 +3994,11 @@ mod tests {
         unassigned_completion
             .order
             .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new([0x99; 32]),
-                completed_by: account(9),
-                completion_epoch: 8,
-            });
+            .push(completion_record(
+                ProviderId::new([0x99; 32]),
+                account(9),
+                8,
+            ));
         assert!(matches!(
             validate_assignment(
                 &unassigned_completion,
@@ -2723,12 +4141,38 @@ mod tests {
         let (mut runtime, _, fetch, ingress) = test_runtime(
             row,
             false,
-            Err(ProviderIngestSourceFetchErrorV1::Rejected),
+            Err(ProviderIngestSourceFetchErrorV1::ContentRejected),
             0,
             ProviderIngestIngressDispositionV1::Submitted,
             false,
         );
         runtime.tick().await.expect("tick");
+        assert_eq!(fetch.calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            runtime.outbox.status(ingress.job_id).unwrap().state,
+            ProviderIngestDeliveryStateV1::RetryScheduled {
+                failure_class: ProviderIngestFailureClassV1::SourceRejected,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn authenticated_source_binding_rejection_is_terminal_for_the_tick() {
+        let row = fixture_row(0x34);
+        let (mut runtime, _, fetch, ingress) = test_runtime(
+            row,
+            false,
+            Err(ProviderIngestSourceFetchErrorV1::Rejected),
+            0,
+            ProviderIngestIngressDispositionV1::Submitted,
+            false,
+        );
+
+        assert!(matches!(
+            runtime.tick().await,
+            Err(ProviderIngestRuntimeErrorV1::SourceProtocolViolation)
+        ));
         assert_eq!(fetch.calls.load(Ordering::SeqCst), 1);
         assert!(matches!(
             runtime.outbox.status(ingress.job_id).unwrap().state,
@@ -2746,7 +4190,7 @@ mod tests {
         let (mut runtime, ledger, fetch, _) = test_runtime(
             first.clone(),
             false,
-            Err(ProviderIngestSourceFetchErrorV1::Rejected),
+            Err(ProviderIngestSourceFetchErrorV1::ContentRejected),
             0,
             ProviderIngestIngressDispositionV1::Submitted,
             false,
@@ -2836,32 +4280,33 @@ mod tests {
             }
         ));
 
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0]
-            .order
-            .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(SOURCE_PROVIDER),
-                completed_by: account(7),
-                completion_epoch: 8,
-            });
-        page.rows[0]
-            .order
-            .provider_completions
-            .push(ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(LOCAL_PROVIDER),
-                completed_by: account(9),
-                completion_epoch: 9,
-            });
-        page.rows[0].order.status = ReplicationOrderStatus::Completed(9);
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0]
+                .order
+                .provider_completions
+                .push(completion_record(
+                    ProviderId::new(SOURCE_PROVIDER),
+                    account(7),
+                    8,
+                ));
+            page.rows[0]
+                .order
+                .provider_completions
+                .push(completion_record(
+                    ProviderId::new(LOCAL_PROVIDER),
+                    account(9),
+                    9,
+                ));
+            page.rows[0].order.status = ReplicationOrderStatus::Completed(9);
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         runtime.tick().await.expect("semantic reconciliation");
         assert!(matches!(
@@ -2879,18 +4324,14 @@ mod tests {
     async fn finalized_completion_first_row_bypasses_full_active_capacity() {
         let mut completed = fixture_row(0x2E);
         completed.order.provider_completions = vec![
-            ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(SOURCE_PROVIDER),
-                completed_by: account(7),
-                completion_epoch: 8,
-            },
-            ReplicationOrderCompletionRecord {
-                provider_id: ProviderId::new(LOCAL_PROVIDER),
-                completed_by: account(9),
-                completion_epoch: 9,
-            },
+            completion_record(ProviderId::new(SOURCE_PROVIDER), account(7), 8),
+            completion_record(ProviderId::new(LOCAL_PROVIDER), account(9), 9),
         ];
         completed.order.status = ReplicationOrderStatus::Completed(9);
+        completed.pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+            height: 9,
+            block_hash: cursor(9).block_hash,
+        };
         completed.completion_epoch = Some(9);
         let (mut runtime, _, fetch, ingress) = test_runtime(
             completed,
@@ -2911,9 +4352,9 @@ mod tests {
         assert_eq!(
             runtime
                 .outbox
-                .statuses()
+                .aggregate_counts()
                 .expect("full active inventory")
-                .len(),
+                .active,
             runtime.outbox.policy().max_active_entries
         );
 
@@ -3047,15 +4488,16 @@ mod tests {
         runtime.tick().await.expect("ambiguous submit");
         *ingress.observation.lock().unwrap() = ProviderIngestTransactionObservationV1::Unknown;
 
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         runtime.tick().await.expect("finalized absence");
         assert!(matches!(
@@ -3085,15 +4527,16 @@ mod tests {
 
         *ingress.observation.lock().unwrap() =
             ProviderIngestTransactionObservationV1::CommittedSuccess;
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         let outcome = runtime.tick().await.expect("committed-success observation");
         assert_eq!(outcome.jobs_finalized, 0);
@@ -3138,16 +4581,21 @@ mod tests {
 
         *ingress.observation.lock().unwrap() =
             ProviderIngestTransactionObservationV1::CommittedSuccess;
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].provider_owner = Some(account(9));
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].provider_owner = Some(account(9));
+            page.rows[0].completion_authority = Some(ProviderIngestCompletionAuthorityV1::new(
+                account(9),
+                completion_signer_policy(1),
+            ));
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         runtime.tick().await.expect("owner rotation");
         assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 1);
@@ -3179,15 +4627,16 @@ mod tests {
             .signer_resolver
             .signer_policy_revision
             .store(2, Ordering::SeqCst);
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         runtime.tick().await.expect("signer policy rotation");
         assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 1);
@@ -3215,16 +4664,18 @@ mod tests {
 
         *ingress.observation.lock().unwrap() =
             ProviderIngestTransactionObservationV1::CommittedSuccess;
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].provider_owner = None;
-        page.rows[0].completion_epoch = None;
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].provider_owner = None;
+            page.rows[0].completion_authority = None;
+            page.rows[0].completion_epoch = None;
+        }
 
         runtime.tick().await.expect("owner removal");
         assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 1);
@@ -3267,16 +4718,21 @@ mod tests {
             }
         ));
 
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].provider_owner = Some(account(9));
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].provider_owner = Some(account(9));
+            page.rows[0].completion_authority = Some(ProviderIngestCompletionAuthorityV1::new(
+                account(9),
+                completion_signer_policy(1),
+            ));
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         runtime.tick().await.expect("invalidate stale owner");
         assert_eq!(ingress.observe_calls.load(Ordering::SeqCst), 0);
@@ -3314,15 +4770,16 @@ mod tests {
             .signer_resolver
             .signer_policy_revision
             .store(2, Ordering::SeqCst);
-        let mut page = ledger.page.lock().unwrap();
-        page.finalized_cursor = cursor(9);
-        page.finalized_block_time_ms = 9_000;
-        page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
-            height: 9,
-            block_hash: cursor(9).block_hash,
-        };
-        page.rows[0].completion_epoch = Some(9);
-        drop(page);
+        {
+            let mut page = ledger.page.lock().unwrap();
+            page.finalized_cursor = cursor(9);
+            page.finalized_block_time_ms = 9_000;
+            page.rows[0].pin.finalized_cursor = PinManifestFinalizedCursorV1 {
+                height: 9,
+                block_hash: cursor(9).block_hash,
+            };
+            page.rows[0].completion_epoch = Some(9);
+        }
 
         runtime
             .tick()
@@ -3361,16 +4818,18 @@ mod tests {
             .expect("retain signed bytes after unavailable preflight");
         assert_eq!(first.completions_signed, 1);
         assert_eq!(first.completion_submissions, 0);
-        assert!(matches!(
-            runtime.outbox.status(ingress.job_id).unwrap().state,
+        let next_attempt_at_ms = match runtime.outbox.status(ingress.job_id).unwrap().state {
             ProviderIngestDeliveryStateV1::LocalStored {
-                completion: ProviderIngestCompletionStateV1::Signed {
-                    ever_exposed: false,
-                    ..
-                },
+                completion:
+                    ProviderIngestCompletionStateV1::Signed {
+                        next_attempt_at_ms,
+                        ever_exposed: false,
+                        ..
+                    },
                 ..
-            }
-        ));
+            } => next_attempt_at_ms,
+            other => panic!("expected a signed retry, got {other:?}"),
+        };
 
         *ingress.prepare_error.lock().unwrap() = None;
         runtime
@@ -3381,7 +4840,10 @@ mod tests {
             .signer_resolver
             .eligibility_flip_to_revision
             .store(2, Ordering::SeqCst);
-        runtime.clock.base_ms.store(20_000, Ordering::SeqCst);
+        runtime
+            .clock
+            .base_ms
+            .store(next_attempt_at_ms, Ordering::SeqCst);
 
         let second = runtime
             .tick()

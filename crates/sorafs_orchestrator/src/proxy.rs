@@ -1433,12 +1433,14 @@ pub fn spawn_local_quic_proxy(
         let bridge_config = bridge_config.clone();
         run_accept_loop(
             endpoint.clone(),
-            telemetry_label.clone(),
-            browser_manifest.clone(),
-            config.proxy_mode.clone(),
-            guard_cache_key,
-            bridge_config,
-            Arc::new(Semaphore::new(PROXY_MAX_CONNECTIONS)),
+            AcceptLoopContext {
+                telemetry_label: telemetry_label.clone(),
+                manifest_template: browser_manifest.clone(),
+                mode: config.proxy_mode.clone(),
+                guard_cache_key,
+                bridge_config,
+                connection_permits: Arc::new(Semaphore::new(PROXY_MAX_CONNECTIONS)),
+            },
             shutdown_rx,
         )
     });
@@ -1468,16 +1470,29 @@ pub fn spawn_local_quic_proxy(
 }
 
 #[cfg(feature = "local-quic-proxy")]
-async fn run_accept_loop(
-    endpoint: Endpoint,
+struct AcceptLoopContext {
     telemetry_label: String,
     manifest_template: Option<BrowserManifestTemplate>,
     mode: ProxyMode,
     guard_cache_key: Option<GuardCacheKey>,
     bridge_config: Arc<ProxyBridgeConfig>,
     connection_permits: Arc<Semaphore>,
+}
+
+#[cfg(feature = "local-quic-proxy")]
+async fn run_accept_loop(
+    endpoint: Endpoint,
+    context: AcceptLoopContext,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    let AcceptLoopContext {
+        telemetry_label,
+        manifest_template,
+        mode,
+        guard_cache_key,
+        bridge_config,
+        connection_permits,
+    } = context;
     loop {
         let connecting_opt = tokio::select! {
             biased;
@@ -2780,13 +2795,10 @@ impl ProxyStreamService {
 
 #[cfg(all(test, feature = "local-quic-proxy"))]
 mod tests {
-    use std::{io, net::SocketAddr, sync::Arc, time::Duration};
+    use std::{net::SocketAddr, sync::Arc, time::Duration};
 
     use tempfile::TempDir;
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        task::JoinHandle,
-    };
+    use tokio::{io::AsyncWriteExt, task::JoinHandle};
 
     use super::*;
     use rand::rand_core::TryRngCore;
@@ -3118,7 +3130,8 @@ mod tests {
         let cache_context =
             CacheTagContext::from_manifest(&manifest).expect("cache context present");
         let expected_context = cache_context.clone();
-        let bridge_config = Arc::new(ProxyBridgeConfig::from_config(&config));
+        let bridge_config =
+            Arc::new(ProxyBridgeConfig::from_config(&config).expect("valid bridge config"));
 
         let session = ProxySession {
             telemetry_label: "test".into(),
@@ -3598,7 +3611,7 @@ mod tests {
             exit_country: None,
             client_id: Some("browser".into()),
         };
-        let (stream_send, mut stream_recv, stream_ack) =
+        let (mut stream_send, mut stream_recv, stream_ack) =
             open_proxy_stream(&connection, &open_frame).await;
         assert!(!stream_ack.accepted);
         assert_eq!(stream_ack.code, STREAM_ACK_BAD_REQUEST);

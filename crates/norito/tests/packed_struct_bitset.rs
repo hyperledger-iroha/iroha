@@ -1,10 +1,13 @@
 //! Golden checks for hybrid packed-struct bitset sizing behavior.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use norito::{
     NoritoDeserialize, NoritoSerialize,
-    core::{self as norito_core, DecodeFlagsGuard, header_flags},
+    core::{self as norito_core, DecodeFlagsGuard, Error, header_flags},
 };
 
 fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
@@ -31,6 +34,49 @@ struct Nested {
 struct NeedsSize {
     id: u32,
     nested: Nested,
+}
+
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+struct Tiny(u32);
+
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+struct NamedTiny {
+    inner: Tiny,
+}
+
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+struct TupleTiny(Tiny);
+
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+struct NamedMixed {
+    fixed: u32,
+    inner: Tiny,
+}
+
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+struct TupleMixed(u32, Tiny);
+
+fn decode_bare_with_flags<T>(payload: &[u8], flags: u8) -> Result<T, Error>
+where
+    T: for<'de> NoritoDeserialize<'de>,
+{
+    let _guard = DecodeFlagsGuard::enter(flags);
+    norito_core::decode_archived_field::<T>(payload)
+}
+
+fn assert_typed_error_without_unwind<T>(payload: &[u8], flags: u8)
+where
+    T: for<'de> NoritoDeserialize<'de>,
+{
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        decode_bare_with_flags::<T>(payload, flags)
+    }));
+    let result = outcome.expect("malformed packed structs must not unwind");
+    match result {
+        Err(Error::LengthMismatch) => {}
+        Err(error) => panic!("unexpected packed-struct decode error: {error:?}"),
+        Ok(_) => panic!("malformed packed structs must return a typed decode error"),
+    }
 }
 
 #[test]
@@ -83,4 +129,66 @@ fn packed_struct_bitset_emits_size_for_nested_structs() {
         &payload[data_start + id_bytes.len()..data_start + id_bytes.len() + nested_payload.len()],
         nested_payload.as_slice()
     );
+}
+
+#[test]
+fn packed_struct_bitset_rejects_layout_forgery_for_named_and_unnamed_structs() {
+    let flags =
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
+
+    let named = NamedMixed {
+        fixed: 7,
+        inner: Tiny(11),
+    };
+    let mut named_payload = encode_bare_with_flags(&named, flags);
+    assert_eq!(named_payload[0], 0b10);
+    assert_eq!(
+        decode_bare_with_flags::<NamedMixed>(&named_payload, flags).expect("canonical named value"),
+        named
+    );
+    named_payload[0] |= 0b01;
+    assert!(matches!(
+        decode_bare_with_flags::<NamedMixed>(&named_payload, flags),
+        Err(Error::NonCanonicalEncoding)
+    ));
+
+    let unnamed = TupleMixed(13, Tiny(17));
+    let mut unnamed_payload = encode_bare_with_flags(&unnamed, flags);
+    assert_eq!(unnamed_payload[0], 0b10);
+    assert_eq!(
+        decode_bare_with_flags::<TupleMixed>(&unnamed_payload, flags)
+            .expect("canonical unnamed value"),
+        unnamed
+    );
+    unnamed_payload[0] |= 0b01;
+    assert!(matches!(
+        decode_bare_with_flags::<TupleMixed>(&unnamed_payload, flags),
+        Err(Error::NonCanonicalEncoding)
+    ));
+}
+
+#[test]
+fn packed_struct_size_headers_reject_truncation_without_unwind() {
+    let flags =
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
+
+    for header_len in 0..=7 {
+        let mut payload = vec![0b1];
+        payload.extend(std::iter::repeat_n(0x80, header_len));
+        assert_typed_error_without_unwind::<NamedTiny>(&payload, flags);
+        assert_typed_error_without_unwind::<TupleTiny>(&payload, flags);
+    }
+}
+
+#[test]
+fn compact_zero_size_header_is_not_reinterpreted_as_fixed_u64() {
+    let flags =
+        header_flags::PACKED_STRUCT | header_flags::COMPACT_LEN | header_flags::FIELD_BITSET;
+
+    for bytes_after_zero in 0..=7 {
+        let mut payload = vec![0b1, 0x00];
+        payload.extend(std::iter::repeat_n(0xAA, bytes_after_zero));
+        assert_typed_error_without_unwind::<NamedTiny>(&payload, flags);
+        assert_typed_error_without_unwind::<TupleTiny>(&payload, flags);
+    }
 }

@@ -1187,13 +1187,6 @@ pub mod isi {
             )?;
             let (account_id, account_value) = account.clone().into_key_value();
             if state_transaction.world.account(&account_id).is_ok() {
-                let plain_domainless_self_registration = self.object().metadata().is_empty()
-                    && self.object().label().is_none()
-                    && self.object().uaid.is_none()
-                    && self.object().opaque_ids.is_empty();
-                if plain_domainless_self_registration {
-                    return Ok(());
-                }
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
                     id: IdBox::AccountId(account_id),
@@ -1940,7 +1933,7 @@ pub mod isi {
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "cannot unregister account {account_id}: it has active repo agreement state ({agreement_id}); close repo agreement first"
+                        "cannot unregister account {account_id}: it is referenced by repo agreement state ({agreement_id}); retain account for settlement audit references"
                     )
                     .into(),
                 )
@@ -2588,42 +2581,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if state_transaction
-                .settlement
-                .repo
-                .eligible_collateral
-                .iter()
-                .any(|definition_id| definition_id == &asset_definition_id)
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is configured as settlement repo eligible collateral (`settlement.repo.eligible_collateral`); update settlement config first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if let Some((base_definition_id, _)) = state_transaction
-                .settlement
-                .repo
-                .collateral_substitution_matrix
-                .iter()
-                .find(|(base_definition_id, substitutes)| {
-                    *base_definition_id == &asset_definition_id
-                        || substitutes
-                            .iter()
-                            .any(|definition_id| definition_id == &asset_definition_id)
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is configured in settlement repo collateral substitution matrix (`settlement.repo.collateral_substitution_matrix`, base {base_definition_id}); update settlement config first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-
             if let Some((agreement_id, _)) =
                 state_transaction
                     .world
@@ -3874,6 +3831,7 @@ mod tests {
             alias_setup::{CompareAndSetPrimaryAccountAlias, EnsureAlias, RebindAccountAlias},
             error::{
                 AssetTransferAdmissionError, InstructionExecutionError, InvalidParameterError,
+                RepetitionError,
             },
             governance::{CouncilDerivationKind, VotingMode},
         },
@@ -4198,9 +4156,8 @@ mod tests {
                         epoch: 1,
                         members: vec![(*ALICE_ID).clone()],
                         alternates: Vec::new(),
-                        verified: 1,
                         candidate_count: 1,
-                        derived_by: CouncilDerivationKind::Fallback,
+                        derived_by: CouncilDerivationKind::Manual,
                     },
                 )
             })
@@ -5380,6 +5337,32 @@ mod tests {
             .expect("account created event");
 
         assert_eq!(created.domain, expected_domain);
+    }
+
+    #[test]
+    fn register_existing_plain_account_returns_repetition_error() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+
+        let error = Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect_err("explicit duplicate registration must fail");
+
+        assert_eq!(
+            error,
+            InstructionExecutionError::Repetition(RepetitionError {
+                instruction: InstructionType::Register,
+                id: IdBox::AccountId(account_id),
+            })
+        );
     }
 
     #[test]
@@ -9096,7 +9079,7 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account_id.clone(),
-                peer_id: PeerId::from(account_id.signatory().clone()),
+                peer_id: PeerId::from(account_id.expect_single_signatory().clone()),
                 stake_account: account_id.clone(),
                 total_stake: Quantity::from(1_u32),
                 self_stake: Quantity::from(1_u32),
@@ -9142,7 +9125,7 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: LaneId::new(1),
                 validator: account_id.clone(),
-                peer_id: PeerId::from(account_id.signatory().clone()),
+                peer_id: PeerId::from(account_id.expect_single_signatory().clone()),
                 stake_account: account_id.clone(),
                 total_stake: Quantity::from(1_u32),
                 self_stake: Quantity::from(1_u32),
@@ -9361,9 +9344,17 @@ mod tests {
                 ),
                 quantity: Quantity::from(10_u32),
             },
+            AssetId::new(
+                AssetDefinitionId::new(domain_id.clone(), "usd".parse().unwrap()),
+                authority.clone(),
+            ),
             iroha_data_model::repo::RepoCollateralLeg::new(
                 AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
                 Quantity::from(12_u32),
+            ),
+            AssetId::new(
+                AssetDefinitionId::new(domain_id.clone(), "bond".parse().unwrap()),
+                authority.clone(),
             ),
             250,
             1000,
@@ -9378,7 +9369,7 @@ mod tests {
             .expect_err("account with repo agreement state must not be unregistered");
         let err_string = err.to_string();
         assert!(
-            err_string.contains("active repo agreement state"),
+            err_string.contains("repo agreement state"),
             "error should explain repo-state conflict: {err_string}"
         );
         assert!(
@@ -9954,7 +9945,6 @@ mod tests {
             epoch: 1,
             members: vec![account_id.clone()],
             alternates: Vec::new(),
-            verified: 0,
             candidate_count: 0,
             derived_by: Default::default(),
         };
@@ -12199,15 +12189,20 @@ mod tests {
         tx.world
             .insert_repo_agreement_entry(iroha_data_model::repo::RepoAgreement::new(
                 repo_id,
-                initiator,
-                counterparty,
+                initiator.clone(),
+                counterparty.clone(),
                 iroha_data_model::repo::RepoCashLeg {
                     asset_definition_id: asset_definition_id.clone(),
                     quantity: Quantity::from(10_u32),
                 },
+                AssetId::new(asset_definition_id.clone(), counterparty.clone()),
                 iroha_data_model::repo::RepoCollateralLeg::new(
-                    AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
+                    AssetDefinitionId::new(asset_domain.clone(), "bond".parse().unwrap()),
                     Quantity::from(12_u32),
+                ),
+                AssetId::new(
+                    AssetDefinitionId::new(asset_domain, "bond".parse().unwrap()),
+                    counterparty,
                 ),
                 250,
                 1_000,
@@ -12480,97 +12475,6 @@ mod tests {
         assert!(
             err_string.contains("nexus staking asset definition"),
             "error should explain nexus staking-asset conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
-        );
-    }
-
-    #[test]
-    fn unregister_asset_definition_rejects_when_definition_is_settlement_repo_eligible_collateral()
-    {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.settlement.repo.eligible_collateral = vec![asset_definition_id.clone()];
-
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("repo eligible collateral definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("settlement repo eligible collateral"),
-            "error should explain settlement repo eligible-collateral conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
-        );
-    }
-
-    #[test]
-    fn unregister_asset_definition_rejects_when_definition_is_settlement_repo_substitution_entry() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-
-        let base_definition_id =
-            AssetDefinitionId::new(asset_domain.clone(), "base".parse().unwrap());
-        let asset_definition_id = AssetDefinitionId::new(asset_domain, "sub".parse().unwrap());
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-
-        Register::asset_definition({
-            let __asset_definition_id = base_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
-        .execute(&authority, &mut tx)
-        .expect("register base asset definition");
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
-        .execute(&authority, &mut tx)
-        .expect("register substitute asset definition");
-        tx.settlement
-            .repo
-            .collateral_substitution_matrix
-            .insert(base_definition_id, vec![asset_definition_id.clone()]);
-
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("repo substitution definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("collateral substitution matrix"),
-            "error should explain settlement repo substitution conflict: {err_string}"
         );
         assert!(
             tx.world

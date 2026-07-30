@@ -282,14 +282,10 @@ pub struct DaIngestReceipt {
   Rust 箱導出 `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}`，Python
   `ToriiClient` 現在包括 `decode_pdp_commitment_header`，並且 `IrohaSwift` 已發貨
   原始標頭映射或 `HTTPURLResponse` 實例的 `decodePdpCommitmentHeader` 重載。 【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii 還公開 `GET /v1/da/manifests/{storage_ticket}`，以便 SDK 和操作員可以獲取清單
-  和塊計劃而不觸及節點的假脫機目錄。響應返回 Norito 字節
-  (base64)，渲染清單 JSON，為 `sorafs fetch` 準備的 `chunk_plan` JSON blob，相關
-  十六進制摘要（`storage_ticket`、`client_blob_id`、`blob_hash`、`chunk_root`），並鏡像
-  來自攝取響應的 `Sora-PDP-Commitment` 標頭以進行奇偶校驗。提供 `block_hash=<hex>`
-  查詢字符串返回確定性 `sampling_plan`（分配哈希、`sample_window` 和採樣
-  `(index, role, group)` 元組跨越完整的 2D 佈局），因此驗證器和 PoR 工具繪製相同
-  指數。
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### 大負載流
 

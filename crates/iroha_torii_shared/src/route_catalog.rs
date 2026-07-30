@@ -66,12 +66,15 @@ pub enum Listener {
 /// Authentication contract enforced by the route boundary.
 ///
 /// Most policies are middleware-backed. Protocol exchanges and explicitly
-/// reviewed canonical-account handlers may enforce their credential while
-/// entering the handler, before parsing or acting on protected request data.
+/// reviewed handlers may enforce their credential at the handler boundary,
+/// before invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
+    /// The route requires exactly one configured Torii API token regardless
+    /// of the listener-wide API-token setting.
+    RequiredApiToken,
     /// The listener's configured API-token policy applies and the route also
     /// requires exactly one dedicated signer-backed onboarding token.
     OnboardingToken,
@@ -1184,26 +1187,6 @@ pub mod operator_authentication {
         LOGIN_OPTIONS,
         LOGIN_VERIFY,
     ];
-}
-
-/// Feature-gated governance VRF helper descriptors.
-pub mod governance_vrf {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
-
-    /// Derive deterministic governance-council VRF inputs.
-    pub const DERIVE_COUNCIL: RouteDescriptor = RouteDescriptor::new(
-        "governance.council.derive_vrf",
-        HttpMethod::Post,
-        "/v1/gov/council/derive-vrf",
-        ApiSurface::Public,
-        Listener::Torii,
-    )
-    .with_feature_gate(FeatureGate::Feature("gov_vrf"))
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-
-    /// Governance VRF routes registered when `gov_vrf` is compiled.
-    pub const ROUTES: &[RouteDescriptor] = &[DERIVE_COUNCIL];
 }
 
 /// Core node information and operator configuration descriptors.
@@ -2862,18 +2845,6 @@ pub mod runtime_governance {
     /// Read citizenship status for one account.
     pub const GOV_CITIZEN_STATUS: RouteDescriptor =
         app_get("governance.citizen.status", "/v1/gov/citizens/{account_id}");
-    /// Read council derivation audit metadata.
-    pub const GOV_COUNCIL_AUDIT: RouteDescriptor =
-        app_get("governance.council.audit", "/v1/gov/council/audit");
-    /// Persist a VRF-derived council.
-    pub const GOV_COUNCIL_PERSIST: RouteDescriptor =
-        app_post("governance.council.persist", "/v1/gov/council/persist")
-            .with_feature_gate(FeatureGate::All(&["app_api", "gov_vrf"]));
-    /// Replace a council member with the next alternate.
-    pub const GOV_COUNCIL_REPLACE: RouteDescriptor =
-        app_post("governance.council.replace", "/v1/gov/council/replace")
-            .with_feature_gate(FeatureGate::All(&["app_api", "gov_vrf"]));
-
     /// Complete route family registered by `add_runtime_governance_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         ZK_ROOTS,
@@ -2935,9 +2906,6 @@ pub mod runtime_governance {
         GOV_COUNCIL_CURRENT,
         GOV_CITIZENS_COUNT,
         GOV_CITIZEN_STATUS,
-        GOV_COUNCIL_AUDIT,
-        GOV_COUNCIL_PERSIST,
-        GOV_COUNCIL_REPLACE,
     ];
 }
 
@@ -3292,40 +3260,49 @@ pub mod sorafs {
     );
 
     /// Read the latest reputation snapshot.
-    pub const REPUTATION_LATEST_GET: RouteDescriptor = documented_get(
+    pub const REPUTATION_LATEST_GET: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.latest",
         "/v1/sorafs/reputation/latest",
-    );
+    )
+    .with_implicit_head(true);
     /// Read one historical reputation snapshot.
-    pub const REPUTATION_SNAPSHOT: RouteDescriptor = documented_get(
+    pub const REPUTATION_SNAPSHOT: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.read",
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
-    );
+    )
+    .with_implicit_head(true);
     /// Read one provider's reputation record and proof.
-    pub const REPUTATION_PROVIDER: RouteDescriptor = documented_get(
+    pub const REPUTATION_PROVIDER: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_provider.read",
         "/v1/sorafs/reputation/providers/{provider_id}",
-    );
+    )
+    .with_implicit_head(true);
     /// Read the active reputation weights.
-    pub const REPUTATION_WEIGHTS: RouteDescriptor = documented_get(
+    pub const REPUTATION_WEIGHTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_weight.read",
         "/v1/sorafs/reputation/weights",
-    );
+    )
+    .with_implicit_head(true);
     /// Read a bounded reputation-event snapshot.
-    pub const REPUTATION_EVENTS: RouteDescriptor = documented_get(
+    pub const REPUTATION_EVENTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_event.list",
         "/v1/sorafs/reputation/events",
-    );
+    )
+    .with_implicit_head(true);
     /// Stream reputation events over SSE.
     pub const REPUTATION_EVENTS_STREAM: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_stream",
         "/v1/sorafs/reputation/events/stream",
-    );
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(true);
     /// Stream reputation events over WebSocket.
     pub const REPUTATION_EVENTS_WEBSOCKET: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_websocket",
         "/v1/sorafs/reputation/events/ws",
-    );
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    .with_implicit_head(true);
 
     /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
@@ -3364,7 +3341,8 @@ pub mod sorafs {
         documented_post("sorafs.storage.fetch", "/v1/sorafs/storage/fetch");
     /// Request a storage access token.
     pub const STORAGE_TOKEN: RouteDescriptor =
-        documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token");
+        documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token")
+            .with_authentication(AuthenticationPolicy::RequiredApiToken);
     /// Read CAR bytes for a stored manifest.
     pub const STORAGE_CAR: RouteDescriptor = documented_get(
         "sorafs.storage_car.read",
@@ -4327,7 +4305,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     operator_authentication::REGISTRATION_VERIFY,
     operator_authentication::LOGIN_OPTIONS,
     operator_authentication::LOGIN_VERIFY,
-    governance_vrf::DERIVE_COUNCIL,
     core::API_VERSION,
     core::PEERS,
     core::HEALTH,
@@ -4513,9 +4490,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::GOV_COUNCIL_CURRENT,
     runtime_governance::GOV_CITIZENS_COUNT,
     runtime_governance::GOV_CITIZEN_STATUS,
-    runtime_governance::GOV_COUNCIL_AUDIT,
-    runtime_governance::GOV_COUNCIL_PERSIST,
-    runtime_governance::GOV_COUNCIL_REPLACE,
     sorafs::STORAGE_PEERS,
     sorafs::PROVIDERS,
     sorafs::PROVIDER_ADVERT,
@@ -5259,6 +5233,25 @@ mod tests {
     }
 
     #[test]
+    fn stream_token_api_token_authentication_is_exactly_scoped() {
+        assert_eq!(
+            sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::RequiredApiToken,
+            "stream-token issuance must advertise its unconditional API credential"
+        );
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| {
+                    route.authentication() == AuthenticationPolicy::RequiredApiToken
+                })
+                .count(),
+            1,
+            "no unrelated route may inherit the stream-token credential policy"
+        );
+    }
+
+    #[test]
     fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
         let routes = [
             application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
@@ -5456,7 +5449,6 @@ mod tests {
             .iter()
             .chain(fees::ROUTES)
             .chain(operator_authentication::ROUTES)
-            .chain(governance_vrf::ROUTES)
             .chain(iso20022::ROUTES)
             .chain(data_availability::ROUTES)
             .chain(musubi::ROUTES)
@@ -6172,14 +6164,50 @@ mod tests {
 
     #[test]
     fn reputation_surface_is_committed_projection_read_only() {
-        let matching = CATALOGED_ROUTES
-            .iter()
-            .filter(|route| route.path() == "/v1/sorafs/reputation/latest")
-            .collect::<Vec<_>>();
-        assert_eq!(matching.len(), 1);
-        assert_eq!(matching[0].method(), HttpMethod::Get);
+        let routes = [
+            sorafs::REPUTATION_LATEST_GET,
+            sorafs::REPUTATION_SNAPSHOT,
+            sorafs::REPUTATION_PROVIDER,
+            sorafs::REPUTATION_WEIGHTS,
+            sorafs::REPUTATION_EVENTS,
+            sorafs::REPUTATION_EVENTS_STREAM,
+            sorafs::REPUTATION_EVENTS_WEBSOCKET,
+        ];
         assert_eq!(
-            matching[0].stable_route_id(),
+            routes.map(RouteDescriptor::stable_route_id),
+            [
+                "sorafs.reputation_snapshot.latest",
+                "sorafs.reputation_snapshot.read",
+                "sorafs.reputation_provider.read",
+                "sorafs.reputation_weight.read",
+                "sorafs.reputation_event.list",
+                "protocol.sorafs.reputation_event_stream",
+                "protocol.sorafs.reputation_event_websocket",
+            ]
+        );
+        assert_eq!(RouteCatalog::new(&routes).validate(), Ok(()));
+        for route in routes {
+            assert_eq!(route.method(), HttpMethod::Get);
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature
+            );
+            assert!(
+                route.implicit_head(),
+                "Axum GET routing provides authenticated framework HEAD handling"
+            );
+            assert_eq!(
+                CATALOGED_ROUTES
+                    .iter()
+                    .filter(|candidate| { candidate.stable_route_id() == route.stable_route_id() })
+                    .count(),
+                1,
+                "reputation route `{}` must appear exactly once",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            sorafs::REPUTATION_LATEST_GET.stable_route_id(),
             "sorafs.reputation_snapshot.latest"
         );
         assert!(

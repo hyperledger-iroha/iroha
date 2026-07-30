@@ -871,7 +871,7 @@ impl<T> SelectorTuple<T> {
                 // unit value to trigger projection when ids-only is requested.
                 SelectorMode::IdsOnly => 1,
             };
-            core::iter::repeat(()).take(count)
+            core::iter::repeat_n((), count)
         }
     }
 
@@ -1467,10 +1467,9 @@ mod codec_tests {
         let error = CompoundPredicate::<query::CommittedTransaction>::from_json_raw("[]".into())
             .expect_err("array predicate wire payload must be rejected");
 
-        assert!(
-            error
-                .to_string()
-                .contains("predicate JSON must be an object")
+        assert_eq!(
+            error.to_string(),
+            "committed transaction predicate nodes must be objects"
         );
     }
 

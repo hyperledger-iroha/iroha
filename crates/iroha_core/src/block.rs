@@ -87,7 +87,6 @@ use iroha_data_model::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    domain::DomainId,
     events::prelude::*,
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS},
@@ -116,63 +115,15 @@ use norito::codec::Encode;
 use norito::json::Value as JsonValue;
 use sha2::Digest as _;
 
-const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
-// Retained only so historical Taira genesis blocks can replay their legacy digest.
-const ARCHIVED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
-
-const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
-    [
-        58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237, 206, 11,
-        155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
-    ],
-    [
-        40, 173, 221, 159, 39, 238, 176, 56, 202, 219, 191, 211, 103, 68, 251, 108, 152, 88, 38,
-        166, 13, 99, 153, 170, 152, 200, 97, 80, 160, 147, 6, 254,
-    ],
-    [
-        6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
-        194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
-    ],
-    [
-        127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95, 145,
-        75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
-    ],
-];
-
-fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
-    matches!(
-        chain_id.as_str(),
-        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
-    )
-}
-
-fn is_archived_taira_chain_id(chain_id: &ChainId) -> bool {
-    chain_id.as_str() == ARCHIVED_TAIRA_CHAIN_ID
-}
-
-fn legacy_replay_confidential_digest_with_hashes(
+fn ensure_confidential_features_match(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
-    legacy_policy_hashes: &[[u8; 32]],
-) -> bool {
-    let (Some(expected), Some(actual)) = (expected, actual) else {
-        return false;
-    };
-
-    actual
-        .zk_policy_hash
-        .is_some_and(|hash| legacy_policy_hashes.contains(&hash))
-        && actual.vk_set_hash == expected.vk_set_hash
-        && actual.poseidon_params_id == expected.poseidon_params_id
-        && actual.pedersen_params_id == expected.pedersen_params_id
-        && actual.conf_rules_version == expected.conf_rules_version
-}
-
-fn taira_legacy_replay_confidential_digest(
-    expected: Option<ConfidentialFeatureDigest>,
-    actual: Option<ConfidentialFeatureDigest>,
-) -> bool {
-    legacy_replay_confidential_digest_with_hashes(expected, actual, &LEGACY_TAIRA_ZK_POLICY_HASHES)
+) -> Result<(), BlockValidationError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(BlockValidationError::ConfidentialFeaturesMismatch { expected, actual })
+    }
 }
 
 #[cfg(feature = "bls")]
@@ -3242,6 +3193,8 @@ pub enum SignatureVerificationError {
 pub enum InvalidGenesisError {
     /// Genesis block must be signed with genesis private key and not signed by any peer
     InvalidSignature,
+    /// Genesis authority must use a single-key account controller
+    GenesisAuthorityNotSingleKey,
     /// Genesis transaction must be authorized by genesis account
     UnexpectedAuthority,
     /// Genesis transactions must not contain errors
@@ -3290,9 +3243,12 @@ pub fn check_genesis_block(
     let [signature] = signatures.as_slice() else {
         return Err(InvalidGenesisError::InvalidSignature);
     };
+    let genesis_signatory = genesis_account
+        .try_signatory()
+        .ok_or(InvalidGenesisError::GenesisAuthorityNotSingleKey)?;
     signature
         .signature()
-        .verify_hash(genesis_account.signatory(), block.hash())
+        .verify_hash(genesis_signatory, block.hash())
         .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
     if block.header().height().get() != 1 || block.header().prev_block_hash().is_some() {
@@ -4193,6 +4149,8 @@ pub(crate) mod valid {
 
     use commit::CommittedBlock;
     #[cfg(test)]
+    use iroha_data_model::nexus::AxtPolicySnapshot;
+    #[cfg(test)]
     use iroha_data_model::soracloud::{
         SoraRuntimeReceiptV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
@@ -4200,7 +4158,7 @@ pub(crate) mod valid {
     use iroha_data_model::{
         ChainId,
         events::pipeline::PipelineEventBox,
-        nexus::{AxtPolicySnapshot, GroupBinding, HandleBudget, HandleSubject},
+        nexus::{GroupBinding, HandleBudget, HandleSubject},
     };
     use iroha_logger::warn;
     use iroha_primitives::time::TimeSource;
@@ -4921,6 +4879,15 @@ pub(crate) mod valid {
                 Self::Replay => false,
                 Self::LegacyLive | Self::SignedGenesis { .. } | Self::SumeragiV2 { .. } => true,
             }
+        }
+
+        /// Return whether validation may publish best-effort pipeline recovery metadata.
+        ///
+        /// Signed genesis validation executes against a disposable state overlay before
+        /// consensus. It must not mutate Kura or invalidate the startup replay binding that
+        /// protects the still-empty canonical store.
+        const fn persist_pipeline_recovery_sidecar(&self) -> bool {
+            !matches!(self, Self::SignedGenesis { .. })
         }
 
         const fn enforce_local_wall_clock(&self) -> bool {
@@ -6561,7 +6528,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
-                false,
                 ConsensusValidationProfile::LegacyLive,
                 false,
                 None,
@@ -6595,7 +6561,6 @@ pub(crate) mod valid {
                 false,
                 None,
                 false,
-                false,
                 ConsensusValidationProfile::SignedGenesis { consensus_mode },
                 false,
                 None,
@@ -6616,7 +6581,6 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
-            trust_replay_tx_signatures: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -6629,7 +6593,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
-                trust_replay_tx_signatures,
                 ConsensusValidationProfile::Replay,
                 false,
                 None,
@@ -6649,8 +6612,9 @@ pub(crate) mod valid {
         /// authenticated height context and its parent CommitQC are the v2
         /// reconfiguration proof; malformed evidence is still rejected when
         /// a body carries it.
-        /// Transaction signatures, stateless checks, state-dependent
-        /// invariants, and deterministic execution all remain mandatory.
+        /// Non-genesis transaction signatures, stateless checks, state-dependent
+        /// invariants, and deterministic execution all remain mandatory. Genesis
+        /// retains its single authority block signature over the ordered intents.
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_v2_candidate_keep_voting_block<'state>(
             block: SignedBlock,
@@ -6674,7 +6638,6 @@ pub(crate) mod valid {
                 false,
                 None,
                 true,
-                false,
                 ConsensusValidationProfile::SumeragiV2 {
                     block_cadence,
                     context: validation_context,
@@ -6689,9 +6652,9 @@ pub(crate) mod valid {
         ///
         /// Callers must only use this after independently verifying that local validation roots
         /// and commit-certificate roots agree for the same block. The path still checks
-        /// state-dependent block invariants, transaction limits, duplicate detection, and
-        /// execution-context alignment, but trusts the already validated block and transaction
-        /// signatures so commit does not repeat that cryptographic work.
+        /// non-genesis transaction signatures, state-dependent block invariants,
+        /// transaction limits, duplicate detection, and execution-context alignment.
+        /// It skips only the block signature set authenticated by the commit certificate.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
@@ -6718,7 +6681,6 @@ pub(crate) mod valid {
                 voting_block,
                 false,
                 Some(timings),
-                true,
                 true,
                 ConsensusValidationProfile::LegacyLive,
                 false,
@@ -6788,6 +6750,7 @@ pub(crate) mod valid {
                 false,
                 None,
                 SccpRootValidation::Defer,
+                true,
             )?;
             let _ = crate::sumeragi::witness::drain_exec_witness();
             drop(exec_witness_guard);
@@ -6890,7 +6853,6 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
-            trust_replay_tx_signatures: bool,
             validation_profile: ConsensusValidationProfile,
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
@@ -6977,16 +6939,6 @@ pub(crate) mod valid {
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
-            let cache_now_ms = block.header().creation_time().as_millis();
-            let cached_stateless_ok = cache_context.as_ref().map(|context| {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context.clone());
-                prepared_txs
-                    .iter()
-                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
-                    .collect::<Vec<_>>()
-            });
             let static_snapshot_start = Instant::now();
             if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
@@ -6995,8 +6947,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                cached_stateless_ok.as_deref(),
-                trust_replay_tx_signatures,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -7011,6 +6961,9 @@ pub(crate) mod valid {
                 &block,
                 state,
                 validation_profile.authoritative_consensus_mode(),
+                validation_profile
+                    .v2_context()
+                    .and_then(SumeragiV2ValidationContext::authenticated_height_context),
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
                 record_timings(&mut timings, stateless_elapsed, None);
@@ -7084,6 +7037,8 @@ pub(crate) mod valid {
                 (!replay_compatibility).then(crate::sumeragi::witness::exec_witness_guard);
             let tx_start = Instant::now();
             let advertised_committed_fragments = block.committed_fragment_count();
+            let persist_pipeline_recovery_sidecar =
+                validation_profile.persist_pipeline_recovery_sidecar();
             if let Err(error) = Self::validate_and_record_transactions_with_prepared(
                 &mut block,
                 &mut state_block,
@@ -7091,6 +7046,7 @@ pub(crate) mod valid {
                 true,
                 Some(&prepared_txs),
                 SccpRootValidation::Enforce,
+                persist_pipeline_recovery_sidecar,
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -7199,7 +7155,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
-                false,
                 ConsensusValidationProfile::LegacyLive,
                 false,
                 Some(&mut send_events),
@@ -7235,7 +7190,6 @@ pub(crate) mod valid {
                 voting_block,
                 soft_fork,
                 Some(timings),
-                false,
                 false,
                 ConsensusValidationProfile::LegacyLive,
                 false,
@@ -7395,34 +7349,7 @@ pub(crate) mod valid {
                 Some(computed_digest)
             };
             let actual_digest = block.header().confidential_features();
-            if actual_digest != expected_digest {
-                let is_legacy_taira_digest =
-                    taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
-                let is_public_taira_genesis = block.header().is_genesis()
-                    && (is_public_taira_chain_id(chain_id) || is_archived_taira_chain_id(chain_id));
-                if is_legacy_taira_digest
-                    && (validation_profile.replay_compatibility() || is_public_taira_genesis)
-                {
-                    if is_public_taira_genesis && !validation_profile.replay_compatibility() {
-                        iroha_logger::warn!(
-                            block_height,
-                            chain_id = chain_id.as_str(),
-                            "accepting public Taira genesis with legacy confidential feature digest"
-                        );
-                    } else {
-                        iroha_logger::debug!(
-                            block_height,
-                            chain_id = chain_id.as_str(),
-                            "accepting legacy confidential feature digest during replay"
-                        );
-                    }
-                } else {
-                    return Err(BlockValidationError::ConfidentialFeaturesMismatch {
-                        expected: expected_digest,
-                        actual: actual_digest,
-                    });
-                }
-            }
+            ensure_confidential_features_match(expected_digest, actual_digest)?;
 
             if block.header().is_genesis() {
                 if block.has_results() {
@@ -7728,6 +7655,9 @@ pub(crate) mod valid {
             block: &SignedBlock,
             state: &State,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
+            authenticated_height_context: Option<
+                &iroha_data_model::block::consensus_v2::HeightContext,
+            >,
         ) -> Result<(), BlockValidationError> {
             Self::validate_npos_effects_header(block)?;
 
@@ -7752,6 +7682,32 @@ pub(crate) mod valid {
                         "permissioned consensus blocks must not carry NPoS effects",
                     ))
                 };
+            }
+            if authoritative_mode
+                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
+            {
+                let context = authenticated_height_context.ok_or_else(|| {
+                    Self::npos_effects_error(
+                        "NPoS candidate validation requires its authenticated height context",
+                    )
+                })?;
+                if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+                    || context.height != block_height
+                {
+                    return Err(Self::npos_effects_error(
+                        "NPoS candidate differs from its authenticated height context",
+                    ));
+                }
+                crate::sumeragi::v2_npos::validate_candidate_records(
+                    context,
+                    state,
+                    actual_effects,
+                )
+                .map_err(|error| {
+                    Self::npos_effects_error(format!(
+                        "invalid authenticated NPoS VRF effects: {error}"
+                    ))
+                })?;
             }
             let admission_keys = if let Some(effects) = actual_effects {
                 crate::sumeragi::evidence::validate_v2_evidence_admissions(
@@ -8150,7 +8106,6 @@ pub(crate) mod valid {
                     })?;
                 if height_context.id() != validation_context.context_id
                     || height_context.height != block.header().height().get()
-                    || height_context.epoch != qc.epoch_id
                 {
                     return Err(Self::execution_context_error(
                         "certified merge reference differs from its authenticated Sumeragi v2 height context",
@@ -10071,8 +10026,6 @@ pub(crate) mod valid {
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
-            cached_stateless_ok: Option<&[bool]>,
-            trust_replay_tx_signatures: bool,
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
@@ -10104,15 +10057,20 @@ pub(crate) mod valid {
             let mut prechecked_signature_results: Vec<
                 Option<Result<(), SignatureVerificationFail>>,
             > = vec![None; prepared_txs.len()];
+            // Genesis authenticates the ordered transaction intents once through the
+            // genesis-authority block signature. Per-transaction proof bytes are not
+            // an additional admission boundary.
             #[cfg(feature = "bls")]
-            Self::precheck_bls_transaction_signatures(
-                &signed_txs,
-                prepared_txs,
-                pipeline_cfg.signature_batch_max_bls,
-                &mut prechecked_signature_results,
-                _metrics,
-                static_data.aggregate_lane,
-            );
+            if !is_genesis_block {
+                Self::precheck_bls_transaction_signatures(
+                    &signed_txs,
+                    prepared_txs,
+                    pipeline_cfg.signature_batch_max_bls,
+                    &mut prechecked_signature_results,
+                    _metrics,
+                    static_data.aggregate_lane,
+                );
+            }
             let mut seen_hashes: HashSet<HashOf<SignedTransaction>> =
                 HashSet::with_capacity(signed_txs.len());
             let mut seen_sealed_commitments =
@@ -10212,11 +10170,6 @@ pub(crate) mod valid {
             use rayon::prelude::*;
 
             let mut ed25519_prechecked = vec![false; prepared_txs.len()];
-            if let Some(cached_stateless_ok) = cached_stateless_ok {
-                if cached_stateless_ok.len() != prepared_txs.len() {
-                    return Err(BlockValidationError::MerkleRootMismatch);
-                }
-            }
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
                 struct Ed25519BatchItem {
@@ -10333,19 +10286,9 @@ pub(crate) mod valid {
                     .map(BlockValidationError::TransactionAccept);
                 }
 
-                let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
-                let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
-                    AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            Some(prechecked_signature_result),
-                            &prepared.metadata,
-                        )
-                } else if let Some(prechecked_signature_result) = prechecked_signature_result {
+                let stateless = if let Some(prechecked_signature_result) =
+                    prechecked_signature_result
+                {
                     AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
@@ -10479,16 +10422,6 @@ pub(crate) mod valid {
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
-            let cache_now_ms = block.header().creation_time().as_millis();
-            let cached_stateless_ok = cache_context.as_ref().map(|context| {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context.clone());
-                prepared_txs
-                    .iter()
-                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
-                    .collect::<Vec<_>>()
-            });
             Self::validate_static_with_snapshot(
                 block,
                 chain_id,
@@ -10496,8 +10429,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                cached_stateless_ok.as_deref(),
-                false,
                 metrics,
             )?;
             if let Some(context) = cache_context {
@@ -11157,6 +11088,7 @@ pub(crate) mod valid {
                 skip_stateless_checks,
                 None,
                 SccpRootValidation::Enforce,
+                true,
             )?;
             Self::finalize_committed_fragment_count(
                 block,
@@ -11203,6 +11135,7 @@ pub(crate) mod valid {
             skip_stateless_checks: bool,
             prepared_txs: Option<&[PreparedBlockTransaction]>,
             sccp_root_validation: SccpRootValidation,
+            persist_pipeline_recovery_sidecar: bool,
         ) -> Result<(), BlockValidationError> {
             use rayon::prelude::*;
 
@@ -11469,12 +11402,14 @@ pub(crate) mod valid {
                 ))
             };
 
-            let sig_batch_start = if skip_stateless_checks {
+            // Static genesis admission already validated the block-authenticated intents.
+            // Do not spend execution-stage work on non-authoritative transaction proofs.
+            let sig_batch_start = if skip_stateless_checks || is_genesis_block {
                 None
             } else {
                 timings.as_ref().map(|_| Instant::now())
             };
-            if !skip_stateless_checks {
+            if !skip_stateless_checks && !is_genesis_block {
                 // Ed25519 deterministic micro-batching for stateless pre-pass.
                 {
                     fn flush_ed25519_precheck_batch<'a>(
@@ -11936,7 +11871,7 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 if let Some(start) = sig_batch_start {
                     timings.execution_tx_signature_batch_ms = to_ms(start.elapsed());
-                } else if skip_stateless_checks {
+                } else if skip_stateless_checks || is_genesis_block {
                     timings.execution_tx_signature_batch_ms = 0;
                 }
             }
@@ -12701,7 +12636,7 @@ pub(crate) mod valid {
             // Persist admission sets and DAG fingerprint for idempotent recovery (best-effort).
             // Store a compact Norito sidecar for diagnostics.
             #[allow(unused)]
-            {
+            if persist_pipeline_recovery_sidecar {
                 let txs_sidecar: Vec<PipelineTxSnapshot> = prepared_txs
                     .iter()
                     .zip(access.iter())
@@ -13538,63 +13473,6 @@ pub(crate) mod valid {
                                     .map(|rm| rm.object.clone())
                             })
                     };
-                    let domain_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::Domain(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        DomainId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
-                    let asset_definition_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::AssetDefinition(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        AssetDefinitionId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
-                    let nft_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::Nft(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        iroha_data_model::nft::NftId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
                     let asset_transfer_target = |instruction: &InstructionBox| {
                         instruction
                             .as_any()
@@ -13641,11 +13519,8 @@ pub(crate) mod valid {
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
                             for instr in ovl.instructions() {
-                                if let Some(transfer) = asset_transfer_target(instr) {
-                                    if detached_is_genesis
-                                        || ovl.instruction_count() != 1
-                                        || transfer.source().account() != &p.authority
-                                    {
+                                if asset_transfer_target(instr).is_some() {
+                                    if detached_is_genesis || ovl.instruction_count() != 1 {
                                         unsupported = true;
                                         break;
                                     }
@@ -13690,86 +13565,6 @@ pub(crate) mod valid {
                                                     TransactionRejectionReason::Validation(
                                                         iroha_data_model::ValidationFail::NotPermitted(
                                                             "Can't set value to the metadata of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = domain_transfer_target(instr) {
-                                        match delta.can_transfer_domain(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                            alias_resolution_time_ms,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer domain of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = asset_definition_transfer_target(instr)
-                                    {
-                                        match delta.can_transfer_asset_definition(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer asset definition of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = nft_transfer_target(instr) {
-                                        match delta.can_transfer_nft(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer NFT of another account"
                                                                 .to_owned(),
                                                         ),
                                                     ),
@@ -15410,8 +15205,9 @@ pub(crate) mod valid {
             let signatory = usize::try_from(signature.index()).map_err(|_err| UnknownSignatory)?;
             let signatory = topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
 
-            assert_ne!(Role::Leader, topology.role(signatory));
-            assert_ne!(Role::Undefined, topology.role(signatory));
+            if matches!(topology.role(signatory), Role::Leader | Role::Undefined) {
+                return Err(UnknownSignatory);
+            }
 
             signature
                 .signature()
@@ -15486,10 +15282,17 @@ pub(crate) mod valid {
 
         /// Commit using the exact cryptographically verified Sumeragi-v2 finality artifact.
         ///
-        /// This is the sole block-signature quorum bypass. It reauthenticates the artifact and
-        /// binds its header, canonical resultless proposal digest, exact
-        /// result-bearing execution digest, and execution commitment to this
-        /// validated block before changing the lifecycle type.
+        /// This is the production Sumeragi-v2 finality path that replaces a
+        /// block-signature quorum with a verified finality artifact. It
+        /// reauthenticates the artifact and binds its header, canonical
+        /// resultless proposal digest, exact result-bearing execution digest,
+        /// and execution commitment to this validated block before changing
+        /// the lifecycle type.
+        ///
+        /// Other explicitly named APIs can also omit the ordinary quorum:
+        /// [`Self::commit_with_signers`] accepts a caller-authorized bypass,
+        /// while [`Self::commit_unchecked`] intentionally performs no block
+        /// signature checks.
         pub fn commit_with_verified_v2_artifact(
             self,
             artifact: &consensus_v2::finality::V2FinalityArtifact,
@@ -16037,7 +15840,9 @@ pub(crate) mod valid {
                 version: 1,
                 entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"weighted-merge-sidecar")),
                 encoded_len: 1,
-                epoch_id: height_context.epoch,
+                // Merge-ledger epochs are independently contiguous and do not
+                // reuse the validator-election epoch from the height context.
+                epoch_id: 1,
                 execution_batch_hash: None,
                 entrypoint_count: None,
                 entrypoint_merkle_root: None,
@@ -16046,7 +15851,7 @@ pub(crate) mod valid {
                 base_state_hash: None,
                 merge_qc: MergeQuorumCertificate {
                     view: block.header().view_change_index(),
-                    epoch_id: height_context.epoch,
+                    epoch_id: 1,
                     carrier_height: block.header().height().get(),
                     carrier_parent_hash: parent_hash,
                     chain_id_digest: crate::merge::merge_chain_id_digest(&chain_id),
@@ -16093,7 +15898,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn merge_reference_accepts_exact_count_and_weighted_quorum() {
+        fn merge_reference_accepts_distinct_merge_epoch_with_weighted_quorum() {
             let (state, block, bundle, profile) = weighted_merge_reference_fixture(&[0, 1, 3]);
             let view = state.query_view();
             ValidBlock::validate_execution_context_merge_reference(
@@ -16103,7 +15908,10 @@ pub(crate) mod valid {
                 &bundle,
                 &profile,
             )
-            .expect("three signers holding 68/100 voting power satisfy both strict quorums");
+            .expect(
+                "an independently contiguous merge epoch with three signers holding 68/100 \
+                 voting power satisfies both strict quorums",
+            );
         }
 
         struct AutonomousAnchorFixture {
@@ -18855,6 +18663,27 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn add_signature_rejects_leader_slot_without_panicking() {
+            let key_pairs = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(3)
+            .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
+            let block_hash = block.as_ref().hash();
+            let leader_signature = BlockSignature::new(
+                0,
+                checked_block_signature(key_pairs[0].private_key(), block_hash),
+            );
+
+            assert_eq!(
+                block.add_signature(leader_signature, &topology),
+                Err(SignatureVerificationError::UnknownSignatory)
+            );
+        }
+
+        #[test]
         fn replace_signatures_rolls_back_on_failure() {
             let key_pairs = core::iter::repeat_with(|| {
                 crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
@@ -19245,8 +19074,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                None,
-                false,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -19348,6 +19175,7 @@ pub(crate) mod valid {
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                None,
             )
             .expect("permissioned validation must not derive NPoS-only penalties");
         }
@@ -19374,6 +19202,7 @@ pub(crate) mod valid {
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                None,
             )
             .expect_err("permissioned validation must reject NPoS-only effects");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
@@ -19393,12 +19222,104 @@ pub(crate) mod valid {
                 &block,
                 &state,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
+                None,
             )
-            .expect_err("NPoS validation must require signed NPoS parameters");
+            .expect_err("NPoS validation must require an authenticated height context");
             assert!(matches!(
                 err,
                 BlockValidationError::NposEffectsInvalid(message)
-                    if message.contains("requires signed NPoS parameters")
+                    if message.contains("authenticated height context")
+            ));
+        }
+
+        #[test]
+        fn authenticated_npos_validation_rejects_forged_first_epoch_seal() {
+            use iroha_data_model::block::consensus_v2::{
+                ConsensusMode, DataAvailabilityLayout, DualQuorum, HeightContext, PayloadEncoding,
+                SnapshotBootstrapAnchor, ValidatorPower,
+            };
+
+            let mut keys = core::iter::repeat_with(|| {
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal)
+            })
+            .take(4)
+            .collect::<Vec<_>>();
+            keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            let roster = keys
+                .iter()
+                .map(|key| ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                })
+                .collect::<Vec<_>>();
+
+            let mut world = World::new();
+            let mut parameters = Parameters::default();
+            let mut npos = SumeragiNposParameters::default();
+            npos.epoch_length_blocks = NonZeroU64::new(10).expect("non-zero epoch");
+            npos.vrf_commit_window_blocks = 3;
+            npos.vrf_reveal_window_blocks = 3;
+            parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
+            world.parameters = Cell::new(parameters);
+            let state = State::new_for_testing(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let parent_hash =
+                HashOf::from_untyped_unchecked(Hash::new(b"forged-first-seal-parent"));
+            let context = HeightContext {
+                chain_id: state.chain_id.clone(),
+                protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
+                height: 2,
+                epoch: 0,
+                epoch_end_height: 10,
+                next_epoch_snapshot: None,
+                mode: ConsensusMode::Npos,
+                parent_commit_qc: None,
+                snapshot_bootstrap: Some(SnapshotBootstrapAnchor {
+                    snapshot_height: 1,
+                    snapshot_block_hash: parent_hash,
+                    snapshot_block_creation_time_ms: 1,
+                    snapshot_state_hash: Hash::new(b"forged-first-seal-state"),
+                }),
+                quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
+                roster,
+                nexus_amx_context_hash: Hash::new(b"forged-first-seal-nexus"),
+                da_layout: DataAvailabilityLayout {
+                    encoding: PayloadEncoding::Plain,
+                    chunk_size_bytes: 1_024,
+                    data_shards: 0,
+                    parity_shards: 0,
+                    max_payload_size_bytes: 4_096,
+                    max_chunk_count: 4,
+                },
+                leader_seed: [0x42; 32],
+            };
+            context.validate().expect("valid NPoS fixture context");
+
+            let block = npos_effects_block(
+                keys[0].private_key(),
+                context.height,
+                Some(NposConsensusEffects {
+                    // This is the exact malicious shape from R-CON-25: a
+                    // first record with no authenticated commit proof.
+                    vrf_epoch_seals: vec![vrf_epoch_record_for_test(0, context.height)],
+                    v2_evidence_admissions: Vec::new(),
+                    penalty_actions: Vec::new(),
+                }),
+            );
+            let err = ValidBlock::validate_npos_effects_with_state(
+                &block,
+                &state,
+                Some(ConsensusMode::Npos),
+                Some(&context),
+            )
+            .expect_err("an unsigned first epoch seal must fail closed");
+            assert!(matches!(
+                err,
+                BlockValidationError::NposEffectsInvalid(message)
+                    if message.contains("invalid authenticated NPoS VRF effects")
             ));
         }
 
@@ -19475,7 +19396,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -19505,7 +19426,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("VRF epoch record rewrite should be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19546,7 +19467,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect("monotonic VRF epoch record extension should validate");
         }
 
@@ -19578,7 +19499,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("VRF epoch record rewrite must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19619,12 +19540,8 @@ pub(crate) mod valid {
             );
             let block = npos_effects_block(leader.private_key(), 20, None);
 
-            let err = ValidBlock::validate_npos_effects_with_state(
-                &block,
-                &state,
-                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
-            )
-            .expect_err("missing deterministic NPoS marker must be rejected");
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
+                .expect_err("missing deterministic NPoS marker must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
 
             let exact = npos_effects_block(
@@ -19636,12 +19553,8 @@ pub(crate) mod valid {
                     penalty_actions: vec![npos_marker(7, 20)],
                 }),
             );
-            ValidBlock::validate_npos_effects_with_state(
-                &exact,
-                &state,
-                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos),
-            )
-            .expect("the exact deterministic NPoS action set must validate");
+            ValidBlock::validate_npos_effects_with_state(&exact, &state, None, None)
+                .expect("the exact deterministic NPoS action set must validate");
         }
 
         #[test]
@@ -19662,7 +19575,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("extra deterministic NPoS action must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19686,7 +19599,7 @@ pub(crate) mod valid {
                 }),
             );
 
-            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None)
+            let err = ValidBlock::validate_npos_effects_with_state(&block, &state, None, None)
                 .expect_err("duplicate NPoS actions must be rejected");
             assert!(matches!(err, BlockValidationError::NposEffectsInvalid(_)));
         }
@@ -19772,8 +19685,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                None,
-                false,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
@@ -19867,8 +19778,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                None,
-                false,
                 metrics,
             )
             .expect_err("duplicate signed transaction hash should be rejected");
@@ -24415,6 +24324,8 @@ pub(crate) mod valid {
                 ["signature", "_", "override"].concat(),
                 ["signature", "_", "overrides"].concat(),
                 ["skip", "_tx", "_signature", "_validation"].concat(),
+                ["trust", "_replay", "_tx", "_signatures"].concat(),
+                ["cached", "_stateless", "_ok"].concat(),
             ];
             let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
             let mut pending = vec![src.clone()];
@@ -24520,7 +24431,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn validate_prevalidated_commit_keep_voting_block_trusts_validated_signatures() {
+        fn prevalidated_commit_skips_only_the_authenticated_block_signature() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
@@ -24625,12 +24536,72 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             assert!(
                 result.is_ok(),
-                "prevalidated commit execution should trust previously checked signatures"
+                "prevalidated commit execution may skip only the authenticated block signature"
             );
             assert!(events.is_empty(), "no rejection events expected");
             assert!(
                 timings.total_ms >= timings.execution_ms,
                 "prevalidated timing should still include execution"
+            );
+            drop(result);
+
+            let (invalid_authority, invalid_signer) =
+                gen_account_in("prevalidated-invalid-signature");
+            let (forged_authority, _) = gen_account_in("prevalidated-forged-authority");
+            let invalid_tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                invalid_authority,
+                &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "invalid-prevalidated".to_owned())])
+            .sign(invalid_signer.private_key())
+            .with_authority(forged_authority);
+            let invalid_builder = BlockBuilder::new_with_time_source(
+                vec![AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx))],
+                block_time_source.clone(),
+            )
+            .chain(0, state.view().latest_block().as_deref());
+            let invalid_execution_context = default_test_execution_context(
+                &invalid_builder.0.transactions,
+                &invalid_builder.0.header,
+                topology.as_ref()[0].clone(),
+            );
+            let invalid_block = with_current_state_da_sidecars(
+                invalid_builder.with_execution_context(Some(invalid_execution_context)),
+                &state,
+            )
+            .sign(wrong_leader.private_key())
+            .unpack(|_| {});
+            let mut invalid_voting_block: Option<super::super::VotingBlock> = None;
+            let mut invalid_events = Vec::new();
+            let mut invalid_timings = ValidationTimings::new();
+            let invalid_result =
+                ValidBlock::validate_prevalidated_commit_keep_voting_block_with_events_and_timing(
+                    invalid_block.into(),
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &block_time_source,
+                    &state,
+                    &mut invalid_voting_block,
+                    &mut invalid_timings,
+                    |event| invalid_events.push(event),
+                )
+                .unpack(|_| {});
+            let Err(error) = invalid_result else {
+                panic!("prevalidated commit must still verify every transaction signature");
+            };
+            assert!(matches!(
+                *error.1,
+                BlockValidationError::TransactionAccept(
+                    AcceptTransactionFail::SignatureVerification(_)
+                )
+            ));
+            assert_eq!(
+                invalid_events.len(),
+                1,
+                "signature rejection should emit exactly one block event"
             );
         }
 
@@ -24869,6 +24840,200 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn check_genesis_block_rejects_height_above_one() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let mut block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let mut header = block.header();
+            header.set_height(nonzero!(2_u64));
+            block.replace_header_for_testing(header);
+            let signature = BlockSignature::new(
+                0,
+                checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
+            );
+            block
+                .replace_signatures([signature].into_iter().collect())
+                .expect("replace signature after changing test header");
+
+            assert_eq!(
+                check_genesis_block(&block, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::InvalidHeader)
+            );
+        }
+
+        #[test]
+        fn check_genesis_block_rejects_parent_hash() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let mut block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let mut header = block.header();
+            header.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"not-a-genesis-parent",
+            ))));
+            block.replace_header_for_testing(header);
+            let signature = BlockSignature::new(
+                0,
+                checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
+            );
+            block
+                .replace_signatures([signature].into_iter().collect())
+                .expect("replace signature after changing test header");
+
+            assert_eq!(
+                check_genesis_block(&block, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::InvalidHeader)
+            );
+        }
+
+        #[cfg(feature = "bls")]
+        #[test]
+        fn block_authenticated_genesis_ignores_invalid_per_transaction_bls_proof() {
+            use iroha_data_model::prelude::*;
+
+            let chain_id = ChainId::from("block-authenticated-bls-genesis");
+            let genesis_keypair =
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let unrelated_keypair =
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+
+            let pop = iroha_crypto::bls_normal_pop_prove(genesis_keypair.private_key())
+                .expect("valid BLS proof of possession");
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "bls_pop".parse().expect("valid BLS PoP metadata key"),
+                iroha_primitives::json::Json::new(hex::encode_upper(pop)),
+            );
+            let mut transaction = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .with_metadata(metadata)
+            .sign(genesis_keypair.private_key());
+            transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
+                SignatureOf::try_new(unrelated_keypair.private_key(), transaction.payload())
+                    .expect("unrelated BLS key can sign the fixture payload"),
+            ));
+            transaction
+                .verify_signature()
+                .expect_err("fixture transaction proof must not authorize the genesis account");
+
+            let block =
+                SignedBlock::genesis(vec![transaction], genesis_keypair.private_key(), None, None);
+            let world = World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
+                [Account::new(genesis_account.clone()).build(&genesis_account)],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let state = State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_test_lane_manifests_for_keypairs(
+                &state,
+                std::slice::from_ref(&genesis_keypair),
+            );
+            let mut crypto = iroha_config::parameters::actual::Crypto::default();
+            if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
+                crypto.allowed_signing.push(Algorithm::BlsNormal);
+            }
+            state.set_crypto(crypto);
+            let block = with_current_state_confidential_features(
+                block,
+                &state,
+                &[(0, genesis_keypair.private_key())],
+            );
+            let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
+            let mut voting_block = None;
+
+            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+                block,
+                &topology,
+                &chain_id,
+                &genesis_account,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {});
+
+            result.expect(
+                "the genesis block signature authenticates the intent; its transaction proof is non-authoritative",
+            );
+        }
+
+        #[test]
+        fn check_genesis_block_rejects_multisig_authority_without_unwinding() {
+            use iroha_data_model::{
+                account::{MultisigMember, MultisigPolicy},
+                prelude::*,
+            };
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let transaction = TransactionBuilder::new(
+                chain_id.clone(),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let block = SignedBlock::genesis(
+                vec![transaction],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let member =
+                MultisigMember::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(), 1)
+                    .expect("valid member");
+            let multisig_genesis = AccountId::new_multisig(
+                MultisigPolicy::new(1, vec![member]).expect("valid policy"),
+            );
+
+            assert_eq!(
+                check_genesis_block(&block, &multisig_genesis, &chain_id),
+                Err(InvalidGenesisError::GenesisAuthorityNotSingleKey)
+            );
+        }
+
+        #[test]
         fn genesis_block_with_da_commitments_uses_canonical_bundle_hash() {
             use iroha_data_model::prelude::*;
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
@@ -24945,8 +25110,9 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn validate_keep_voting_block_accepts_ordered_genesis_parameter_transactions() {
+        fn signed_genesis_validation_is_storage_side_effect_free() {
             use iroha_data_model::{
+                block::consensus_v2::ConsensusMode,
                 parameter::{Parameter, system::SumeragiParameter},
                 peer::PeerId,
                 prelude::*,
@@ -24981,7 +25147,7 @@ pub(crate) mod valid {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(
                 World::with([genesis_domain], [genesis_account_model], []),
-                kura,
+                Arc::clone(&kura),
                 query_handle,
             );
             install_test_lane_manifests_for_keypairs(
@@ -24997,7 +25163,7 @@ pub(crate) mod valid {
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
 
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis_block,
                 &topology,
                 &chain_id,
@@ -25005,7 +25171,7 @@ pub(crate) mod valid {
                 &time_source,
                 &state,
                 &mut voting_block,
-                false,
+                ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
 
@@ -25018,6 +25184,11 @@ pub(crate) mod valid {
                     "ordered genesis parameter transactions should validate: {err}; results={results:?}"
                 );
             }
+            assert_eq!(
+                kura.pipeline_sidecar_queue_len_for_testing(),
+                0,
+                "disposable signed-genesis validation must not publish pipeline recovery metadata"
+            );
         }
 
         #[test]
@@ -28375,7 +28546,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_replay_confidential_digest_allows_known_policy_hash_drift_only() {
+    fn legacy_taira_confidential_policy_hash_is_rejected() {
         let historical_policy_hash = [
             6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
             194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
@@ -28395,71 +28566,36 @@ mod tests {
             Some(historical_policy_hash),
         );
 
-        assert!(taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(actual)
+        assert!(matches!(
+            ensure_confidential_features_match(Some(expected), Some(actual)),
+            Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                expected: Some(reported_expected),
+                actual: Some(reported_actual),
+            }) if reported_expected == expected && reported_actual == actual
         ));
-
-        let height_2584_policy_hash = [
-            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
-            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
-        ];
-        let actual_height_2584 = ConfidentialFeatureDigest::new(
-            expected.vk_set_hash,
-            expected.poseidon_params_id,
-            expected.pedersen_params_id,
-            expected.conf_rules_version,
-            Some(height_2584_policy_hash),
-        );
-        assert!(taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(actual_height_2584)
-        ));
-
-        let mut mismatched_vk = actual;
-        mismatched_vk.vk_set_hash = Some([0x44; 32]);
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(mismatched_vk)
-        ));
-
-        let mut unknown_policy = actual;
-        unknown_policy.zk_policy_hash = Some([0x55; 32]);
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(unknown_policy)
-        ));
-
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            None
-        ));
+        assert!(ensure_confidential_features_match(Some(expected), Some(expected)).is_ok());
     }
 
     #[test]
-    fn public_taira_chain_id_guard_accepts_only_taira_ids() {
-        assert!(is_public_taira_chain_id(&ChainId::from(
-            "fc56984b-2be7-431d-840e-21514d1883f0"
-        )));
-        assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
-        assert!(is_public_taira_chain_id(&ChainId::from("taira")));
-        assert!(!is_public_taira_chain_id(&ChainId::from(
-            ARCHIVED_TAIRA_CHAIN_ID
-        )));
-        assert!(!is_public_taira_chain_id(&ChainId::from(
-            "00000000-0000-0000-0000-000000000000"
-        )));
-    }
+    fn confidential_feature_presence_is_exact() {
+        let digest =
+            ConfidentialFeatureDigest::new(Some([0x01; 32]), None, None, Some(1), Some([0x02; 32]));
 
-    #[test]
-    fn archived_taira_chain_id_guard_accepts_only_archived_uuid() {
-        assert!(is_archived_taira_chain_id(&ChainId::from(
-            ARCHIVED_TAIRA_CHAIN_ID
-        )));
-        assert!(!is_archived_taira_chain_id(&ChainId::from(
-            PUBLIC_TAIRA_CHAIN_ID
-        )));
-        assert!(!is_archived_taira_chain_id(&ChainId::from("taira")));
+        assert!(ensure_confidential_features_match(None, None).is_ok());
+        assert!(matches!(
+            ensure_confidential_features_match(Some(digest), None),
+            Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                expected: Some(reported),
+                actual: None,
+            }) if reported == digest
+        ));
+        assert!(matches!(
+            ensure_confidential_features_match(None, Some(digest)),
+            Err(BlockValidationError::ConfidentialFeaturesMismatch {
+                expected: None,
+                actual: Some(reported),
+            }) if reported == digest
+        ));
     }
 
     fn native_amx_test_catalog(
@@ -32744,7 +32880,8 @@ seiyaku MeteredFailure {
     #[test]
     fn successful_live_batches_accumulate_parent_block_gas() {
         for parallel_apply in [false, true] {
-            let chain_id = ChainId::from(format!("live-batch-parent-gas-{parallel_apply}"));
+            let chain_id = ChainId::try_from(format!("live-batch-parent-gas-{parallel_apply}"))
+                .expect("canonical live-batch test chain id");
             let (authority, keypair) = gen_account_in("wonderland");
             let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
             let world = World::with(
@@ -34745,9 +34882,10 @@ seiyaku MeteredFailure {
     #[allow(clippy::too_many_lines)]
     fn non_genesis_contract_deployment_bootstrap_survives_block_and_committed_replay() {
         for parallel_apply in [false, true] {
-            let chain_id = ChainId::from(format!(
+            let chain_id = ChainId::try_from(format!(
                 "contract-deployment-bootstrap-block-{parallel_apply}"
-            ));
+            ))
+            .expect("canonical contract-deployment test chain id");
             let leader = crate::block::checked_keypair();
             let (authority, authority_keypair) = gen_account_in("bootstrap");
             let (adversary, adversary_keypair) = gen_account_in("adversary");

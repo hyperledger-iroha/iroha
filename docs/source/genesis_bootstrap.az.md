@@ -24,8 +24,9 @@ Norito kodlu bootstrap protokolundan istifadə etməklə.
   ölçü qapağı (`genesis.bootstrap_max_bytes`). İcazə siyahısından kənar sorğular `NotAllowed` alır və
   yanlış düymə ilə imzalanmış faydalı yüklər `MismatchedPubkey` alır.
 - **Tələb axını:** yaddaş boş olduqda və `genesis.file` ayarlanmadıqda (və
-  `genesis.bootstrap_enabled=true`), node isteğe bağlı olan etibarlı həmyaşıdları əvvəlcədən idarə edir
-  `genesis.expected_hash`, sonra faydalı yükü götürür, `validate_genesis_block` vasitəsilə imzaları təsdiqləyir,
+  `genesis.bootstrap_enabled=true`), `genesis.expected_hash` dəqiq imzalanmış genezis blokunu
+  məcburi olaraq sabitləməlidir. Həm faylın, həm də həşin olmaması heç bir sorğu göndərilməzdən əvvəl
+  başlanğıc konfiqurasiya xətasıdır. Sonra node faydalı yükü götürür və imzaları `validate_genesis_block` vasitəsilə təsdiqləyir,
   və blok tətbiq etməzdən əvvəl Kür ilə yanaşı `genesis.bootstrap.nrt`-ni saxlayır. Bootstrap yenidən cəhd edir
   honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` və
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ Norito kodlu bootstrap protokolundan istifadə etməklə.
   həmyaşıdları arasında gətirməni dayandırın; yerli konfiqurasiyaya cavab verənlər/taym-autları geri qayıtmır.
 - **Operator addımları:** etibarlı genezisi olan ən azı bir etibarlı həmyaşıdın əlçatan olmasını təmin edin, konfiqurasiya edin
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` və təkrar cəhd düymələri və
-  uyğun olmayan faydalı yükləri qəbul etməmək üçün isteğe bağlı olaraq `expected_hash`-i bağlayın. Davamlı yüklər ola bilər
+  uzaq bootstrap-ı işə salmazdan əvvəl dəqiq bloku `expected_hash`-ə bağlayın. Yerli imzalanmış
+  `genesis.file` artıq açıq artefaktdır və əlavə həş tələb etmir. Davamlı yüklər ola bilər
   `genesis.file`-i `genesis.bootstrap.nrt`-ə göstərərək sonrakı çəkmələrdə təkrar istifadə olunur.

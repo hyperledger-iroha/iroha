@@ -137,7 +137,7 @@ Tip: These keys map to the `iroha_config::parameters::user::Torii` section and a
 - Privacy: neither `/v1/zk/ivm/derive` nor `/v1/zk/ivm/prove` expose plaintext gas usage (`gas_used`). Gas usage is committed inside `gas_policy_commitment`.
 - Execution semantics: `/v1/zk/ivm/prove` executes bytecode from the request (`authority`, `metadata`, `bytecode`) and derives the authoritative `IvmProved` payload on-node before generating `ivm-execution-v1` proof attachments (`halo2/ipa` or `stark/fri`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }` where optional `proved` is treated as a strict consistency check against node-derived execution output.
-- Nodes can still deterministically replay bytecode during admission as an additional safety check. `pipeline.ivm_proved.skip_replay` controls whether that extra replay check is skipped for full-semantics execution circuits.
+- Nodes always replay ABI V1 bytecode deterministically during admission. The active on-chain `ivm-execution-v1` verifier-key record controls circuit admission and proof-size limits; local pipeline configuration cannot enable, disable, or bypass proved execution.
 - Metrics: `torii_zk_ivm_prove_inflight` (jobs currently proving) and `torii_zk_ivm_prove_queued` (jobs queued waiting for an inflight slot) expose IVM prove helper queue pressure.
 
 ## Examples

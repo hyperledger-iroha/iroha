@@ -2073,6 +2073,29 @@ AsyncSchedulerExceptCausalControlRunnerAndNodeService ==
     asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
     asyncHistoricalRecoveryTargets, asyncServiceActivationState>>
 
+\* Exact Local continuation replay rematerializes the stored candidate into
+\* its existing lifecycle without admitting a new producer.  Only the command
+\* queue and runner phase/budget are therefore outside this frozen frame.
+AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService ==
+  <<asyncNow, asyncNextCommandClass,
+    asyncFifoOwed, asyncTimeoutEmitted,
+    asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
+    asyncNextServeAdmissionOrdinal, asyncNextServeIngressOrdinal,
+    asyncServeIngressAdmissions, asyncServeAdmissions,
+    asyncServeReservations, asyncServeTombstones,
+    asyncOutstandingWork, asyncIoReadyCompletions,
+    asyncLocalReadyCompletions, asyncNextCompletionSource,
+    asyncIoControlAvailable, asyncDeferredCompletionQueues,
+    asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+    asyncDeferredHandoffs,
+    asyncNextDeferredClass, asyncDeferredDrainOwed,
+    asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
+    asyncIoServiceDeadlines,
+    asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+    asyncCertifiedResponseClaim, asyncTransport,
+    asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+    asyncHistoricalRecoveryTargets, asyncServiceActivationState>>
+
 AsyncRecoveryLifecycleVars ==
   <<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>
 
@@ -4650,10 +4673,11 @@ No action chooses a new peer, payload, evidence object, or admission ordinal.
 Materialized takes the immediately following turn to publish the terminal
 tombstone.  `AsyncControlServiceSlotTransition` performs both monotone state
 updates.  The ordinary voter runner remains blocked for both turns.  A
-historical recovery target instead gives the selected record one
-resolution-only turn inside its already-fair serialized recovery runner;
-that turn freezes every later scheduler owner and publishes the terminal
-tombstone atomically.
+historical recovery target uses the same serialized runner: Ready evidence is
+acknowledged directly, while a non-Ready Local reservation first
+rematerializes its stored exact carrier without changing status.  The next
+turn observes that carrier as Ready.  Later scheduler owners remain frozen
+throughout both steps.
 ***************************************************************************)
 AsyncCandidateProducerContinuationDeclaredHandoffOwned(record) ==
   \E successor \in record.handoffCandidates:
@@ -4732,9 +4756,14 @@ AsyncCandidateVolatileBodyRetired(record) ==
      \/ /\ record.handoffCandidates # {}
         /\ AsyncCandidateProducerContinuationDeclaredHandoffRetired(record)
 
+AsyncCandidateProducerContinuationLocalReplayCarrier(record) ==
+  /\ record.sourceClass = "Local"
+  /\ CandidateScheduled(record.candidate)
+
 AsyncCandidateProducerContinuationHandoffOwned(record) ==
   \/ /\ record.sourceClass = "Local"
-     /\ AsyncCandidateProducerContinuationDeclaredHandoffOwned(record)
+     /\ \/ AsyncCandidateProducerContinuationDeclaredHandoffOwned(record)
+        \/ AsyncCandidateProducerContinuationLocalReplayCarrier(record)
   \/ /\ record.sourceClass = "ConditionalTransport"
      /\ \/ AsyncCandidateProducerContinuationDeclaredHandoffOwned(record)
         \/ AsyncCandidateConditionalTransportCarrier(record)
@@ -4758,6 +4787,18 @@ AsyncCandidateProducerContinuationDurableTerminal(record) ==
   \/ record.height # height
   \/ record.view < nodeView[record.node]
   \/ NodeHasDecision(record.node)
+
+\* An external continuation is never the sole physical owner.  Its exact
+\* retained transport/body carrier or a monotone retirement witness survives
+\* every restart.  This is a reachable-state invariant proved from the
+\* transition relation; it is not an added fairness premise.
+AsyncCandidateProducerContinuationExternalCoverageInvariant ==
+  \A record \in AsyncCandidateProducerContinuations:
+    /\ record.status \in {"Reserved", "Materialized"}
+    /\ record.sourceClass \in {"ConditionalTransport", "VolatileBody"}
+      => \/ AsyncCandidateProducerContinuationConcreteSuccessorOwned(record)
+         \/ AsyncCandidateProducerContinuationHandoffRetired(record)
+         \/ AsyncCandidateProducerContinuationDurableTerminal(record)
 
 AsyncCandidateProducerSemanticHandoffReservation(record) ==
   /\ record \in AsyncCandidateProducerContinuations
@@ -4837,13 +4878,21 @@ AsyncCandidateProducerContinuationResolutionReady(node) ==
         \/ AsyncCandidateProducerContinuationConcreteSuccessorOwned(record)
         \/ AsyncCandidateProducerContinuationHandoffRetired(record)
 
-\* Finite prefix owned ahead of every later local scheduler action.  The
-\* count is not an environment budget: it is derived from the immutable,
-\* coalesced continuation table and strictly decreases on the owner-neutral
-\* RunNodeWork resolution branch.
+\* Finite remaining lifecycle-stage prefix owned ahead of every later local
+\* scheduler action.  Reserved contributes two remaining acknowledgement
+\* stages and Materialized contributes one.  The value is derived from the
+\* immutable, coalesced continuation table rather than from an environment
+\* budget, and therefore also decreases when exact replay materializes (but
+\* does not yet retire) one handoff.
 AsyncCandidateProducerContinuationRunnerPrefixBudget(node) ==
-  Cardinality(
-    AsyncCandidateProducerContinuationResolutionRecordsForNode(node))
+  2 * Cardinality(
+        {record \in
+           AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
+           record.status = "Reserved"})
+    + Cardinality(
+        {record \in
+           AsyncCandidateProducerContinuationResolutionRecordsForNode(node):
+           record.status = "Materialized"})
 
 AsyncCandidateProducerContinuationRunnerPrefixAtBudget(node, budget) ==
   /\ gst
@@ -8052,7 +8101,8 @@ AsyncLeaderWireIngressPrefixSnapshot(recipient) ==
 
 AsyncLeaderWireLocalAcceptanceCapacityProven(item) ==
   LET recipient == item.envelope.recipient
-  IN /\ ~AsyncControlServiceAdmissionCoalesced(item)
+  IN /\ AsyncIngressPhysicalOrdinalAvailable(recipient)
+     /\ ~AsyncControlServiceAdmissionCoalesced(item)
      /\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)
      /\ ~AsyncCandidateServicePacketRetired(item)
      /\ ~AsyncCandidateStageRetired(item)
@@ -8120,13 +8170,13 @@ AsyncLeaderWireAdmissionMatchesRecord(item, record) ==
 Potential predecessor ownership is deliberately distinct from the active
 ingress rank.
 
-A crash-restored Dormant identity owns no selector barrier, but a real exact
-packet can reactivate it with its old actor-global scheduler ordinal.  Every
-later Serve, Candidate, Control, Completion, or priority owner therefore
-precharges the bounded set of retained lower leader-wire ordinals.  The set is
-derived from the finite lifecycle table and immutable scheduler ordinals
-rather than copied into a second mutable field: fresh allocation is strictly
-above the high-watermark, and exact Dormant admission changes only status.
+A crash-restored Dormant identity owns no selector barrier.  The sets below
+retain a bounded semantic compatibility projection for proofs which freeze
+the possible exact retry identities; they are not physical predecessor sets
+and may not order a Dormant token ahead of Serve, Candidate, Control,
+Completion, or priority work.  When the exact packet is accepted, the shared
+fresh physical ordinal above decides cross-ingress order while the immutable
+scheduler ordinal continues to identify the logical lifecycle.
 
 The retryable subset requires a presently retained exact transport packet.
 Mere membership of the frozen responsive roster is not a send owner and does
@@ -8149,7 +8199,6 @@ AsyncLeaderWirePotentialPredecessorRecordsBefore(node, ownerOrdinal) ==
 AsyncLeaderWirePotentialOwnerIdentity(record) ==
   [identity |-> record.identity,
    admissionOrdinal |-> record.admissionOrdinal,
-   physicalAdmissionOrdinal |-> record.physicalAdmissionOrdinal,
    schedulerOrdinal |-> record.schedulerOrdinal]
 
 AsyncLeaderWirePotentialPredecessorIdentitiesIn(
@@ -8386,6 +8435,15 @@ AdmitHiddenPacket(recipient, source) ==
                     asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
+THEOREM AdmitHiddenPacketReservesFreshSharedPhysicalOrdinal ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AdmitHiddenPacket(recipient, source)
+      => /\ AsyncIngressPhysicalOrdinalAvailable(recipient)
+         /\ AsyncNextIngressPhysicalOrdinal(recipient)'
+              = AsyncNextIngressPhysicalOrdinal(recipient) + 1
+BY DEF AdmitHiddenPacket,
+       AsyncNextIngressPhysicalOrdinal
+
 THEOREM AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     LET packet == OldestDueSourcePacket(recipient, source)
@@ -8402,6 +8460,8 @@ THEOREM AdmitHiddenLeaderWireIsAtomicLocalAcceptanceCut ==
           /\ \E record \in asyncLeaderWireLifecycles':
                /\ record.identity =
                     AsyncLeaderWireLifecycleIdentityAt(item, context)
+               /\ record.physicalAdmissionOrdinal
+                    = AsyncNextIngressPhysicalOrdinal(recipient)
                /\ record.status = "Ingress"
 BY Isa
    DEF AdmitHiddenPacket, CanAdmitIngressItem,
@@ -10859,13 +10919,15 @@ BY DEF AsyncIngressSchedulerBarrierActive,
        LocalAdmissionStep, SerializedRuntimeStep,
        EnqueueIoLocalControlWork, CommitCertificateDiscoveryStepWork
 
-THEOREM AsyncLeaderWireProtectedRecordBoundsIngressScheduler ==
-  \A node \in ValidatorIds,
-     record \in AsyncLeaderWireIngressProtectedRecordsAt(node):
-    AsyncLeaderWireLifecycleTypeInvariant
+THEOREM AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler ==
+  \A node \in ValidatorIds:
+    /\ AsyncLeaderWireLifecycleTypeInvariant
+    /\ AsyncLeaderWireIngressOwnsSharedPhysicalTurn(node)
       => /\ AsyncIngressSchedulerBarrierActive(node)
          /\ AsyncEarliestIngressSchedulerOrdinal(node)
-              <= record.schedulerOrdinal
+              =
+                AsyncLeaderWireEarliestPhysicalIngressRecord(
+                  node).schedulerOrdinal
 BY FS_CardinalityType, IsaT(120)
    DEF AsyncLeaderWireIngressProtectedRecordsAt,
        AsyncLeaderWireLifecycleTypeInvariant,
@@ -10873,6 +10935,8 @@ BY FS_CardinalityType, IsaT(120)
        AsyncIngressSchedulerBarrierActive,
        AsyncEarliestIngressSchedulerOrdinal,
        AsyncLeaderWireEarliestPhysicalIngressRecord,
+       AsyncLeaderWireIngressOwnsSharedPhysicalTurn,
+       AsyncServeIngressOwnsSharedPhysicalTurn,
        AsyncServeEarliestIngressSchedulerOrdinal,
        AsyncServeIngressLifecycleOwnerIdentities
 
@@ -10909,9 +10973,20 @@ AsyncCandidateProducerContinuationSelectedReplayRecord(node) ==
   AsyncCandidateProducerContinuationSelectedResolutionRecord(node)
 
 AsyncCandidateProducerContinuationSelectedLocalCandidate(node) ==
-  IF SelectedLocalSource(node) = "Producer"
-  THEN SelectedCompletionCandidate(node)
-  ELSE HeadCausalCandidate(node)
+  (AsyncCandidateProducerContinuationSelectedReplayRecord(node)).candidate
+
+AsyncCandidateProducerContinuationExactReplayIdentity(node, candidate) ==
+  LET record ==
+        AsyncCandidateProducerContinuationSelectedReplayRecord(node)
+  IN /\ candidate = record.candidate
+     /\ candidate.node = record.node
+     /\ candidate.consumerContext = record.context
+     /\ candidate.height = record.height
+     /\ candidate.view = record.view
+     /\ candidate.kind = record.phase
+     /\ candidate.causalOrigin = record.causalOrigin
+     /\ AsyncCandidateProducerContinuationSourceClass(candidate)
+          = record.sourceClass
 
 AsyncCandidateProducerContinuationExactLocalReplayStep(node) ==
   LET record ==
@@ -10919,12 +10994,58 @@ AsyncCandidateProducerContinuationExactLocalReplayStep(node) ==
   IN /\ record.status = "Reserved"
      /\ record.sourceClass = "Local"
      /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
-     /\ LocalAdmissionCanAdvance(node)
-     /\ AsyncCandidateProducerContinuationSelectedLocalCandidate(node)
-          = record.candidate
-     /\ LocalSourceLifecycleOrdinal(node, SelectedLocalSource(node))
-          = record.ordinal
-     /\ SelectedLocalAdmissionAdvance(node)
+     /\ asyncRunnerPhase[node] = "Local"
+     /\ asyncRunnerBudget[node] > 0
+     /\ CanEnqueueClass(node, record.candidate.class)
+     /\ AsyncCandidateProducerContinuationExactReplayIdentity(
+          node,
+          AsyncCandidateProducerContinuationSelectedLocalCandidate(node))
+     /\ AsyncCandidateLifecycleOrdinal(record.candidate) = record.ordinal
+     /\ EnqueueCandidate(record.candidate)
+     /\ UNCHANGED vars
+     /\ UNCHANGED asyncCausalQueues
+     /\ UNCHANGED
+          AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService
+     /\ asyncRunnerPhase' = asyncRunnerPhase
+     /\ asyncRunnerBudget' =
+          [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+THEOREM AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier ==
+  \A node \in ValidatorIds:
+    AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+      => LET record ==
+               AsyncCandidateProducerContinuationSelectedReplayRecord(node)
+         IN /\ asyncCommandQueues'[node] =
+                  Append(asyncCommandQueues[node], record.candidate)
+            /\ CandidateScheduledAfter(record.candidate)
+            /\ AsyncCandidateProducerContinuationExactReplayIdentity(
+                 node, record.candidate)
+            /\ asyncCausalAdmissionOwed' = asyncCausalAdmissionOwed
+            /\ asyncNextLocalSource' = asyncNextLocalSource
+BY Isa
+   DEF AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       EnqueueCandidate, CandidateScheduledAfter, CandidateScheduledIn,
+       QueuedCandidates, SequenceSet,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService
+
+THEOREM AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady ==
+  \A node \in ValidatorIds,
+     record \in AsyncCandidateProducerContinuationRecordSet:
+    /\ AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+    /\ record =
+         AsyncCandidateProducerContinuationSelectedResolutionRecord(node)
+    /\ record =
+         (AsyncCandidateProducerContinuationSelectedResolutionRecord(node))'
+    /\ record \in
+         (AsyncCandidateProducerContinuationResolutionRecordsForNode(node))'
+      => (AsyncCandidateProducerContinuationResolutionReady(node))'
+BY AsyncCandidateProducerContinuationExactLocalReplayPublishesStoredCarrier,
+   Isa
+   DEF AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned
 
 AsyncCandidateProducerContinuationRuntimeReplayCarrier(node) ==
   LET record ==
@@ -10936,15 +11057,25 @@ AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node) ==
   /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
   /\ (AsyncCandidateProducerContinuationSelectedReplayRecord(node))
        .sourceClass = "Local"
-  /\ AsyncCandidateProducerContinuationRuntimeReplayCarrier(node)
-  /\ asyncRunnerPhase[node] \in {"Local", "Ingress"}
+  /\ asyncRunnerPhase[node] \in {"Local", "Ingress", "Runtime"}
+  /\ IF AsyncCandidateProducerContinuationRuntimeReplayCarrier(node)
+     THEN asyncRunnerPhase[node] \in {"Local", "Ingress"}
+     ELSE asyncRunnerPhase[node] \in {"Ingress", "Runtime"}
   /\ UNCHANGED vars
   /\ UNCHANGED asyncCausalQueues
   /\ UNCHANGED AsyncSchedulerExceptCausalControlRunnerAndNodeService
   /\ asyncRunnerPhase' =
-       [asyncRunnerPhase EXCEPT ![node] = "Runtime"]
+       [asyncRunnerPhase EXCEPT
+          ![node] =
+            IF AsyncCandidateProducerContinuationRuntimeReplayCarrier(node)
+            THEN "Runtime"
+            ELSE "Local"]
   /\ asyncRunnerBudget' =
-       [asyncRunnerBudget EXCEPT ![node] = 1]
+       [asyncRunnerBudget EXCEPT
+          ![node] =
+            IF AsyncCandidateProducerContinuationRuntimeReplayCarrier(node)
+            THEN 1
+            ELSE AsyncQueueCapacity]
 
 AsyncCandidateProducerContinuationSelectedRuntimeCandidate(node) ==
   IF DeferredWorkOwnsRuntimeTurn(node)
@@ -10958,8 +11089,9 @@ AsyncCandidateProducerContinuationExactRuntimeReplayStep(node) ==
      /\ record.sourceClass = "Local"
      /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
      /\ asyncRunnerPhase[node] = "Runtime"
-     /\ AsyncCandidateProducerContinuationSelectedRuntimeCandidate(node)
-          = record.candidate
+     /\ AsyncCandidateProducerContinuationExactReplayIdentity(
+          node,
+          AsyncCandidateProducerContinuationSelectedRuntimeCandidate(node))
      /\ AsyncSelectedRuntimeLifecycleOrdinal(node) = record.ordinal
      /\ AsyncIoTimeoutLifecycleRetirementTransition(node)
      /\ UNCHANGED AsyncLocalAdmissionVars
@@ -10986,6 +11118,28 @@ ReplayRunNodeCandidateProducerContinuation(node) ==
        [asyncNodeServiceDeadlines EXCEPT
           ![node] = asyncNow + AsyncDeliveryBound]
   /\ UNCHANGED asyncIoServiceDeadlines
+
+THEOREM AsyncCandidateProducerContinuationReplayDispatchesOnlyExactIdentity ==
+  \A node \in ValidatorIds:
+    ReplayRunNodeCandidateProducerContinuation(node)
+      => \/ /\ AsyncCandidateProducerContinuationExactLocalReplayStep(node)
+               /\ AsyncCandidateProducerContinuationExactReplayIdentity(
+                    node,
+                    AsyncCandidateProducerContinuationSelectedLocalCandidate(
+                      node))
+          \/ AsyncCandidateProducerContinuationReplayTargetOnlyTurn(node)
+          \/ /\ AsyncCandidateProducerContinuationExactRuntimeReplayStep(node)
+               /\ AsyncCandidateProducerContinuationExactReplayIdentity(
+                    node,
+                    AsyncCandidateProducerContinuationSelectedRuntimeCandidate(
+                      node))
+               /\ AsyncSelectedRuntimeLifecycleOrdinal(node)
+                    =
+                      (AsyncCandidateProducerContinuationSelectedReplayRecord(
+                         node)).ordinal
+BY DEF ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep
 
 AsyncCurrentViewTimeoutLifecycleSelected(node) ==
   LET origin == AsyncEffectiveTimeoutLifecycleOrigin(node)
@@ -11019,6 +11173,7 @@ THEOREM AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake ==
        /\ (RunNodeWork(node)
              => \/ ResolveRunNodeCandidateProducerContinuation(
                       node)
+                \/ ReplayRunNodeCandidateProducerContinuation(node)
                 \/ AsyncServeIngressTargetOnlyTurn(node))
 BY Isa
    DEF AsyncCurrentViewTimeoutLifecycleSelected,
@@ -11026,7 +11181,8 @@ BY Isa
        SerializedRuntimePrecedesServeIngressStep,
        AsyncOlderRuntimeLifecyclePrecedesIngressScheduler,
        RunNodeWork,
-       ResolveRunNodeCandidateProducerContinuation
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation
 
 THEOREM LocalAdmissionAdvanceSelectsAtomicWork ==
   \A node \in ValidatorIds:
@@ -13623,10 +13779,15 @@ AsyncCandidateVolatileBodyRetiredAfterIn(state, record) ==
         /\ AsyncCandidateProducerContinuationDeclaredHandoffRetiredAfterIn(
              state, record)
 
+AsyncCandidateProducerContinuationLocalReplayCarrierAfter(record) ==
+  /\ record.sourceClass = "Local"
+  /\ CandidateScheduledAfter(record.candidate)
+
 AsyncCandidateProducerContinuationHandoffOwnedAfterIn(state, record) ==
   \/ /\ record.sourceClass = "Local"
-     /\ AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn(
-          state, record)
+     /\ \/ AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn(
+             state, record)
+        \/ AsyncCandidateProducerContinuationLocalReplayCarrierAfter(record)
   \/ /\ record.sourceClass = "ConditionalTransport"
      /\ \/ AsyncCandidateProducerContinuationDeclaredHandoffOwnedAfterIn(
              state, record)
@@ -13649,20 +13810,30 @@ AsyncCandidateProducerContinuationSelectedForRunnerResolution(record) ==
   /\ AsyncCandidateProducerContinuationSelectedResolutionRecord(
        record.node) = record
 
+AsyncCandidateProducerContinuationSelectedForRunnerReplay(record) ==
+  /\ ReplayRunNodeCandidateProducerContinuation(record.node)
+  /\ AsyncCandidateProducerContinuationExactRuntimeReplayStep(
+       record.node)
+  /\ AsyncCandidateProducerContinuationSelectedReplayRecord(
+       record.node) = record
+
+AsyncCandidateProducerContinuationSelectedForAcknowledgement(record) ==
+  \/ AsyncCandidateProducerContinuationSelectedForResolution(record)
+  \/ AsyncCandidateProducerContinuationSelectedForRunnerResolution(record)
+  \/ AsyncCandidateProducerContinuationSelectedForRunnerReplay(record)
+
 AsyncCandidateProducerContinuationRecordAfterStep(state, record) ==
   IF record.status = "Terminal"
   THEN record
   ELSE IF \/ AsyncCandidateProducerContinuationTerminalAfter(record)
-          \/ AsyncCandidateProducerContinuationSelectedForRunnerResolution(
-               record)
-          \/ /\ AsyncCandidateProducerContinuationSelectedForResolution(
+          \/ /\ AsyncCandidateProducerContinuationSelectedForAcknowledgement(
                   record)
              /\ \/ record.status = "Materialized"
                 \/ /\ record.status = "Reserved"
                    /\ AsyncCandidateProducerContinuationHandoffRetiredAfterIn(
                         state, record)
        THEN [record EXCEPT !.status = "Terminal"]
-       ELSE IF /\ AsyncCandidateProducerContinuationSelectedForResolution(
+       ELSE IF /\ AsyncCandidateProducerContinuationSelectedForAcknowledgement(
                        record)
                /\ record.status = "Reserved"
                /\ AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn(
@@ -13670,16 +13841,61 @@ AsyncCandidateProducerContinuationRecordAfterStep(state, record) ==
             THEN [record EXCEPT !.status = "Materialized"]
             ELSE record
 
-THEOREM AsyncCandidateProducerContinuationRunnerSelectionTerminalizes ==
+THEOREM AsyncCandidateProducerContinuationRunnerResolutionRequiresReadyEvidence ==
+  \A record \in AsyncCandidateProducerContinuationRecordSet:
+    AsyncCandidateProducerContinuationSelectedForRunnerResolution(record)
+      => AsyncCandidateProducerContinuationResolutionReady(record.node)
+BY DEF AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+       ResolveRunNodeCandidateProducerContinuation
+
+THEOREM AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation ==
+  \A state,
+     record \in AsyncCandidateProducerContinuationRecordSet:
+    /\ record =
+         AsyncCandidateProducerContinuationSelectedReplayRecord(record.node)
+    /\ record.status = "Reserved"
+    /\ ~AsyncCandidateProducerContinuationTerminalAfter(record)
+    /\ AsyncCandidateProducerContinuationExactLocalReplayStep(record.node)
+      => (AsyncCandidateProducerContinuationRecordAfterStep(
+            state, record)).status = "Reserved"
+BY SMT
+   DEF AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
+       AsyncCandidateProducerContinuationSelectedForResolution,
+       AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+       AsyncCandidateProducerContinuationSelectedForRunnerReplay,
+       ResolveCandidateProducerContinuation,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationResolutionReady
+
+THEOREM AsyncCandidateProducerContinuationRunnerResolutionConsumesExactStage ==
   \A state,
      record \in AsyncCandidateProducerContinuationRecordSet:
     /\ record.status \in {"Reserved", "Materialized"}
     /\ AsyncCandidateProducerContinuationSelectedForRunnerResolution(
          record)
-      => (AsyncCandidateProducerContinuationRecordAfterStep(
-            state, record)).status = "Terminal"
+      => \/ /\ record.status = "Materialized"
+               /\ (AsyncCandidateProducerContinuationRecordAfterStep(
+                     state, record)).status = "Terminal"
+         \/ /\ record.status = "Reserved"
+               /\ AsyncCandidateProducerContinuationHandoffRetiredAfterIn(
+                    state, record)
+               /\ (AsyncCandidateProducerContinuationRecordAfterStep(
+                     state, record)).status = "Terminal"
+         \/ /\ record.status = "Reserved"
+               /\ AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn(
+                    state, record)
+               /\ (AsyncCandidateProducerContinuationRecordAfterStep(
+                     state, record)).status = "Materialized"
 BY SMT
-   DEF AsyncCandidateProducerContinuationRecordAfterStep
+   DEF AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
+       AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+       ResolveRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationResolutionReady
 
 THEOREM AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix ==
   \A node \in ValidatorIds:
@@ -13687,7 +13903,7 @@ THEOREM AsyncRunnerResolutionStrictlyConsumesFiniteProducerPrefix ==
     /\ AsyncControlServiceSlotTransition
     /\ ResolveRunNodeCandidateProducerContinuation(node)
       => AsyncCandidateProducerContinuationRunnerPrefixStepOutcome(node)
-BY AsyncCandidateProducerContinuationRunnerSelectionTerminalizes,
+BY AsyncCandidateProducerContinuationRunnerResolutionConsumesExactStage,
    FS_CardinalityType, FS_Subset, IsaT(1800)
    DEF ResolveRunNodeCandidateProducerContinuation,
        AsyncCandidateProducerContinuationRunnerPrefixStepOutcome,
@@ -13695,6 +13911,7 @@ BY AsyncCandidateProducerContinuationRunnerSelectionTerminalizes,
        AsyncCandidateProducerContinuationRunnerPrefixGoal,
        AsyncCandidateProducerContinuationRunnerPrefixBudget,
        AsyncCandidateProducerContinuationSelectedForRunnerResolution,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
        AsyncCandidateProducerContinuationResolutionRequired,
        AsyncCandidateProducerContinuationResolutionRecordsForNode,
        AsyncCandidateProducerContinuationSelectedResolutionRecord,
@@ -13715,6 +13932,7 @@ THEOREM AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck ==
          state, record)
     /\ ~AsyncCandidateProducerContinuationSelectedForRunnerResolution(
          record)
+    /\ ~AsyncCandidateProducerContinuationSelectedForRunnerReplay(record)
       => AsyncCandidateProducerContinuationRecordAfterStep(
            state, record) = record
 BY SMT
@@ -13745,10 +13963,9 @@ THEOREM AsyncCandidateProducerSemanticHandoffRetirementRequiresAck ==
          \/ AsyncCandidateProducerContinuationDurableTerminalAfter(record)
          \/ AsyncCandidateProducerContinuationHandoffRetiredAfterIn(
               state, record)
-         \/ AsyncCandidateProducerContinuationSelectedForRunnerResolution(
-              record)
 BY SMT
    DEF AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
        AsyncCandidateProducerContinuationDurableTerminalAfter,
        AsyncCandidateProducerContinuationHandoffRetiredAfterIn
 
@@ -16296,11 +16513,19 @@ AsyncCandidateLifecycleStageIdentityInvariant ==
   /\ AsyncCandidateScheduledLifecycleStageIdentityInvariant
   /\ AsyncCandidateRecordedLifecycleStageIdentityInvariant
 
+AsyncCandidateProducerContinuationExactReplayCarrier(candidate) ==
+  \E record \in AsyncCandidateProducerContinuations:
+    /\ record.status \in {"Reserved", "Materialized"}
+    /\ record.sourceClass = "Local"
+    /\ record.candidate = candidate
+    /\ record.ordinal = AsyncCandidateLifecycleOrdinal(candidate)
+
 AsyncCandidateProducerContinuationScheduledExclusionInvariant ==
   \A candidate \in
        QueuedCandidates \cup DeferredCandidates
          \cup CausalCandidates \cup TrackedWorkCandidates:
-    ~AsyncCandidateProducerContinuationBlocks(candidate)
+    \/ ~AsyncCandidateProducerContinuationBlocks(candidate)
+    \/ AsyncCandidateProducerContinuationExactReplayCarrier(candidate)
 
 AsyncCandidateServiceLifecycleInvariant ==
   /\ AsyncControlServiceStateTypeInvariant
@@ -16337,6 +16562,7 @@ THEOREM AsyncNextPreservesCandidateProducerContinuationScheduledExclusion ==
 BY IsaT(1800)
    DEF AsyncCandidateServiceLifecycleInvariant,
        AsyncCandidateProducerContinuationScheduledExclusionInvariant,
+       AsyncCandidateProducerContinuationExactReplayCarrier,
        AsyncCandidateProducerContinuationBlocks,
        AsyncCandidateProducerContinuationRecordsForIdentity,
        AsyncCandidateProducerContinuationRecordsForIdentityIn,
@@ -16350,7 +16576,9 @@ BY IsaT(1800)
        AsyncCandidateProducerContinuationRecord,
        AsyncCandidateProducerContinuationRecordAfterStep,
        AsyncCandidateProducerContinuationSelectedForResolution,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
        AsyncCandidateProducerContinuationHandoffOwnedAfterIn,
+       AsyncCandidateProducerContinuationLocalReplayCarrierAfter,
        AsyncCandidateProducerContinuationHandoffRetiredAfterIn,
        AsyncCandidateProducerContinuationTerminalAfter,
        AsyncCandidateServiceStateAfterReclamation,
@@ -16372,7 +16600,15 @@ BY IsaT(1800)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
        SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
@@ -17330,6 +17566,20 @@ THEOREM LeaderWireRestartReopenRefinesLifecycleTransition ==
 BY DEF AsyncLeaderWireLifecycleTransition,
        AsyncLeaderWireLifecycleRestartTransition
 
+\* One accepted FairV2Ingress carrier consumes exactly the next receiver-local
+\* physical ordinal.  Every other transition retains the high-watermark.  This
+\* explicit transition contract is the formal counterpart of the checked u64
+\* increment under the ingress lock and prevents a future action from silently
+\* rewinding or bypassing the shared Serve/leader-wire order.
+AsyncIngressPhysicalOrdinalTransition ==
+  \A node \in ValidatorIds:
+    \/ AsyncNextIngressPhysicalOrdinal(node)'
+         = AsyncNextIngressPhysicalOrdinal(node)
+    \/ /\ AsyncNextIngressPhysicalOrdinal(node)'
+              = AsyncNextIngressPhysicalOrdinal(node) + 1
+       /\ \E source \in AsyncIngressSources:
+            AdmitHiddenPacket(node, source)
+
 AsyncNext ==
   /\ (AsyncNonCrashStep
         \/ (\E node \in ValidatorIds:
@@ -17344,9 +17594,19 @@ AsyncNext ==
   /\ AsyncControlServiceSlotTransition
   /\ AsyncFixedCorridorDeadlineTransition
   /\ AsyncLeaderWireLifecycleTransition
+  /\ AsyncIngressPhysicalOrdinalTransition
   /\ AsyncServiceActivationTransition
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
+
+THEOREM AsyncIngressPhysicalHighWatermarkIsMonotone ==
+  AsyncNext
+    => \A node \in ValidatorIds:
+         AsyncNextIngressPhysicalOrdinal(node)
+           <= AsyncNextIngressPhysicalOrdinal(node)'
+BY Isa
+   DEF AsyncNext,
+       AsyncIngressPhysicalOrdinalTransition
 
 \* Exact pre-receipt action projection.  `ENABLED` binds the complete
 \* augmented successor while `nextOriginal` copies its non-receipt tuple back
@@ -17510,7 +17770,15 @@ BY IsaT(600)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17552,7 +17820,15 @@ BY IsaT(900)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17599,6 +17875,13 @@ BY FS_Singleton, FS_Subset, IsaT(600)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17620,6 +17903,13 @@ BY FS_Singleton, FS_Subset, IsaT(600)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17710,7 +18000,15 @@ BY AsyncCandidateDiscardInstallsTerminalTombstone, IsaT(600)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17740,7 +18038,15 @@ BY IsaT(900)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17777,7 +18083,15 @@ BY AsyncCandidateInternalBodyAvailableStageRetirementIsMonotoneAtGst,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17834,7 +18148,15 @@ BY AsyncCandidateAdmissionIdentityObsolescenceIsMonotoneAtGst,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17884,7 +18206,15 @@ BY AsyncCandidateTerminalTombstoneCoalescesFreshCandidate,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17934,7 +18264,15 @@ BY AsyncCandidateSuccessfulServiceInstallsTransientMarker,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -17967,7 +18305,15 @@ BY AsyncCandidateTransientMarkerPersistsWithinGeneration,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,

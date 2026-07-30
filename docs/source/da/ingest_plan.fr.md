@@ -374,22 +374,10 @@ Toutes les TODO d'ingestion précédemment bloquées ont été implémentées et
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` housse Rust, le Python `ToriiClient`
   exporte désormais `decode_pdp_commitment_header`, et `IrohaSwift` expédie les aides correspondantes de manière si mobile
   les clients peuvent immédiatement cacher le programme d'échantillonnage codé.
-- Torii expose également `GET /v1/da/manifests/{storage_ticket}` afin que les SDK et les opérateurs puissent récupérer les manifestes
-  et fragmentez les plans sans toucher au répertoire spool du nœud. La réponse renvoie les octets Norito
-  (base64), rendu JSON manifeste, un blob JSON `chunk_plan` prêt pour `sorafs fetch`, ainsi que le
-  des résumés hexadécimaux (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`) afin que les outils en aval puissent
-  alimente l'orchestrateur sans recalculer les résumés et émet le même en-tête `Sora-PDP-Commitment` vers
-  refléter les réponses d’ingestion. Passer `block_hash=<hex>` comme paramètre de requête renvoie un résultat déterministe
-  `sampling_plan` enraciné dans `block_hash || client_blob_id` (partagé entre les validateurs) contenant le
-  `assignment_hash`, le `sample_window` demandé et les tuples `(index, role, group)` échantillonnés couvrant
-  l'intégralité de la disposition des bandes 2D afin que les échantillonneurs et validateurs PoR puissent rejouer les mêmes indices. L'échantillonneur
-  mélange `client_blob_id`, `chunk_root` et `ipa_commitment` dans le hachage d'affectation ; `Iroha App Da Get
-  --block-hash ` now writes `sampling_plan_.json` à côté du manifeste + plan de fragments avec
-  le hachage est conservé et les clients JS/Swift Torii exposent le même `assignment_hash_hex` donc les validateurs
-  et les prouveurs partagent un seul ensemble de sondes déterministes. Lorsque Torii renvoie un plan d'échantillonnage, `iroha app da
-  prouver-disponibilité` now reuses that deterministic probe set (seed derived from `sample_seed`) à la place
-  d'échantillonnage ad hoc afin que les témoins PoR s'alignent sur les missions du validateur même si l'opérateur omet un
-  `--block-hash` override.【crates/iroha_torii_shared/src/da/sampling.rs:1】【crates/iroha_cli/src/commands/da.rs:523】【javascript/iroha_js/src/toriiClient.js:15903】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Flux de streaming de charges utiles importantesLes clients qui doivent ingérer des actifs supérieurs à la limite de requête unique configurée lancent une
 session de streaming en appelant `POST /v1/da/ingest/chunk/start`. Torii répond avec un

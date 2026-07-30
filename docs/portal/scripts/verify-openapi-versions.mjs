@@ -33,11 +33,15 @@ const staleHint = "Run 'npm run sync-openapi -- --latest' from docs/portal/ to r
 const OPENAPI_SPEC_MAX_BYTES = 64 * 1024 * 1024;
 const OPENAPI_MANIFEST_MAX_BYTES = 64 * 1024;
 const OPENAPI_VERSIONS_MAX_BYTES = 1024 * 1024;
+const GIT_SHA1_HEX = /^[0-9a-f]{40}$/;
 
 export async function verifyOpenApiVersions(options = {}) {
   const outputDir = options.outputDir ?? defaultOutputDir;
   const versionsDir = options.versionsDir ?? defaultVersionsDir;
   const versionsFile = options.versionsFile ?? defaultVersionsFile;
+  const expectedGeneratorCommit = validateExpectedGeneratorCommit(
+    options.expectedGeneratorCommit,
+  );
 
   const manifest = await readJsonFile(versionsFile, `versions manifest ${versionsFile} is missing. ${staleHint}`);
   validateManifestStructure(manifest);
@@ -49,12 +53,22 @@ export async function verifyOpenApiVersions(options = {}) {
   await ensureDirectoryCoverage(versionsDir, entries);
   ensureLatestAndCurrentAligned(latestEntry, currentEntry);
 
+  const verifiedEntries = new Map();
   for (const entry of entries) {
-    await verifyEntry(entry, {
+    const verified = await verifyEntry(entry, {
       outputDir,
       allowDirtyUnsigned: options.allowUnsigned === true,
+      expectedGeneratorCommit:
+        entry.label === 'latest' || entry.label === 'current'
+          ? expectedGeneratorCommit
+          : undefined,
     });
+    if (entry.label === 'latest' || entry.label === 'current') {
+      verifiedEntries.set(entry.label, verified);
+    }
   }
+  ensureMutableAliasPaths(latestEntry, currentEntry);
+  ensureLatestAndCurrentCopiesAligned(verifiedEntries);
 }
 
 async function ensureDirectoryCoverage(versionsDir, entries) {
@@ -120,6 +134,7 @@ async function verifyEntry(entry, context) {
     );
   }
 
+  let manifestBytes = null;
   if (entry.manifestPath) {
     const manifestPath = ensurePathWithinOutputDir(
       context.outputDir,
@@ -127,18 +142,20 @@ async function verifyEntry(entry, context) {
       entry.label,
       'manifestPath',
     );
-    await verifyManifest(entry, manifestPath, context.outputDir, {
+    manifestBytes = await verifyManifest(entry, manifestPath, context.outputDir, {
       specPath,
       specSha: digest,
       specBytes: specBuffer.length,
       specBuffer,
       allowDirtyUnsigned: context.allowDirtyUnsigned,
+      expectedGeneratorCommit: context.expectedGeneratorCommit,
     });
   } else if (entry.signed) {
     throw new Error(
       `versions.json entry ${entry.label} is marked as signed but has no manifestPath.`,
     );
   }
+  return {specBuffer, manifestBytes};
 }
 
 async function verifyManifest(entry, manifestPath, outputDir, specContext) {
@@ -177,8 +194,18 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
       relative(dirname(manifestPath), specContext.specPath),
     ),
     requireSignature: Boolean(entry.signed),
-    requireClean: !specContext.allowDirtyUnsigned,
+    requireClean:
+      specContext.expectedGeneratorCommit !== undefined ||
+      !specContext.allowDirtyUnsigned,
   });
+  if (
+    specContext.expectedGeneratorCommit !== undefined &&
+    manifest.generator_commit !== specContext.expectedGeneratorCommit
+  ) {
+    throw new Error(
+      `manifest ${manifestPath} generator_commit (${String(manifest.generator_commit)}) does not match expected source commit ${specContext.expectedGeneratorCommit}. ${staleHint}`,
+    );
+  }
   const artifact = manifest?.artifact;
   if (!artifact || typeof artifact.path !== 'string') {
     throw new Error(
@@ -249,6 +276,7 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
     );
   }
   compareHexField(entry.blake3, manifestBlake3, `BLAKE3 digest for ${entry.label}`);
+  return Buffer.from(manifestText, 'utf8');
 }
 
 function ensurePathWithinOutputDir(outputDir, relativePath, label, fieldName) {
@@ -372,6 +400,64 @@ function ensureLatestAndCurrentAligned(latestEntry, currentEntry) {
     'latest/current signature public key',
   );
   compareHexField(latestEntry.signatureHex, currentEntry.signatureHex, 'latest/current signature');
+  if (latestEntry.updatedAt !== currentEntry.updatedAt) {
+    throw new Error(
+      `versions.json latest updatedAt must match current updatedAt. ${staleHint}`,
+    );
+  }
+}
+
+function ensureMutableAliasPaths(latestEntry, currentEntry) {
+  for (const [entry, expectedPath, expectedManifestPath] of [
+    [latestEntry, 'torii.json', 'manifest.json'],
+    [
+      currentEntry,
+      'versions/current/torii.json',
+      'versions/current/manifest.json',
+    ],
+  ]) {
+    if (entry.path !== expectedPath) {
+      throw new Error(
+        `versions.json ${entry.label} path must be exactly ${expectedPath}. ${staleHint}`,
+      );
+    }
+    if (entry.manifestPath !== expectedManifestPath) {
+      throw new Error(
+        `versions.json ${entry.label} manifestPath must be exactly ${expectedManifestPath}. ${staleHint}`,
+      );
+    }
+  }
+}
+
+function ensureLatestAndCurrentCopiesAligned(verifiedEntries) {
+  const latest = verifiedEntries.get('latest');
+  const current = verifiedEntries.get('current');
+  if (!latest.specBuffer.equals(current.specBuffer)) {
+    throw new Error(
+      `checked-in latest and current OpenAPI specs must be byte-identical. ${staleHint}`,
+    );
+  }
+  if (
+    latest.manifestBytes === null ||
+    current.manifestBytes === null ||
+    !latest.manifestBytes.equals(current.manifestBytes)
+  ) {
+    throw new Error(
+      `checked-in latest and current OpenAPI manifests must be byte-identical. ${staleHint}`,
+    );
+  }
+}
+
+function validateExpectedGeneratorCommit(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !GIT_SHA1_HEX.test(value)) {
+    throw new Error(
+      'expectedGeneratorCommit must be exactly 40 lowercase hexadecimal characters',
+    );
+  }
+  return value;
 }
 
 async function readJsonFile(path, missingMessage) {
@@ -458,11 +544,29 @@ function isNonEmptyString(value) {
 
 async function runCli() {
   const args = process.argv.slice(2);
-  const unknown = args.filter((arg) => arg !== '--allow-unsigned');
+  let allowUnsigned = false;
+  let expectedGeneratorCommit;
+  const unknown = [];
+  for (const arg of args) {
+    if (arg === '--allow-unsigned') {
+      allowUnsigned = true;
+    } else if (arg.startsWith('--expected-generator-commit=')) {
+      if (expectedGeneratorCommit !== undefined) {
+        throw new Error(
+          'verify-openapi-versions accepts --expected-generator-commit only once',
+        );
+      }
+      expectedGeneratorCommit = arg.slice(
+        '--expected-generator-commit='.length,
+      );
+    } else {
+      unknown.push(arg);
+    }
+  }
   if (unknown.length > 0) {
     throw new Error(`unknown verify-openapi-versions option: ${unknown.join(', ')}`);
   }
-  await verifyOpenApiVersions({allowUnsigned: args.includes('--allow-unsigned')});
+  await verifyOpenApiVersions({allowUnsigned, expectedGeneratorCommit});
 }
 
 const invokedUrl = process.argv[1] ? pathToFileURL(process.argv[1]).href : undefined;

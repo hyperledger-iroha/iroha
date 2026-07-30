@@ -142,7 +142,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
 
     // Metadata edits must fail before the permission is granted.
     let metadata_key = "key".parse::<Name>()?;
-    let metadata_value = "value".parse::<Json>()?;
+    let metadata_value = Json::from("value");
     let err = test_client
         .submit_blocking(
             SetKeyValue::account(
@@ -310,9 +310,10 @@ fn role_permissions_are_deduplicated() {
     // Different content, but same meaning
     let allow_alice_to_transfer_rose_2 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
-        iroha_primitives::json::Json::from_string_unchecked(format!(
+        iroha_primitives::json::Json::from_raw_json(format!(
             r#"{{ "asset" : "{rose_asset_lower}" }}"#
-        )),
+        ))
+        .expect("valid permission JSON fixture"),
     );
 
     let role_id: RoleId = "role_id".parse().expect("Valid");
@@ -382,8 +383,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     .sign(mouse_keypair.private_key());
     test_client.submit_transaction_blocking(&grant_role_tx)?;
 
-    let set_key_value =
-        SetKeyValue::account(mouse_id.clone(), "key".parse()?, "value".parse::<Json>()?);
+    let set_key_value = SetKeyValue::account(mouse_id.clone(), "key".parse()?, Json::from("value"));
     let can_set_key_value_in_mouse = CanModifyAccountMetadata {
         account: mouse_id.clone(),
     };

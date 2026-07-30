@@ -261,6 +261,19 @@ impl ConfigReader {
         self
     }
 
+    /// Return whether any loaded TOML source explicitly defines `id`.
+    ///
+    /// This distinguishes an operator-provided value from a value materialized
+    /// by [`ReadConfig`] defaults. Sources loaded through
+    /// [`Self::read_toml_with_extends`] are included.
+    #[must_use]
+    pub fn contains_toml_parameter(&self, id: impl Into<ParameterId>) -> bool {
+        let id = self.full_id(id);
+        self.sources
+            .iter()
+            .any(|source| source.fetch(&id).is_some())
+    }
+
     /// Reads a TOML file and handles its `extends` field, implementing mixins mechanism.
     ///
     /// # Errors
@@ -791,6 +804,24 @@ impl<T> FinalWrap<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_explicit_toml_parameter_before_defaults_are_read() {
+        let mut reader = ConfigReader::new().with_toml_source(TomlSource::inline(::toml::toml! {
+            [sorafs.storage]
+            enabled = false
+        }));
+
+        assert!(reader.contains_toml_parameter(["sorafs", "storage", "enabled"]));
+        assert!(!reader.contains_toml_parameter(["sorafs", "storage", "missing"]));
+
+        let enabled = reader
+            .read_parameter::<bool>(["sorafs", "storage", "enabled"])
+            .value_required()
+            .finish();
+        reader.into_result().expect("source must be fully consumed");
+        assert!(!enabled.unwrap());
+    }
 
     #[test]
     fn trims_json_error_prefix_in_messages() {

@@ -252,7 +252,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     "DeferredRetransmitConsumesDriveProgramCounter",
     "AsyncServeIngressTicketExcludesLaterLocalWork",
     "AsyncLeaderWireIngressTicketExcludesLaterLocalWork",
-    "AsyncLeaderWireProtectedRecordBoundsIngressScheduler",
+    "AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler",
     "AsyncOlderCandidateLifecyclePreventsDueTimeoutOvertake",
     "AsyncEarlierIngressLifecyclePreventsDueTimeoutOvertake",
     "LocalAdmissionAdvanceSelectsAtomicWork",
@@ -6865,6 +6865,21 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedIngressLifecycleOwned",
+    ): (
+        "AsyncLeaderWireIngressOwnsSharedPhysicalTurn",
+        "AsyncLeaderWireEarliestPhysicalIngressRecord",
+        "AsyncEffectiveTimeoutLifecycleOrdinal",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderProtectedIngressLifecyclePrecedesTimeout",
+    ): (
+        "AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler",
+        "AdequateLeaderProtectedIngressLifecycleOwned",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderFrozenCommitRequestItemPayload",
     ): (
         "source",
@@ -7319,10 +7334,10 @@ _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
 }
 _SERVE_INGRESS_ORDINAL_STRUCT_SHA256 = {
     "FairV2IngressState": (
-        "324248c7459d2c16959971d8b1cf3bad8c6ea80b404bf457c50c7c34c6ae43ef"
+        "d4c2679003b4ca3474033e2048fb4c94a59a3eaccbc13f0876a15e47f04134ca"
     ),
     "FairV2IngressEntry": (
-        "68479dfbab25c5e65388501a0a6f83bcab3ccae66ab3df804d54d6cfaed7276e"
+        "81d3ce89a1b7ea4f13c481084e5097c583cbad2c50a1c74929261f42c41c839e"
     ),
 }
 _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
@@ -7333,7 +7348,13 @@ _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
         "ac57535058bc5dd4d724d1e6d56c0fe15e41424e7bbf578ba2eb99ae4111b8ac"
     ),
     "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes": (
-        "de2b4cc8ba283b6102207024917bb89fbebea24283f0569b6709e658112b241e"
+        "d428ca8360f6fac1dae8e57e260980fe8fae39f0501adb255d03222a695c89c7"
+    ),
+    "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier": (
+        "447627f22757f044e5cb8007715375b2bc46f7ddb23398469b02d90368250556"
+    ),
+    "restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant": (
+        "e2850b0677b5219e0960641d23b79a679c1fcc84faaaa7c83db0cfe79a3e6e3b"
     ),
 }
 _SERVE_INGRESS_GATE_IMPL_ITEM_SHA256 = {
@@ -7344,7 +7365,7 @@ _SERVE_INGRESS_GATE_IMPL_ITEM_SHA256 = {
         "ed0997516f643a29a4da048b9983d26f2a8b64123888555b7bec50319efbda66"
     ),
     "unbind_certified_serve_gate": (
-        "a579a60ef7d2f9349dd5ff0966c77a6ec2e2e245e0936492e677bd06446a731d"
+        "16c1655f5a4fc1e1cfd65133e09a9dc336eed6cceb7470bd3bc83993d52ee034"
     ),
 }
 _SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
@@ -7354,13 +7375,16 @@ _SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
 }
 _SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
     "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers": (
-        "806a6fc1ee2ee50f0ef6536b6eaa29618370ba605a307625d499afb272f477b8"
+        "f330e8cbb207fd3872c81d79817209a35cf7acfc2f033cc32f8c1b37ec232f19"
     ),
     "fair_ingress_gate_overflow_closes_without_partial_admission": (
         "820e286fc897de3e36b4463d707faee647de8db649554e8a48ce2efe48afc419"
     ),
     "fair_ingress_rollover_retires_ticket_before_old_service_teardown": (
         "16712f671a24fd8c0bc00543719eb8ac4b4022789274803292fb1f7219ed27c3"
+    ),
+    "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
+        "7d4298be7b35579fb36dd79bf8224325aa63e4ad084763e02c8978263fe4726f"
     ),
 }
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
@@ -19111,7 +19135,7 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
         "LeaderWirePhysicalLifecycleOrdinalRankIsInCarrier",
         "LeaderWirePhysicalIngressDependencyRankIsInCarrier",
         "AsyncLeaderWireIngressTicketExcludesLaterLocalWork",
-        "AsyncLeaderWireProtectedRecordBoundsIngressScheduler",
+        "AsyncSelectedLeaderWirePhysicalCarrierDefinesIngressScheduler",
         "AsyncProoflessChunkEpisodeBudgetIsFiniteAndCoalesced",
         "AsyncHeldChunkReceiptTombstonesExactProducerEpisode",
         "LeaderWirePacketAdmissionPreservesExactResolution",
@@ -22685,6 +22709,9 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
     "deferred_authenticated_event_matches_wire": (
         "71cff12249ba75d45cc55f3be85c966fa2f317a3638ce36fa250d399c0f88fd5"
     ),
+    "wire_ingress_missing_execution_commitment": (
+        "ab4345a4067a48f67735cb5867d717cf8f32aa809f7218aeb04c8eaaf3775678"
+    ),
     "runtime_ingress_from_fair_ingress": (
         "638d44eae201d3477a987e857d3c9318c7a525347cddb9d5bbce704d9bbc7985"
     ),
@@ -22716,7 +22743,7 @@ _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
         "708305b7037a4fae5e8d796ee08a80f46065ec2fe73ecc498a5e806c7efe33bc"
     ),
     "can_admit_network_message_with_ingress_ownership": (
-        "f5faf916f195ed39af046bd533d4fcc97dc66cd1979ddf010ca347a2b14454e9"
+        "20fdb8057db53f88bced2eef196421432d2db968f475af444ec08c65bb5c3f11"
     ),
     "take_last_scheduler_ownership": (
         "b781f7ace9823e4ba2b395230912a703a78c2b6ae8fb48e96a0f0f120c9fa7c8"
@@ -22779,10 +22806,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 277
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 278
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 280
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 281
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "9ac5508323573c9dfc6e4e6f219befd13a62ef59e8c611e6374f5706145b61fd"
+    "b8f15e29a9d3176413c6696393f3b7209f1e88f08cfc74b182f93b6685283462"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -24378,13 +24405,13 @@ _PRODUCTION_P2P_FRAME_GEOMETRY_ITEM_SHA256 = {
         "84837f33c9793445071c17cdc11de01ddc1b7b57e061896afd381252743d3c05"
     ),
     "relay_message_wire_payload_len": (
-        "10d9aba9d1b59f437beaa2292a03ffb9aaad5e254ec336d1d2f6a8743f237e36"
+        "76c27a4cf75123379bdd30fd759589189574587442a29333618dd6fa78e6a145"
     ),
     "data_frame_wire_len_from_payload_len_with_peer_key_bytes": (
-        "b2068790fd5e3eb3850f89f4d5db9b6876c6c87bbe7b0936a3ab9bc1a0fbdd01"
+        "6a7f400c67afdc25c834fdb17f782baf374017cca082295f88bbfda501199fb1"
     ),
     "data_frame_wire_len_from_payload_len": (
-        "72a4b6c68092baaae7856ba4d2c3e733cdb9477f25538bcc2c4c7536d783acea"
+        "33df4c34f2034f666dfe403b97869e498094f42a6fe35c5ce0ab75164fe0bcbe"
     ),
     "validate_transport_queue_geometry": (
         "2b43cba3a15fb667169280663e960cb6fabf5ccde7272d4276b6480041c66632"
@@ -24636,7 +24663,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "43f713676440d7756bcadf7729ea2432c30262b8c11cbb751dac8657e9423445"
     ),
     "peer_message": (
-        "666a83156b30dc86bf8495b0fd2a29703667597a4adffdfddaccb65fc85bb181"
+        "fc267abe5dfc2417a9d51978ac73cd5c10912b7a2f11593491100c8f203f4485"
     ),
     "progress_ticket_request_digest": (
         "ab51b06be057b794221217b6505e2cd4abbb66c2d7f87504a6f2257c260124c4"
@@ -24669,7 +24696,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "1b8948a28bf0ccae5431b18c25abd9507b2b832433306f28af50565e960e2dda"
     ),
     "post_reply_recoverable": (
-        "2d5b13c0f087aa8c01b672248b1347d29dc31a482aee6e26b1f7bf058aff64b2"
+        "e81939836efa2f08aea3d4cc74424e1c15a17dcd25c3718290c90f68ffa2f463"
     ),
     "post_reply_recoverable_with_flush_ack": (
         "b7b67e256375e22c86ff57fb7ccbb26131b24f0b191a5ed317cab1dcce89b888"
@@ -24699,7 +24726,7 @@ _PRODUCTION_P2P_RELIABLE_NETWORK_ITEM_SHA256 = {
         "21cf34eb5aa68209a6baf29124170f073ea3a65be8c4e5887d6c5fbb69ffe20f"
     ),
     "dispatch_reliable_actor_message_inner": (
-        "0a86c139f4a1bdfc79cc7b4ef51285fad125f529df122f00cd1696a37c7d7458"
+        "3988f0adb7eae269376964cbe9bd11e6437b7c9955076523704ee7f9f6633687"
     ),
     "post_reliable_actor_frame_to_writer": (
         "9347732994ea2854fc8185768ca08bbd0b3bac410fdb65b3d724b4ccb71d0c4b"
@@ -24825,10 +24852,10 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "5e605df8dc71ee5961cf2c40b3dc8c6108c1c745662a5249d533b1dc8c9fd6eb"
     ),
     "fair_v2_ingress_required_p2p_frame_bytes": (
-        "588dd190373946bb198b0836265a3ef65e847074098b6b507e4e03497bca829c"
+        "a72706f96788cbab7cb43997ec1dc97e8168b2e5dc8e5d1817db641179f8d7ae"
     ),
     "fair_v2_ingress_required_lane_p2p_frame_bytes": (
-        "404f91aba77f994eb73fd1a0f4a4e6f369108a7893b0c3774c7691534bee4446"
+        "db83412d500e2f53d7959462f230a02afe85cfa87d1ebf05dd1744a1aacf88d6"
     ),
     "fair_v2_ingress_v2_envelope_bytes": (
         "6a5e066c134eb45a8b64fb5e3b62aab6527ef05f4f6c4459666d56929f13723e"
@@ -24837,10 +24864,10 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "6a511e21a8e16c6b4db002e3276a5d98d9797249a2d1c3b7549931d6bf24f5bb"
     ),
     "fair_v2_ingress_required_merge_sidecar_chunk_network_message_bytes_for_key": (
-        "a802eaf24a0ddf6df2fdf2a1d71516915c724bfc597b7a3beaf0e7df0939f517"
+        "8456504122db0dfe12337fce4f14d0e107a3802f990bcf3b9f28dc946ee67b8c"
     ),
     "fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes": (
-        "0b78e42ba389b119706f24cfbeea082ae4f3b06a40ea4eee2ce217217848d914"
+        "67264f5f5699090643b5ba1554f750f89ade5b6f8e36e12f6d10c15607783b9f"
     ),
     "fair_v2_ingress_required_block_sync_p2p_frame_bytes": (
         "dbbe6e8853781b0d42843c59a4028d103a938493d45d5f5e5551356b884a6aec"
@@ -24868,22 +24895,22 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "ce50f51262abf51c1bc8a1ced10f4ad2b22fc12351f84fabf7b1c86413b06833"
+        "b8d9a480d1cd0e582576891f2af20370ef35f5af4dcdc6c9fe24eafc6e30f3c1"
     ),
     "configure_roster_for_context": (
-        "9d82e47c0cefdc03cc542aa28d4b0d666527af5bd20037377092aa99d8f560db"
+        "13d8e7a240e22e620a6627a6f34c5be856eb22cb9e2f8a38bd2b3e3f95b21334"
     ),
     "configure_roster_with_byte_requirements": (
-        "e5d74945047d4df6ba2c55d96e3109d241fe18eeb6e6171cfd412627864238bd"
+        "193a8e4586cc6ee7689c9cc15e45474c129a217e91be760559027fd1939f9d02"
     ),
     "open": (
-        "0f53561f5615c82c7647757a5bd02eab2bcbd22b0b8ce6ebcae1d9a9ae8bbded"
+        "d19623cdc7ad56922f91c7a9c0d2513199ecafa4e6ad26ea2717073d561b41eb"
     ),
     "try_push_at": (
-        "82164cbd6974d79ef0a11013045db7f7ab5796b3b743f11c52d4c47a40810d7d"
+        "5dc0c2bc91dfedf3972f1d7f13b45c0d8ce923d6e1ba25ea139b77f82285857b"
     ),
-    "try_recv_if_at": (
-        "ed17c4a3ab7c7377067210f69ef8bca0288c2908ad2db396c5109908eb0695aa"
+    "try_recv_if_at_checked": (
+        "f8e33e730395060fec32b387e03cee628290309603ef3320ec8f7de03af1f041"
     ),
 }
 
@@ -35597,8 +35624,8 @@ def _serve_ingress_ordinal_production_source_fidelity_errors(
                 "atomic Serve ingress ordinal admission",
             ),
             (
-                "try_recv_if_at",
-                "global earliest-request ingress cutoff",
+                "try_recv_if_at_checked",
+                "durable physical-carrier ingress arbitration",
             ),
         )
     }
@@ -35612,7 +35639,9 @@ def _serve_ingress_ordinal_production_source_fidelity_errors(
                     "process-monotone Serve ingress ordinal rollover"
                 ),
                 "try_push_at": "atomic Serve ingress ordinal admission",
-                "try_recv_if_at": "global earliest-request ingress cutoff",
+                "try_recv_if_at_checked": (
+                    "durable physical-carrier ingress arbitration"
+                ),
             }[name],
             errors,
         )
@@ -35621,12 +35650,17 @@ def _serve_ingress_ordinal_production_source_fidelity_errors(
     _require_rust_token_sequence(
         path,
         configure,
-        """
-state.pending_wire_owners.clear();
-state.ready.clear();
-""",
+        "state.pending_wire_owners.clear();",
         "rollover must clear queued ownership without resetting the ingress "
         "ordinal high-watermark",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        configure,
+        "state.ready.clear();",
+        "rollover must clear ready-source ownership without resetting the "
+        "ingress ordinal high-watermark",
         errors,
     )
     if configure is not None and _token_sequence_count(
@@ -35643,22 +35677,35 @@ state.ready.clear();
         path,
         push,
         """
-let Some(admission_ordinal) = state.last_admission_ordinal.checked_add(1) else {
+let Some(carrier_admission_ordinal) = state.last_admission_ordinal.checked_add(1) else {
     state.open = false;
-    return Err(FairV2IngressPushError::Closed(inbound));
+    return Err(FairV2IngressPushError::FailStop(inbound));
 };
 """,
-        "ordinal exhaustion must fail admission closed without wrapping",
+        "physical carrier ordinal exhaustion must fail stop before durable "
+        "leader or Serve publication",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        push,
+        "let admission_ordinal = carrier_admission_ordinal;",
+        "validated admission must commit the fresh physical carrier "
+        "rather than reuse a retained logical leader ordinal",
         errors,
     )
     _require_rust_token_sequence(
         path,
         push,
         """
-inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(occurrence));
 state.last_admission_ordinal = admission_ordinal;
+inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(
+    occurrence,
+    leader_wire_token.clone(),
+));
 """,
-        "validated admission must commit its immutable ordinal exactly once",
+        "validated admission must commit the fresh physical carrier "
+        "high-watermark exactly once while retaining logical leader identity",
         errors,
     )
     _require_rust_token_sequence(
@@ -35666,11 +35713,16 @@ state.last_admission_ordinal = admission_ordinal;
         push,
         """
 lane.entries.push_back(FairV2IngressEntry {
-    inbound,
+    inbound: Arc::new(inbound),
     enqueued_at,
     admission_ordinal,
+    certified_serve_reservation,
+    class,
+    wire_key,
+    leader_wire_token,
 """,
-        "the admitted queue occurrence must retain its immutable ordinal",
+        "the admitted queue occurrence must keep its fresh physical ordinal "
+        "separate from the retained logical leader token",
         errors,
     )
     if push is not None:
@@ -35692,36 +35744,176 @@ lane.entries.push_back(FairV2IngressEntry {
         ):
             errors.append(
                 f"{path}:{push.line}: every exact retry/coalescing return must "
-                "precede immutable ingress ordinal allocation"
+                "precede fresh physical carrier ordinal allocation"
+            )
+        capacity_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("if state.len >= usable_capacity"),
+        )
+        leader_publication_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens(
+                """
+fair_v2_ingress_admit_leader_wire(
+    &mut state,
+    derivation,
+    true,
+)
+"""
+            ),
+        )
+        serve_reservation_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens(
+                """
+gate.reserve(
+    request,
+    &authenticated_via,
+    requester_is_roster,
+    admission_ordinal,
+)
+"""
+            ),
+        )
+        high_watermark_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens(
+                "state.last_admission_ordinal = admission_ordinal"
+            ),
+        )
+        entry_publication_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("lane.entries.push_back(FairV2IngressEntry"),
+        )
+        if (
+            len(capacity_positions) != 1
+            or len(allocation_positions) != 1
+            or len(leader_publication_positions) != 1
+            or len(serve_reservation_positions) != 1
+            or len(high_watermark_positions) != 1
+            or len(entry_publication_positions) != 1
+            or not (
+                capacity_positions[0]
+                < allocation_positions[0]
+                < leader_publication_positions[0]
+                < serve_reservation_positions[0]
+                < high_watermark_positions[0]
+                < entry_publication_positions[0]
+            )
+        ):
+            errors.append(
+                f"{path}:{push.line}: fresh physical carrier allocation must "
+                "follow all capacity cuts, precede durable leader/Serve "
+                "publication, and commit its high-watermark exactly once "
+                "before queue visibility"
+            )
+        if _token_sequence_count(
+            tokens,
+            rust_code_tokens("let admission_ordinal = token.admission_ordinal"),
+        ) or _token_sequence_count(
+            tokens,
+            rust_code_tokens(
+                "admission_ordinal: token.admission_ordinal"
+            ),
+        ):
+            errors.append(
+                f"{path}:{push.line}: a restored logical leader token may not "
+                "reuse its retained lifecycle ordinal as a fresh physical "
+                "carrier position"
             )
 
-    receive = items["try_recv_if_at"]
+    receive = items["try_recv_if_at_checked"]
     _require_rust_token_sequence(
         path,
         receive,
         """
-let certified_body_request_cutoff = state
-    .lanes
-    .values()
-    .flat_map(|lane| lane.entries.iter())
-    .filter(|entry| fair_v2_ingress_is_certified_body_request(&entry.inbound))
-    .map(|entry| entry.admission_ordinal)
-    .min();
+.filter(|entry| {
+    fair_v2_ingress_is_certified_body_request(&entry.inbound)
+        && (!state.requires_certified_serve_gate
+            || entry.certified_serve_reservation.is_some())
+})
+.map(|entry| entry.admission_ordinal)
+.min()
 """,
-        "the selector must freeze the globally earliest exact Serve request "
-        "ordinal before scanning ready sources",
+        "the fallback selector must freeze the globally earliest eligible "
+        "Serve physical carrier",
         errors,
     )
     _require_rust_token_sequence(
         path,
         receive,
         """
-certified_body_request_cutoff
-    .is_none_or(|cutoff| entry.admission_ordinal <= cutoff)
-    && predicate(&entry.inbound)
+if selected_serve_barrier.is_some_and(|serve| {
+    leader_wire_carrier_ordinal
+        .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
+}) {
+    leader_wire_barrier = None;
+}
 """,
-        "later work of every class must be excluded before the downstream "
-        "drain predicate runs",
+        "Serve versus restored-leader arbitration must compare current "
+        "physical carrier ordinals rather than retained scheduler identities",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        receive,
+        """
+entry.admission_ordinal < serve.carrier_ordinal()
+    || (entry.admission_ordinal == serve.carrier_ordinal()
+        && entry.certified_serve_reservation.as_ref().is_some_and(|reservation| {
+            reservation.matches_barrier(serve)
+        })
+""",
+        "selected Serve equality must retain exact lifecycle, request, and "
+        "physical carrier identity",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        receive,
+        """
+} else {
+    certified_body_request_cutoff.is_none_or(|cutoff| {
+        entry.admission_ordinal <= cutoff
+    })
+};
+""",
+        "ungated or not-yet-selected Serve fallback must retain the earliest "
+        "physical request cutoff",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        receive,
+        """
+let _service_guard = self.service_lock.lock();
+let (ready_sources, candidates) = {
+    let mut state = self.state.lock();
+""",
+        "serialized dequeue must snapshot authorized carriers before running "
+        "the downstream predicate outside the ingress-state mutex",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        receive,
+        "reservation.publish_physical_drain()?;",
+        "selected Serve physical retirement must publish before removing its "
+        "fair-ingress carrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        receive,
+        """
+if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
+    && admitted_index < *predecessors
+{
+    *predecessors = predecessors
+        .checked_sub(1)
+""",
+        "every live leader episode must consume the selected physical "
+        "predecessor before carrier removal",
         errors,
     )
     if receive is not None:
@@ -35730,18 +35922,34 @@ certified_body_request_cutoff
             tokens,
             rust_code_tokens("let certified_body_request_cutoff ="),
         )
-        ready_positions = _token_sequence_positions(
+        candidate_positions = _token_sequence_positions(
             tokens,
-            rust_code_tokens("let ready_sources = state.ready.len()"),
+            rust_code_tokens("let candidates = ready_sources"),
+        )
+        predicate_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("if predicate(inbound.as_ref())"),
+        )
+        relock_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("let mut state = self.state.lock()"),
         )
         if (
             len(cutoff_positions) != 1
-            or len(ready_positions) != 1
-            or cutoff_positions[0] >= ready_positions[0]
+            or len(candidate_positions) != 1
+            or len(predicate_positions) != 1
+            or len(relock_positions) != 2
+            or not (
+                cutoff_positions[0]
+                < candidate_positions[0]
+                < predicate_positions[0]
+                < relock_positions[1]
+            )
         ):
             errors.append(
-                f"{path}:{receive.line}: the exact-request cutoff must be "
-                "computed once before ready-source rotation"
+                f"{path}:{receive.line}: exact physical cutoff and barrier "
+                "authorization must be frozen once before the unlocked "
+                "predicate, then revalidated for removal under the state lock"
             )
 
     expected_test_context = (
@@ -38736,6 +38944,106 @@ def _proof_obligation_architecture_errors(
                 symbol,
                 forbidden=("AdequateLeaderFreshSynchronizedTargetCorridor",),
             )
+
+        require_operator(
+            "AdequateLeaderFixedPreCandidateRouteTyped",
+            required=(
+                "AdequateLeaderFixedPreCandidateRouteIdentityCarrier",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
+            required=(
+                "AdequateLeaderFixedCandidatePipelineServiceCellIdentity",
+                "AdequateLeaderFixedPreCandidatePipelineServiceCellIdentity",
+                "AdequateLeaderFixedPipelineRankCell",
+                "AdequateLeaderFixedPreCandidateEntryRankCell",
+                "cellIdentity",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedSelectedPipelineServiceRankFrontierForCell",
+            required=(
+                "AdequateLeaderFixedCandidatePipelineServiceCellIdentity",
+                "AdequateLeaderFixedPreCandidatePipelineServiceCellIdentity",
+                "AdequateLeaderFixedSelectedPipelineRankFrontier",
+                "AdequateLeaderFixedSelectedPreCandidateEntryFrontier",
+                "cellIdentity",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedGlobalBlockerSnapshotCarrier",
+            required=(
+                "AdequateLeaderFixedPipelineServiceCellIdentityCarrier",
+                "serviceCellIdentity",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedConfiguredGlobalBlockerSnapshot",
+            required=(
+                "serviceCellIdentity",
+                "serviceCellIdentity |-> serviceCellIdentity",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedGlobalBlockerSelectionGoal",
+            required=(
+                "AdequateLeaderFixedPipelineServiceRankDescentGoal",
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontierForCell",
+                "serviceCellIdentity",
+            ),
+            forbidden=(
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontier",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedGlobalBlockerPending",
+            required=(
+                "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
+                "snapshot.serviceCellIdentity",
+                "AdequateLeaderFixedGlobalBlockerSelectionGoal",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedGlobalBlockerEntryProvider",
+            required=(
+                "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
+                "AdequateLeaderFixedPipelineServiceCellIdentityCarrier",
+                "AdequateLeaderFixedConfiguredGlobalBlockerSnapshot",
+                "serviceCellIdentity",
+            ),
+        )
+        require_operator(
+            "AdequateLeaderFixedGlobalBlockerSelectionClosureProperty",
+            required=(
+                "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
+                "AdequateLeaderFixedPipelineServiceCellIdentityCarrier",
+                "AdequateLeaderFixedGlobalBlockerSelectionGoal",
+                "serviceCellIdentity",
+            ),
+        )
+        require_theorem(
+            "AdequateLeaderFixedPipelineServiceRankFrontierHasExactCell",
+            required=(
+                "AdequateLeaderFixedPipelineServiceRankFrontier",
+                "AdequateLeaderFixedPipelineServiceRankFrontierForCell",
+                "AdequateLeaderFixedPipelineServiceCellIdentityCarrier",
+            ),
+        )
+        require_theorem(
+            "AdequateLeaderFixedSelectedExactCellProjectsToServiceFrontier",
+            required=(
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontierForCell",
+                "AdequateLeaderFixedSelectedPipelineServiceRankFrontier",
+            ),
+        )
+        require_theorem(
+            "AdequateLeaderFixedGlobalSelectionAndSelectedServiceSupplyPipelineRankDescent",
+            required=(
+                "AdequateLeaderFixedPipelineServiceRankFrontierHasExactCell",
+                "AdequateLeaderFixedSelectedExactCellProjectsToServiceFrontier",
+            ),
+        )
 
         for stage, symbol in enumerate(
             (
@@ -42088,9 +42396,10 @@ def _application_completion_source_fidelity_errors(
                 )
             repeated = [
                 dependency
-                for dependency, offsets in zip(
-                    dependencies, dependency_positions, strict=True
-                )
+                # `dependency_positions` is constructed directly from the
+                # fixed `dependencies` tuple above, so the lengths are equal.
+                # Plain zip keeps this release checker on its Python 3.9 floor.
+                for dependency, offsets in zip(dependencies, dependency_positions)
                 if len(offsets) != 1
             ]
             if repeated:
@@ -42264,9 +42573,10 @@ def _application_completion_source_fidelity_errors(
             )
         repeated = [
             dependency
-            for dependency, offsets in zip(
-                dependencies, dependency_positions, strict=True
-            )
+            # `dependency_positions` is constructed directly from the
+            # fixed `dependencies` tuple above, so the lengths are equal.
+            # Plain zip keeps this release checker on its Python 3.9 floor.
+            for dependency, offsets in zip(dependencies, dependency_positions)
             if len(offsets) != 1
         ]
         if repeated:
@@ -45708,6 +46018,173 @@ def _deferred_handoff_mutation_source_fidelity_errors(
     if runner.count("-config deferred_handoff_exact.cfg") != 1:
         errors.append(
             f"{runner_path}: deferred-handoff green config must execute exactly once"
+        )
+    return errors
+
+
+def _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
+    formal_dir: Path,
+    repo_root: Path,
+) -> list[str]:
+    """Pin the red/green witness for equal-rank global-blocker cell swapping."""
+
+    module_path = (
+        formal_dir / "SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla"
+    )
+    errors: list[str] = []
+    if not module_path.is_file():
+        errors.append(
+            f"{module_path}: missing adequate-leader global-blocker cell mutation"
+        )
+    else:
+        source = module_path.read_text(encoding="utf-8")
+        expected_operators = {
+            "Cells": '{"Original", "Replacement"}',
+            "CellRank": (
+                "IF cell \\in Cells THEN <<2, 1>> ELSE <<3, 1>>"
+            ),
+            "TypeInvariant": (
+                "/\\ originalOwned \\in BOOLEAN "
+                "/\\ replacementGeneration \\in 0..1 "
+                "/\\ selectedCell \\in Cells"
+            ),
+            "SelectedCellHasOriginalRank": (
+                'CellRank(selectedCell) = CellRank("Original")'
+            ),
+            "RankOnlyInit": (
+                "/\\ originalOwned = TRUE "
+                "/\\ replacementGeneration = 0 "
+                '/\\ selectedCell = "Original"'
+            ),
+            "SelectEqualRankReplacement": (
+                "/\\ originalOwned "
+                '/\\ selectedCell = "Original" '
+                '/\\ selectedCell\' = "Replacement" '
+                "/\\ UNCHANGED <<originalOwned, replacementGeneration>>"
+            ),
+            "ServiceAndReplenishReplacement": (
+                "/\\ originalOwned "
+                '/\\ selectedCell = "Replacement" '
+                "/\\ replacementGeneration' = 1 - replacementGeneration "
+                "/\\ UNCHANGED <<originalOwned, selectedCell>>"
+            ),
+            "RankOnlyNext": (
+                "SelectEqualRankReplacement \\/ "
+                "ServiceAndReplenishReplacement"
+            ),
+            "RankOnlySpec": (
+                "/\\ RankOnlyInit "
+                "/\\ [][RankOnlyNext]_vars "
+                "/\\ WF_vars(SelectEqualRankReplacement) "
+                "/\\ WF_vars(ServiceAndReplenishReplacement)"
+            ),
+            "ExactCellInit": "RankOnlyInit",
+            "ServiceExactOriginalCell": (
+                "/\\ originalOwned "
+                '/\\ selectedCell = "Original" '
+                "/\\ originalOwned' = FALSE "
+                "/\\ UNCHANGED <<replacementGeneration, selectedCell>>"
+            ),
+            "ChurnReplacementAfterOriginalService": (
+                "/\\ ~originalOwned "
+                "/\\ replacementGeneration' = 1 - replacementGeneration "
+                '/\\ selectedCell\' = "Replacement" '
+                "/\\ UNCHANGED originalOwned"
+            ),
+            "ExactCellNext": (
+                "ServiceExactOriginalCell \\/ "
+                "ChurnReplacementAfterOriginalService"
+            ),
+            "ExactCellSpec": (
+                "/\\ ExactCellInit "
+                "/\\ [][ExactCellNext]_vars "
+                "/\\ WF_vars(ServiceExactOriginalCell) "
+                "/\\ WF_vars(ChurnReplacementAfterOriginalService)"
+            ),
+            "OriginalCellEventuallyReleased": (
+                "originalOwned ~> ~originalOwned"
+            ),
+        }
+        for symbol, expected in expected_operators.items():
+            extracted = _top_level_operator_body(
+                source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{module_path}: missing global-blocker mutation operator "
+                    f"{symbol}"
+                )
+                continue
+            body, line = extracted
+            if " ".join(body.split()) != expected:
+                errors.append(
+                    f"{module_path}:{line}: {symbol} must equal the exact "
+                    "reviewed same-rank cell-selection mutation"
+                )
+
+    config_contracts = {
+        "adequate_leader_global_blocker_same_rank_swap_bug.cfg": (
+            "SPECIFICATION RankOnlySpec\n"
+            "CHECK_DEADLOCK FALSE\n\n"
+            "INVARIANT TypeInvariant\n"
+            "INVARIANT SelectedCellHasOriginalRank\n\n"
+            "PROPERTY OriginalCellEventuallyReleased\n"
+        ),
+        "adequate_leader_global_blocker_exact_cell.cfg": (
+            "SPECIFICATION ExactCellSpec\n"
+            "CHECK_DEADLOCK FALSE\n\n"
+            "INVARIANT TypeInvariant\n"
+            "INVARIANT SelectedCellHasOriginalRank\n\n"
+            "PROPERTY OriginalCellEventuallyReleased\n"
+        ),
+    }
+    for name, expected in config_contracts.items():
+        path = formal_dir / name
+        if not path.is_file():
+            errors.append(
+                f"{path}: missing adequate-leader global-blocker mutation config"
+            )
+            continue
+        if path.read_text(encoding="utf-8") != expected:
+            errors.append(
+                f"{path}: global-blocker mutation config must equal the exact "
+                "reviewed TLC contract"
+            )
+
+    runner_path = (
+        repo_root / "scripts" / "formal" / "run_sumeragi_v2_service_rank_mutation.sh"
+    )
+    if not runner_path.is_file():
+        errors.append(f"{runner_path}: missing service-rank mutation runner")
+        return errors
+    runner = runner_path.read_text(encoding="utf-8")
+    runner_contracts = (
+        "-config adequate_leader_global_blocker_same_rank_swap_bug.cfg",
+        "-config adequate_leader_global_blocker_exact_cell.cfg",
+        "SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla",
+        "global_blocker_same_rank_swap_status=$?",
+        "[[ $global_blocker_same_rank_swap_status -eq 13 ]]",
+        "same-rank global-blocker cell swap did not fail with TLC status 13",
+        "Temporal properties were violated.",
+        'selectedCell = "Replacement"',
+        "Back to state 2",
+        "Model checking completed. No error has been found.",
+    )
+    for token in runner_contracts:
+        if token not in runner:
+            errors.append(
+                f"{runner_path}: global-blocker cell mutation runner omits "
+                f"{token!r}"
+            )
+    for config_name in config_contracts:
+        if runner.count(f"-config {config_name}") != 1:
+            errors.append(
+                f"{runner_path}: {config_name} must execute exactly once"
+            )
+    if runner.count("SumeragiV2AdequateLeaderGlobalBlockerCellMutation.tla") != 2:
+        errors.append(
+            f"{runner_path}: global-blocker cell mutation module must execute "
+            "exactly twice"
         )
     return errors
 
@@ -51926,6 +52403,7 @@ pub(crate) struct FairV2Ingress {
     block_sync_frame_byte_capacity: usize,
     outbound_high_frame_byte_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,
+    service_lock: Mutex<()>,
     state: Mutex<FairV2IngressState>,
 }
 """,
@@ -52054,8 +52532,9 @@ let queued = lane
     .iter_mut()
     .find(|entry| entry.wire_key.as_ref() == Some(key))
     .expect("global pending wire key has one queued owner");
-queued.inbound.reply_routes = routes_after;
-queued.inbound.ingress_ownership = Some(evidence);
+let queued_inbound = Arc::make_mut(&mut queued.inbound);
+queued_inbound.reply_routes = routes_after;
+queued_inbound.ingress_ownership = Some(evidence);
 return Ok(FairV2IngressPushDisposition::Coalesced);
 """,
         "validated ingress route shadow commits atomically beside its exact ownership evidence",
@@ -52065,15 +52544,15 @@ return Ok(FairV2IngressPushDisposition::Coalesced);
         core_path,
         push,
         """
-queued.inbound.reply_routes = routes_after;
-queued.inbound.ingress_ownership = Some(evidence);
+let queued_inbound = Arc::make_mut(&mut queued.inbound);
+queued_inbound.reply_routes = routes_after;
+queued_inbound.ingress_ownership = Some(evidence);
 return Ok(FairV2IngressPushDisposition::Coalesced);
 }
 let source_lane_is_new = !state.lanes.contains_key(&source);
-if source_lane_is_new {
-    if !matches!(source, FairV2IngressSource::Authenticated(_)) {
-        return Err(FairV2IngressPushError::Rejected(inbound));
-    }
+if source_lane_is_new && !matches!(source, FairV2IngressSource::Authenticated(_)) {
+    return Err(FairV2IngressPushError::Rejected(inbound));
+}
 """,
         "semantic duplicate route attachment precedes authenticated non-validator lane-cap admission",
         errors,
@@ -52101,14 +52580,23 @@ if self
         core_path,
         push,
         """
-if is_transport_completion && lane.transport_completion_len != 0 {
-    return Err(FairV2IngressPushError::Full(inbound));
-}
-if is_transport_completion && encoded_len > self.transport_completion_byte_reserve {
+if encoded_len > source_class_byte_limit || encoded_len > self.byte_capacity {
     return Err(FairV2IngressPushError::Rejected(inbound));
 }
 """,
-        "single source-lane transport-completion count and byte owner",
+        "transport-completion bytes remain inside their source-class and "
+        "aggregate admission ceilings",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        push,
+        """
+if is_transport_completion && lane_transport_completion_len != 0 {
+    return Err(FairV2IngressPushError::Full(inbound));
+}
+""",
+        "single source-lane transport-completion count owner",
         errors,
     )
     _require_rust_token_sequence(
@@ -52136,7 +52624,7 @@ let Some(latent_authenticated_slots_after) = self
             .and_then(|latent| latent.checked_mul(2))
     })
 else {
-    return Err(FairV2IngressPushError::Rejected(inbound));
+    reject_after_leader_wire_admission!();
 };
 """,
         "unmaterialized authenticated non-validator lanes retain two protected owners each",
@@ -52151,7 +52639,9 @@ let lane = state.lanes.entry(source.clone()).or_default();
         "new authenticated non-validator ownership materializes one exact source lane",
         errors,
     )
-    receive = _require_rust_item(core_path, core_source, "try_recv_if_at", errors)
+    receive = _require_rust_item(
+        core_path, core_source, "try_recv_if_at_checked", errors
+    )
     same_control_slot = _require_rust_item(
         core_path, core_source, "fair_v2_ingress_same_control_slot", errors
     )
@@ -52178,13 +52668,21 @@ let has_live_control_predecessor = lane
     .any(|prior| {
         fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound)
     });
-(!has_live_control_predecessor
-    && certified_body_request_cutoff
-        .is_none_or(|cutoff| entry.admission_ordinal <= cutoff)
-    && predicate(&entry.inbound))
-.then_some(index)
 """,
-        "live control predecessor blocks strict-newer dequeue bypass",
+        "live control predecessor identity must be computed before carrier "
+        "authorization",
+        errors,
+    )
+    _require_rust_token_sequence(
+        core_path,
+        receive,
+        """
+(!has_live_control_predecessor && ingress_barrier_allows).then(|| {
+    (entry.admission_ordinal, Arc::clone(&entry.inbound))
+})
+""",
+        "live control predecessor blocks strict-newer carrier authorization "
+        "before the unlocked predicate",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -52377,7 +52875,7 @@ if let Some(key) = &entry.wire_key {
         receive,
         """
 if remains_ready {
-    state.ready.push_back(source);
+    state.ready.push_back(source.clone());
 } else if matches!(&source, FairV2IngressSource::Authenticated(_)) {
     let removed = state.lanes.remove(&source).expect(
         "an emptied authenticated non-validator lane remains indexed until dequeue",
@@ -56087,9 +56585,11 @@ handle.spawn(async move {
         network_reliable_items.get("post_reply_recoverable"),
         """
 self.post_reply_recoverable_with_flush_ack(msg, reply_route, ticket)
-    .map(|flush_ack| match flush_ack {
-        Some(_flush_ack) => NetworkReplyAdmissionOutcome::Admitted,
-        None => NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,
+    .map(|flush_ack| {
+        flush_ack.map_or(
+            NetworkReplyAdmissionOutcome::ReplyWriterUnavailable,
+            |_flush_ack| NetworkReplyAdmissionOutcome::Admitted,
+        )
     })
 """,
         "reply admission distinguishes transferred writer ownership from a delivery-active but unwritable route",
@@ -62516,6 +63016,11 @@ def _production_causal_fifo_source_fidelity_errors(
                 "deferred_authenticated_event_matches_wire",
                 (("impl", "SumeragiV2Adapter"),),
                 "typed deferred event to canonical-envelope comparator",
+            ),
+            (
+                "wire_ingress_missing_execution_commitment",
+                (("impl", "SumeragiV2Adapter"),),
+                "structurally validated missing-execution-commitment ingress classifier",
             ),
         )
         observed_authenticated_deferred_adapter_items: dict[
@@ -97242,6 +97747,11 @@ def validate_ledger(
     errors.extend(_causal_fifo_rank_mutation_runner_errors(ROOT_DIR))
     errors.extend(
         _deferred_handoff_mutation_source_fidelity_errors(formal_dir, ROOT_DIR)
+    )
+    errors.extend(
+        _adequate_leader_global_blocker_cell_mutation_source_fidelity_errors(
+            formal_dir, ROOT_DIR
+        )
     )
     errors.extend(
         _reply_writer_deadline_formal_source_fidelity_errors(

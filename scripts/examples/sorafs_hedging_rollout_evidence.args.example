@@ -20,3 +20,4 @@ feed_collector,reference_price,billing_cycle,statement_publication,reconciliatio
 3888000
 --max-divergence-bps
 500
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

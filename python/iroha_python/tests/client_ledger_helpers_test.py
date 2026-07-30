@@ -26,6 +26,7 @@ from iroha_python import (
     TransactionDraft,
     UaidPortfolioAsset,
     authority_fee_payment,
+    decode_cancel_asset_lock_v1,
 )
 from iroha_python._privacy_backends import (
     _VERIFIER_BACKEND_REGISTRY_LABELS_V1,
@@ -36,6 +37,7 @@ from iroha_python._privacy_backends import (
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
 from iroha_python.repo import (
     RepoAgreementListPage,
+    RepoAgreementRecord,
     RepoCashLeg,
     RepoCollateralLeg,
 )
@@ -52,6 +54,10 @@ FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 
 def test_data_model_version_matches_current_wire_contract() -> None:
     assert DATA_MODEL_VERSION == 4
+
+
+def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
+    assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
 
 
 class FakeSession:
@@ -963,12 +969,16 @@ def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() 
                 "counterparty": "bob@is",
                 "custodian": None,
                 "cash_leg": {"asset_definition_id": "cash#is", "quantity": "100"},
+                "cash_source": "cash#is::bob@is",
                 "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+                "collateral_custody_asset": "bond#is::bob@is",
                 "rate_bps": 250,
                 "maturity_timestamp_ms": 2_000,
                 "initiated_timestamp_ms": 1_000,
                 "last_margin_check_timestamp_ms": 1_000,
                 "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+                "settlement_timestamp_ms": None,
+                "status": "active",
             }
         ],
         "has_more": True,
@@ -986,11 +996,20 @@ def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() 
     assert page.indexed_height == 11
     assert page.indexed_block_hash == "cd" * 32
     assert page.query_source == "live"
+    assert page.items[0].cash_source == "cash#is::bob@is"
+    assert page.items[0].collateral_custody_asset == "bond#is::bob@is"
+    assert page.items[0].settlement_timestamp_ms is None
+    assert page.items[0].status == "active"
 
     bad = dict(payload)
     bad["has_more"] = "true"
     with pytest.raises(TypeError, match="has_more"):
         RepoAgreementListPage.from_payload(bad)
+
+    inconsistent = dict(payload["items"][0])
+    inconsistent["status"] = "settled"
+    with pytest.raises(ValueError, match="status must agree"):
+        RepoAgreementRecord.from_payload(inconsistent)
 
 
 @pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, 1.0, None])
@@ -1003,15 +1022,19 @@ def test_repo_agreement_readback_rejects_noncanonical_quantities(quantity: objec
                 "counterparty": "bob@is",
                 "custodian": None,
                 "cash_leg": {"asset_definition_id": "cash#is", "quantity": quantity},
+                "cash_source": "cash#is::bob@is",
                 "collateral_leg": {
                     "asset_definition_id": "bond#is",
                     "quantity": "120",
                 },
+                "collateral_custody_asset": "bond#is::bob@is",
                 "rate_bps": 250,
                 "maturity_timestamp_ms": 2_000,
                 "initiated_timestamp_ms": 1_000,
                 "last_margin_check_timestamp_ms": 1_000,
                 "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+                "settlement_timestamp_ms": None,
+                "status": "active",
             }
         ]
     }
@@ -1027,12 +1050,16 @@ def test_repo_agreement_readback_requires_quantity_fields() -> None:
         "counterparty": "bob@is",
         "custodian": None,
         "cash_leg": {"asset_definition_id": "cash#is"},
+        "cash_source": "cash#is::bob@is",
         "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+        "collateral_custody_asset": "bond#is::bob@is",
         "rate_bps": 250,
         "maturity_timestamp_ms": 2_000,
         "initiated_timestamp_ms": 1_000,
         "last_margin_check_timestamp_ms": 1_000,
         "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+        "settlement_timestamp_ms": None,
+        "status": "active",
     }
 
     with pytest.raises(KeyError, match="quantity"):
@@ -1125,7 +1152,13 @@ def test_zk_verifying_key_helpers_reject_labels_outside_exact_registry() -> None
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     for backend in ("stark/fri/latest", "stark/fri/attestation", "stark/fri/contest"):
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             client.submit_zk_verifying_key_registration(
                 {"backend": backend, "name": "vk_false_positive_guard"}
             )
@@ -1220,7 +1253,13 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             client.submit_zk_verifying_key_registration(
                 {"backend": backend, "name": "vk_transfer"}
             )
@@ -1584,9 +1623,21 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             client.request_zk_verifying_key(backend, "vk_transfer")
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             client.zk_verifying_key_active(backend, "vk_transfer")
     assert session.calls == []
 
@@ -1688,13 +1739,37 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             client.stream_verifying_key_events(backend=backend, name="vk_transfer")
-        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+        with pytest.raises(
+            ValueError,
+            match=(
+                "must be a non-empty string|surrounding whitespace|"
+                "unsupported production verifier backend"
+            ),
+        ):
             client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
     assert session.calls == []
 
@@ -2440,11 +2515,33 @@ def test_cancel_asset_lock_and_wait_builds_compare_and_cancel_instruction() -> N
     )
 
     draft = captured["draft"]
-    instruction_json = draft.instructions[0].to_json().replace(" ", "")
+    instruction_json_bytes = draft.instructions[0].to_json().encode("utf-8")
+    instruction_archive = base64.b64decode(
+        json.loads(instruction_json_bytes),
+        validate=True,
+    )
+    cancel_asset_lock_archive = instruction_archive[-85:]
+    decoded_cancel_asset_lock = decode_cancel_asset_lock_v1(cancel_asset_lock_archive)
     assert result == {"hash": "cancel-lock"}
     assert len(draft) == 1
     assert draft.config.metadata == {"purpose": "stale-cancel-guard"}
-    assert '"expected_remaining_amount":"10"' in instruction_json
+    assert instruction_json_bytes == (
+        b'"TlJUMAAAhip9dwddTSP/bBJh2wJ4EQCOAAAAAAAAAHlkviSo5tQGAi8uaXJvaGFfZGF0YV9tb2RlbDo6'
+        b'aXNpOjplc2Nyb3c6OkNhbmNlbEFzc2V0TG9ja11VAAAAAAAAAE5SVDAAALXIpmWn3oDi7vdcyyhwePoALQAA'
+        b'AAAAAACG3Fptkn+hwwIgigyS0HjBmiKawik0EvjKoV6DBVSoxaJxqi80+Us5JkkLBQEAAAAKBAAAAAA="'
+    )
+    assert instruction_archive == bytes.fromhex(
+        "4e5254300000862a7d77075d4d23ff6c1261db027811008e000000000000007964be24a8e6d406"
+        "022f2e69726f68615f646174615f6d6f64656c3a3a6973693a3a657363726f773a3a43616e6365"
+        "6c41737365744c6f636b5d55000000000000004e5254300000b5c8a665a7de80e2eef75ccb2870"
+        "78fa002d0000000000000086dc5a6d927fa1c302208a0c92d078c19a229ac2293412f8caa15e83"
+        "0554a8c5a271aa2f34f94b3926490b05010000000a0400000000"
+    )
+    assert len(cancel_asset_lock_archive) == 85
+    assert decoded_cancel_asset_lock.escrow_id == (
+        "hash:8A0C92D078C19A229AC2293412F8CAA15E830554A8C5A271AA2F34F94B392649#91BC"
+    )
+    assert decoded_cancel_asset_lock.expected_remaining_amount == "10"
     assert captured["kwargs"]["wait"] is False
 
 
@@ -2555,7 +2652,7 @@ def test_cancel_asset_lock_bounds_exact_utf8_lock_id_preimage() -> None:
 
 @pytest.mark.parametrize(
     "lock_id",
-    ["", " ", " lock", "lock ", "\ufefflock", "lock\ufeff"],
+    ["", " ", " lock", "lock ", "\ufefflock", "lock\ufeff", "\ud800", "\udc00"],
 )
 def test_cancel_asset_lock_rejects_unclean_lock_id_preimage(lock_id: str) -> None:
     with pytest.raises(ValueError, match="lock-ID preimage"):

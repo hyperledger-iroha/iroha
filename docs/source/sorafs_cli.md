@@ -291,8 +291,10 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
 
 - {{#include sorafs/snippets/multi_source_flag_notes.txt}}
 
-- `--guard-directory=PATH` loads a pinned guard set JSON (see below) and
-  `--guard-cache=PATH` persists cache updates across runs. When you need
+- `--guard-directory=PATH` loads a pinned guard set JSON (see below).
+  `--guard-directory-digest=HEX` is required with it and must be the
+  domain-separated BLAKE3 digest published through the independent governance
+  channel. `--guard-cache=PATH` persists cache updates across runs. When you need
   tamper-evidence for the cache (e.g., storing it on shared network volumes),
   pass a 32-byte hex key via `--guard-cache-key=HEX`; the orchestrator signs
   cached guard lists with the key and refuses to load caches whose MAC fails.
@@ -302,16 +304,21 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
   sorafs_cli guard-directory fetch \
     --url https://directory.soranet.dev/mainnet_snapshot.norito \
     --output ./state/guard_directory.norito \
-    --expected-directory-hash <directory-hash-hex>
+    --expected-snapshot-digest <snapshot-digest-hex>
 
   sorafs_cli guard-directory verify \
     --path ./state/guard_directory.norito \
-    --expected-directory-hash <directory-hash-hex>
+    --expected-snapshot-digest <snapshot-digest-hex>
+
+  sorafs_cli guard-directory inspect \
+    --path ./state/guard_directory.norito
   ```
 
-  `fetch` downloads and verifies the SRCv2 payload before writing it to disk,
-  while `verify` replays the validation pipeline for artefacts sourced from
-  other teams, emitting a JSON summary that mirrors the orchestrator output.
+  `fetch` and `verify` authenticate the exact SRCv2 artefact against the
+  externally supplied digest, verify its signatures, and enforce the half-open
+  validity window (`valid_after <= now < valid_until`). `inspect` only performs
+  structural and embedded-signature checks; its output is explicitly marked
+  unauthenticated and must not be used to establish trust.
 - `--scoreboard-out=PATH` persists the computed eligibility/weighting snapshot
   to Norito JSON for audits. Pair it with `--scoreboard-now=UNIX_SECS` when you
   need deterministic fixtures for CI or release evidence.
@@ -342,7 +349,7 @@ orchestrator. A machine-readable summary is emitted to stdout (and, when
   manifest (certificate PEM, ALPN label, guard cache key, cache-tagging salt,
   telemetry hints) and the same payload is written to
   `--local-proxy-manifest-out=PATH` for browser extensions.
-- `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. These fields mirror the manifest response returned by `/v1/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
+- `manifest_digest_hex`, `manifest_payload_digest_hex`, `manifest_car_digest_hex`, `manifest_content_length`, `manifest_chunk_count`, `manifest_chunk_profile_handle`, and `manifest_governance` surface the manifest metadata downloaded from the gateway. `manifest_payload_digest_hex` binds the unchunked payload, while `manifest_car_digest_hex` binds the entire canonical CARv2 archive (pragma, CARv2 header, embedded CARv1 payload, and index); neither is a fallback for the other. These fields mirror the manifest response returned by `/v1/sorafs/storage/manifest/{id}`, confirm that the orchestrator rebuilt the CAR archive against the expected payload, and expose the council signatures bundled with the manifest (`manifest_governance.council_signatures`).
 - `car_archive` now contains the assembled CAR diagnostics (`payload_digest_hex`, `archive_digest_hex`, `cid_hex`, `root_cids_hex`, `size`) alongside `verified=true` and `por_leaf_count`, proving that the CAR bytes emitted by the gateway match the manifest digests and PoR tree recorded on ingest.
 - `ineligible_providers`, listing any aliases filtered out by capability or
   validity window checks, so SREs can surface advert drift before re-running the

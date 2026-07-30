@@ -10,7 +10,7 @@
 //! release manifest at V4. It fixes both parities at degree 16, exposes one
 //! 64-element commitment column, keeps the exact 138-`u32`
 //! predecessor/result state boundary private, and caps each processed proving
-//! key at 96 MiB. Production retains authenticated proving keys as file-backed
+//! key at 5 GiB. Production retains authenticated proving keys as file-backed
 //! spools and verifier keys as bounded raw bytes. It parses Eq and Ep one at a
 //! time, then materializes terminal verifier domains only after both proving
 //! keys and populated circuits have been released.
@@ -53,7 +53,10 @@ use snark_verifier::verifier::plonk::PlonkProtocol;
 use super::kagemusha_accumulation::{
     KagemushaIpaAccumulationProofV4, KagemushaIpaAccumulatorWireV4,
 };
-use super::kagemusha_sha256_v4::{KagemushaSha256ConfigV4, KagemushaSha256JobsV4};
+use super::kagemusha_dense_msm::{KagemushaDenseMsmConfigV5, KagemushaDenseMsmJobsV5};
+use super::kagemusha_sha256_v4::{
+    KagemushaSha256ByteV4, KagemushaSha256ConfigV4, KagemushaSha256JobsV4,
+};
 use super::kagemusha_step_transition::{
     KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4, KAGEMUSHA_STEP_OPERATION_LIMBS_V4,
     KagemushaStepOperationVectorV4,
@@ -118,12 +121,12 @@ fn validate_kagemusha_circuit_params_v4(
 // candidate generation. Keeping the generation boundary explicit prevents a
 // stale or column-heavy profile from reaching `ParamsIPA::new` or Halo2
 // configure/keygen even if it was decoded from a historical carrier.
-const KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4: &[u32] = &[8];
-const KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4: &[u32] = &[1];
+const KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4: &[u32] = &[443];
+const KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4: &[u32] = &[47, 0, 0];
 const KAGEMUSHA_GENERATION_FIXED_COLUMNS_V4: u32 = 1;
 const KAGEMUSHA_GENERATION_INSTANCE_COLUMNS_V4: u32 = 1;
-const KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4: u64 = 256 * 1024 * 1024;
-const KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5: u64 = 232 * 1024 * 1024;
+const KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4: u64 = 12 * 1024 * 1024 * 1024;
+const KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5: u64 = 12 * 1024 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_FIXED_HEADROOM_BYTES_V4: u64 = 56 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_QUOTIENT_HEADROOM_BYTES_V5: u64 = 72 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_FIELD_BYTES_V4: u64 = 32;
@@ -175,21 +178,30 @@ fn estimate_kagemusha_generation_peak_bytes_v4(
         return Err("Kagemusha V4 generator Eq/Ep degree mismatch".to_owned());
     }
 
-    let columns = |params: &KagemushaStepCircuitParamsV4, parity: &str| {
-        params
-            .num_advice_per_phase
-            .iter()
-            .chain(&params.num_lookup_advice_per_phase)
-            .copied()
-            .chain([params.num_fixed, params.num_instance_columns])
-            .try_fold(0_u64, |total, count| {
-                total
-                    .checked_add(u64::from(count))
-                    .ok_or_else(|| format!("Kagemusha V4 generator {parity} column-count overflow"))
-            })
+    let columns = |shape: KagemushaConfiguredVkWireShapeV4, parity: &str| {
+        [
+            shape.advice_columns,
+            shape.base_fixed_columns,
+            shape.selectors,
+            shape.instance_columns,
+        ]
+        .into_iter()
+        .try_fold(0_u64, |total, count| {
+            total
+                .checked_add(u64::try_from(count).map_err(|_| {
+                    format!("Kagemusha V4 generator {parity} column count does not fit u64")
+                })?)
+                .ok_or_else(|| format!("Kagemusha V4 generator {parity} column-count overflow"))
+        })
     };
-    let eq_columns = columns(step_eq_circuit_params, "Eq")?;
-    let ep_columns = columns(step_ep_circuit_params, "Ep")?;
+    let eq_columns = columns(
+        configured_kagemusha_eq_vk_wire_shape_v4(step_eq_circuit_params)?,
+        "Eq",
+    )?;
+    let ep_columns = columns(
+        configured_kagemusha_ep_vk_wire_shape_v4(step_ep_circuit_params)?,
+        "Ep",
+    )?;
     // Every populated Eq circuit is consumed and dropped before an Ep circuit
     // is built (and vice versa), so peak circuit storage is the larger parity,
     // not their sum.
@@ -770,6 +782,25 @@ pub struct KagemushaStepBootstrapV4 {
     pub branch_merge_fold: KagemushaIpaAccumulationProofV4,
 }
 
+#[derive(Clone, Copy)]
+enum KagemushaBootstrapParentValidationV4 {
+    Strict,
+    ProvisionalPreKeygen,
+}
+
+impl KagemushaBootstrapParentValidationV4 {
+    fn require_break_points(self, circuit_break_points: &[Vec<u32>]) -> Result<bool, String> {
+        match self {
+            Self::Strict => Ok(true),
+            Self::ProvisionalPreKeygen if circuit_break_points.is_empty() => Ok(false),
+            Self::ProvisionalPreKeygen => Err(
+                "Kagemusha V5 provisional pre-keygen parent must omit circuit breakpoints"
+                    .to_owned(),
+            ),
+        }
+    }
+}
+
 impl KagemushaStepBootstrapV4 {
     /// Validate every host-checkable bootstrap invariant against authenticated
     /// circuit parameters. Ordinary/fold equation validity is checked by the
@@ -952,10 +983,27 @@ impl KagemushaStepBootstrapV4 {
         slot: usize,
     ) -> Result<KagemushaStepParentProofV4<halo2_proofs::halo2curves::pasta::EqAffine>, String>
     {
-        self.validate(
+        self.step_eq_parent_internal(
+            params,
+            expected_structure_sha256,
+            slot,
+            KagemushaBootstrapParentValidationV4::Strict,
+        )
+    }
+
+    fn step_eq_parent_internal(
+        &self,
+        params: &KagemushaStepCircuitParamsV4,
+        expected_structure_sha256: [u8; 32],
+        slot: usize,
+        validation: KagemushaBootstrapParentValidationV4,
+    ) -> Result<KagemushaStepParentProofV4<halo2_proofs::halo2curves::pasta::EqAffine>, String>
+    {
+        self.validate_internal(
             params,
             KagemushaPastaCycleParityV1::StepEq,
             expected_structure_sha256,
+            validation.require_break_points(&self.circuit_break_points)?,
         )?;
         if slot >= KAGEMUSHA_PASTA_PARENT_SLOTS_V1 {
             return Err("Kagemusha V4 Eq bootstrap slot is out of range".to_owned());
@@ -986,10 +1034,27 @@ impl KagemushaStepBootstrapV4 {
         slot: usize,
     ) -> Result<KagemushaStepParentProofV4<halo2_proofs::halo2curves::pasta::EpAffine>, String>
     {
-        self.validate(
+        self.step_ep_parent_internal(
+            params,
+            expected_structure_sha256,
+            slot,
+            KagemushaBootstrapParentValidationV4::Strict,
+        )
+    }
+
+    fn step_ep_parent_internal(
+        &self,
+        params: &KagemushaStepCircuitParamsV4,
+        expected_structure_sha256: [u8; 32],
+        slot: usize,
+        validation: KagemushaBootstrapParentValidationV4,
+    ) -> Result<KagemushaStepParentProofV4<halo2_proofs::halo2curves::pasta::EpAffine>, String>
+    {
+        self.validate_internal(
             params,
             KagemushaPastaCycleParityV1::StepEp,
             expected_structure_sha256,
+            validation.require_break_points(&self.circuit_break_points)?,
         )?;
         if slot >= KAGEMUSHA_PASTA_PARENT_SLOTS_V1 {
             return Err("Kagemusha V4 Ep bootstrap slot is out of range".to_owned());
@@ -3065,30 +3130,50 @@ impl<'a> KagemushaStructuralCursorV4<'a> {
     }
 }
 
+trait KagemushaProcessedKeyCurveV4: CurveAffine {
+    fn configured_wire_shape_v4(
+        circuit_params: &KagemushaStepCircuitParamsV4,
+    ) -> Result<KagemushaConfiguredVkWireShapeV4, String>;
+}
+
+impl KagemushaProcessedKeyCurveV4 for halo2_proofs::halo2curves::pasta::EqAffine {
+    fn configured_wire_shape_v4(
+        circuit_params: &KagemushaStepCircuitParamsV4,
+    ) -> Result<KagemushaConfiguredVkWireShapeV4, String> {
+        configured_kagemusha_eq_vk_wire_shape_v4(circuit_params)
+    }
+}
+
+impl KagemushaProcessedKeyCurveV4 for halo2_proofs::halo2curves::pasta::EpAffine {
+    fn configured_wire_shape_v4(
+        circuit_params: &KagemushaStepCircuitParamsV4,
+    ) -> Result<KagemushaConfiguredVkWireShapeV4, String> {
+        configured_kagemusha_ep_vk_wire_shape_v4(circuit_params)
+    }
+}
+
 fn kagemusha_processed_key_shape_v4<C>(
     circuit_params: &KagemushaStepCircuitParamsV4,
     role: &str,
 ) -> Result<KagemushaProcessedKeyShapeV4, String>
 where
-    C: CurveAffine,
+    C: KagemushaProcessedKeyCurveV4,
     C::Scalar: halo2_base::utils::ScalarField,
 {
     validate_kagemusha_circuit_params_v4(circuit_params)?;
-    let mut constraint_system = halo2_proofs::plonk::ConstraintSystem::<C::Scalar>::default();
-    let base_params = kagemusha_base_circuit_params_v4(circuit_params)?;
-    let _config =
-        halo2_base::gates::circuit::BaseConfig::configure(&mut constraint_system, base_params);
+    let configured = C::configured_wire_shape_v4(circuit_params)?;
 
     // `keygen_vk` disables selector compression. It appends one fixed
     // polynomial per selector before serializing the fixed commitments, while
     // the permutation vectors retain one polynomial per equality-enabled
-    // column. Derive both counts from the authenticated circuit configuration
-    // rather than trusting either serialized u32 count.
-    let fixed_polynomials = constraint_system
-        .num_fixed_columns()
-        .checked_add(constraint_system.num_selectors())
+    // column. Derive both counts from the complete authenticated composite
+    // circuit (Base, all SHA lanes, and the dense reciprocal MSM) rather than
+    // the Base subcircuit alone or either serialized u32 count.
+    let fixed_polynomials = configured
+        .base_fixed_columns
+        .checked_add(configured.selectors)
         .ok_or_else(|| format!("Kagemusha V4 {role} fixed-polynomial count overflows"))?;
-    let permutation_polynomials = constraint_system.permutation().get_columns().len();
+    let permutation_polynomials = configured.permutation_columns;
     let domain_rows = 1_u32
         .checked_shl(circuit_params.k)
         .ok_or_else(|| format!("Kagemusha V4 {role} domain-row count overflows"))?;
@@ -3148,7 +3233,7 @@ fn kagemusha_artifact_encoding_sizes_for_curve_v4<C>(
     role: &str,
 ) -> Result<KagemushaArtifactEncodingSizesV4, String>
 where
-    C: CurveAffine,
+    C: KagemushaProcessedKeyCurveV4,
     C::Scalar: halo2_base::utils::ScalarField,
 {
     let shape = kagemusha_processed_key_shape_v4::<C>(circuit_params, role)?;
@@ -3179,7 +3264,7 @@ fn validate_kagemusha_generation_encoding_sizes_v4<C>(
     role: &str,
 ) -> Result<(), String>
 where
-    C: CurveAffine,
+    C: KagemushaProcessedKeyCurveV4,
     C::Scalar: halo2_base::utils::ScalarField,
 {
     let shape = kagemusha_processed_key_shape_v4::<C>(circuit_params, role)?;
@@ -3372,9 +3457,11 @@ fn validate_kagemusha_processed_pk_encoding_v4(
 struct KagemushaConfiguredVkWireShapeV4 {
     k: u32,
     domain_size: u64,
+    advice_columns: usize,
     base_fixed_columns: usize,
     selectors: usize,
     permutation_columns: usize,
+    instance_columns: usize,
     curve_bytes: usize,
     scalar_bytes: usize,
 }
@@ -3389,6 +3476,7 @@ struct KagemushaVkWirePreflightV4 {
 struct KagemushaWireScannerV4<'reader> {
     reader: &'reader mut dyn std::io::Read,
     consumed: u64,
+    consumed_sha256: Option<Sha256>,
     role: &'reader str,
 }
 
@@ -3397,6 +3485,7 @@ impl<'reader> KagemushaWireScannerV4<'reader> {
         Self {
             reader,
             consumed: 0,
+            consumed_sha256: Some(Sha256::new()),
             role,
         }
     }
@@ -3415,6 +3504,9 @@ impl<'reader> KagemushaWireScannerV4<'reader> {
                     format!("Kagemusha V4 {} read width does not fit u64", self.role)
                 })?)
                 .ok_or_else(|| format!("Kagemusha V4 {} length overflow", self.role))?;
+        if let Some(hasher) = &mut self.consumed_sha256 {
+            hasher.update(&bytes);
+        }
         Ok(bytes)
     }
 
@@ -3450,9 +3542,24 @@ impl<'reader> KagemushaWireScannerV4<'reader> {
                 .consumed
                 .checked_add(chunk_u64)
                 .ok_or_else(|| format!("Kagemusha V4 {} length overflow", self.role))?;
+            if let Some(hasher) = &mut self.consumed_sha256 {
+                hasher.update(&scratch[..chunk]);
+            }
             remaining -= chunk_u64;
         }
         Ok(())
+    }
+
+    fn finish_consumed_sha256(&mut self) -> Result<[u8; 32], String> {
+        self.consumed_sha256
+            .take()
+            .map(|hasher| hasher.finalize().into())
+            .ok_or_else(|| {
+                format!(
+                    "Kagemusha V4 {} consumed-byte digest was already finalized",
+                    self.role
+                )
+            })
     }
 }
 
@@ -3484,9 +3591,11 @@ fn configured_kagemusha_eq_vk_wire_shape_v4(
     Ok(KagemushaConfiguredVkWireShapeV4 {
         k: circuit_params.k,
         domain_size,
+        advice_columns: cs.num_advice_columns(),
         base_fixed_columns: cs.num_fixed_columns(),
         selectors: cs.num_selectors(),
         permutation_columns: cs.permutation().get_columns().len(),
+        instance_columns: cs.num_instance_columns(),
         curve_bytes: 32,
         scalar_bytes: 32,
     })
@@ -3509,9 +3618,11 @@ fn configured_kagemusha_ep_vk_wire_shape_v4(
     Ok(KagemushaConfiguredVkWireShapeV4 {
         k: circuit_params.k,
         domain_size,
+        advice_columns: cs.num_advice_columns(),
         base_fixed_columns: cs.num_fixed_columns(),
         selectors: cs.num_selectors(),
         permutation_columns: cs.permutation().get_columns().len(),
+        instance_columns: cs.num_instance_columns(),
         curve_bytes: 32,
         scalar_bytes: 32,
     })
@@ -3765,8 +3876,11 @@ fn read_bounded_kagemusha_bootstrap_from_source_v4(
 mod source_parser_preflight_tests {
     use std::io::Cursor;
 
+    use sha2::{Digest as _, Sha256};
+
     use super::{
-        KagemushaConfiguredVkWireShapeV4, KagemushaWireScannerV4,
+        KagemushaConfiguredVkWireShapeV4, KagemushaPkWirePreflightV4, KagemushaVkWirePreflightV4,
+        KagemushaWireScannerV4, ensure_kagemusha_pk_preflight_matches_vk_v4,
         preflight_kagemusha_polynomial_v4, preflight_kagemusha_polynomial_vec_v4,
         preflight_kagemusha_processed_vk_v4,
     };
@@ -3775,9 +3889,11 @@ mod source_parser_preflight_tests {
         KagemushaConfiguredVkWireShapeV4 {
             k: 8,
             domain_size: 256,
+            advice_columns: 7,
             base_fixed_columns: 2,
             selectors: 3,
             permutation_columns: 4,
+            instance_columns: 1,
             curve_bytes: 32,
             scalar_bytes: 32,
         }
@@ -3806,6 +3922,13 @@ mod source_parser_preflight_tests {
             preflight_kagemusha_processed_vk_v4(&mut scanner, shape(), Some(valid.len() as u64))
                 .expect("configured VK wire");
         assert_eq!(parsed.fixed_columns, 5);
+        let expected_digest: [u8; 32] = Sha256::digest(&valid).into();
+        assert_eq!(
+            scanner
+                .finish_consumed_sha256()
+                .expect("first digest finalization"),
+            expected_digest
+        );
 
         let mut bad_k = valid.clone();
         bad_k[1..5].copy_from_slice(&31_u32.to_le_bytes());
@@ -3857,6 +3980,47 @@ mod source_parser_preflight_tests {
             KagemushaWireScannerV4::new(&mut malicious_count, "malicious polynomial vector");
         assert!(preflight_kagemusha_polynomial_vec_v4(&mut scanner, 4, 256, 32).is_err());
         assert_eq!(scanner.consumed, 4);
+    }
+
+    #[test]
+    fn wire_scanner_stops_hashing_after_digest_finalization() {
+        let bytes = [1_u8, 2, 3, 4, 5, 6, 7, 8];
+        let mut cursor = Cursor::new(bytes.as_slice());
+        let mut scanner = KagemushaWireScannerV4::new(&mut cursor, "digest boundary");
+        assert_eq!(
+            scanner.read_array::<4>().expect("digest prefix"),
+            [1, 2, 3, 4]
+        );
+        let expected_prefix_digest: [u8; 32] = Sha256::digest([1_u8, 2, 3, 4]).into();
+        assert_eq!(
+            scanner
+                .finish_consumed_sha256()
+                .expect("first digest finalization"),
+            expected_prefix_digest
+        );
+        scanner.skip_exact(4).expect("unhashed suffix scan");
+        assert_eq!(scanner.consumed, bytes.len() as u64);
+        assert!(scanner.finish_consumed_sha256().is_err());
+    }
+
+    #[test]
+    fn proving_key_preflight_binds_the_exact_standalone_verifier_key() {
+        let expected = [0x51; 32];
+        let preflight = KagemushaPkWirePreflightV4 {
+            vk: KagemushaVkWirePreflightV4 {
+                serialized_len: 35_018,
+                fixed_columns: 560,
+                permutation_columns: 534,
+            },
+            embedded_verifying_key_sha256: expected,
+        };
+        ensure_kagemusha_pk_preflight_matches_vk_v4(&preflight, expected, "Eq")
+            .expect("exact embedded verifier identity");
+        assert!(
+            ensure_kagemusha_pk_preflight_matches_vk_v4(&preflight, [0x52; 32], "Eq")
+                .expect_err("substituted standalone verifier must fail")
+                .contains("different verifier key")
+        );
     }
 }
 
@@ -4425,6 +4589,17 @@ impl super::kagemusha_artifact_source_v4::KagemushaAuthenticatedArtifactSourceV4
     ) -> Result<(), String> {
         self.source.with_framed_artifact(parity, kind, consume)
     }
+
+    fn authenticated_inspection(
+        &self,
+        parity: KagemushaPastaCycleParityV1,
+        kind: KagemushaPastaCycleArtifactKindV4,
+    ) -> Result<
+        Option<super::kagemusha_artifact_v4::KagemushaAuthenticatedArtifactInspectionV4>,
+        String,
+    > {
+        self.source.authenticated_inspection(parity, kind)
+    }
 }
 
 fn qualify_kagemusha_eq_artifacts_v4(
@@ -4443,15 +4618,17 @@ fn qualify_kagemusha_eq_artifacts_v4(
     let params = load_kagemusha_eq_params_from_source_v4(source, profile.ipa_k)?;
     let verifying_key =
         load_kagemusha_eq_verifying_key_from_source_v4(source, &profile.circuit_params)?;
-    let proving_key = load_kagemusha_eq_proving_key_from_source_v4(
+    let proving_key = preflight_kagemusha_pk_from_source_v4(
         source,
-        &profile.circuit_params,
-        verifying_key.processed_sha256,
+        KagemushaPastaCycleParityV1::StepEq,
+        configured_kagemusha_eq_vk_wire_shape_v4(&profile.circuit_params)?,
+        "Eq",
     )?;
-    // Parsing and canonical embedded-VK comparison above are the complete PK
-    // qualification.  Do not retain its domain-sized polynomials while the
-    // bootstrap or opposite parity is validated.
-    drop(proving_key);
+    ensure_kagemusha_pk_preflight_matches_vk_v4(
+        &proving_key,
+        verifying_key.processed_sha256,
+        "Eq",
+    )?;
     let bootstrap_bytes = read_bounded_kagemusha_bootstrap_from_source_v4(
         source,
         KagemushaPastaCycleParityV1::StepEq,
@@ -4479,6 +4656,9 @@ fn qualify_kagemusha_eq_artifacts_v4(
         verifying_key.processed_len,
         verifying_key.processed_sha256,
         verifying_key.commitment,
+        proving_key.embedded_verifying_key_sha256,
+        proving_key.vk.fixed_columns,
+        proving_key.vk.permutation_columns,
     )
 }
 
@@ -4498,12 +4678,17 @@ fn qualify_kagemusha_ep_artifacts_v4(
     let params = load_kagemusha_ep_params_from_source_v4(source, profile.ipa_k)?;
     let verifying_key =
         load_kagemusha_ep_verifying_key_from_source_v4(source, &profile.circuit_params)?;
-    let proving_key = load_kagemusha_ep_proving_key_from_source_v4(
+    let proving_key = preflight_kagemusha_pk_from_source_v4(
         source,
-        &profile.circuit_params,
-        verifying_key.processed_sha256,
+        KagemushaPastaCycleParityV1::StepEp,
+        configured_kagemusha_ep_vk_wire_shape_v4(&profile.circuit_params)?,
+        "Ep",
     )?;
-    drop(proving_key);
+    ensure_kagemusha_pk_preflight_matches_vk_v4(
+        &proving_key,
+        verifying_key.processed_sha256,
+        "Ep",
+    )?;
     let bootstrap_bytes = read_bounded_kagemusha_bootstrap_from_source_v4(
         source,
         KagemushaPastaCycleParityV1::StepEp,
@@ -4531,6 +4716,9 @@ fn qualify_kagemusha_ep_artifacts_v4(
         verifying_key.processed_len,
         verifying_key.processed_sha256,
         verifying_key.commitment,
+        proving_key.embedded_verifying_key_sha256,
+        proving_key.vk.fixed_columns,
+        proving_key.vk.permutation_columns,
     )
 }
 
@@ -4851,6 +5039,20 @@ impl KagemushaPastaCycleTerminalVerifierV4 {
 #[derive(Debug)]
 struct KagemushaPkWirePreflightV4 {
     vk: KagemushaVkWirePreflightV4,
+    embedded_verifying_key_sha256: [u8; 32],
+}
+
+fn ensure_kagemusha_pk_preflight_matches_vk_v4(
+    preflight: &KagemushaPkWirePreflightV4,
+    processed_verifying_key_sha256: [u8; 32],
+    role: &str,
+) -> Result<(), String> {
+    if preflight.embedded_verifying_key_sha256 != processed_verifying_key_sha256 {
+        return Err(format!(
+            "Kagemusha V4 {role} proving key embeds a different verifier key"
+        ));
+    }
+    Ok(())
 }
 
 fn preflight_kagemusha_pk_from_source_v4(
@@ -4866,6 +5068,7 @@ fn preflight_kagemusha_pk_from_source_v4(
         |reader, header| {
             let mut scanner = KagemushaWireScannerV4::new(reader, role);
             let vk = preflight_kagemusha_processed_vk_v4(&mut scanner, shape, None)?;
+            let embedded_verifying_key_sha256 = scanner.finish_consumed_sha256()?;
             for _ in 0..3 {
                 preflight_kagemusha_polynomial_v4(
                     &mut scanner,
@@ -4891,7 +5094,10 @@ fn preflight_kagemusha_pk_from_source_v4(
                     "Kagemusha V4 {role} proving key has trailing, truncated, or structurally unaccounted bytes"
                 ));
             }
-            Ok(KagemushaPkWirePreflightV4 { vk })
+            Ok(KagemushaPkWirePreflightV4 {
+                vk,
+                embedded_verifying_key_sha256,
+            })
         },
     )
 }
@@ -5009,6 +5215,108 @@ pub(crate) fn load_kagemusha_ep_proving_key_from_source_v4(
     {
         return Err(
             "Kagemusha V4 Ep proving key embeds a different verifier key or shape".to_owned(),
+        );
+    }
+    Ok(KagemushaLoadedProvingKeyV4 { key })
+}
+
+fn load_kagemusha_eq_proving_key_from_qualified_source_v4(
+    source: &super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4,
+    circuit_params: &KagemushaStepCircuitParamsV4,
+) -> Result<KagemushaLoadedProvingKeyV4<halo2_proofs::halo2curves::pasta::EqAffine>, String> {
+    use halo2_proofs::{SerdeFormat, plonk::ProvingKey};
+
+    let metadata = source.step_eq();
+    let key = super::kagemusha_artifact_source_v4::with_kagemusha_authenticated_artifact_payload_from_source_v4(
+        source,
+        KagemushaPastaCycleParityV1::StepEq,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+        |mut reader, _header| {
+            #[cfg(feature = "circuit-params")]
+            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
+                    &mut reader,
+                    SerdeFormat::Processed,
+                    circuit_params.clone(),
+                )
+            }))
+            .map_err(|_| "Kagemusha V4 Eq proving-key reader panicked".to_owned())?
+            .map_err(|error| format!("failed to parse Kagemusha V4 Eq proving key: {error}"))?;
+            #[cfg(not(feature = "circuit-params"))]
+            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ProvingKey::read::<_, KagemushaStepEqCircuitV4>(
+                    &mut reader,
+                    SerdeFormat::Processed,
+                )
+            }))
+            .map_err(|_| "Kagemusha V4 Eq proving-key reader panicked".to_owned())?
+            .map_err(|error| format!("failed to parse Kagemusha V4 Eq proving key: {error}"))?;
+            Ok(key)
+        },
+    )?;
+    let embedded_vk = key.get_vk();
+    if embedded_vk.fixed_commitments().len() != metadata.proving_key_fixed_columns()
+        || embedded_vk.fixed_commitments().len() != embedded_vk.cs().num_fixed_columns()
+        || embedded_vk.permutation().commitments().len()
+            != metadata.proving_key_permutation_columns()
+        || embedded_vk.permutation().commitments().len()
+            != embedded_vk.cs().permutation().get_columns().len()
+        || canonical_kagemusha_vk_sha256_v4(embedded_vk, "Eq proving-key embedded")?
+            != metadata.proving_key_embedded_verifying_key_sha256()
+    {
+        return Err(
+            "Kagemusha V4 Eq proving key changed after structural qualification".to_owned(),
+        );
+    }
+    Ok(KagemushaLoadedProvingKeyV4 { key })
+}
+
+fn load_kagemusha_ep_proving_key_from_qualified_source_v4(
+    source: &super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4,
+    circuit_params: &KagemushaStepCircuitParamsV4,
+) -> Result<KagemushaLoadedProvingKeyV4<halo2_proofs::halo2curves::pasta::EpAffine>, String> {
+    use halo2_proofs::{SerdeFormat, plonk::ProvingKey};
+
+    let metadata = source.step_ep();
+    let key = super::kagemusha_artifact_source_v4::with_kagemusha_authenticated_artifact_payload_from_source_v4(
+        source,
+        KagemushaPastaCycleParityV1::StepEp,
+        KagemushaPastaCycleArtifactKindV4::ProvingKey,
+        |mut reader, _header| {
+            #[cfg(feature = "circuit-params")]
+            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
+                    &mut reader,
+                    SerdeFormat::Processed,
+                    circuit_params.clone(),
+                )
+            }))
+            .map_err(|_| "Kagemusha V4 Ep proving-key reader panicked".to_owned())?
+            .map_err(|error| format!("failed to parse Kagemusha V4 Ep proving key: {error}"))?;
+            #[cfg(not(feature = "circuit-params"))]
+            let key = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                ProvingKey::read::<_, KagemushaStepEpCircuitV4>(
+                    &mut reader,
+                    SerdeFormat::Processed,
+                )
+            }))
+            .map_err(|_| "Kagemusha V4 Ep proving-key reader panicked".to_owned())?
+            .map_err(|error| format!("failed to parse Kagemusha V4 Ep proving key: {error}"))?;
+            Ok(key)
+        },
+    )?;
+    let embedded_vk = key.get_vk();
+    if embedded_vk.fixed_commitments().len() != metadata.proving_key_fixed_columns()
+        || embedded_vk.fixed_commitments().len() != embedded_vk.cs().num_fixed_columns()
+        || embedded_vk.permutation().commitments().len()
+            != metadata.proving_key_permutation_columns()
+        || embedded_vk.permutation().commitments().len()
+            != embedded_vk.cs().permutation().get_columns().len()
+        || canonical_kagemusha_vk_sha256_v4(embedded_vk, "Ep proving-key embedded")?
+            != metadata.proving_key_embedded_verifying_key_sha256()
+    {
+        return Err(
+            "Kagemusha V4 Ep proving key changed after structural qualification".to_owned(),
         );
     }
     Ok(KagemushaLoadedProvingKeyV4 { key })
@@ -6302,13 +6610,13 @@ impl KagemushaPastaCycleProverV4 {
             // have finished: the derivation boundary deliberately rejects a
             // caller-preselected join. Each large witness-only builder drops
             // inside its scope before the opposite parity starts.
-            let eq_public_words = kagemusha_deferred_audit_public_words_v4(
+            let eq_public_words = kagemusha_deferred_audit_public_words_v5(
                 &eq_audits.audit,
                 &eq_audits.stages,
                 public_inputs.parent_count,
                 eq_audits.inner_parent_counts,
             )?;
-            let ep_public_words = kagemusha_deferred_audit_public_words_v4(
+            let ep_public_words = kagemusha_deferred_audit_public_words_v5(
                 &ep_audits.audit,
                 &ep_audits.stages,
                 public_inputs.parent_count,
@@ -7036,11 +7344,8 @@ fn load_kagemusha_source_eq_prover_material_v4(
     let break_points =
         kagemusha_break_points_from_wire_v5(bootstrap_break_points, &circuit_params)?;
     let params = load_kagemusha_eq_params_from_source_v4(source, circuit_params.k)?;
-    let loaded_key = load_kagemusha_eq_proving_key_from_source_v4(
-        source,
-        &circuit_params,
-        metadata.processed_verifying_key_sha256(),
-    )?;
+    let loaded_key =
+        load_kagemusha_eq_proving_key_from_qualified_source_v4(source, &circuit_params)?;
     ensure_kagemusha_eq_verifying_material_identity_v4(
         &params,
         loaded_key.key.get_vk(),
@@ -7064,11 +7369,8 @@ fn load_kagemusha_source_ep_prover_material_v4(
     let break_points =
         kagemusha_break_points_from_wire_v5(bootstrap_break_points, &circuit_params)?;
     let params = load_kagemusha_ep_params_from_source_v4(source, circuit_params.k)?;
-    let loaded_key = load_kagemusha_ep_proving_key_from_source_v4(
-        source,
-        &circuit_params,
-        metadata.processed_verifying_key_sha256(),
-    )?;
+    let loaded_key =
+        load_kagemusha_ep_proving_key_from_qualified_source_v4(source, &circuit_params)?;
     ensure_kagemusha_ep_verifying_material_identity_v4(
         &params,
         loaded_key.key.get_vk(),
@@ -7516,7 +7818,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
                     &step_eq,
                     KagemushaPastaCycleParityV1::StepEq,
                 )?;
-                kagemusha_deferred_audit_public_words_v4(
+                kagemusha_deferred_audit_public_words_v5(
                     &audits.audit,
                     &audits.stages,
                     public_inputs.parent_count,
@@ -7533,7 +7835,7 @@ impl KagemushaPastaCycleSourceBackedProverV4 {
                     &step_ep,
                     KagemushaPastaCycleParityV1::StepEp,
                 )?;
-                kagemusha_deferred_audit_public_words_v4(
+                kagemusha_deferred_audit_public_words_v5(
                     &audits.audit,
                     &audits.stages,
                     public_inputs.parent_count,
@@ -7840,8 +8142,8 @@ mod scalar_lineage_v1 {
         KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5, KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_DOMAIN_V1,
         KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_VERSION_V1, KAGEMUSHA_POSEIDON_FULL_ROUNDS,
         KAGEMUSHA_POSEIDON_PARTIAL_ROUNDS, KAGEMUSHA_POSEIDON_RATE, KAGEMUSHA_POSEIDON_SECURE_MDS,
-        KAGEMUSHA_POSEIDON_WIDTH, KagemushaPastaCycleParityV1, KagemushaSha256JobsV4,
-        kagemusha_compiled_protocol_structure_sha256, protocol_parity_tag,
+        KAGEMUSHA_POSEIDON_WIDTH, KagemushaPastaCycleParityV1, KagemushaSha256ByteV4,
+        KagemushaSha256JobsV4, kagemusha_compiled_protocol_structure_sha256, protocol_parity_tag,
     };
     use crate::zk::{
         kagemusha_accumulation::{
@@ -8141,15 +8443,10 @@ mod scalar_lineage_v1 {
     }
 
     fn push_constant_bytes<F: BigPrimeField>(
-        ctx: &mut halo2_base::Context<F>,
-        output: &mut Vec<AssignedValue<F>>,
+        output: &mut Vec<KagemushaSha256ByteV4<F>>,
         bytes: &[u8],
     ) {
-        output.extend(
-            bytes
-                .iter()
-                .map(|byte| ctx.load_constant(F::from(u64::from(*byte)))),
-        );
+        output.extend(bytes.iter().copied().map(KagemushaSha256ByteV4::constant));
     }
 
     /// Witness-load the only self-referential protocol values and bind their
@@ -8196,25 +8493,15 @@ mod scalar_lineage_v1 {
         let chip = loader.ecc_chip();
         let mut ctx = loader.ctx_mut();
         let mut bytes = Vec::new();
+        push_constant_bytes(&mut bytes, KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_DOMAIN_V1);
+        push_constant_bytes(&mut bytes, &[0]);
         push_constant_bytes(
-            ctx.main(),
-            &mut bytes,
-            KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_DOMAIN_V1,
-        );
-        push_constant_bytes(ctx.main(), &mut bytes, &[0]);
-        push_constant_bytes(
-            ctx.main(),
             &mut bytes,
             &KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_VERSION_V1.to_le_bytes(),
         );
+        push_constant_bytes(&mut bytes, &protocol_parity_tag(parity).to_le_bytes());
+        push_constant_bytes(&mut bytes, &fixed_structure_sha256);
         push_constant_bytes(
-            ctx.main(),
-            &mut bytes,
-            &protocol_parity_tag(parity).to_le_bytes(),
-        );
-        push_constant_bytes(ctx.main(), &mut bytes, &fixed_structure_sha256);
-        push_constant_bytes(
-            ctx.main(),
             &mut bytes,
             &u32::try_from(loaded.preprocessed.len())
                 .map_err(|_| transcript_error("Kagemusha preprocessed count does not fit u32"))?
@@ -8229,7 +8516,7 @@ mod scalar_lineage_v1 {
             })?;
         bytes.extend(chip.assigned_scalar_bytes(&mut ctx, *loaded_transcript_state.assigned()));
         let digest = sha_jobs
-            .digest(ctx.main(), chip.range(), &bytes)
+            .digest_constrained(ctx.main(), &bytes)
             .map_err(transcript_error)?;
         for (assigned, expected) in digest.chunks_exact(4).zip(expected_words) {
             let packed = super::pack_assigned_u32_words_v5(ctx.main(), chip.range(), assigned);
@@ -8827,7 +9114,7 @@ mod scalar_lineage_v1 {
         Ok(ExposedParentLineageV4 { stages })
     }
 
-    /// Hash the complete selector-bound V4 audit once and expose it through
+    /// Hash the complete selector-bound V5 audit once and expose it through
     /// both independently presence-gated public join slots.
     ///
     /// Both public slots receive the same complete post-branch preimage.  For
@@ -8856,9 +9143,9 @@ mod scalar_lineage_v1 {
         for selector in slot_present.iter().copied() {
             range.gate().assert_bit(ctx.main(), selector);
         }
-        let bytes = chip.assigned_equation_bytes_v4(&mut ctx, &gate_tags, &selectors)?;
+        let bytes = chip.assigned_equation_bytes_v5(&mut ctx, &gate_tags, &selectors)?;
         let digest = sha_jobs
-            .digest(ctx.main(), range, &bytes)
+            .digest_constrained(ctx.main(), &bytes)
             .map_err(transcript_error)?;
         for (present, expected_words) in slot_present.into_iter().zip(expected_words) {
             for (assigned, expected) in digest.chunks_exact(4).zip(expected_words) {
@@ -8942,7 +9229,7 @@ where
 
 /// Serialize one scalar-verifier audit exactly as both constrained halves do
 /// and derive its selector-gated public SHA-256 words.
-fn kagemusha_deferred_audit_public_words_v4<C>(
+fn kagemusha_deferred_audit_public_words_v5<C>(
     witness: &super::kagemusha_cycle_loader::DeferredEquationWitness<C>,
     stages: &[scalar_lineage_v1::DeferredEquationStageShapeV4],
     current_parent_count: u32,
@@ -8954,14 +9241,14 @@ where
     C::ScalarExt: PrimeField,
 {
     use super::kagemusha_cycle_loader::{
-        KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4,
+        KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5,
     };
 
     if current_parent_count > 2 || inner_parent_counts.into_iter().any(|count| count > 2) {
-        return Err("Kagemusha V4 deferred-audit parent count is invalid".to_owned());
+        return Err("Kagemusha V5 deferred-audit parent count is invalid".to_owned());
     }
     scalar_lineage_v1::validate_stage_shapes_v4(stages, witness.equations.len())
-        .map_err(|error| format!("invalid Kagemusha V4 deferred-audit stage plan: {error:?}"))?;
+        .map_err(|error| format!("invalid Kagemusha V5 deferred-audit stage plan: {error:?}"))?;
 
     let slot_present = [current_parent_count >= 1, current_parent_count == 2];
     let parent_has_carried = inner_parent_counts.map(|count| count != 0);
@@ -8987,7 +9274,7 @@ where
 
     fn push_len(output: &mut Sha256, value: usize, label: &str) -> Result<(), String> {
         let value = u32::try_from(value)
-            .map_err(|_| format!("Kagemusha V4 deferred-audit {label} does not fit u32"))?;
+            .map_err(|_| format!("Kagemusha V5 deferred-audit {label} does not fit u32"))?;
         output.update(value.to_le_bytes());
         Ok(())
     }
@@ -9000,7 +9287,7 @@ where
         let repr = value.to_repr();
         if repr.as_ref().len() != 32 {
             return Err(format!(
-                "Kagemusha V4 deferred-audit {label} is not a 32-byte Pasta scalar"
+                "Kagemusha V5 deferred-audit {label} is not a 32-byte Pasta scalar"
             ));
         }
         output.update(repr.as_ref());
@@ -9008,16 +9295,16 @@ where
     }
 
     let mut digest = Sha256::new();
-    digest.update(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4);
+    digest.update(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5);
     digest.update([0]);
-    digest.update(KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4.to_le_bytes());
+    digest.update(KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5.to_le_bytes());
     push_len(&mut digest, witness.sources.len(), "source count")?;
     push_len(&mut digest, witness.equations.len(), "equation count")?;
     for source in &witness.sources {
         let coordinates: Option<snark_verifier::util::arithmetic::Coordinates<C>> =
             source.coordinates().into();
         let coordinates = coordinates
-            .ok_or_else(|| "Kagemusha V4 deferred-audit source is the identity point".to_owned())?;
+            .ok_or_else(|| "Kagemusha V5 deferred-audit source is the identity point".to_owned())?;
         push_field(&mut digest, coordinates.x(), "source x-coordinate")?;
         push_field(&mut digest, coordinates.y(), "source y-coordinate")?;
     }
@@ -9550,7 +9837,6 @@ fn constrain_kagemusha_compact_eq_header_v5(
     range: &halo2_base::gates::RangeChip<Fp>,
     compact: &[halo2_base::AssignedValue<Fp>],
     semantic: &[halo2_base::AssignedValue<Fp>],
-    proof_step_count: u32,
 ) -> Result<(), String> {
     use halo2_base::gates::{GateInstructions as _, RangeInstructions as _};
 
@@ -9566,11 +9852,6 @@ fn constrain_kagemusha_compact_eq_header_v5(
     ctx.constrain_equal(
         &compact[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5],
         &semantic[KAGEMUSHA_PASTA_PARENT_COUNT_OFFSET_V4],
-    );
-    range.gate().assert_is_const(
-        ctx,
-        &compact[KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5],
-        &Fp::from(u64::from(proof_step_count)),
     );
     constrain_exact_u32_digest_chunks_v5(
         ctx,
@@ -9678,8 +9959,10 @@ fn constrain_kagemusha_compact_eq_header_v5(
         one,
     )?;
 
-    // The step count is also part of the exact operation relation; bind the
-    // compact header directly to that constrained native field.
+    // The step count is runtime witness data. Never assert it as a constant:
+    // doing so would place the keygen step into fixed columns and make every
+    // later recursive step incompatible with the authenticated StepEq key.
+    // Bind the compact header only to the constrained native operation field.
     let operation_step =
         KAGEMUSHA_PASTA_STEP_OPERATION_OFFSET_V4 + super::kagemusha_v2::I_PROOF_STEP_COUNT * 8;
     let operation_step_value =
@@ -9940,14 +10223,17 @@ fn constrain_kagemusha_eq_secure_relations_v4(
 fn constrain_kagemusha_reciprocal_output_v4<C>(
     builder: &mut halo2_base::gates::circuit::builder::BaseCircuitBuilder<C::Base>,
     sha_jobs: &mut KagemushaSha256JobsV4<C::Base>,
+    dense_jobs: &mut KagemushaDenseMsmJobsV5<C>,
     public_cells: &[halo2_base::AssignedValue<C::Base>],
     layout: &KagemushaPastaPublicLayoutV4,
     output: &KagemushaScalarAuditOutputV4<C>,
 ) -> Result<(), String>
 where
     C: halo2_base::utils::CurveAffineExt,
-    C::Base: halo2_base::utils::BigPrimeField + halo2_base::utils::ScalarField,
-    C::ScalarExt: halo2_base::utils::BigPrimeField,
+    C::Base: halo2_base::utils::BigPrimeField
+        + halo2_base::utils::ScalarField
+        + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
 {
     use std::mem;
 
@@ -9992,6 +10278,7 @@ where
             &public_cells[deferred_offset..deferred_offset + 2],
             &public_cells[deferred_offset + 2..deferred_offset + 4],
         ],
+        KagemushaDeferredMsmV5::Dense(dense_jobs),
     )?;
     constrain_reciprocal_protocol_identity::<C>(
         &mut ctx,
@@ -10019,6 +10306,7 @@ where
 pub(crate) struct KagemushaStepCompositeConfigV4<F: halo2_base::utils::ScalarField> {
     base: halo2_base::gates::circuit::BaseConfig<F>,
     sha: KagemushaSha256ConfigV4,
+    dense: KagemushaDenseMsmConfigV5,
 }
 
 #[derive(Clone)]
@@ -10026,6 +10314,7 @@ pub(crate) struct KagemushaStepEqCircuitV4 {
     params: KagemushaStepCircuitParamsV4,
     builder: halo2_base::gates::circuit::builder::BaseCircuitBuilder<Fp>,
     sha_jobs: KagemushaSha256JobsV4<Fp>,
+    dense_jobs: KagemushaDenseMsmJobsV5<halo2_proofs::halo2curves::pasta::EpAffine>,
 }
 
 impl halo2_proofs::plonk::Circuit<Fp> for KagemushaStepEqCircuitV4 {
@@ -10042,6 +10331,7 @@ impl halo2_proofs::plonk::Circuit<Fp> for KagemushaStepEqCircuitV4 {
             params: self.params.clone(),
             builder: kagemusha_builder_without_witnesses_v4(&self.builder),
             sha_jobs: self.sha_jobs.unknown(),
+            dense_jobs: self.dense_jobs.unknown(),
         }
     }
 
@@ -10058,6 +10348,9 @@ impl halo2_proofs::plonk::Circuit<Fp> for KagemushaStepEqCircuitV4 {
         KagemushaStepCompositeConfigV4 {
             base,
             sha: KagemushaSha256ConfigV4::configure(meta),
+            dense: KagemushaDenseMsmConfigV5::configure::<halo2_proofs::halo2curves::pasta::EpAffine>(
+                meta,
+            ),
         }
     }
 
@@ -10084,6 +10377,13 @@ impl halo2_proofs::plonk::Circuit<Fp> for KagemushaStepEqCircuitV4 {
             &mut layouter,
             &self.builder.core().copy_manager,
             usable_rows,
+        )?;
+        self.dense_jobs.synthesize(
+            &config.dense,
+            &mut layouter,
+            &self.builder.core().copy_manager,
+            self.builder.witness_gen_only(),
+            usable_rows,
         )
     }
 }
@@ -10094,6 +10394,7 @@ pub(crate) struct KagemushaStepEpCircuitV4 {
     params: KagemushaStepCircuitParamsV4,
     builder: halo2_base::gates::circuit::builder::BaseCircuitBuilder<Fq>,
     sha_jobs: KagemushaSha256JobsV4<Fq>,
+    dense_jobs: KagemushaDenseMsmJobsV5<halo2_proofs::halo2curves::pasta::EqAffine>,
 }
 
 impl halo2_proofs::plonk::Circuit<Fq> for KagemushaStepEpCircuitV4 {
@@ -10110,6 +10411,7 @@ impl halo2_proofs::plonk::Circuit<Fq> for KagemushaStepEpCircuitV4 {
             params: self.params.clone(),
             builder: kagemusha_builder_without_witnesses_v4(&self.builder),
             sha_jobs: self.sha_jobs.unknown(),
+            dense_jobs: self.dense_jobs.unknown(),
         }
     }
 
@@ -10126,6 +10428,9 @@ impl halo2_proofs::plonk::Circuit<Fq> for KagemushaStepEpCircuitV4 {
         KagemushaStepCompositeConfigV4 {
             base,
             sha: KagemushaSha256ConfigV4::configure(meta),
+            dense: KagemushaDenseMsmConfigV5::configure::<halo2_proofs::halo2curves::pasta::EqAffine>(
+                meta,
+            ),
         }
     }
 
@@ -10151,6 +10456,13 @@ impl halo2_proofs::plonk::Circuit<Fq> for KagemushaStepEpCircuitV4 {
             &config.sha,
             &mut layouter,
             &self.builder.core().copy_manager,
+            usable_rows,
+        )?;
+        self.dense_jobs.synthesize(
+            &config.dense,
+            &mut layouter,
+            &self.builder.core().copy_manager,
+            self.builder.witness_gen_only(),
             usable_rows,
         )
     }
@@ -10301,7 +10613,7 @@ where
     if required.k != pinned.k
         || required.lookup_bits != pinned.lookup_bits
         || !phase_fits(&required.num_advice_per_phase, &pinned.num_advice_per_phase)
-        || !phase_fits(
+        || !kagemusha_lookup_phase_columns_fit_v5(
             &required.num_lookup_advice_per_phase,
             &pinned.num_lookup_advice_per_phase,
         )
@@ -10322,6 +10634,32 @@ where
         ));
     }
     Ok(())
+}
+
+/// Return whether the populated lookup-column counts fit the authenticated
+/// per-phase shape.
+///
+/// `BaseCircuitBuilder::calculate_params` reports every supported phase, so
+/// an unused suffix is represented as zero-width phases (for example
+/// `[1, 0, 0]`). Authenticated first-release parameters omit that suffix.
+/// Canonicalizing only the trailing zero-width phases preserves all real phase
+/// positions: an internal zero or a later non-zero phase can never be shifted.
+fn kagemusha_lookup_phase_columns_fit_v5(needed: &[usize], available: &[usize]) -> bool {
+    fn trim_trailing_zero_phases(phases: &[usize]) -> &[usize] {
+        let canonical_len = phases
+            .iter()
+            .rposition(|columns| *columns != 0)
+            .map_or(0, |index| index + 1);
+        &phases[..canonical_len]
+    }
+
+    let needed = trim_trailing_zero_phases(needed);
+    let available = trim_trailing_zero_phases(available);
+    needed.len() <= available.len()
+        && needed
+            .iter()
+            .zip(available)
+            .all(|(needed, available)| needed <= available)
 }
 
 fn validate_kagemusha_witness_builder_break_points_v5<F>(
@@ -10486,6 +10824,7 @@ fn build_kagemusha_step_eq_circuit_v5(
     let public = assign_kagemusha_public_mode_v4(&mut step_eq, values, &layout, mode)?;
     let range = step_eq.range_chip();
     let mut sha_jobs = KagemushaSha256JobsV4::default();
+    let mut dense_jobs = KagemushaDenseMsmJobsV5::default();
     let semantic_values = witness.public_inputs.private_semantic_column::<Fp>();
     let semantic_len = semantic_values.len();
     let semantic = step_eq.main(0).assign_witnesses(semantic_values);
@@ -10496,13 +10835,7 @@ fn build_kagemusha_step_eq_circuit_v5(
         &semantic,
         semantic_len,
     )?;
-    constrain_kagemusha_compact_eq_header_v5(
-        step_eq.main(0),
-        &range,
-        &public,
-        &semantic,
-        witness.proof_step_count,
-    )?;
+    constrain_kagemusha_compact_eq_header_v5(step_eq.main(0), &range, &public, &semantic)?;
     constrain_kagemusha_eq_secure_relations_v4(
         step_eq.main(0),
         &range,
@@ -10510,20 +10843,20 @@ fn build_kagemusha_step_eq_circuit_v5(
         witness.secure,
         witness.output_membership,
     )?;
-    let _eq_output =
-        constrain_kagemusha_parity_scalar_v4::<halo2_proofs::halo2curves::pasta::EqAffine>(
-            &mut step_eq,
-            &mut sha_jobs,
-            &public,
-            KagemushaPastaCycleParityV1::StepEq,
-            &step_eq_params,
-            &layout,
-            witness.step_eq_recursion,
-            true,
-        )?;
+    constrain_kagemusha_parity_scalar_v4::<halo2_proofs::halo2curves::pasta::EqAffine>(
+        &mut step_eq,
+        &mut sha_jobs,
+        &public,
+        KagemushaPastaCycleParityV1::StepEq,
+        &step_eq_params,
+        &layout,
+        witness.step_eq_recursion,
+        true,
+    )?;
     constrain_kagemusha_reciprocal_output_v4::<halo2_proofs::halo2curves::pasta::EpAffine>(
         &mut step_eq,
         &mut sha_jobs,
+        &mut dense_jobs,
         &public,
         &layout,
         ep_output,
@@ -10545,6 +10878,7 @@ fn build_kagemusha_step_eq_circuit_v5(
         params: step_eq_params,
         builder: step_eq,
         sha_jobs,
+        dense_jobs,
     })
 }
 
@@ -10570,20 +10904,21 @@ fn build_kagemusha_step_ep_circuit_v5(
     )?;
     let public = assign_kagemusha_public_mode_v4(&mut step_ep, values, &layout, mode)?;
     let mut sha_jobs = KagemushaSha256JobsV4::default();
-    let _ep_output =
-        constrain_kagemusha_parity_scalar_v4::<halo2_proofs::halo2curves::pasta::EpAffine>(
-            &mut step_ep,
-            &mut sha_jobs,
-            &public,
-            KagemushaPastaCycleParityV1::StepEp,
-            &step_ep_params,
-            &layout,
-            witness.step_ep_recursion,
-            true,
-        )?;
+    let mut dense_jobs = KagemushaDenseMsmJobsV5::default();
+    constrain_kagemusha_parity_scalar_v4::<halo2_proofs::halo2curves::pasta::EpAffine>(
+        &mut step_ep,
+        &mut sha_jobs,
+        &public,
+        KagemushaPastaCycleParityV1::StepEp,
+        &step_ep_params,
+        &layout,
+        witness.step_ep_recursion,
+        true,
+    )?;
     constrain_kagemusha_reciprocal_output_v4::<halo2_proofs::halo2curves::pasta::EqAffine>(
         &mut step_ep,
         &mut sha_jobs,
+        &mut dense_jobs,
         &public,
         &layout,
         eq_output,
@@ -10605,6 +10940,7 @@ fn build_kagemusha_step_ep_circuit_v5(
         params: step_ep_params,
         builder: step_ep,
         sha_jobs,
+        dense_jobs,
     })
 }
 
@@ -11659,14 +11995,25 @@ fn kagemusha_eq_recursion_from_bootstrap_v4(
     protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EqAffine>,
     structure_sha256: [u8; 32],
     bootstrap: &KagemushaStepBootstrapV4,
+    parent_validation: KagemushaBootstrapParentValidationV4,
 ) -> Result<KagemushaStepParityRecursionV4<halo2_proofs::halo2curves::pasta::EqAffine>, String> {
     Ok(KagemushaStepParityRecursionV4 {
         succinct_vk: kagemusha_eq_succinct_vk_v4(params)?,
         compiled_parent_protocol: protocol,
         fixed_structure_sha256: structure_sha256,
         parents: [
-            bootstrap.step_eq_parent(circuit_params, structure_sha256, 0)?,
-            bootstrap.step_eq_parent(circuit_params, structure_sha256, 1)?,
+            bootstrap.step_eq_parent_internal(
+                circuit_params,
+                structure_sha256,
+                0,
+                parent_validation,
+            )?,
+            bootstrap.step_eq_parent_internal(
+                circuit_params,
+                structure_sha256,
+                1,
+                parent_validation,
+            )?,
         ],
         branch_merge_fold: bootstrap.branch_merge_fold.clone(),
     })
@@ -11680,14 +12027,25 @@ fn kagemusha_ep_recursion_from_bootstrap_v4(
     protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EpAffine>,
     structure_sha256: [u8; 32],
     bootstrap: &KagemushaStepBootstrapV4,
+    parent_validation: KagemushaBootstrapParentValidationV4,
 ) -> Result<KagemushaStepParityRecursionV4<halo2_proofs::halo2curves::pasta::EpAffine>, String> {
     Ok(KagemushaStepParityRecursionV4 {
         succinct_vk: kagemusha_ep_succinct_vk_v4(params)?,
         compiled_parent_protocol: protocol,
         fixed_structure_sha256: structure_sha256,
         parents: [
-            bootstrap.step_ep_parent(circuit_params, structure_sha256, 0)?,
-            bootstrap.step_ep_parent(circuit_params, structure_sha256, 1)?,
+            bootstrap.step_ep_parent_internal(
+                circuit_params,
+                structure_sha256,
+                0,
+                parent_validation,
+            )?,
+            bootstrap.step_ep_parent_internal(
+                circuit_params,
+                structure_sha256,
+                1,
+                parent_validation,
+            )?,
         ],
         branch_merge_fold: bootstrap.branch_merge_fold.clone(),
     })
@@ -11969,6 +12327,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         step_eq_seed.protocol.clone(),
         step_eq_seed.structure_sha256,
         &step_eq_seed_bootstrap,
+        KagemushaBootstrapParentValidationV4::ProvisionalPreKeygen,
     )?;
     let step_ep_seed_recursion = kagemusha_ep_recursion_from_bootstrap_v4(
         &step_ep_params,
@@ -11976,6 +12335,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         step_ep_seed.protocol.clone(),
         step_ep_seed.structure_sha256,
         &step_ep_seed_bootstrap,
+        KagemushaBootstrapParentValidationV4::ProvisionalPreKeygen,
     )?;
     let keygen_witness = KagemushaStepWitnessV4 {
         public_inputs: &keygen_calibration.public_inputs,
@@ -11993,8 +12353,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         &step_ep_circuit_params,
         false,
     )?;
-    let compile_config =
-        || snark_verifier::system::halo2::Config::ipa().with_num_instance(vec![public_len]);
+    let compile_config = || kagemusha_ipa_compile_config_v4(public_len);
     let step_eq_keygen_circuit = build_kagemusha_step_eq_circuit_v5(
         &keygen_witness,
         step_eq_circuit_params.clone(),
@@ -12113,6 +12472,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         step_eq_final_protocol.clone(),
         step_eq_structure_sha256,
         &step_eq_seed_bootstrap,
+        KagemushaBootstrapParentValidationV4::Strict,
     )?;
     let step_ep_final_seed_recursion = kagemusha_ep_recursion_from_bootstrap_v4(
         &step_ep_params,
@@ -12120,6 +12480,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         step_ep_final_protocol.clone(),
         step_ep_structure_sha256,
         &step_ep_seed_bootstrap,
+        KagemushaBootstrapParentValidationV4::Strict,
     )?;
     let final_bootstrap_witness = KagemushaStepWitnessV4 {
         public_inputs: &final_calibration.public_inputs,
@@ -12345,6 +12706,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         step_eq_final_protocol.clone(),
         step_eq_structure_sha256,
         &step_eq_final_bootstrap,
+        KagemushaBootstrapParentValidationV4::Strict,
     )?;
     let step_ep_live_recursion = kagemusha_ep_recursion_from_bootstrap_v4(
         &step_ep_params,
@@ -12352,6 +12714,7 @@ fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(
         step_ep_final_protocol.clone(),
         step_ep_structure_sha256,
         &step_ep_final_bootstrap,
+        KagemushaBootstrapParentValidationV4::Strict,
     )?;
     drop(step_eq_final_protocol);
     drop(step_ep_final_protocol);
@@ -12850,7 +13213,17 @@ where
     [slot_zero, slot_one]
 }
 
-/// Constrain one complete selector-bound V4 reciprocal audit once.
+enum KagemushaDeferredMsmV5<'a, C>
+where
+    C: halo2_base::utils::CurveAffineExt,
+    C::Base: halo2_base::utils::BigPrimeField,
+{
+    Dense(&'a mut KagemushaDenseMsmJobsV5<C>),
+    #[cfg(test)]
+    GenericTest,
+}
+
+/// Constrain one complete selector-bound V5 reciprocal audit once.
 ///
 /// The complete post-branch stage plan is required for both public slots.  As
 /// on the scalar side, each public exposure is multiplied by its slot-presence
@@ -12866,11 +13239,12 @@ fn constrain_reciprocal_point_audit_identity_v4<'chip, C>(
     current_public_parent_count: halo2_base::AssignedValue<C::Base>,
     parent_public_parent_counts: [halo2_base::AssignedValue<C::Base>; 2],
     expected_words: [&[halo2_base::AssignedValue<C::Base>]; 2],
+    msm: KagemushaDeferredMsmV5<'_, C>,
 ) -> Result<[halo2_base::AssignedValue<C::Base>; 8], String>
 where
     C: halo2_base::utils::CurveAffineExt,
-    C::Base: halo2_base::utils::BigPrimeField,
-    C::ScalarExt: halo2_base::utils::BigPrimeField,
+    C::Base: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
+    C::ScalarExt: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
 {
     use halo2_base::{
         QuantumCell::Existing,
@@ -12880,7 +13254,7 @@ where
     use super::kagemusha_cycle_loader::PastaCycleEccChip;
 
     if expected_words.iter().any(|words| words.len() != 2) {
-        return Err("Kagemusha reciprocal V4 audit slot has the wrong shape".to_owned());
+        return Err("Kagemusha reciprocal V5 audit slot has the wrong shape".to_owned());
     }
     scalar_lineage_v1::validate_stage_shapes_v4(stages, witness.equations.len())
         .map_err(|error| format!("invalid Kagemusha reciprocal V4 stage plan: {error:?}"))?;
@@ -12919,9 +13293,20 @@ where
     }
 
     let mut chip = PastaCycleEccChip::<C>::new(base, scalar);
-    let audit = chip.constrain_deferred_equations_with_selectors(ctx, witness, &selectors)?;
-    let bytes = chip.assigned_equation_bytes_v4(ctx, &audit, &gate_tags, &selectors)?;
-    let digest = sha_jobs.digest(ctx.main(), base.range, &bytes)?;
+    let audit = chip.assign_deferred_equations_with_selectors(ctx, witness, &selectors)?;
+    let bytes = chip.assigned_equation_bytes_v5(ctx, &audit, &gate_tags, &selectors)?;
+    let digest = sha_jobs.digest_constrained(ctx.main(), &bytes)?;
+    match msm {
+        KagemushaDeferredMsmV5::Dense(dense_jobs) => {
+            chip.constrain_deferred_equation_batch_v5(
+                ctx, &audit, &selectors, &digest, dense_jobs,
+            )?;
+        }
+        #[cfg(test)]
+        KagemushaDeferredMsmV5::GenericTest => {
+            chip.constrain_deferred_equation_batch_generic_v5(ctx, &audit, &selectors, &digest)?;
+        }
+    }
     for (present, expected_words) in slot_present.into_iter().zip(expected_words) {
         for (assigned, expected) in digest.chunks_exact(4).zip(expected_words) {
             let packed = pack_assigned_u32_words_v5(ctx.main(), base.range, assigned);
@@ -12970,13 +13355,8 @@ where
     {
         return Err("Kagemusha reciprocal protocol identity shape mismatch".to_owned());
     }
-    let mut push_constants = |output: &mut Vec<halo2_base::AssignedValue<C::Base>>,
-                              bytes: &[u8]| {
-        output.extend(
-            bytes
-                .iter()
-                .map(|byte| ctx.main().load_constant(C::Base::from(u64::from(*byte)))),
-        );
+    let push_constants = |output: &mut Vec<KagemushaSha256ByteV4<C::Base>>, bytes: &[u8]| {
+        output.extend(bytes.iter().copied().map(KagemushaSha256ByteV4::constant));
     };
     let mut bytes = Vec::new();
     push_constants(&mut bytes, KAGEMUSHA_COMPILED_PROTOCOL_IDENTITY_DOMAIN_V1);
@@ -12996,7 +13376,6 @@ where
             .map_err(|_| "Kagemusha reciprocal protocol point count does not fit u32".to_owned())?
             .to_le_bytes(),
     );
-    drop(push_constants);
 
     let chip = PastaCycleEccChip::<C>::new(base, scalar);
     for point in &identity.preprocessed {
@@ -13007,7 +13386,7 @@ where
         .scalar_chip()
         .assign_integer(ctx, identity.transcript_initial_state);
     bytes.extend(chip.assigned_scalar_bytes(ctx, &transcript_initial_state));
-    let digest = sha_jobs.digest(ctx.main(), base.range, &bytes)?;
+    let digest = sha_jobs.digest_constrained(ctx.main(), &bytes)?;
     for (assigned, expected) in digest.chunks_exact(4).zip(expected_words) {
         let packed = pack_assigned_u32_words_v5(ctx.main(), base.range, assigned);
         ctx.main().constrain_equal(&packed, expected);
@@ -13087,8 +13466,8 @@ mod tests {
         KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8],
-            num_lookup_advice_per_phase: vec![1],
+            num_advice_per_phase: KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4.to_vec(),
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,
@@ -13103,6 +13482,74 @@ mod tests {
         params.num_advice_per_phase = KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4.to_vec();
         params.num_lookup_advice_per_phase = KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4.to_vec();
         params
+    }
+
+    #[test]
+    fn v5_lookup_shape_ignores_only_trailing_zero_phases() {
+        assert!(kagemusha_lookup_phase_columns_fit_v5(&[1, 0, 0], &[1]));
+        assert!(kagemusha_lookup_phase_columns_fit_v5(&[1], &[1, 0, 0]));
+        assert!(kagemusha_lookup_phase_columns_fit_v5(&[0, 0, 0], &[]));
+
+        assert!(!kagemusha_lookup_phase_columns_fit_v5(&[2, 0, 0], &[1]));
+        assert!(!kagemusha_lookup_phase_columns_fit_v5(&[1, 0, 1], &[1, 1]));
+        assert!(!kagemusha_lookup_phase_columns_fit_v5(&[1, 1], &[1, 0, 1]));
+    }
+
+    #[test]
+    fn v5_generator_final_protocol_compile_uses_direct_instances() {
+        let config = format!("{:?}", kagemusha_ipa_compile_config_v4(73));
+        assert!(config.contains("query_instance: false"));
+        assert!(config.contains("num_instance: [73]"));
+
+        let source = include_str!("kagemusha_recursion_adapter.rs");
+        let generator = source
+            .split_once("fn generate_kagemusha_pasta_cycle_artifacts_in_pool_v5(")
+            .expect("artifact generator")
+            .1
+            .split_once("/// Produce and immediately self-verify one concrete V4 StepEq proof.")
+            .expect("end artifact generator")
+            .0;
+        assert!(
+            generator
+                .contains("let compile_config = || kagemusha_ipa_compile_config_v4(public_len);")
+        );
+        assert_eq!(generator.matches("compile_config()").count(), 2);
+        assert!(!generator.contains("Config::ipa().with_num_instance"));
+    }
+
+    #[test]
+    fn v5_compact_step_count_is_witness_bound_not_fixed() {
+        let source = include_str!("kagemusha_recursion_adapter.rs");
+        let header = source
+            .split_once("fn constrain_kagemusha_compact_eq_header_v5(")
+            .expect("StepEq compact-header relation")
+            .1
+            .split_once("fn constrain_kagemusha_output_frontier_v4")
+            .expect("end StepEq compact-header relation")
+            .0;
+        let signature = header
+            .split_once(") -> Result<(), String>")
+            .expect("StepEq compact-header signature")
+            .0;
+
+        assert!(
+            !signature.contains("proof_step_count"),
+            "runtime step data must not enter the circuit through a Rust constant"
+        );
+        assert_eq!(
+            header
+                .matches("KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5")
+                .count(),
+            2,
+            "the compact step cell must appear only in the operation copy constraint and range check"
+        );
+        assert!(header.contains("let operation_step ="));
+        assert!(header.contains("ctx.constrain_equal("));
+        assert!(header.contains("range.range_check("));
+        assert!(
+            !header.contains("Fp::from(u64::from(proof_step_count))"),
+            "keygen step one must never be assigned into fixed columns"
+        );
     }
 
     #[test]
@@ -13154,6 +13601,50 @@ mod tests {
         assert!(!prove.contains("step_ep_proving_key.get_vk()"));
         assert!(eq_pk < eq_consume && eq_consume < eq_vk_drop);
         assert!(eq_vk_drop < ep_circuit && ep_circuit < ep_vk_drop && ep_vk_drop < terminal_vks);
+    }
+
+    #[test]
+    fn source_qualification_defers_full_proving_key_parse_until_prover_use() {
+        let source = include_str!("kagemusha_recursion_adapter.rs");
+        for (start, end) in [
+            (
+                "fn qualify_kagemusha_eq_artifacts_v4(",
+                "fn qualify_kagemusha_ep_artifacts_v4(",
+            ),
+            (
+                "fn qualify_kagemusha_ep_artifacts_v4(",
+                "pub(super) fn qualify_kagemusha_authenticated_artifact_source_v4(",
+            ),
+        ] {
+            let qualification = source
+                .split_once(start)
+                .expect("parity qualification")
+                .1
+                .split_once(end)
+                .expect("end parity qualification")
+                .0;
+            assert!(qualification.contains("preflight_kagemusha_pk_from_source_v4("));
+            assert!(!qualification.contains("load_kagemusha_eq_proving_key_from_source_v4("));
+            assert!(!qualification.contains("load_kagemusha_ep_proving_key_from_source_v4("));
+            assert!(!qualification.contains("ProvingKey::read"));
+        }
+
+        let eq_runtime = source
+            .split_once("fn load_kagemusha_source_eq_prover_material_v4(")
+            .expect("Eq source prover loader")
+            .1
+            .split_once("fn load_kagemusha_source_ep_prover_material_v4(")
+            .expect("end Eq source prover loader")
+            .0;
+        let ep_runtime = source
+            .split_once("fn load_kagemusha_source_ep_prover_material_v4(")
+            .expect("Ep source prover loader")
+            .1
+            .split_once("fn load_kagemusha_source_eq_recursion_material_v4(")
+            .expect("end Ep source prover loader")
+            .0;
+        assert!(eq_runtime.contains("load_kagemusha_eq_proving_key_from_qualified_source_v4"));
+        assert!(ep_runtime.contains("load_kagemusha_ep_proving_key_from_qualified_source_v4"));
     }
 
     #[test]
@@ -13316,12 +13807,21 @@ mod tests {
         );
 
         let reviewed = first_release_generation_params_v4();
+        let configured =
+            configured_kagemusha_eq_vk_wire_shape_v4(&reviewed).expect("reviewed configured shape");
+        assert_eq!(configured.advice_columns, 583);
+        assert_eq!(configured.base_fixed_columns, 7);
+        assert_eq!(configured.selectors, 553);
+        assert_eq!(configured.permutation_columns, 534);
+        assert_eq!(configured.instance_columns, 1);
         let reviewed_shape = kagemusha_processed_key_shape_v4::<EqAffine>(&reviewed, "reviewed")
             .expect("reviewed key shape");
         assert_eq!(reviewed_shape.domain_rows, 1 << 16);
+        assert_eq!(reviewed_shape.fixed_polynomials, 560);
+        assert_eq!(reviewed_shape.permutation_polynomials, 534);
         assert_eq!(
             reviewed_shape.fixed_polynomials + reviewed_shape.permutation_polynomials,
-            21
+            1_094
         );
         assert_eq!(reviewed_shape.point_bytes, 32);
         assert_eq!(reviewed_shape.scalar_bytes, mem::size_of::<Fp>());
@@ -13329,7 +13829,7 @@ mod tests {
             reviewed_shape
                 .proving_key_bytes("Eq")
                 .expect("exact compact V5 PK length"),
-            94_372_718
+            4_594_903_830
         );
         assert!(
             reviewed_shape
@@ -13620,19 +14120,20 @@ mod tests {
         );
         assert_eq!(
             shape.verifier_key_bytes("Eq").expect("reviewed VK length"),
-            682
+            35_018
         );
         assert_eq!(
             shape.proving_key_bytes("Eq").expect("reviewed PK length"),
-            94_372_718
+            4_594_903_830
         );
         let preflight = preflight_kagemusha_generation_v4(&reviewed, &reviewed)
             .expect("compact k16 profile passes before ParamsIPA allocation");
         assert_eq!(preflight.layout.instance_column_limbs, 64);
+        assert_eq!(preflight.estimated_peak_bytes, 9_747_562_496);
         assert!(preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4);
         assert!(
             preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5,
-            "the reviewed staged lifecycle must remain within 232 MiB"
+            "the reviewed staged lifecycle must remain within 12 GiB"
         );
 
         let mut stale = reviewed;
@@ -13769,8 +14270,8 @@ mod tests {
         use halo2_proofs::halo2curves::{group::prime::PrimeCurveAffine as _, pasta::EqAffine};
 
         use crate::zk::kagemusha_cycle_loader::{
-            DeferredEquationWitness, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4,
-            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4,
+            DeferredEquationWitness, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5,
+            KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5,
         };
 
         let source = EqAffine::generator();
@@ -13785,9 +14286,9 @@ mod tests {
 
         let expected_bytes = |selectors: [u8; 8], coefficients: [u64; 8]| {
             let mut bytes = Vec::new();
-            bytes.extend_from_slice(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4);
+            bytes.extend_from_slice(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V5);
             bytes.push(0);
-            bytes.extend_from_slice(&KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4.to_le_bytes());
+            bytes.extend_from_slice(&KAGEMUSHA_DEFERRED_AUDIT_VERSION_V5.to_le_bytes());
             bytes.extend_from_slice(&1_u32.to_le_bytes());
             bytes.extend_from_slice(&8_u32.to_le_bytes());
             let coordinates: Option<snark_verifier::util::arithmetic::Coordinates<EqAffine>> =
@@ -13809,8 +14310,8 @@ mod tests {
             bytes
         };
 
-        let one_parent = kagemusha_deferred_audit_public_words_v4(&witness, &stages, 1, [1, 0])
-            .expect("serialize complete one-parent V4 audit");
+        let one_parent = kagemusha_deferred_audit_public_words_v5(&witness, &stages, 1, [1, 0])
+            .expect("serialize complete one-parent V5 audit");
         assert_eq!(
             one_parent[0],
             kagemusha_sha256_public_words(
@@ -13823,13 +14324,13 @@ mod tests {
         let mut tampered = witness.clone();
         tampered.equations[7] = vec![(0, Fp::from(29))];
         let tampered_one_parent =
-            kagemusha_deferred_audit_public_words_v4(&tampered, &stages, 1, [1, 0])
-                .expect("serialize BranchSelect-tampered V4 audit");
+            kagemusha_deferred_audit_public_words_v5(&tampered, &stages, 1, [1, 0])
+                .expect("serialize BranchSelect-tampered V5 audit");
         assert_ne!(one_parent[0], tampered_one_parent[0]);
         assert_eq!(tampered_one_parent[1], [0; 8]);
 
-        let two_parent = kagemusha_deferred_audit_public_words_v4(&witness, &stages, 2, [1, 1])
-            .expect("serialize complete two-parent V4 audit");
+        let two_parent = kagemusha_deferred_audit_public_words_v5(&witness, &stages, 2, [1, 1])
+            .expect("serialize complete two-parent V5 audit");
         assert_eq!(two_parent[0], two_parent[1]);
         assert_eq!(
             two_parent[0],
@@ -13839,7 +14340,7 @@ mod tests {
         );
 
         assert_eq!(
-            kagemusha_deferred_audit_public_words_v4(&witness, &stages, 0, [0, 0])
+            kagemusha_deferred_audit_public_words_v5(&witness, &stages, 0, [0, 0])
                 .expect("serialize absent V4 slots"),
             [[0; 8]; 2]
         );
@@ -13853,8 +14354,10 @@ mod tests {
     ) -> halo2_base::gates::circuit::builder::BaseCircuitBuilder<C::Base>
     where
         C: halo2_base::utils::CurveAffineExt,
-        C::Base: halo2_base::utils::BigPrimeField + halo2_base::utils::ScalarField,
-        C::ScalarExt: halo2_base::utils::BigPrimeField,
+        C::Base: halo2_base::utils::BigPrimeField
+            + halo2_base::utils::ScalarField
+            + ff::WithSmallOrderMulGroup<3>,
+        C::ScalarExt: halo2_base::utils::BigPrimeField + ff::WithSmallOrderMulGroup<3>,
     {
         use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
         use halo2_ecc::fields::fp::FpChip;
@@ -13890,6 +14393,7 @@ mod tests {
             current_parent_count,
             parent_counts,
             [&expected_words[0], &expected_words[1]],
+            KagemushaDeferredMsmV5::GenericTest,
         )
         .expect("complete V4 reciprocal audit shape");
         *builder.pool(0) = ctx;
@@ -13920,7 +14424,7 @@ mod tests {
                 sources: vec![source],
                 equations: vec![vec![(0, C::ScalarExt::ZERO)]; 8],
             };
-            let expected = kagemusha_deferred_audit_public_words_v4(&original, &stages, 1, [0, 0])
+            let expected = kagemusha_deferred_audit_public_words_v5(&original, &stages, 1, [0, 0])
                 .expect("serialize original one-parent audit");
             assert_ne!(expected[0], [0; 8]);
             assert_eq!(expected[1], [0; 8]);
@@ -13947,7 +14451,7 @@ mod tests {
             );
 
             let two_parent =
-                kagemusha_deferred_audit_public_words_v4(&original, &stages, 2, [0, 0])
+                kagemusha_deferred_audit_public_words_v5(&original, &stages, 2, [0, 0])
                     .expect("serialize original two-parent audit");
             assert_ne!(two_parent[0], [0; 8]);
             assert_eq!(two_parent[0], two_parent[1]);
@@ -14987,5 +15491,72 @@ mod tests {
             *limb = 0xA500_0000 | u32::try_from(index + 1).expect("digest index fits u32");
         }
         state
+    }
+
+    #[test]
+    fn v5_pre_keygen_parent_extraction_accepts_only_provisional_empty_breakpoints() {
+        let params = valid_step_circuit_params_v4();
+        let structure = [0x51; 32];
+        let mut bootstrap = v4_bootstrap();
+        assert!(
+            bootstrap
+                .step_eq_parent_internal(
+                    &params,
+                    structure,
+                    0,
+                    KagemushaBootstrapParentValidationV4::ProvisionalPreKeygen,
+                )
+                .is_err(),
+            "the provisional path must reject even valid populated keygen breakpoints"
+        );
+        bootstrap.circuit_break_points.clear();
+
+        assert!(
+            bootstrap.step_eq_parent(&params, structure, 0).is_err(),
+            "strict parent extraction must require authenticated keygen breakpoints"
+        );
+        let parent = bootstrap
+            .step_eq_parent_internal(
+                &params,
+                structure,
+                0,
+                KagemushaBootstrapParentValidationV4::ProvisionalPreKeygen,
+            )
+            .expect("the pre-keygen seed may omit breakpoints before they are captured");
+        assert_eq!(
+            parent.instances,
+            vec![vec![Fp::ZERO; parent.instances[0].len()]]
+        );
+
+        bootstrap.circuit_break_points = vec![vec![], vec![]];
+        assert!(
+            bootstrap
+                .step_eq_parent_internal(
+                    &params,
+                    structure,
+                    0,
+                    KagemushaBootstrapParentValidationV4::ProvisionalPreKeygen,
+                )
+                .is_err(),
+            "the provisional path must still reject malformed non-empty breakpoints"
+        );
+
+        let mut ep_bootstrap = v4_bootstrap();
+        ep_bootstrap.parity = KagemushaPastaCycleParityV1::StepEp;
+        ep_bootstrap.circuit_break_points.clear();
+        ep_bootstrap.parent_slot.carried_lineage =
+            v4_accumulator(KagemushaPastaCycleParityV1::StepEp, params.k);
+        assert!(
+            ep_bootstrap.step_ep_parent(&params, structure, 0).is_err(),
+            "strict Ep extraction must require authenticated keygen breakpoints"
+        );
+        ep_bootstrap
+            .step_ep_parent_internal(
+                &params,
+                structure,
+                0,
+                KagemushaBootstrapParentValidationV4::ProvisionalPreKeygen,
+            )
+            .expect("the pre-keygen Ep seed may omit breakpoints before they are captured");
     }
 }

@@ -133,8 +133,9 @@ Execution semantics:
   selected backend (`halo2/ipa` or `stark/fri`).
 - Request body: `{ vk_ref: { backend, name }, authority, metadata, bytecode, proved? }`.
   The optional `proved` field is validated against the node-derived execution payload and rejected on mismatch.
-- Nodes may still deterministically replay bytecode during admission as an extra safety check.
-  Replay behavior is controlled by `pipeline.ivm_proved.skip_replay`.
+- Nodes always replay ABI V1 execution deterministically during admission. The active on-chain
+  `ivm-execution-v1` verifier-key record controls circuit admission and proof-size limits; local
+  pipeline configuration cannot enable, disable, or bypass proved execution.
 
 Metrics:
 - `torii_zk_ivm_prove_inflight` (gauge) — jobs currently proving.
@@ -424,6 +425,6 @@ iroha ledger trigger register \
 For submitting ZK ballots and building transaction skeletons, refer to the Governance App API document. Torii submits the ballot when `private_key` is provided; otherwise it returns a skeleton for clients to sign and submit:
 - POST `/v1/gov/ballots/zk` — base DTO returning a `CastZkBallot` skeleton.
 - POST `/v1/gov/ballots/zk-v1` — v1-style DTO with explicit envelope fields.
-- POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts `BallotProof` JSON directly (feature `zk-ballot`).
+- POST `/v1/gov/ballots/zk-v1/ballot-proof` — accepts canonical V1 `BallotProof` JSON directly.
 
 See docs/source/governance_api.md for details and examples.

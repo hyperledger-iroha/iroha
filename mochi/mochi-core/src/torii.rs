@@ -482,6 +482,9 @@ impl ReadinessSmokePlan {
 /// Errors that can occur while constructing a readiness smoke plan.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadinessSmokeBuildError {
+    /// The configured chain identifier is not canonical.
+    #[error("invalid readiness smoke chain id `{0}`")]
+    InvalidChainId(String),
     /// Failed to construct the smoke domain identifier.
     #[error("invalid readiness smoke domain `{0}`")]
     InvalidDomain(String),
@@ -613,8 +616,11 @@ fn build_lane_lifecycle_transaction(
     let custom = LaneLifecycleParameterV1::new(&catalog, &status.incarnations, plan)
         .map_err(|err| ToriiError::Decode(format!("invalid lane incarnation binding: {err}")))?
         .into_custom_parameter();
+    let chain_id = chain_id
+        .parse::<ChainId>()
+        .map_err(|error| ToriiError::Decode(format!("invalid canonical chain id: {error}")))?;
     let mut builder = TransactionBuilder::new(
-        ChainId::from(chain_id.to_owned()),
+        chain_id,
         signer.account_id().clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -632,7 +638,9 @@ fn build_readiness_smoke_transaction(
     signer: &SigningAuthority,
     attempt: usize,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
-    let chain_id = ChainId::from(chain_id.to_owned());
+    let chain_id = chain_id
+        .parse::<ChainId>()
+        .map_err(|_| ReadinessSmokeBuildError::InvalidChainId(chain_id.to_owned()))?;
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)

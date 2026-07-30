@@ -911,11 +911,13 @@ where
     let mut set = AccessSet::new();
     let max_depth = state_ro
         .map(|state| {
-            state
-                .world()
-                .parameters()
-                .smart_contract()
-                .execution_depth()
+            u16::from(
+                state
+                    .world()
+                    .parameters()
+                    .smart_contract()
+                    .execution_depth(),
+            )
         })
         .unwrap_or(0);
     let mut visited_triggers = BTreeSet::new();
@@ -1710,7 +1712,7 @@ where
 
     let mut set = AccessSet::new();
     let max_depth = state_ro
-        .map(|view| view.world().parameters().smart_contract().execution_depth())
+        .map(|view| u16::from(view.world().parameters().smart_contract().execution_depth()))
         .unwrap_or(0);
     let mut visited_triggers = BTreeSet::new();
     for instr in batch {
@@ -1748,8 +1750,8 @@ fn derive_from_instruction<R>(
     instr: &InstructionBox,
     state_ro: Option<&R>,
     visited_triggers: &mut BTreeSet<TriggerId>,
-    depth: u8,
-    max_depth: u8,
+    depth: u16,
+    max_depth: u16,
 ) -> AccessSet
 where
     R: StateReadOnly + QueryStateSource,
@@ -2026,11 +2028,14 @@ where
             let can_recurse = depth < max_depth && !visited_triggers.contains(&exe.trigger);
             if can_recurse {
                 visited_triggers.insert(exe.trigger.clone());
+                // Access planning mirrors execution with a counter wider than
+                // the `u8` configured limit. `depth < max_depth` proves this
+                // successor is representable without wrapping.
                 set.union_with(derive_from_trigger_executable(
                     &exe.trigger,
                     view,
                     visited_triggers,
-                    depth.saturating_add(1),
+                    depth + 1,
                     max_depth,
                 ));
             }
@@ -2058,8 +2063,8 @@ fn derive_from_trigger_executable<R>(
     trigger_id: &TriggerId,
     state_ro: &R,
     visited_triggers: &mut BTreeSet<TriggerId>,
-    depth: u8,
-    max_depth: u8,
+    depth: u16,
+    max_depth: u16,
 ) -> AccessSet
 where
     R: StateReadOnly + QueryStateSource,
@@ -2527,6 +2532,15 @@ where
         }
     }
     let mut vm = ivm::IVM::new(gas_limit);
+    let heap_limit = state_ro
+        .world()
+        .parameters()
+        .smart_contract()
+        .memory()
+        .get();
+    vm.memory
+        .set_heap_max_limit(heap_limit)
+        .map_err(|e| format!("ivm.heap_limit: {e}"))?;
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = if let Some(context) = contract_call_context.as_ref() {
@@ -2542,6 +2556,7 @@ where
         )
     }
     .with_access_logging();
+    host.set_output_limits_from_parameters(state_ro.world().parameters().smart_contract());
     host.set_prepared_contract_cache(state_ro.prepared_contract_cache());
     host.hydrate_axt_state(state_ro)
         .map_err(|e| format!("ivm.axt_state: {e}"))?;
@@ -2590,11 +2605,13 @@ where
         .map_err(|e| format!("ivm.run: {e}"))?;
     let mut set = AccessSet::new();
     let mut access_log: Option<ivm::host::AccessLog> = None;
-    let max_depth = state_ro
-        .world()
-        .parameters()
-        .smart_contract()
-        .execution_depth();
+    let max_depth = u16::from(
+        state_ro
+            .world()
+            .parameters()
+            .smart_contract()
+            .execution_depth(),
+    );
     let mut visited_triggers = BTreeSet::new();
     for isi in host.drain_instructions() {
         set.union_with(derive_from_instruction(
@@ -4505,6 +4522,61 @@ seiyaku DynamicAccessCounter {
             "a concrete prepass target cannot prove that a ledger-write target is stable after re-execution"
         );
         assert_eq!(source, Some(AccessSetSource::ConservativeFallback));
+    }
+
+    #[test]
+    fn ivm_access_dynamic_prepass_honors_governed_heap_limit() {
+        let (alice, _) = iroha_test_samples::gen_account_in("wonderland");
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
+        let account = build_wonderland_account(&alice);
+        let state = State::new(
+            World::with([domain], [account], []),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+                iroha_data_model::parameter::SmartContractParameter::Memory(
+                    core::num::NonZeroU64::new(64).expect("test heap limit is non-zero"),
+                ),
+            ));
+            parameters.commit();
+        }
+        let view = state.view();
+
+        let mut program = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 0,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 10_000,
+            abi_version: 1,
+        }
+        .encode();
+        program.extend_from_slice(
+            &ivm::kotodama::compiler::encode_addi(10, 0, 72)
+                .expect("encode allocation size")
+                .to_le_bytes(),
+        );
+        program.extend_from_slice(
+            &ivm::encoding::wide::encode_sys(
+                ivm::instruction::wide::system::SCALL,
+                u8::try_from(ivm::syscalls::SYSCALL_ALLOC)
+                    .expect("syscall identifier fits in 8 bits"),
+            )
+            .to_le_bytes(),
+        );
+        program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+
+        let error =
+            derive_from_ivm_dynamic_with_context(&program, &alice, None, &view, TEST_GAS_LIMIT)
+                .expect_err("access planning must use the live smart-contract heap ceiling");
+        assert!(
+            error.to_ascii_lowercase().contains("out of memory"),
+            "unexpected governed-heap failure: {error}"
+        );
     }
 
     #[test]

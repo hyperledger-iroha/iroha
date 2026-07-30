@@ -35,7 +35,7 @@ use crate::{
         current_axt_slot_from_block,
     },
 };
-use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
+use iroha_crypto::{Hash, HashOf, streaming::TransportCapabilityResolutionSnapshot};
 #[cfg(not(feature = "fast_dsl"))]
 use iroha_data_model::query::{
     account::prelude::FindAccounts,
@@ -76,7 +76,7 @@ use iroha_data_model::{
         AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
         TouchManifest as ModelTouchManifest,
     },
-    parameter::{Parameters, system::ivm_metadata},
+    parameter::{Parameters, SmartContractParameters, system::ivm_metadata},
     permission::Permissions,
     prelude::{AccountId, *},
     proof::{ProofBox, VerifyingKeyId, VerifyingKeyRecord},
@@ -462,23 +462,55 @@ impl PreparedCoreQueryWord {
     }
 }
 
-/// Bounds for artifacts retained by a host execution used by non-consensus tooling.
+/// Consensus bounds for artifacts retained by one host execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HostOutputLimits {
     /// Maximum queued instructions, pending FastPQ entries, durable writes, and completed AXT items.
-    pub max_items: usize,
+    pub max_items: u64,
     /// Maximum aggregate encoded/retained bytes for those artifacts.
-    pub max_bytes: usize,
+    pub max_bytes: u64,
 }
 
 impl HostOutputLimits {
     /// Construct an output budget.
     #[must_use]
-    pub const fn new(max_items: usize, max_bytes: usize) -> Self {
+    pub const fn new(max_items: u64, max_bytes: u64) -> Self {
         Self {
             max_items,
             max_bytes,
         }
+    }
+
+    /// Derive the deterministic host-output budget from on-chain parameters.
+    #[must_use]
+    pub const fn from_parameters(parameters: SmartContractParameters) -> Self {
+        Self::new(
+            parameters.max_output_items.get(),
+            parameters.max_output_bytes.get(),
+        )
+    }
+
+    /// Return the component-wise stricter of two budgets.
+    #[must_use]
+    pub const fn restrict(self, stricter: Self) -> Self {
+        Self::new(
+            if self.max_items < stricter.max_items {
+                self.max_items
+            } else {
+                stricter.max_items
+            },
+            if self.max_bytes < stricter.max_bytes {
+                self.max_bytes
+            } else {
+                stricter.max_bytes
+            },
+        )
+    }
+}
+
+impl Default for HostOutputLimits {
+    fn default() -> Self {
+        Self::from_parameters(SmartContractParameters::default())
     }
 }
 
@@ -488,19 +520,34 @@ pub enum HostOutputBudgetViolation {
     /// Retained item count would exceed the configured limit.
     ItemCount {
         /// Item count that would have been retained.
-        attempted: usize,
+        attempted: u64,
         /// Configured maximum item count.
-        limit: usize,
+        limit: u64,
     },
     /// Retained bytes would exceed the configured limit.
     EncodedBytes {
         /// Byte count that would have been retained.
-        attempted: usize,
+        attempted: u64,
         /// Configured maximum retained bytes.
-        limit: usize,
+        limit: u64,
     },
-    /// An artifact could not be measured with the canonical encoder.
-    EncodingFailed,
+}
+
+impl HostOutputBudgetViolation {
+    fn into_vm_error(self) -> ivm::VMError {
+        match self {
+            Self::ItemCount { attempted, limit } => ivm::VMError::HostOutputBudgetExceeded {
+                resource: ivm::HostOutputResource::Items,
+                attempted,
+                limit,
+            },
+            Self::EncodedBytes { attempted, limit } => ivm::VMError::HostOutputBudgetExceeded {
+                resource: ivm::HostOutputResource::Bytes,
+                attempted,
+                limit,
+            },
+        }
+    }
 }
 
 struct BoundedCountingWriter {
@@ -591,9 +638,9 @@ pub struct CoreHostImpl<QS> {
     stark_config: iroha_config::parameters::actual::Stark,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
     queued: Vec<QueuedInstruction>,
-    instruction_queue_limits: Option<HostOutputLimits>,
-    instruction_queue_count: usize,
-    instruction_queue_encoded_bytes: usize,
+    instruction_queue_limits: HostOutputLimits,
+    instruction_queue_count: u64,
+    instruction_queue_encoded_bytes: u64,
     instruction_queue_violation: Option<HostOutputBudgetViolation>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
@@ -1232,6 +1279,9 @@ pub struct SubscriptionContext {
 
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Return the governed smart-contract heap ceiling in bytes.
+    fn smart_contract_heap_limit(&self) -> u64;
+
     /// Parse and canonicalize an account alias literal using the current dataspace catalog.
     ///
     /// # Errors
@@ -1639,6 +1689,24 @@ fn visit_storage_keys_with_text_prefix(
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn smart_contract_heap_limit(&self) -> u64 {
+        match *self {
+            QueryStateRef::View(view) => view.world().parameters().smart_contract().memory().get(),
+            QueryStateRef::QueryView(view) => {
+                view.world().parameters().smart_contract().memory().get()
+            }
+            QueryStateRef::Block(block) => {
+                block.world().parameters().smart_contract().memory().get()
+            }
+            QueryStateRef::Transaction(transaction) => transaction
+                .world()
+                .parameters()
+                .smart_contract()
+                .memory()
+                .get(),
+        }
+    }
+
     fn parse_account_alias(&self, alias_literal: &str) -> Result<AccountAlias, ivm::VMError> {
         match *self {
             QueryStateRef::View(view) => {
@@ -2202,8 +2270,8 @@ struct NestedContractCallHostSnapshot {
     axt_proof_cache: Arc<BTreeMap<DataSpaceId, CachedProofEntry>>,
     last_axt_reject: Option<AxtRejectContext>,
     amx_budget_violation: Option<AmxBudgetViolation>,
-    output_count_before: usize,
-    output_bytes_before: usize,
+    output_count_before: u64,
+    output_bytes_before: u64,
     output_violation_before: Option<HostOutputBudgetViolation>,
 }
 
@@ -2666,7 +2734,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
-            instruction_queue_limits: None,
+            instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
             instruction_queue_violation: None,
@@ -2765,6 +2833,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         host.hydrate_axt_state(&view)
             .map_err(CoreHostStateError::AxtPolicySnapshot)?;
         host.set_durable_state_snapshot_from_world(view.world());
+        host.set_output_limits_from_parameters(view.world().parameters().smart_contract());
         host.set_public_inputs_from_parameters(view.world().parameters());
         host.set_vrf_epoch_seeds_from_world(view.world());
         host.set_bound_contract_records_by_subject_snapshot(
@@ -2798,7 +2867,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
-            instruction_queue_limits: None,
+            instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
             instruction_queue_violation: None,
@@ -2884,7 +2953,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             stark_config: iroha_config::parameters::actual::Stark::default(),
             crypto,
             queued: Vec::new(),
-            instruction_queue_limits: None,
+            instruction_queue_limits: HostOutputLimits::default(),
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
             instruction_queue_violation: None,
@@ -4707,13 +4776,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .collect()
     }
 
-    /// Configure a sticky aggregate output budget for tooling executions.
+    /// Configure the aggregate output budget from consensus parameters.
     ///
-    /// Consensus execution leaves this unset and retains its existing policy.
-    /// Torii helpers set it before running untrusted bytecode so output is
-    /// rejected before vectors/maps grow past the transport budget.
-    pub fn set_output_limits(&mut self, limits: HostOutputLimits) {
-        self.instruction_queue_limits = Some(limits);
+    /// Call this before execution. Every constructor starts with the same
+    /// on-chain defaults so a missed configuration site remains bounded.
+    pub fn set_output_limits_from_parameters(&mut self, parameters: SmartContractParameters) {
+        self.instruction_queue_limits = HostOutputLimits::from_parameters(parameters);
+        self.instruction_queue_count = 0;
+        self.instruction_queue_encoded_bytes = 0;
+        self.instruction_queue_violation = None;
+    }
+
+    /// Apply an additional local/transport cap without widening consensus limits.
+    ///
+    /// This is intended for read-only tooling and must be called before
+    /// execution. Consensus validity never depends on this stricter cap.
+    pub fn restrict_output_limits(&mut self, limits: HostOutputLimits) {
+        self.instruction_queue_limits = self.instruction_queue_limits.restrict(limits);
         self.instruction_queue_count = 0;
         self.instruction_queue_encoded_bytes = 0;
         self.instruction_queue_violation = None;
@@ -4727,27 +4806,27 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     /// Number of items currently accounted against a configured output budget.
     #[must_use]
-    pub const fn retained_output_items(&self) -> usize {
+    pub const fn retained_output_items(&self) -> u64 {
         self.instruction_queue_count
     }
 
     /// Encoded/retained bytes currently accounted against a configured output budget.
     #[must_use]
-    pub const fn retained_output_bytes(&self) -> usize {
+    pub const fn retained_output_bytes(&self) -> u64 {
         self.instruction_queue_encoded_bytes
     }
 
     fn try_reserve_output(&mut self, items: usize, bytes: usize) -> bool {
-        let Some(limits) = self.instruction_queue_limits else {
-            return true;
-        };
+        let limits = self.instruction_queue_limits;
         if self.instruction_queue_violation.is_some() {
             return false;
         }
+        let items = u64::try_from(items).unwrap_or(u64::MAX);
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
         let attempted_items = self
             .instruction_queue_count
             .checked_add(items)
-            .unwrap_or(usize::MAX);
+            .unwrap_or(u64::MAX);
         if attempted_items > limits.max_items {
             self.instruction_queue_violation = Some(HostOutputBudgetViolation::ItemCount {
                 attempted: attempted_items,
@@ -4758,7 +4837,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let attempted_bytes = self
             .instruction_queue_encoded_bytes
             .checked_add(bytes)
-            .unwrap_or(usize::MAX);
+            .unwrap_or(u64::MAX);
         if attempted_bytes > limits.max_bytes {
             self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
                 attempted: attempted_bytes,
@@ -4776,28 +4855,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         value: &T,
         items: usize,
     ) -> bool {
-        const RETAINED_ITEM_OVERHEAD_BYTES: usize = 64;
-        let Some(limits) = self.instruction_queue_limits else {
-            return true;
-        };
+        const RETAINED_ITEM_OVERHEAD_BYTES: u64 = 64;
+        let limits = self.instruction_queue_limits;
         if self.instruction_queue_violation.is_some() {
             return false;
         }
         let remaining = limits
             .max_bytes
             .saturating_sub(self.instruction_queue_encoded_bytes);
-        // A single retained Norito value is later rendered as JSON by tooling.
-        // Bound each canonical fragment as well as the aggregate so one value
-        // cannot trigger an attacker-sized temporary JSON allocation before
-        // the final response writer observes its cap. The 1/8 share leaves a
-        // conservative expansion allowance for JSON strings/base64/field names.
-        let per_item_limit = limits.max_bytes.saturating_div(8).max(1);
-        let payload_limit = remaining
-            .saturating_sub(RETAINED_ITEM_OVERHEAD_BYTES)
-            .min(per_item_limit);
+        // Count directly into a bounded sink, avoiding a temporary encoded
+        // allocation while enforcing the exact aggregate consensus budget.
+        let payload_limit = remaining.saturating_sub(RETAINED_ITEM_OVERHEAD_BYTES);
         let mut writer = BoundedCountingWriter {
             written: 0,
-            max: payload_limit,
+            max: usize::try_from(payload_limit).unwrap_or(usize::MAX),
         };
         let serialization = {
             let _canonical_flags =
@@ -4813,29 +4884,37 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         self.try_reserve_output(
             items,
-            writer.written.saturating_add(RETAINED_ITEM_OVERHEAD_BYTES),
+            usize::try_from(
+                u64::try_from(writer.written)
+                    .unwrap_or(u64::MAX)
+                    .saturating_add(RETAINED_ITEM_OVERHEAD_BYTES),
+            )
+            .unwrap_or(usize::MAX),
         )
     }
 
     fn try_reserve_durable_state_update(&mut self, key: &Name, value_len: usize) -> bool {
-        const DURABLE_ENTRY_OVERHEAD_BYTES: usize = 64;
-        let Some(_limits) = self.instruction_queue_limits else {
-            return true;
-        };
-        let new_bytes = key
-            .as_ref()
-            .len()
+        const DURABLE_ENTRY_OVERHEAD_BYTES: u64 = 64;
+        let key_len = u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX);
+        let value_len = u64::try_from(value_len).unwrap_or(u64::MAX);
+        let new_bytes = key_len
             .saturating_add(value_len)
             .saturating_add(DURABLE_ENTRY_OVERHEAD_BYTES);
         let old_bytes = self.durable_state_overlay.get(key).map_or(0, |value| {
-            key.as_ref()
-                .len()
-                .saturating_add(value.as_ref().map_or(0, Vec::len))
+            key_len
+                .saturating_add(
+                    value
+                        .as_ref()
+                        .map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX)),
+                )
                 .saturating_add(DURABLE_ENTRY_OVERHEAD_BYTES)
         });
         let items = usize::from(old_bytes == 0);
         if new_bytes >= old_bytes {
-            self.try_reserve_output(items, new_bytes - old_bytes)
+            self.try_reserve_output(
+                items,
+                usize::try_from(new_bytes - old_bytes).unwrap_or(usize::MAX),
+            )
         } else {
             self.instruction_queue_encoded_bytes = self
                 .instruction_queue_encoded_bytes
@@ -4935,6 +5014,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         *Arc::make_mut(&mut self.zk_last_env_hash_transfer) = VecDeque::from([h]);
     }
     /// Test helper: replace the pending unshield envelope hash queue with a single entry.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn __test_set_last_env_hash_unshield(&mut self, h: [u8; 32]) {
         *Arc::make_mut(&mut self.zk_last_env_hash_unshield) = VecDeque::from([h]);
     }
@@ -5059,10 +5139,17 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
+    fn ensure_output_budget(&self) -> Result<(), ivm::VMError> {
+        self.instruction_queue_violation
+            .map_or(Ok(()), |violation| Err(violation.into_vm_error()))
+    }
+
     pub(crate) fn into_execution_artifacts(
         mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
+        self.ensure_output_budget()
+            .map_err(|error| ValidationFail::NotPermitted(error.to_string()))?;
         self.ensure_execution_artifacts_are_committable()?;
         self.ensure_view_execution_has_no_effect_artifacts()?;
         let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
@@ -5580,7 +5667,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 // Reusing an exhausted sequence would create duplicate NFT IDs.
                 break;
             };
-            let name = format!("nft_number_{}_for_{}", sequence, account_id.signatory());
+            let account_digest = HashOf::new(account_id);
+            let name = format!(
+                "nft_number_{}_for_{}",
+                sequence,
+                hex::encode(account_digest.as_ref())
+            );
             let Ok(name) = name.parse() else {
                 continue;
             };
@@ -5856,6 +5948,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let amount_ptr = payload.first().copied().ok_or(ivm::VMError::DecodeError)?;
         Self::decode_quantity(vm, amount_ptr).map(Some)
+    }
+
+    fn decode_optional_string(vm: &IVM, ptr: u64) -> Result<Option<String>, ivm::VMError> {
+        let layout = ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
+        let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
+        if !is_some {
+            return Ok(None);
+        }
+        let string_ptr = payload.first().copied().ok_or(ivm::VMError::DecodeError)?;
+        let bytes = Self::decode_tlv_blob(vm, string_ptr)?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| ivm::VMError::DecodeError)
     }
 
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
@@ -7184,7 +7289,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let permission =
             crate::executor::nested_contract_entrypoint_permission(descriptor, &entrypoint)
                 .map_err(|error| ivm::VMError::metered(request_gas, map_validation_fail(&error)))?;
-        {
+        let child_heap_limit = {
             let state_ref = self.query_state.get().ok_or_else(|| {
                 ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied)
             })?;
@@ -7207,7 +7312,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         ivm::VMError::metered(request_gas, map_validation_fail(&error))
                     })?;
             }
-        }
+            state_ref.smart_contract_heap_limit()
+        };
         // The target identity, lifecycle state, and selected permission are authoritative before
         // the potentially attacker-sized argument record is copied or canonically decoded.
         let argument_record = if argument_pointer == 0 {
@@ -7265,7 +7371,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .and_then(|descriptor| descriptor.return_schema.clone());
         let mut child_vm = self
             .prepared_contract_cache
-            .checkout_runtime(prepared_contract.as_ref(), child_gas_limit)
+            .checkout_runtime(
+                prepared_contract.as_ref(),
+                child_gas_limit,
+                child_heap_limit,
+            )
             .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
         if let Some(entrypoint_pc) = call_context.entrypoint_pc() {
             let code_len = child_vm.memory.code_len();
@@ -8012,6 +8122,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             "transaction.max_metadata_depth" => Parameter::Transaction(
                 TransactionParameter::MaxMetadataDepth(params.transaction().max_metadata_depth()),
             ),
+            "transaction.max_time_to_live_ms" => Parameter::Transaction(
+                TransactionParameter::MaxTimeToLiveMs(params.transaction().max_time_to_live_ms()),
+            ),
             "transaction.require_height_ttl" => Parameter::Transaction(
                 TransactionParameter::RequireHeightTtl(params.transaction().require_height_ttl()),
             ),
@@ -8027,6 +8140,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             "smart_contract.execution_depth" => Parameter::SmartContract(
                 SmartContractParameter::ExecutionDepth(params.smart_contract().execution_depth()),
             ),
+            "smart_contract.max_output_items" => Parameter::SmartContract(
+                SmartContractParameter::MaxOutputItems(params.smart_contract().max_output_items()),
+            ),
+            "smart_contract.max_output_bytes" => Parameter::SmartContract(
+                SmartContractParameter::MaxOutputBytes(params.smart_contract().max_output_bytes()),
+            ),
             "executor.fuel" => {
                 Parameter::Executor(SmartContractParameter::Fuel(params.executor().fuel()))
             }
@@ -8035,6 +8154,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             "executor.execution_depth" => Parameter::Executor(
                 SmartContractParameter::ExecutionDepth(params.executor().execution_depth()),
+            ),
+            "executor.max_output_items" => Parameter::Executor(
+                SmartContractParameter::MaxOutputItems(params.executor().max_output_items()),
+            ),
+            "executor.max_output_bytes" => Parameter::Executor(
+                SmartContractParameter::MaxOutputBytes(params.executor().max_output_bytes()),
             ),
             _ => return Err(ivm::VMError::DecodeError),
         };
@@ -8919,6 +9044,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
+    /// Return the authority recorded on ledger effects emitted by the active frame.
+    ///
+    /// A contract or proved-contract frame must always retain
+    /// `current_contract_runtime_context`; falling back to the transaction authority
+    /// inside such a frame would silently re-author contract effects. Generic/view
+    /// setup therefore clears the frame and its execution class together, while every
+    /// admitted contract binder installs both together.
     fn effect_authority(&self) -> AccountId {
         self.current_contract_runtime_context.as_ref().map_or_else(
             || self.authority.clone(),
@@ -10185,6 +10317,7 @@ impl<QS> CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_DEBUG_PRINT
                 | ivm::syscalls::SYSCALL_EXIT
                 | ivm::syscalls::SYSCALL_ABORT
+                | ivm::syscalls::SYSCALL_CONTRACT_ABORT
                 | ivm::syscalls::SYSCALL_DEBUG_LOG
                 | ivm::syscalls::SYSCALL_ALLOC
                 | ivm::syscalls::SYSCALL_GROW_HEAP
@@ -10396,8 +10529,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
-            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY
             | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
@@ -10488,1158 +10622,1221 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
 
     #[allow(clippy::too_many_lines)]
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, ivm::VMError> {
-        // Enforce both ABI policy and exhaustive metering classification for
-        // direct host calls as well as VM-dispatched execution.
-        ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
-        self.execution_class.ensure_syscall_allowed(number)?;
-        // See `prepare_syscall`: production consensus execution has no raw
-        // witness transport, even if a caller bypasses the staged VM path and
-        // invokes the host method directly.
-        if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        if self.lifecycle_hook_is_running()
-            && matches!(
-                number,
-                ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE
-                    | ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
-            )
-        {
-            return Err(ivm::VMError::PermissionDenied);
-        }
-        match number {
-            // ----------------- Domain ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_REGISTER_DOMAIN => {
-                let ptr = vm.register(10);
-                let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
-                let isi = Register::domain(Domain::new(id));
-                let instr = InstructionBox::from(RegisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
+        self.ensure_output_budget()?;
+        let result = (|| {
+            // Enforce both ABI policy and exhaustive metering classification for
+            // direct host calls as well as VM-dispatched execution.
+            ivm::host::require_host_syscall_metering_spec(vm.syscall_policy(), number)?;
+            self.execution_class.ensure_syscall_allowed(number)?;
+            // See `prepare_syscall`: production consensus execution has no raw
+            // witness transport, even if a caller bypasses the staged VM path and
+            // invokes the host method directly.
+            if number == ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT {
+                return Err(ivm::VMError::PermissionDenied);
             }
-            ivm::syscalls::SYSCALL_UNREGISTER_DOMAIN => {
-                let ptr = vm.register(10);
-                let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
-                let isi = Unregister::domain(id);
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_TRANSFER_DOMAIN => {
-                // r10=&DomainId, r11=&AccountId(to)
-                let dptr = vm.register(10);
-                let tptr = vm.register(11);
-                let id: DomainId = Self::decode_tlv_typed(vm, dptr, PointerType::DomainId)?;
-                let to: AccountId = Self::decode_tlv_typed(vm, tptr, PointerType::AccountId)?;
-                let from = self.authority.clone();
-                let isi = Transfer::domain(from, id, to);
-                let instr = InstructionBox::from(TransferBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            // ----------------- Peer ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_REGISTER_PEER => {
-                let ptr = vm.register(10);
-                let payload: Json = Self::decode_tlv_json(vm, ptr)?;
-                let request = Self::register_peer_from_json(&payload)?;
-                let instr = InstructionBox::from(request);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_UNREGISTER_PEER => {
-                let ptr = vm.register(10);
-                let payload: Json = Self::decode_tlv_json(vm, ptr)?;
-                let value: json::Value = payload
-                    .try_into_any_norito::<json::Value>()
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                let peer_id = Self::peer_id_from_value(&value)?;
-                let isi = Unregister::peer(peer_id);
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            // ----------------- Account ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
-                let ptr = vm.register(10);
-                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
-                let isi = Register::account(Account::new(id));
-                let instr = InstructionBox::from(RegisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
-                let ptr = vm.register(10);
-                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
-                let isi = Unregister::account(id);
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_ADD_SIGNATORY => {
-                let account_ptr = vm.register(10);
-                let signatory_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
-                let signatory = Self::public_key_from_json(&payload)?;
-                let isi = AddSignatory::new(account, signatory);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REMOVE_SIGNATORY => {
-                let account_ptr = vm.register(10);
-                let signatory_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
-                let signatory = Self::public_key_from_json(&payload)?;
-                let isi = RemoveSignatory::new(account, signatory);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                let account_ptr = vm.register(10);
-                let quorum_raw = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let quorum_u16 =
-                    u16::try_from(quorum_raw).map_err(|_| ivm::VMError::DecodeError)?;
-                let quorum = NonZeroU16::new(quorum_u16).ok_or(ivm::VMError::DecodeError)?;
-                let isi = SetAccountQuorum::new(account, quorum);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            // ----------------- Asset quantity ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_REGISTER_ASSET => {
-                let ptr = vm.register(10);
-                let id: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
-                let name = Self::asset_definition_name_for_syscall(&id);
-                let isi = Register::asset_definition({
-                    let __asset_definition_id = id;
-                    AssetDefinition::numeric(__asset_definition_id.clone()).with_name(name)
-                });
-                let instr = InstructionBox::from(RegisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_UNREGISTER_ASSET => {
-                let ptr = vm.register(10);
-                let id: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
-                let isi = Unregister::asset_definition(id);
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_MINT_ASSET => {
-                let account_ptr = vm.register(10);
-                let asset_def_ptr = vm.register(11);
-                let amount_ptr = vm.register(12);
-
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let asset_def: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_quantity(vm, amount_ptr)?;
-                let asset_id = AssetId::of(asset_def, account);
-                let isi = Mint::asset_quantity(amount, asset_id);
-                let instr = InstructionBox::from(MintBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_BURN_ASSET => {
-                let account_ptr = vm.register(10);
-                let asset_def_ptr = vm.register(11);
-                let amount_ptr = vm.register(12);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let asset_def: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_quantity(vm, amount_ptr)?;
-                let asset_id = AssetId::of(asset_def, account);
-                let isi = Burn::asset_quantity(amount, asset_id);
-                let instr = InstructionBox::from(BurnBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_TRANSFER_V1 => {
-                if self.fastpq_batch_entries.is_some() {
-                    return self.push_fastpq_batch_entry(vm);
-                }
-                self.queue_legacy_transfer_v1(vm)
-            }
-            ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
-                if self.fastpq_batch_entries.is_some() {
-                    return Err(ivm::VMError::PermissionDenied);
-                }
-                let from_ptr = vm.register(10);
-                let to_ptr = vm.register(11);
-                let asset_def_ptr = vm.register(12);
-                let amount_ptr = vm.register(13);
-                let dataspace_ptr = vm.register(14);
-                let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
-                let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
-                let asset_def: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_quantity(vm, amount_ptr)?;
-                let dataspace: DataSpaceId =
-                    Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
-                let scope = {
-                    let state_ref = self
-                        .query_state
-                        .get()
-                        .ok_or(ivm::VMError::PermissionDenied)?;
-                    match state_ref.asset_balance_policy(&asset_def)? {
-                        AssetBalancePolicy::Global => AssetBalanceScope::Global,
-                        AssetBalancePolicy::DataspaceRestricted => {
-                            AssetBalanceScope::Dataspace(dataspace)
-                        }
-                    }
-                };
-                let asset_id = AssetId::with_scope(asset_def, from, scope);
-                let isi = Transfer::asset_quantity(asset_id, amount, to);
-                let instr = InstructionBox::from(TransferBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE => {
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
-                let asset_definition: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AssetDefinitionId)?;
-                let frozen = match vm.register(12) {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(ivm::VMError::DecodeError),
-                };
-                let instruction = iroha_data_model::isi::SetAssetTransferFreeze::new(
-                    account,
-                    asset_definition,
-                    frozen,
-                    None,
-                );
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
-            }
-            ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => {
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
-                let asset_definition: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AssetDefinitionId)?;
-                let cap = Self::decode_optional_amount(vm, vm.register(12))?;
-                let instruction = iroha_data_model::isi::SetAssetTransferControl::new(
-                    account,
-                    asset_definition,
-                    vec![iroha_data_model::asset::AssetTransferLimit {
-                        window: iroha_data_model::asset::AssetTransferControlWindow::Day,
-                        cap_amount: cap,
-                    }],
-                );
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
-            }
-            ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE => {
-                let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
-                let alias_literal =
-                    std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
-                let alias = self
-                    .query_state
-                    .get()
-                    .ok_or(ivm::VMError::PermissionDenied)?
-                    .parse_account_alias(alias_literal)?;
-                let replacement: AccountId =
-                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
-                let instruction = iroha_data_model::isi::account_recovery::ProposeAccountRecovery {
-                    alias,
-                    new_controller: replacement.controller().clone(),
-                };
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
-            }
-            ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
-            | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
-                let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
-                let alias_literal =
-                    std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
-                let alias = self
-                    .query_state
-                    .get()
-                    .ok_or(ivm::VMError::PermissionDenied)?
-                    .parse_account_alias(alias_literal)?;
-                let instruction = match number {
-                    ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE => InstructionBox::from(
-                        iroha_data_model::isi::account_recovery::ApproveAccountRecovery { alias },
-                    ),
-                    ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL => InstructionBox::from(
-                        iroha_data_model::isi::account_recovery::CancelAccountRecovery { alias },
-                    ),
-                    ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => InstructionBox::from(
-                        iroha_data_model::isi::account_recovery::FinalizeAccountRecovery { alias },
-                    ),
-                    _ => unreachable!("matched account-recovery syscall"),
-                };
-                self.queue_instruction_after_preflight(vm, instruction)
-            }
-            ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
-            ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
-            ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => self.apply_fastpq_batch_from_tlv(vm),
-            // ----------------- Native anonymous asset escrow ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => {
-                let request: OpenAnonymousAssetEscrow =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-            }
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                self.queue_instruction_after_preflight(
-                    vm,
-                    InstructionBox::from(AcceptAnonymousAssetEscrow { escrow_id }),
+            if self.lifecycle_hook_is_running()
+                && matches!(
+                    number,
+                    ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE
+                        | ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE
                 )
+            {
+                return Err(ivm::VMError::PermissionDenied);
             }
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                self.queue_instruction_after_preflight(
-                    vm,
-                    InstructionBox::from(MarkAnonymousEscrowPaymentSent { escrow_id }),
-                )
-            }
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE => {
-                let request: ReleaseAnonymousAssetEscrow =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-            }
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL => {
-                let request: CancelAnonymousAssetEscrow =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-            }
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
-                self.queue_instruction_after_preflight(
-                    vm,
-                    InstructionBox::from(OpenAnonymousEscrowDispute {
-                        escrow_id,
-                        evidence_hashes,
-                    }),
-                )
-            }
-            ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
-                let request: ResolveAnonymousEscrowDispute =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
-                self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
-            }
-            // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
-                let escrow_ptr = vm.register(10);
-                let asset_def_ptr = vm.register(11);
-                let amount_ptr = vm.register(12);
-                let evidence_ptr = vm.register(13);
-                let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
-                let asset_definition: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let amount = Self::decode_quantity(vm, amount_ptr)?;
-                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
-                let instr = InstructionBox::from(OpenAssetEscrow {
-                    escrow_id,
-                    asset_definition,
-                    amount,
-                    evidence_hashes,
-                });
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_ESCROW_ACCEPT => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                Ok(self.queue_instruction(InstructionBox::from(AcceptAssetEscrow { escrow_id })))
-            }
-            ivm::syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                Ok(self
-                    .queue_instruction(InstructionBox::from(MarkEscrowPaymentSent { escrow_id })))
-            }
-            ivm::syscalls::SYSCALL_ESCROW_RELEASE => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                Ok(self.queue_instruction(InstructionBox::from(ReleaseAssetEscrow { escrow_id })))
-            }
-            ivm::syscalls::SYSCALL_ESCROW_CANCEL => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                Ok(self.queue_instruction(InstructionBox::from(CancelAssetEscrow { escrow_id })))
-            }
-            ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE => {
-                let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
-                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
-                Ok(
-                    self.queue_instruction(InstructionBox::from(OpenEscrowDispute {
-                        escrow_id,
-                        evidence_hashes,
-                    })),
-                )
-            }
-            ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE => {
-                let escrow_ptr = vm.register(10);
-                let buyer_amount_ptr = vm.register(11);
-                let seller_amount_ptr = vm.register(12);
-                let evidence_ptr = vm.register(13);
-                let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
-                let buyer_amount = Self::decode_quantity(vm, buyer_amount_ptr)?;
-                let seller_amount = Self::decode_quantity(vm, seller_amount_ptr)?;
-                let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
-                Ok(
-                    self.queue_instruction(InstructionBox::from(ResolveEscrowDispute {
-                        escrow_id,
-                        buyer_amount,
-                        seller_amount,
-                        evidence_hashes,
-                    })),
-                )
-            }
-            // Account metadata (SetKeyValue<Account>)
-            ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                let account_ptr = vm.register(10);
-                let key_ptr = vm.register(11);
-                let value_ptr = vm.register(12);
-
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
-                let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
-
-                let isi = SetKeyValue::account(account, key, value);
-                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            // ----------------- Role and permission ISIs via pointer-ABI -----------------
-            ivm::syscalls::SYSCALL_CREATE_ROLE => {
-                let name_ptr = vm.register(10);
-                let perms_ptr = vm.register(11);
-                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
-                let perms_json: Json = Self::decode_tlv_json(vm, perms_ptr)?;
-                let permissions = Self::permissions_from_json(&perms_json)?;
-                let role_id = RoleId::new(name);
-                let mut role = Role::new(role_id, self.authority.clone());
-                for perm in permissions {
-                    role = role.add_permission(perm);
+            match number {
+                // ----------------- Domain ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_REGISTER_DOMAIN => {
+                    let ptr = vm.register(10);
+                    let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
+                    let isi = Register::domain(Domain::new(id));
+                    let instr = InstructionBox::from(RegisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
                 }
-                let isi = Register::role(role);
-                let instr = InstructionBox::from(RegisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_DELETE_ROLE => {
-                let name_ptr = vm.register(10);
-                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
-                let isi = Unregister::role(RoleId::new(name));
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_GRANT_ROLE => {
-                let account_ptr = vm.register(10);
-                let name_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
-                let isi = Grant::account_role(RoleId::new(name), account);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REVOKE_ROLE => {
-                let account_ptr = vm.register(10);
-                let name_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
-                let isi = Revoke::account_role(RoleId::new(name), account);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_GRANT_PERMISSION => {
-                let account_ptr = vm.register(10);
-                let perm_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let permission = Self::decode_permission(vm, perm_ptr)?;
-                let isi = Grant::account_permission(permission, account);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REVOKE_PERMISSION => {
-                let account_ptr = vm.register(10);
-                let perm_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let permission = Self::decode_permission(vm, perm_ptr)?;
-                let isi = Revoke::account_permission(permission, account);
-                let instr = InstructionBox::from(isi);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
-            | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
-                let selector_tlv = vm.validate_tlv(vm.register(11))?;
-                if selector_tlv.type_id != PointerType::Blob {
-                    return Err(ivm::VMError::NoritoInvalid);
+                ivm::syscalls::SYSCALL_UNREGISTER_DOMAIN => {
+                    let ptr = vm.register(10);
+                    let id: DomainId = Self::decode_tlv_typed(vm, ptr, PointerType::DomainId)?;
+                    let isi = Unregister::domain(id);
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
                 }
-                let entrypoint = core::str::from_utf8(selector_tlv.payload)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
-                    return Err(ivm::VMError::DecodeError);
+                ivm::syscalls::SYSCALL_TRANSFER_DOMAIN => {
+                    // r10=&DomainId, r11=&AccountId(to)
+                    let dptr = vm.register(10);
+                    let tptr = vm.register(11);
+                    let id: DomainId = Self::decode_tlv_typed(vm, dptr, PointerType::DomainId)?;
+                    let to: AccountId = Self::decode_tlv_typed(vm, tptr, PointerType::AccountId)?;
+                    let from = self.authority.clone();
+                    let isi = Transfer::domain(from, id, to);
+                    let instr = InstructionBox::from(TransferBox::from(isi));
+                    Ok(self.queue_instruction(instr))
                 }
-                let contract = self
-                    .current_contract_runtime_context
-                    .as_ref()
-                    .map(|context| context.contract_address.clone())
-                    .ok_or(ivm::VMError::PermissionDenied)?;
-                let permission = Permission::from(CanInvokeContractEntrypoint {
-                    contract,
-                    entrypoint: entrypoint.to_owned(),
-                });
-                let instruction = if number == ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT {
-                    InstructionBox::from(Grant::account_permission(permission, account))
-                } else {
-                    InstructionBox::from(Revoke::account_permission(permission, account))
-                };
-                Ok(self.queue_instruction(instruction))
-            }
-            ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
-                let ptr = vm.register(10);
-                let spec: Json = Self::decode_tlv_json(vm, ptr)?;
-                let trigger = if let Ok(trigger) = spec.try_into_any_norito::<Trigger>() {
-                    trigger
-                } else {
-                    let value: json::Value = spec
+                // ----------------- Peer ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_REGISTER_PEER => {
+                    let ptr = vm.register(10);
+                    let payload: Json = Self::decode_tlv_json(vm, ptr)?;
+                    let request = Self::register_peer_from_json(&payload)?;
+                    let instr = InstructionBox::from(request);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_UNREGISTER_PEER => {
+                    let ptr = vm.register(10);
+                    let payload: Json = Self::decode_tlv_json(vm, ptr)?;
+                    let value: json::Value = payload
                         .try_into_any_norito::<json::Value>()
                         .map_err(|_| ivm::VMError::DecodeError)?;
-                    let mut map = match value {
-                        json::Value::Object(map) => map,
-                        _ => return Err(ivm::VMError::DecodeError),
+                    let peer_id = Self::peer_id_from_value(&value)?;
+                    let isi = Unregister::peer(peer_id);
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                // ----------------- Account ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
+                    let ptr = vm.register(10);
+                    let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                    let isi = Register::account(Account::new(id));
+                    let instr = InstructionBox::from(RegisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
+                    let ptr = vm.register(10);
+                    let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                    let isi = Unregister::account(id);
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_ADD_SIGNATORY => {
+                    let account_ptr = vm.register(10);
+                    let signatory_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
+                    let signatory = Self::public_key_from_json(&payload)?;
+                    let isi = AddSignatory::new(account, signatory);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REMOVE_SIGNATORY => {
+                    let account_ptr = vm.register(10);
+                    let signatory_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let payload: Json = Self::decode_tlv_json(vm, signatory_ptr)?;
+                    let signatory = Self::public_key_from_json(&payload)?;
+                    let isi = RemoveSignatory::new(account, signatory);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
+                    let account_ptr = vm.register(10);
+                    let quorum_raw = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let quorum_u16 =
+                        u16::try_from(quorum_raw).map_err(|_| ivm::VMError::DecodeError)?;
+                    let quorum = NonZeroU16::new(quorum_u16).ok_or(ivm::VMError::DecodeError)?;
+                    let isi = SetAccountQuorum::new(account, quorum);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                // ----------------- Asset quantity ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_REGISTER_ASSET => {
+                    let ptr = vm.register(10);
+                    let id: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                    let name = Self::asset_definition_name_for_syscall(&id);
+                    let isi = Register::asset_definition({
+                        let __asset_definition_id = id;
+                        AssetDefinition::numeric(__asset_definition_id.clone()).with_name(name)
+                    });
+                    let instr = InstructionBox::from(RegisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_UNREGISTER_ASSET => {
+                    let ptr = vm.register(10);
+                    let id: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)?;
+                    let isi = Unregister::asset_definition(id);
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_MINT_ASSET => {
+                    let account_ptr = vm.register(10);
+                    let asset_def_ptr = vm.register(11);
+                    let amount_ptr = vm.register(12);
+
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let asset_def: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                    let amount = Self::decode_quantity(vm, amount_ptr)?;
+                    let asset_id = AssetId::of(asset_def, account);
+                    let isi = Mint::asset_quantity(amount, asset_id);
+                    let instr = InstructionBox::from(MintBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_BURN_ASSET => {
+                    let account_ptr = vm.register(10);
+                    let asset_def_ptr = vm.register(11);
+                    let amount_ptr = vm.register(12);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let asset_def: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                    let amount = Self::decode_quantity(vm, amount_ptr)?;
+                    let asset_id = AssetId::of(asset_def, account);
+                    let isi = Burn::asset_quantity(amount, asset_id);
+                    let instr = InstructionBox::from(BurnBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_TRANSFER_V1 => {
+                    if self.fastpq_batch_entries.is_some() {
+                        return self.push_fastpq_batch_entry(vm);
+                    }
+                    self.queue_legacy_transfer_v1(vm)
+                }
+                ivm::syscalls::SYSCALL_TRANSFER_ASSET_SCOPED => {
+                    if self.fastpq_batch_entries.is_some() {
+                        return Err(ivm::VMError::PermissionDenied);
+                    }
+                    let from_ptr = vm.register(10);
+                    let to_ptr = vm.register(11);
+                    let asset_def_ptr = vm.register(12);
+                    let amount_ptr = vm.register(13);
+                    let dataspace_ptr = vm.register(14);
+                    let from: AccountId =
+                        Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
+                    let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
+                    let asset_def: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                    let amount = Self::decode_quantity(vm, amount_ptr)?;
+                    let dataspace: DataSpaceId =
+                        Self::decode_tlv_typed(vm, dataspace_ptr, PointerType::DataSpaceId)?;
+                    let scope = {
+                        let state_ref = self
+                            .query_state
+                            .get()
+                            .ok_or(ivm::VMError::PermissionDenied)?;
+                        match state_ref.asset_balance_policy(&asset_def)? {
+                            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+                            AssetBalancePolicy::DataspaceRestricted => {
+                                AssetBalanceScope::Dataspace(dataspace)
+                            }
+                        }
                     };
-                    let id_value = map.remove("id").ok_or(ivm::VMError::DecodeError)?;
-                    let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
-                    let id: TriggerId = id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
-                    let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
-                    let mut action = Self::decode_trigger_action_spec(action_value)?;
-                    if action.authority.subject_id() == self.authority.subject_id() {
-                        action.authority = self.authority.clone();
-                    }
-                    Trigger::new(id, action)
-                };
-                let instr = InstructionBox::from(Register::trigger(trigger));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REMOVE_TRIGGER => {
-                let ptr = vm.register(10);
-                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
-                let id = TriggerId::new(name);
-                let isi = Unregister::trigger(id);
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED => {
-                let ptr = vm.register(10);
-                let enabled = vm.register(11) != 0;
-                let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
-                let id = TriggerId::new(name);
-                let key: Name = TRIGGER_ENABLED_METADATA_KEY
-                    .parse()
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                let isi = SetKeyValue::trigger(id, key, Json::from(enabled));
-                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
-                let ptr = vm.register(10);
-                // Decode manifest registration request from Norito-encoded TLV bytes.
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
+                    let asset_id = AssetId::with_scope(asset_def, from, scope);
+                    let isi = Transfer::asset_quantity(asset_id, amount, to);
+                    let instr = InstructionBox::from(TransferBox::from(isi));
+                    Ok(self.queue_instruction(instr))
                 }
-                let request: scode::RegisterSmartContractCode =
-                    decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)?;
-                let instr = InstructionBox::from(request);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
-                let ptr = vm.register(10);
-                let request: scode::RegisterSmartContractBytes =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                let instr = InstructionBox::from(request);
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
-                let ptr = vm.register(10);
-                let request: scode::ActivateContractInstance =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                let instr = InstructionBox::from(request);
-                self.ensure_instruction_queue_allowed(&instr)?;
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {
-                let ptr = vm.register(10);
-                let request: scode::DeactivateContractInstance =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                let instr = InstructionBox::from(request);
-                self.ensure_instruction_queue_allowed(&instr)?;
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
-                let ptr = vm.register(10);
-                let request: scode::RemoveSmartContractBytes =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                let instr = InstructionBox::from(request);
-                Ok(self.queue_instruction(instr))
-            }
-            // ----------------- NFT (Non-fungible) ISIs -----------------
-            ivm::syscalls::SYSCALL_NFT_MINT_ASSET => {
-                let nft_id_ptr = vm.register(10);
-                let owner_ptr = vm.register(11);
-                let owner: AccountId =
-                    Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
-                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
-                let nft = Nft::new(nft_id.clone(), Metadata::default());
-                let mut gas = self
-                    .queue_instruction(InstructionBox::from(RegisterBox::from(Register::nft(nft))));
-                if owner != self.authority {
-                    let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
-                        self.authority.clone(),
-                        nft_id,
-                        owner,
+                ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY => {
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let asset_definition: AssetDefinitionId = Self::decode_tlv_typed(
+                        vm,
+                        vm.register(11),
+                        PointerType::AssetDefinitionId,
+                    )?;
+                    let expected_revision = vm.register(12);
+                    let availability_flags = vm.register(13);
+                    if availability_flags & !0b11 != 0 {
+                        return Err(ivm::VMError::DecodeError);
+                    }
+                    let availability = |mask| {
+                        if availability_flags & mask == 0 {
+                            iroha_data_model::asset::AssetTransferAvailability::Disabled
+                        } else {
+                            iroha_data_model::asset::AssetTransferAvailability::Enabled
+                        }
+                    };
+                    let incoming = availability(0b01);
+                    let outgoing = availability(0b10);
+                    let reason = Self::decode_optional_string(vm, vm.register(14))?;
+                    let instruction = iroha_data_model::isi::SetAssetTransferAvailability::new(
+                        account,
+                        asset_definition,
+                        expected_revision,
+                        incoming,
+                        outgoing,
+                        reason,
+                    );
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+                }
+                ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => {
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let asset_definition: AssetDefinitionId = Self::decode_tlv_typed(
+                        vm,
+                        vm.register(11),
+                        PointerType::AssetDefinitionId,
+                    )?;
+                    let cap = Self::decode_optional_amount(vm, vm.register(12))?;
+                    let instruction = iroha_data_model::isi::SetAssetTransferControl::new(
+                        account,
+                        asset_definition,
+                        vec![iroha_data_model::asset::AssetTransferLimit {
+                            window: iroha_data_model::asset::AssetTransferControlWindow::Day,
+                            cap_amount: cap,
+                        }],
+                    );
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+                }
+                ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT => {
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let asset_definition: AssetDefinitionId = Self::decode_tlv_typed(
+                        vm,
+                        vm.register(11),
+                        PointerType::AssetDefinitionId,
+                    )?;
+                    let limit = Self::decode_optional_amount(vm, vm.register(12))?;
+                    let instruction = iroha_data_model::isi::SetAssetHoldingLimit::new(
+                        account,
+                        asset_definition,
+                        limit,
+                    );
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+                }
+                ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE => {
+                    let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
+                    let alias_literal =
+                        std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                    let alias = self
+                        .query_state
+                        .get()
+                        .ok_or(ivm::VMError::PermissionDenied)?
+                        .parse_account_alias(alias_literal)?;
+                    let replacement: AccountId =
+                        Self::decode_tlv_typed(vm, vm.register(11), PointerType::AccountId)?;
+                    let instruction =
+                        iroha_data_model::isi::account_recovery::ProposeAccountRecovery {
+                            alias,
+                            new_controller: replacement.controller().clone(),
+                        };
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+                }
+                ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
+                | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
+                | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => {
+                    let alias_bytes = Self::decode_tlv_blob(vm, vm.register(10))?;
+                    let alias_literal =
+                        std::str::from_utf8(&alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                    let alias = self
+                        .query_state
+                        .get()
+                        .ok_or(ivm::VMError::PermissionDenied)?
+                        .parse_account_alias(alias_literal)?;
+                    let instruction = match number {
+                        ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE => InstructionBox::from(
+                            iroha_data_model::isi::account_recovery::ApproveAccountRecovery {
+                                alias,
+                            },
+                        ),
+                        ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL => InstructionBox::from(
+                            iroha_data_model::isi::account_recovery::CancelAccountRecovery {
+                                alias,
+                            },
+                        ),
+                        ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_FINALIZE => InstructionBox::from(
+                            iroha_data_model::isi::account_recovery::FinalizeAccountRecovery {
+                                alias,
+                            },
+                        ),
+                        _ => unreachable!("matched account-recovery syscall"),
+                    };
+                    self.queue_instruction_after_preflight(vm, instruction)
+                }
+                ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_BEGIN => self.begin_fastpq_batch(),
+                ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
+                ivm::syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => {
+                    self.apply_fastpq_batch_from_tlv(vm)
+                }
+                // ----------------- Native anonymous asset escrow ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_OFFER => {
+                    let request: OpenAnonymousAssetEscrow =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
+                }
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_ACCEPT => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    self.queue_instruction_after_preflight(
+                        vm,
+                        InstructionBox::from(AcceptAnonymousAssetEscrow { escrow_id }),
+                    )
+                }
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_MARK_PAYMENT_SENT => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    self.queue_instruction_after_preflight(
+                        vm,
+                        InstructionBox::from(MarkAnonymousEscrowPaymentSent { escrow_id }),
+                    )
+                }
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RELEASE => {
+                    let request: ReleaseAnonymousAssetEscrow =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
+                }
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_CANCEL => {
+                    let request: CancelAnonymousAssetEscrow =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
+                }
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let evidence_hashes =
+                        Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
+                    self.queue_instruction_after_preflight(
+                        vm,
+                        InstructionBox::from(OpenAnonymousEscrowDispute {
+                            escrow_id,
+                            evidence_hashes,
+                        }),
+                    )
+                }
+                ivm::syscalls::SYSCALL_ANONYMOUS_ESCROW_RESOLVE_DISPUTE => {
+                    let request: ResolveAnonymousEscrowDispute =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                    self.queue_instruction_after_preflight(vm, InstructionBox::from(request))
+                }
+                // ----------------- Native asset escrow ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_ESCROW_OPEN_OFFER => {
+                    let escrow_ptr = vm.register(10);
+                    let asset_def_ptr = vm.register(11);
+                    let amount_ptr = vm.register(12);
+                    let evidence_ptr = vm.register(13);
+                    let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
+                    let asset_definition: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                    let amount = Self::decode_quantity(vm, amount_ptr)?;
+                    let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
+                    let instr = InstructionBox::from(OpenAssetEscrow {
+                        escrow_id,
+                        asset_definition,
+                        amount,
+                        evidence_hashes,
+                    });
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_ESCROW_ACCEPT => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    Ok(self
+                        .queue_instruction(InstructionBox::from(AcceptAssetEscrow { escrow_id })))
+                }
+                ivm::syscalls::SYSCALL_ESCROW_MARK_PAYMENT_SENT => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    Ok(
+                        self.queue_instruction(InstructionBox::from(MarkEscrowPaymentSent {
+                            escrow_id,
+                        })),
+                    )
+                }
+                ivm::syscalls::SYSCALL_ESCROW_RELEASE => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    Ok(self
+                        .queue_instruction(InstructionBox::from(ReleaseAssetEscrow { escrow_id })))
+                }
+                ivm::syscalls::SYSCALL_ESCROW_CANCEL => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    Ok(self
+                        .queue_instruction(InstructionBox::from(CancelAssetEscrow { escrow_id })))
+                }
+                ivm::syscalls::SYSCALL_ESCROW_OPEN_DISPUTE => {
+                    let escrow_id = Self::decode_escrow_id(vm, vm.register(10))?;
+                    let evidence_hashes =
+                        Self::decode_optional_evidence_hashes(vm, vm.register(11))?;
+                    Ok(
+                        self.queue_instruction(InstructionBox::from(OpenEscrowDispute {
+                            escrow_id,
+                            evidence_hashes,
+                        })),
+                    )
+                }
+                ivm::syscalls::SYSCALL_ESCROW_RESOLVE_DISPUTE => {
+                    let escrow_ptr = vm.register(10);
+                    let buyer_amount_ptr = vm.register(11);
+                    let seller_amount_ptr = vm.register(12);
+                    let evidence_ptr = vm.register(13);
+                    let escrow_id = Self::decode_escrow_id(vm, escrow_ptr)?;
+                    let buyer_amount = Self::decode_quantity(vm, buyer_amount_ptr)?;
+                    let seller_amount = Self::decode_quantity(vm, seller_amount_ptr)?;
+                    let evidence_hashes = Self::decode_optional_evidence_hashes(vm, evidence_ptr)?;
+                    Ok(
+                        self.queue_instruction(InstructionBox::from(ResolveEscrowDispute {
+                            escrow_id,
+                            buyer_amount,
+                            seller_amount,
+                            evidence_hashes,
+                        })),
+                    )
+                }
+                // Account metadata (SetKeyValue<Account>)
+                ivm::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
+                    let account_ptr = vm.register(10);
+                    let key_ptr = vm.register(11);
+                    let value_ptr = vm.register(12);
+
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
+                    let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
+
+                    let isi = SetKeyValue::account(account, key, value);
+                    let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                // ----------------- Role and permission ISIs via pointer-ABI -----------------
+                ivm::syscalls::SYSCALL_CREATE_ROLE => {
+                    let name_ptr = vm.register(10);
+                    let perms_ptr = vm.register(11);
+                    let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                    let perms_json: Json = Self::decode_tlv_json(vm, perms_ptr)?;
+                    let permissions = Self::permissions_from_json(&perms_json)?;
+                    let role_id = RoleId::new(name);
+                    let mut role = Role::new(role_id, self.authority.clone());
+                    for perm in permissions {
+                        role = role.add_permission(perm);
+                    }
+                    let isi = Register::role(role);
+                    let instr = InstructionBox::from(RegisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_DELETE_ROLE => {
+                    let name_ptr = vm.register(10);
+                    let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                    let isi = Unregister::role(RoleId::new(name));
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_GRANT_ROLE => {
+                    let account_ptr = vm.register(10);
+                    let name_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                    let isi = Grant::account_role(RoleId::new(name), account);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REVOKE_ROLE => {
+                    let account_ptr = vm.register(10);
+                    let name_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let name: Name = Self::decode_tlv_typed(vm, name_ptr, PointerType::Name)?;
+                    let isi = Revoke::account_role(RoleId::new(name), account);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_GRANT_PERMISSION => {
+                    let account_ptr = vm.register(10);
+                    let perm_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let permission = Self::decode_permission(vm, perm_ptr)?;
+                    let isi = Grant::account_permission(permission, account);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REVOKE_PERMISSION => {
+                    let account_ptr = vm.register(10);
+                    let perm_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let permission = Self::decode_permission(vm, perm_ptr)?;
+                    let isi = Revoke::account_permission(permission, account);
+                    let instr = InstructionBox::from(isi);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+                | ivm::syscalls::SYSCALL_REVOKE_CONTRACT_ENTRYPOINT => {
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                    let selector_tlv = vm.validate_tlv(vm.register(11))?;
+                    if selector_tlv.type_id != PointerType::Blob {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let entrypoint = core::str::from_utf8(selector_tlv.payload)
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                        return Err(ivm::VMError::DecodeError);
+                    }
+                    let contract = self
+                        .current_contract_runtime_context
+                        .as_ref()
+                        .map(|context| context.contract_address.clone())
+                        .ok_or(ivm::VMError::PermissionDenied)?;
+                    let permission = Permission::from(CanInvokeContractEntrypoint {
+                        contract,
+                        entrypoint: entrypoint.to_owned(),
+                    });
+                    let instruction = if number == ivm::syscalls::SYSCALL_GRANT_CONTRACT_ENTRYPOINT
+                    {
+                        InstructionBox::from(Grant::account_permission(permission, account))
+                    } else {
+                        InstructionBox::from(Revoke::account_permission(permission, account))
+                    };
+                    Ok(self.queue_instruction(instruction))
+                }
+                ivm::syscalls::SYSCALL_CREATE_TRIGGER => {
+                    let ptr = vm.register(10);
+                    let spec: Json = Self::decode_tlv_json(vm, ptr)?;
+                    let trigger = if let Ok(trigger) = spec.try_into_any_norito::<Trigger>() {
+                        trigger
+                    } else {
+                        let value: json::Value = spec
+                            .try_into_any_norito::<json::Value>()
+                            .map_err(|_| ivm::VMError::DecodeError)?;
+                        let mut map = match value {
+                            json::Value::Object(map) => map,
+                            _ => return Err(ivm::VMError::DecodeError),
+                        };
+                        let id_value = map.remove("id").ok_or(ivm::VMError::DecodeError)?;
+                        let id_str = id_value.as_str().ok_or(ivm::VMError::DecodeError)?;
+                        let id: TriggerId =
+                            id_str.parse().map_err(|_| ivm::VMError::DecodeError)?;
+                        let action_value = map.remove("action").ok_or(ivm::VMError::DecodeError)?;
+                        let mut action = Self::decode_trigger_action_spec(action_value)?;
+                        if action.authority.subject_id() == self.authority.subject_id() {
+                            action.authority = self.authority.clone();
+                        }
+                        Trigger::new(id, action)
+                    };
+                    let instr = InstructionBox::from(Register::trigger(trigger));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REMOVE_TRIGGER => {
+                    let ptr = vm.register(10);
+                    let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                    let id = TriggerId::new(name);
+                    let isi = Unregister::trigger(id);
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_SET_TRIGGER_ENABLED => {
+                    let ptr = vm.register(10);
+                    let enabled = vm.register(11) != 0;
+                    let name: Name = Self::decode_tlv_typed(vm, ptr, PointerType::Name)?;
+                    let id = TriggerId::new(name);
+                    let key: Name = TRIGGER_ENABLED_METADATA_KEY
+                        .parse()
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    let isi = SetKeyValue::trigger(id, key, Json::from(enabled));
+                    let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_CODE => {
+                    let ptr = vm.register(10);
+                    // Decode manifest registration request from Norito-encoded TLV bytes.
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let request: scode::RegisterSmartContractCode =
+                        decode_canonical_norito(tlv.payload)
+                            .map_err(|_| ivm::VMError::DecodeError)?;
+                    let instr = InstructionBox::from(request);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES => {
+                    let ptr = vm.register(10);
+                    let request: scode::RegisterSmartContractBytes =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    let instr = InstructionBox::from(request);
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_ACTIVATE_CONTRACT_INSTANCE => {
+                    let ptr = vm.register(10);
+                    let request: scode::ActivateContractInstance =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    let instr = InstructionBox::from(request);
+                    self.ensure_instruction_queue_allowed(&instr)?;
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_DEACTIVATE_CONTRACT_INSTANCE => {
+                    let ptr = vm.register(10);
+                    let request: scode::DeactivateContractInstance =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    let instr = InstructionBox::from(request);
+                    self.ensure_instruction_queue_allowed(&instr)?;
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_REMOVE_SMART_CONTRACT_BYTES => {
+                    let ptr = vm.register(10);
+                    let request: scode::RemoveSmartContractBytes =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    let instr = InstructionBox::from(request);
+                    Ok(self.queue_instruction(instr))
+                }
+                // ----------------- NFT (Non-fungible) ISIs -----------------
+                ivm::syscalls::SYSCALL_NFT_MINT_ASSET => {
+                    let nft_id_ptr = vm.register(10);
+                    let owner_ptr = vm.register(11);
+                    let owner: AccountId =
+                        Self::decode_tlv_typed(vm, owner_ptr, PointerType::AccountId)?;
+                    let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                    let nft = Nft::new(nft_id.clone(), Metadata::default());
+                    let mut gas = self.queue_instruction(InstructionBox::from(RegisterBox::from(
+                        Register::nft(nft),
                     )));
-                    gas = gas.saturating_add(self.queue_instruction(transfer));
+                    if owner != self.authority {
+                        let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
+                            self.authority.clone(),
+                            nft_id,
+                            owner,
+                        )));
+                        gas = gas.saturating_add(self.queue_instruction(transfer));
+                    }
+                    Ok(gas)
                 }
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                let from_ptr = vm.register(10);
-                let nft_id_ptr = vm.register(11);
-                let to_ptr = vm.register(12);
-                let from: AccountId = Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
-                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
-                let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
-                let isi = Transfer::nft(from, nft_id, to);
-                let instr = InstructionBox::from(TransferBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_NFT_SET_METADATA => {
-                let nft_id_ptr = vm.register(10);
-                let key_ptr = vm.register(11);
-                let value_ptr = vm.register(12);
+                ivm::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
+                    let from_ptr = vm.register(10);
+                    let nft_id_ptr = vm.register(11);
+                    let to_ptr = vm.register(12);
+                    let from: AccountId =
+                        Self::decode_tlv_typed(vm, from_ptr, PointerType::AccountId)?;
+                    let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                    let to: AccountId = Self::decode_tlv_typed(vm, to_ptr, PointerType::AccountId)?;
+                    let isi = Transfer::nft(from, nft_id, to);
+                    let instr = InstructionBox::from(TransferBox::from(isi));
+                    Ok(self.queue_instruction(instr))
+                }
+                ivm::syscalls::SYSCALL_NFT_SET_METADATA => {
+                    let nft_id_ptr = vm.register(10);
+                    let key_ptr = vm.register(11);
+                    let value_ptr = vm.register(12);
 
-                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
-                let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
-                let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
+                    let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                    let key: Name = Self::decode_tlv_typed(vm, key_ptr, PointerType::Name)?;
+                    let value: Json = Self::decode_tlv_json(vm, value_ptr)?;
 
-                let isi = SetKeyValue::nft(nft_id, key, value);
-                let instr = InstructionBox::from(SetKeyValueBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            ivm::syscalls::SYSCALL_NFT_BURN_ASSET => {
-                let nft_id_ptr = vm.register(10);
-                let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
-                let isi = Unregister::nft(nft_id);
-                let instr = InstructionBox::from(UnregisterBox::from(isi));
-                Ok(self.queue_instruction(instr))
-            }
-            // Sample convenience: create one NFT per known account (from snapshot)
-            ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS => {
-                let (instructions, next_sequence) = self.create_nfts_for_all_preview();
-                let exact_gas = Self::create_nfts_for_all_instructions_gas(&instructions);
-                ivm::host::preflight_reserved_syscall_gas(vm, exact_gas)?;
-                let gas = instructions.into_iter().fold(0_u64, |gas, instruction| {
-                    gas.saturating_add(self.queue_instruction(instruction))
-                });
-                self.nft_seq = next_sequence;
-                debug_assert_eq!(gas.max(Self::create_nfts_for_all_gas()), exact_gas);
-                Ok(exact_gas)
-            }
-            // Set SmartContract execution depth parameter to x10
-            ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
-                let depth_raw = vm.register(10);
-                // If zero, treat as no-op to avoid setting an invalid value
-                if depth_raw == 0 {
-                    let gas = Self::smartcontract_depth_gas();
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    return Ok(gas);
+                    let isi = SetKeyValue::nft(nft_id, key, value);
+                    let instr = InstructionBox::from(SetKeyValueBox::from(isi));
+                    Ok(self.queue_instruction(instr))
                 }
-                // SmartContractParameter::ExecutionDepth expects a u8.
-                let depth: u8 = u8::try_from(depth_raw).unwrap_or(u8::MAX);
-                let param = Parameter::SmartContract(
-                    iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
-                );
-                let instr = InstructionBox::from(SetParameter::new(param));
-                let gas =
-                    crate::gas::meter_instruction(&instr).max(Self::smartcontract_depth_gas());
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                self.queued.push(QueuedInstruction {
-                    instruction: instr,
-                    authority: self.effect_authority(),
-                    contract_runtime_context: self.current_contract_runtime_context.clone(),
-                    entrypoint_authorization: self.current_entrypoint_authorization.clone(),
-                });
-                Ok(gas)
-            }
-            // Accept one of the operation-tagged instruction bridges used by Kotodama.
-            ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
-                let operation_tag = vm.register(11);
-                if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
-                    && !self.can_record_sccp_message()
-                {
-                    // Reject an unproved SCCP request before copying or decoding its attacker-
-                    // controlled payload. Other operation tags retain their own typed gates.
-                    return Err(ivm::VMError::PermissionDenied);
+                ivm::syscalls::SYSCALL_NFT_BURN_ASSET => {
+                    let nft_id_ptr = vm.register(10);
+                    let nft_id: NftId = Self::decode_tlv_typed(vm, nft_id_ptr, PointerType::NftId)?;
+                    let isi = Unregister::nft(nft_id);
+                    let instr = InstructionBox::from(UnregisterBox::from(isi));
+                    Ok(self.queue_instruction(instr))
                 }
-                let ib = Self::decode_opaque_instruction(vm)?;
-                self.ensure_instruction_queue_allowed(&ib)?;
-                let any_ref = ib.as_any();
-                match operation_tag {
-                    ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
-                        let sb = any_ref
-                            .downcast_ref::<DMZk::SubmitBallot>()
-                            .ok_or(ivm::VMError::PermissionDenied)?;
-                        let mut proof = sb.ballot_proof.clone();
-                        let pending_hash = if proof.envelope_hash.is_none() {
-                            self.zk_last_env_hash_ballot.front().copied()
-                        } else {
-                            None
-                        };
-                        if let Some(hash) = pending_hash {
-                            proof.envelope_hash = Some(hash);
-                        }
-                        let instruction = InstructionBox::from(DMZk::SubmitBallot {
-                            election_id: sb.election_id.clone(),
-                            ciphertext: sb.ciphertext.clone(),
-                            ballot_proof: proof,
-                            nullifier: sb.nullifier,
-                        });
-                        let gas = crate::gas::meter_instruction(&instruction);
+                // Sample convenience: create one NFT per known account (from snapshot)
+                ivm::syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS => {
+                    let (instructions, next_sequence) = self.create_nfts_for_all_preview();
+                    let exact_gas = Self::create_nfts_for_all_instructions_gas(&instructions);
+                    ivm::host::preflight_reserved_syscall_gas(vm, exact_gas)?;
+                    let gas = instructions.into_iter().fold(0_u64, |gas, instruction| {
+                        gas.saturating_add(self.queue_instruction(instruction))
+                    });
+                    self.nft_seq = next_sequence;
+                    debug_assert_eq!(gas.max(Self::create_nfts_for_all_gas()), exact_gas);
+                    Ok(exact_gas)
+                }
+                // Set SmartContract execution depth parameter to x10
+                ivm::syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => {
+                    let depth_raw = vm.register(10);
+                    // If zero, treat as no-op to avoid setting an invalid value
+                    if depth_raw == 0 {
+                        let gas = Self::smartcontract_depth_gas();
                         ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                        if pending_hash.is_some() {
-                            debug_assert_eq!(
-                                Arc::make_mut(&mut self.zk_last_env_hash_ballot).pop_front(),
-                                pending_hash
-                            );
-                        }
-                        let queued_gas = self.queue_instruction(instruction);
-                        debug_assert_eq!(queued_gas, gas);
-                        Ok(gas)
-                    }
-                    ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD => {
-                        let unshield = any_ref
-                            .downcast_ref::<DMZk::Unshield>()
-                            .ok_or(ivm::VMError::PermissionDenied)?;
-                        let mut proof = unshield.proof.clone();
-                        let pending_hash = if proof.envelope_hash.is_none() {
-                            self.zk_last_env_hash_unshield.front().copied()
-                        } else {
-                            None
-                        };
-                        if let Some(hash) = pending_hash {
-                            proof.envelope_hash = Some(hash);
-                        }
-                        let instruction = InstructionBox::from(DMZk::Unshield {
-                            asset: unshield.asset.clone(),
-                            to: unshield.to.clone(),
-                            public_amount: unshield.public_amount().clone(),
-                            inputs: unshield.inputs.clone(),
-                            outputs: unshield.outputs.clone(),
-                            proof,
-                            root_hint: unshield.root_hint,
-                        });
-                        let gas = crate::gas::meter_instruction(&instruction);
-                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                        if pending_hash.is_some() {
-                            debug_assert_eq!(
-                                Arc::make_mut(&mut self.zk_last_env_hash_unshield).pop_front(),
-                                pending_hash
-                            );
-                        }
-                        let queued_gas = self.queue_instruction(instruction);
-                        debug_assert_eq!(queued_gas, gas);
-                        Ok(gas)
-                    }
-                    ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE => {
-                        any_ref
-                            .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
-                            .ok_or(ivm::VMError::PermissionDenied)?;
-                        // The host capability above proves that this is the authenticated root
-                        // contract frame of an IvmProved derivation or replay. Overlay admission
-                        // independently verifies and scopes the resulting proof authority while
-                        // applying the standard ISI.
-                        self.queue_instruction_after_preflight(vm, ib)
-                    }
-                    _ => Err(ivm::VMError::PermissionDenied),
-                }
-            }
-            ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
-            | ivm::syscalls::SYSCALL_QUERY_EXECUTE_NORITO => {
-                let ptr = vm.register(10);
-                let request: QueryRequest =
-                    Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
-                let gas_remaining = vm.remaining_gas();
-                let gas_ctx = QueryGasContext::from_request(&request);
-                let Some(state_ref) = self.query_state.get() else {
-                    return Err(ivm::VMError::NotImplemented { syscall: number });
-                };
-                let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
-                if matches!(request, QueryRequest::Singular(_)) && budget.max_items() == 0 {
-                    return Err(ivm::VMError::OutOfGas);
-                }
-                let query_result =
-                    state_ref.execute_query_with_budget(&self.authority, request, Some(budget))?;
-                let response = query_result.response;
-                let processed_items = query_result.processed_items;
-                let gas =
-                    Self::query_gas_cost(&gas_ctx, processed_items, query_result.processed_bytes);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                if gas > gas_remaining {
-                    return Err(ivm::VMError::OutOfGas);
-                }
-                let response_bytes = Self::encode_norito_payload(&response)
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                let payload_len = Self::len_to_u32(response_bytes.len())?;
-                let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&payload_len.to_be_bytes());
-                out.extend_from_slice(&response_bytes);
-                let h: [u8; Hash::LENGTH] = Hash::new(&response_bytes).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => {
-                self.stage_queued_syscall(vm, Self::subscription_bill)
-            }
-            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => {
-                self.stage_queued_syscall(vm, Self::subscription_record_usage)
-            }
-            ivm::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
-                let gas_remaining = vm.remaining_gas();
-                let alias_ptr = vm.register(10);
-                let alias_bytes = Self::decode_tlv_blob(vm, alias_ptr)?;
-                let alias_literal =
-                    String::from_utf8(alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
-                let gas_ctx = QueryGasContext::singular();
-                let Some(state_ref) = self.query_state.get() else {
-                    return Err(ivm::VMError::NotImplemented { syscall: number });
-                };
-                if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
-                    return Err(ivm::VMError::OutOfGas);
-                }
-                let account_id =
-                    state_ref.resolve_account_alias(&self.authority, &alias_literal)?;
-                let payload = Self::encode_norito_payload(&account_id)?;
-                let payload_len_u64 = u64::try_from(payload.len()).unwrap_or(u64::MAX);
-                let gas = Self::query_gas_cost(&gas_ctx, 1, payload_len_u64);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                if gas > gas_remaining {
-                    return Err(ivm::VMError::OutOfGas);
-                }
-                let payload_len = Self::len_to_u32(payload.len())?;
-                let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-                out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&payload_len.to_be_bytes());
-                out.extend_from_slice(&payload);
-                let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
-                let account_ptr = vm.register(10);
-                let asset_def_ptr = vm.register(11);
-                let account: AccountId =
-                    Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
-                let asset_def: AssetDefinitionId =
-                    Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
-                let asset_id = AssetId::of(asset_def, account);
-                let request =
-                    QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById {
-                        id: asset_id,
-                    }));
-                self.execute_singular_query_payload_as(
-                    vm,
-                    number,
-                    PointerType::Quantity,
-                    request,
-                    |output| match output {
-                        SingularQueryOutputBox::Asset(asset) => {
-                            Self::encode_amount_payload(asset.value())
-                        }
-                        _ => Err(ivm::VMError::DecodeError),
-                    },
-                )
-            }
-            ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
-                let name_ptr = vm.register(10);
-                let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
-                let name = Self::decode_name_payload(tlv.payload)?;
-                if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
-                    self.prepared_argument_record_pointer = None;
-                    if let Some(record) = self.entrypoint_argument_record.as_ref() {
-                        if !is_type_allowed_for_policy(
-                            vm.syscall_policy(),
-                            PointerType::NoritoBytes,
-                        ) {
-                            return Err(ivm::VMError::AbiTypeNotAllowed {
-                                abi: vm.abi_version(),
-                                type_id: PointerType::NoritoBytes as u16,
-                            });
-                        }
-                        let guest_binding = record.binding_bytes().as_slice();
-                        let bytes = u64::try_from(guest_binding.len()).unwrap_or(u64::MAX);
-                        let gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
-                            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes),
-                        );
-                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                        let ptr = Self::alloc_norito_bytes(vm, guest_binding)?;
-                        vm.set_register(10, ptr);
-                        self.prepared_argument_record_pointer = Some(ptr);
                         return Ok(gas);
                     }
-                    let Some(args) = self.args.as_ref() else {
+                    // SmartContractParameter::ExecutionDepth expects a u8.
+                    let depth: u8 = u8::try_from(depth_raw).unwrap_or(u8::MAX);
+                    let param = Parameter::SmartContract(
+                        iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(depth),
+                    );
+                    let instr = InstructionBox::from(SetParameter::new(param));
+                    let gas =
+                        crate::gas::meter_instruction(&instr).max(Self::smartcontract_depth_gas());
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    let _queued_gas = self.queue_instruction(instr);
+                    Ok(gas)
+                }
+                // Accept one of the operation-tagged instruction bridges used by Kotodama.
+                ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION => {
+                    let operation_tag = vm.register(11);
+                    if operation_tag
+                        == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE
+                        && !self.can_record_sccp_message()
+                    {
+                        // Reject an unproved SCCP request before copying or decoding its attacker-
+                        // controlled payload. Other operation tags retain their own typed gates.
                         return Err(ivm::VMError::PermissionDenied);
-                    };
-                    if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
-                        return Err(ivm::VMError::AbiTypeNotAllowed {
-                            abi: vm.abi_version(),
-                            type_id: PointerType::Json as u16,
-                        });
                     }
-                    let payload = Self::encode_norito_payload(args)?;
+                    let ib = Self::decode_opaque_instruction(vm)?;
+                    self.ensure_instruction_queue_allowed(&ib)?;
+                    let any_ref = ib.as_any();
+                    match operation_tag {
+                        ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_SUBMIT_BALLOT => {
+                            let sb = any_ref
+                                .downcast_ref::<DMZk::SubmitBallot>()
+                                .ok_or(ivm::VMError::PermissionDenied)?;
+                            let mut proof = sb.ballot_proof.clone();
+                            let pending_hash = if proof.envelope_hash.is_none() {
+                                self.zk_last_env_hash_ballot.front().copied()
+                            } else {
+                                None
+                            };
+                            if let Some(hash) = pending_hash {
+                                proof.envelope_hash = Some(hash);
+                            }
+                            let instruction = InstructionBox::from(DMZk::SubmitBallot {
+                                election_id: sb.election_id.clone(),
+                                ciphertext: sb.ciphertext.clone(),
+                                ballot_proof: proof,
+                                nullifier: sb.nullifier,
+                            });
+                            let gas = crate::gas::meter_instruction(&instruction);
+                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                            if pending_hash.is_some() {
+                                debug_assert_eq!(
+                                    Arc::make_mut(&mut self.zk_last_env_hash_ballot).pop_front(),
+                                    pending_hash
+                                );
+                            }
+                            let queued_gas = self.queue_instruction(instruction);
+                            debug_assert_eq!(queued_gas, gas);
+                            Ok(gas)
+                        }
+                        ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_UNSHIELD => {
+                            let unshield = any_ref
+                                .downcast_ref::<DMZk::Unshield>()
+                                .ok_or(ivm::VMError::PermissionDenied)?;
+                            let mut proof = unshield.proof.clone();
+                            let pending_hash = if proof.envelope_hash.is_none() {
+                                self.zk_last_env_hash_unshield.front().copied()
+                            } else {
+                                None
+                            };
+                            if let Some(hash) = pending_hash {
+                                proof.envelope_hash = Some(hash);
+                            }
+                            let instruction = InstructionBox::from(DMZk::Unshield {
+                                asset: unshield.asset.clone(),
+                                to: unshield.to.clone(),
+                                public_amount: unshield.public_amount().clone(),
+                                inputs: unshield.inputs.clone(),
+                                outputs: unshield.outputs.clone(),
+                                proof,
+                                root_hint: unshield.root_hint,
+                            });
+                            let gas = crate::gas::meter_instruction(&instruction);
+                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                            if pending_hash.is_some() {
+                                debug_assert_eq!(
+                                    Arc::make_mut(&mut self.zk_last_env_hash_unshield).pop_front(),
+                                    pending_hash
+                                );
+                            }
+                            let queued_gas = self.queue_instruction(instruction);
+                            debug_assert_eq!(queued_gas, gas);
+                            Ok(gas)
+                        }
+                        ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE => {
+                            any_ref
+                                .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+                                .ok_or(ivm::VMError::PermissionDenied)?;
+                            // The host capability above proves that this is the authenticated root
+                            // contract frame of an IvmProved derivation or replay. Overlay admission
+                            // independently verifies and scopes the resulting proof authority while
+                            // applying the standard ISI.
+                            self.queue_instruction_after_preflight(vm, ib)
+                        }
+                        _ => Err(ivm::VMError::PermissionDenied),
+                    }
+                }
+                ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY
+                | ivm::syscalls::SYSCALL_QUERY_EXECUTE_NORITO => {
+                    let ptr = vm.register(10);
+                    let request: QueryRequest =
+                        Self::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes)?;
+                    let gas_remaining = vm.remaining_gas();
+                    let gas_ctx = QueryGasContext::from_request(&request);
+                    let Some(state_ref) = self.query_state.get() else {
+                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                    };
+                    let budget = Self::query_execution_budget(&gas_ctx, gas_remaining)?;
+                    if matches!(request, QueryRequest::Singular(_)) && budget.max_items() == 0 {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
+                    let query_result = state_ref.execute_query_with_budget(
+                        &self.authority,
+                        request,
+                        Some(budget),
+                    )?;
+                    let response = query_result.response;
+                    let processed_items = query_result.processed_items;
+                    let gas = Self::query_gas_cost(
+                        &gas_ctx,
+                        processed_items,
+                        query_result.processed_bytes,
+                    );
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    if gas > gas_remaining {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
+                    let response_bytes = Self::encode_norito_payload(&response)
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    let payload_len = Self::len_to_u32(response_bytes.len())?;
+                    let mut out = Vec::with_capacity(7 + response_bytes.len() + Hash::LENGTH);
+                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(&payload_len.to_be_bytes());
+                    out.extend_from_slice(&response_bytes);
+                    let h: [u8; Hash::LENGTH] = Hash::new(&response_bytes).into();
+                    out.extend_from_slice(&h);
+                    let p = vm.alloc_host_tlv(&out)?;
+                    vm.set_register(10, p);
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => {
+                    self.stage_queued_syscall(vm, Self::subscription_bill)
+                }
+                ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => {
+                    self.stage_queued_syscall(vm, Self::subscription_record_usage)
+                }
+                ivm::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
+                    let gas_remaining = vm.remaining_gas();
+                    let alias_ptr = vm.register(10);
+                    let alias_bytes = Self::decode_tlv_blob(vm, alias_ptr)?;
+                    let alias_literal =
+                        String::from_utf8(alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
+                    let gas_ctx = QueryGasContext::singular();
+                    let Some(state_ref) = self.query_state.get() else {
+                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                    };
+                    if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
+                    let account_id =
+                        state_ref.resolve_account_alias(&self.authority, &alias_literal)?;
+                    let payload = Self::encode_norito_payload(&account_id)?;
+                    let payload_len_u64 = u64::try_from(payload.len()).unwrap_or(u64::MAX);
+                    let gas = Self::query_gas_cost(&gas_ctx, 1, payload_len_u64);
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    if gas > gas_remaining {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
                     let payload_len = Self::len_to_u32(payload.len())?;
                     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
-                    out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                    out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                     out.push(1);
                     out.extend_from_slice(&payload_len.to_be_bytes());
                     out.extend_from_slice(&payload);
                     let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
                     out.extend_from_slice(&h);
-                    let bytes = u64::try_from(out.len()).unwrap_or(u64::MAX);
-                    let gas = PUBLIC_INPUT_GAS_BASE_DEFAULT
-                        .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes));
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    let ptr = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, ptr);
-                    return Ok(gas);
+                    let p = vm.alloc_host_tlv(&out)?;
+                    vm.set_register(10, p);
+                    Ok(gas)
                 }
-                let Some(record) = self.public_inputs.get(&name) else {
-                    return Err(ivm::VMError::PermissionDenied);
-                };
-                if !is_type_allowed_for_policy(vm.syscall_policy(), record.type_id) {
-                    return Err(ivm::VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: record.type_id as u16,
-                    });
-                }
-                let gas = record.gas_cost();
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let ptr = vm.alloc_host_tlv(&record.tlv)?;
-                vm.set_register(10, ptr);
-                Ok(gas)
-            }
-            // ZK verify syscalls are handled here so CoreHost can enforce VK binding
-            // and run full backend verification before arming ISI latches.
-            ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
-                // Capture TLV payload hash (envelope hash) and verify the bound proof.
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                let envelope = match envelope {
-                    Ok(envelope) => envelope,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                let ok = match self.verify_bound_envelope(envelope, tlv.payload, "transfer") {
-                    Ok(ok) => ok,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                vm.set_register(10, u64::from(ok));
-                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                if ok {
-                    Arc::make_mut(&mut self.zk_verified_transfer).push_back(env_hash);
-                    Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(env_hash);
-                }
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                let envelope = match envelope {
-                    Ok(envelope) => envelope,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                let ok = match self.verify_bound_envelope(envelope, tlv.payload, "unshield") {
-                    Ok(ok) => ok,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                vm.set_register(10, u64::from(ok));
-                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                if ok {
-                    Arc::make_mut(&mut self.zk_verified_unshield).push_back(env_hash);
-                    Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(env_hash);
-                }
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                let envelope = match envelope {
-                    Ok(envelope) => envelope,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                let ok = match self.verify_bound_envelope(envelope, tlv.payload, "ballot") {
-                    Ok(ok) => ok,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                vm.set_register(10, u64::from(ok));
-                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                if ok {
-                    Arc::make_mut(&mut self.zk_verified_ballot).push_back(env_hash);
-                    Arc::make_mut(&mut self.zk_last_env_hash_ballot).push_back(env_hash);
-                }
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                let envelope = match envelope {
-                    Ok(envelope) => envelope,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
-                let ok = match self.verify_bound_envelope(envelope, tlv.payload, "tally") {
-                    Ok(ok) => ok,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                vm.set_register(10, u64::from(ok));
-                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                if ok {
-                    Arc::make_mut(&mut self.zk_verified_tally).push_back(env_hash);
-                    Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(env_hash);
-                }
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_VERIFY_PROOF => {
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
-                let envelope = match envelope {
-                    Ok(envelope) => envelope,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                let ok = match self.verify_any_namespace_envelope(envelope, tlv.payload) {
-                    Ok(ok) => ok,
-                    Err(code) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, code);
-                        return Ok(gas);
-                    }
-                };
-                vm.set_register(10, u64::from(ok));
-                vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                if tlv.type_id != PointerType::NoritoBytes {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                if u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX)
-                    > self.zk_gas_schedule.max_payload_bytes
-                {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let quote = ivm::host::quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
-                ivm::host::preflight_reserved_syscall_gas(vm, quote.gas)?;
-                let max_items = usize::try_from(self.halo2_config.verifier_max_batch)
-                    .unwrap_or(usize::MAX)
-                    .min(
-                        usize::try_from(self.zk_gas_schedule.max_batch_proofs)
-                            .unwrap_or(usize::MAX),
-                    );
-                let envs = match ivm::host::decode_canonical_zk_batch(tlv.payload, max_items) {
-                    Ok(envs) => envs,
-                    Err(status) => {
-                        vm.set_register(10, 0);
-                        vm.set_register(11, status);
-                        vm.set_register(12, u64::MAX);
-                        return Ok(quote.gas);
-                    }
-                };
-                let public_input_count = envs.iter().fold(0_u64, |total, env| {
-                    total.saturating_add(
-                        self.zk_gas_schedule
-                            .public_input_count(env.public_inputs.len()),
+                ivm::syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
+                    let account_ptr = vm.register(10);
+                    let asset_def_ptr = vm.register(11);
+                    let account: AccountId =
+                        Self::decode_tlv_typed(vm, account_ptr, PointerType::AccountId)?;
+                    let asset_def: AssetDefinitionId =
+                        Self::decode_tlv_typed(vm, asset_def_ptr, PointerType::AssetDefinitionId)?;
+                    let asset_id = AssetId::of(asset_def, account);
+                    let request =
+                        QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById {
+                            id: asset_id,
+                        }));
+                    self.execute_singular_query_payload_as(
+                        vm,
+                        number,
+                        PointerType::Quantity,
+                        request,
+                        |output| match output {
+                            SingularQueryOutputBox::Asset(asset) => {
+                                Self::encode_amount_payload(asset.value())
+                            }
+                            _ => Err(ivm::VMError::DecodeError),
+                        },
                     )
-                });
-                let gas = self.zk_gas_schedule.actual_batch_gas(
-                    envs.len(),
-                    tlv.payload.len(),
-                    public_input_count,
-                );
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let guardrails = self.zk_verify_guardrails();
-
-                let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
-                let mut first_error: Option<u64> = None;
-                for env in envs {
-                    let mut status = 0u8;
-                    let payload = if let Ok(bytes) = Self::encode_norito_payload(&env) {
-                        bytes
-                    } else {
-                        first_error.get_or_insert(ivm::host::ERR_DECODE);
-                        statuses.push(status);
-                        continue;
+                }
+                ivm::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                    let name_ptr = vm.register(10);
+                    let tlv = Self::expect_tlv(vm, name_ptr, PointerType::Name)?;
+                    let name = Self::decode_name_payload(tlv.payload)?;
+                    if name.as_ref() == TRIGGER_EVENT_PUBLIC_INPUT_KEY {
+                        self.prepared_argument_record_pointer = None;
+                        if let Some(record) = self.entrypoint_argument_record.as_ref() {
+                            if !is_type_allowed_for_policy(
+                                vm.syscall_policy(),
+                                PointerType::NoritoBytes,
+                            ) {
+                                return Err(ivm::VMError::AbiTypeNotAllowed {
+                                    abi: vm.abi_version(),
+                                    type_id: PointerType::NoritoBytes as u16,
+                                });
+                            }
+                            let guest_binding = record.binding_bytes().as_slice();
+                            let bytes = u64::try_from(guest_binding.len()).unwrap_or(u64::MAX);
+                            let gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+                                PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes),
+                            );
+                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                            let ptr = Self::alloc_norito_bytes(vm, guest_binding)?;
+                            vm.set_register(10, ptr);
+                            self.prepared_argument_record_pointer = Some(ptr);
+                            return Ok(gas);
+                        }
+                        let Some(args) = self.args.as_ref() else {
+                            return Err(ivm::VMError::PermissionDenied);
+                        };
+                        if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
+                            return Err(ivm::VMError::AbiTypeNotAllowed {
+                                abi: vm.abi_version(),
+                                type_id: PointerType::Json as u16,
+                            });
+                        }
+                        let payload = Self::encode_norito_payload(args)?;
+                        let payload_len = Self::len_to_u32(payload.len())?;
+                        let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+                        out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&payload_len.to_be_bytes());
+                        out.extend_from_slice(&payload);
+                        let h: [u8; Hash::LENGTH] = Hash::new(&payload).into();
+                        out.extend_from_slice(&h);
+                        let bytes = u64::try_from(out.len()).unwrap_or(u64::MAX);
+                        let gas = PUBLIC_INPUT_GAS_BASE_DEFAULT.saturating_add(
+                            PUBLIC_INPUT_GAS_PER_BYTE_DEFAULT.saturating_mul(bytes),
+                        );
+                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                        let ptr = vm.alloc_host_tlv(&out)?;
+                        vm.set_register(10, ptr);
+                        return Ok(gas);
+                    }
+                    let Some(record) = self.public_inputs.get(&name) else {
+                        return Err(ivm::VMError::PermissionDenied);
                     };
-                    let (_env, prepared) =
-                        match self.enforce_zk_envelope_any_namespace_value(env, payload.len()) {
+                    if !is_type_allowed_for_policy(vm.syscall_policy(), record.type_id) {
+                        return Err(ivm::VMError::AbiTypeNotAllowed {
+                            abi: vm.abi_version(),
+                            type_id: record.type_id as u16,
+                        });
+                    }
+                    let gas = record.gas_cost();
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    let ptr = vm.alloc_host_tlv(&record.tlv)?;
+                    vm.set_register(10, ptr);
+                    Ok(gas)
+                }
+                // ZK verify syscalls are handled here so CoreHost can enforce VK binding
+                // and run full backend verification before arming ISI latches.
+                ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER => {
+                    // Capture TLV payload hash (envelope hash) and verify the bound proof.
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
+                    let envelope = match envelope {
+                        Ok(envelope) => envelope,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "transfer") {
+                        Ok(ok) => ok,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    vm.set_register(10, u64::from(ok));
+                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    if ok {
+                        Arc::make_mut(&mut self.zk_verified_transfer).push_back(env_hash);
+                        Arc::make_mut(&mut self.zk_last_env_hash_transfer).push_back(env_hash);
+                    }
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => {
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
+                    let envelope = match envelope {
+                        Ok(envelope) => envelope,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "unshield") {
+                        Ok(ok) => ok,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    vm.set_register(10, u64::from(ok));
+                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    if ok {
+                        Arc::make_mut(&mut self.zk_verified_unshield).push_back(env_hash);
+                        Arc::make_mut(&mut self.zk_last_env_hash_unshield).push_back(env_hash);
+                    }
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => {
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
+                    let envelope = match envelope {
+                        Ok(envelope) => envelope,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "ballot") {
+                        Ok(ok) => ok,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    vm.set_register(10, u64::from(ok));
+                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    if ok {
+                        Arc::make_mut(&mut self.zk_verified_ballot).push_back(env_hash);
+                        Arc::make_mut(&mut self.zk_last_env_hash_ballot).push_back(env_hash);
+                    }
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
+                    let envelope = match envelope {
+                        Ok(envelope) => envelope,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    let env_hash: [u8; 32] = Hash::new(tlv.payload).into();
+                    let ok = match self.verify_bound_envelope(envelope, tlv.payload, "tally") {
+                        Ok(ok) => ok,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    vm.set_register(10, u64::from(ok));
+                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    if ok {
+                        Arc::make_mut(&mut self.zk_verified_tally).push_back(env_hash);
+                        Arc::make_mut(&mut self.zk_last_env_hash_tally).push_back(env_hash);
+                    }
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_VERIFY_PROOF => {
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let (envelope, gas) = self.decode_metered_zk_envelope(vm, tlv.payload)?;
+                    let envelope = match envelope {
+                        Ok(envelope) => envelope,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    let ok = match self.verify_any_namespace_envelope(envelope, tlv.payload) {
+                        Ok(ok) => ok,
+                        Err(code) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, code);
+                            return Ok(gas);
+                        }
+                    };
+                    vm.set_register(10, u64::from(ok));
+                    vm.set_register(11, if ok { 0 } else { ivm::host::ERR_VERIFY });
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_ZK_VERIFY_BATCH => {
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    if u64::try_from(tlv.payload.len()).unwrap_or(u64::MAX)
+                        > self.zk_gas_schedule.max_payload_bytes
+                    {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let quote = ivm::host::quote_zk_batch_at(vm, ptr, self.zk_gas_schedule)?;
+                    ivm::host::preflight_reserved_syscall_gas(vm, quote.gas)?;
+                    let max_items = usize::try_from(self.halo2_config.verifier_max_batch)
+                        .unwrap_or(usize::MAX)
+                        .min(
+                            usize::try_from(self.zk_gas_schedule.max_batch_proofs)
+                                .unwrap_or(usize::MAX),
+                        );
+                    let envs = match ivm::host::decode_canonical_zk_batch(tlv.payload, max_items) {
+                        Ok(envs) => envs,
+                        Err(status) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, status);
+                            vm.set_register(12, u64::MAX);
+                            return Ok(quote.gas);
+                        }
+                    };
+                    let public_input_count = envs.iter().fold(0_u64, |total, env| {
+                        total.saturating_add(
+                            self.zk_gas_schedule
+                                .public_input_count(env.public_inputs.len()),
+                        )
+                    });
+                    let gas = self.zk_gas_schedule.actual_batch_gas(
+                        envs.len(),
+                        tlv.payload.len(),
+                        public_input_count,
+                    );
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    let guardrails = self.zk_verify_guardrails();
+
+                    let mut statuses: Vec<u8> = Vec::with_capacity(envs.len());
+                    let mut first_error: Option<u64> = None;
+                    for env in envs {
+                        let mut status = 0u8;
+                        let payload = if let Ok(bytes) = Self::encode_norito_payload(&env) {
+                            bytes
+                        } else {
+                            first_error.get_or_insert(ivm::host::ERR_DECODE);
+                            statuses.push(status);
+                            continue;
+                        };
+                        let (_env, prepared) = match self
+                            .enforce_zk_envelope_any_namespace_value(env, payload.len())
+                        {
                             Ok(v) => v,
                             Err(code) => {
                                 first_error.get_or_insert(code);
@@ -11647,525 +11844,547 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                                 continue;
                             }
                         };
-                    let Some(vk_box) = prepared.record.key.as_ref() else {
-                        first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                        let Some(vk_box) = prepared.record.key.as_ref() else {
+                            first_error.get_or_insert(ivm::host::ERR_VK_MISSING);
+                            statuses.push(status);
+                            continue;
+                        };
+                        let backend_label = prepared.backend_label.as_ref();
+                        let proof = ProofBox::new(backend_label.into(), payload);
+                        let report = crate::zk::verify_backend_with_timing_guardrails(
+                            backend_label,
+                            &proof,
+                            Some(vk_box),
+                            guardrails,
+                        );
+                        status = u8::from(report.ok);
+                        if !report.ok {
+                            first_error.get_or_insert(ivm::host::ERR_VERIFY);
+                        }
                         statuses.push(status);
-                        continue;
-                    };
-                    let backend_label = prepared.backend_label.as_ref();
-                    let proof = ProofBox::new(backend_label.into(), payload);
-                    let report = crate::zk::verify_backend_with_timing_guardrails(
-                        backend_label,
-                        &proof,
-                        Some(vk_box),
-                        guardrails,
-                    );
-                    status = u8::from(report.ok);
-                    if !report.ok {
-                        first_error.get_or_insert(ivm::host::ERR_VERIFY);
                     }
-                    statuses.push(status);
-                }
 
-                if statuses.is_empty() {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ivm::host::ERR_DECODE);
-                    return Ok(gas);
-                }
-
-                let body = Self::encode_norito_payload(&statuses)
-                    .map_err(|_| ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid))?;
-                let output_bytes = 7_usize
-                    .saturating_add(body.len())
-                    .saturating_add(iroha_crypto::Hash::LENGTH);
-                if u64::try_from(output_bytes).unwrap_or(u64::MAX)
-                    != self.zk_gas_schedule.batch_output_bytes(statuses.len())
-                {
-                    return Err(ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid));
-                }
-                let mut out = Vec::with_capacity(output_bytes);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
-                    vm.set_register(12, idx as u64);
-                } else {
-                    vm.set_register(12, u64::MAX);
-                }
-                if let Some(code) = first_error {
-                    vm.set_register(11, code);
-                } else {
-                    vm.set_register(11, 0);
-                }
-                Ok(gas)
-            }
-            // ZK roots read: build response from snapshot and return TLV pointer in r10
-            ivm::syscalls::SYSCALL_ZK_ROOTS_GET => {
-                let ptr = vm.register(10);
-                let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
-                let input_len = req_tlv.payload.len();
-                let req: ivm::zk_verify::RootsGetRequest = decode_canonical_norito(req_tlv.payload)
-                    .map_err(|_| ivm::VMError::NoritoInvalid)?;
-                let resp = self.roots_get_response(&req)?;
-                let body = Self::encode_norito_payload(&resp)?;
-                let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let body_len = Self::len_to_u32(body.len())?;
-                let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&body_len.to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                Ok(gas)
-            }
-            // ZK vote tally read: respond from elections snapshot
-            ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
-                let ptr = vm.register(10);
-                let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
-                let input_len = req_tlv.payload.len();
-                let req: ivm::zk_verify::VoteGetTallyRequest =
-                    decode_canonical_norito(req_tlv.payload)
-                        .map_err(|_| ivm::VMError::NoritoInvalid)?;
-                let resp = self.vote_get_tally_response(&req)?;
-                let body = Self::encode_norito_payload(&resp)?;
-                let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let body_len = Self::len_to_u32(body.len())?;
-                let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&body_len.to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
-                use ivm::vrf::VrfEpochSeedRequest;
-
-                const OK: u64 = 0;
-                const ERR_TYPE: u64 = 1;
-                const ERR_DECODE: u64 = 2;
-                const ERR_OOM: u64 = 3;
-
-                let ptr = vm.register(10);
-                let tlv = vm.validate_tlv(ptr)?;
-                let input_len = tlv.payload.len();
-                let gas = Self::state_query_gas(input_len);
-                if tlv.type_id != PointerType::NoritoBytes {
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_TYPE);
-                    return Ok(gas);
-                }
-                let req: VrfEpochSeedRequest = match decode_canonical_norito(tlv.payload) {
-                    Ok(req) => req,
-                    Err(_) => {
-                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    if statuses.is_empty() {
                         vm.set_register(10, 0);
-                        vm.set_register(11, ERR_DECODE);
+                        vm.set_register(11, ivm::host::ERR_DECODE);
                         return Ok(gas);
                     }
-                };
 
-                let resp = self.vrf_epoch_seed_response(&req);
-                let body = Self::encode_norito_payload(&resp)?;
-                let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let body_len = Self::len_to_u32(body.len())?;
-                let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&body_len.to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                match vm.alloc_host_tlv(&out) {
-                    Ok(p) => {
-                        vm.set_register(10, p);
-                        vm.set_register(11, OK);
+                    let body = Self::encode_norito_payload(&statuses)
+                        .map_err(|_| ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid))?;
+                    let output_bytes = 7_usize
+                        .saturating_add(body.len())
+                        .saturating_add(iroha_crypto::Hash::LENGTH);
+                    if u64::try_from(output_bytes).unwrap_or(u64::MAX)
+                        != self.zk_gas_schedule.batch_output_bytes(statuses.len())
+                    {
+                        return Err(ivm::VMError::metered(gas, ivm::VMError::NoritoInvalid));
                     }
-                    Err(_) => {
+                    let mut out = Vec::with_capacity(output_bytes);
+                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(
+                        &u32::try_from(body.len()).unwrap_or(u32::MAX).to_be_bytes(),
+                    );
+                    out.extend_from_slice(&body);
+                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                    out.extend_from_slice(&h);
+                    let p = vm.alloc_host_tlv(&out)?;
+                    vm.set_register(10, p);
+                    if let Some((idx, _)) = statuses.iter().enumerate().find(|(_, s)| **s == 0) {
+                        vm.set_register(12, idx as u64);
+                    } else {
+                        vm.set_register(12, u64::MAX);
+                    }
+                    if let Some(code) = first_error {
+                        vm.set_register(11, code);
+                    } else {
+                        vm.set_register(11, 0);
+                    }
+                    Ok(gas)
+                }
+                // ZK roots read: build response from snapshot and return TLV pointer in r10
+                ivm::syscalls::SYSCALL_ZK_ROOTS_GET => {
+                    let ptr = vm.register(10);
+                    let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
+                    let input_len = req_tlv.payload.len();
+                    let req: ivm::zk_verify::RootsGetRequest =
+                        decode_canonical_norito(req_tlv.payload)
+                            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    let resp = self.roots_get_response(&req)?;
+                    let body = Self::encode_norito_payload(&resp)?;
+                    let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    let body_len = Self::len_to_u32(body.len())?;
+                    let mut out = Vec::with_capacity(7 + body.len() + 32);
+                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(&body_len.to_be_bytes());
+                    out.extend_from_slice(&body);
+                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                    out.extend_from_slice(&h);
+                    let p = vm.alloc_host_tlv(&out)?;
+                    vm.set_register(10, p);
+                    Ok(gas)
+                }
+                // ZK vote tally read: respond from elections snapshot
+                ivm::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
+                    let ptr = vm.register(10);
+                    let req_tlv = Self::expect_tlv(vm, ptr, PointerType::NoritoBytes)?;
+                    let input_len = req_tlv.payload.len();
+                    let req: ivm::zk_verify::VoteGetTallyRequest =
+                        decode_canonical_norito(req_tlv.payload)
+                            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+                    let resp = self.vote_get_tally_response(&req)?;
+                    let body = Self::encode_norito_payload(&resp)?;
+                    let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    let body_len = Self::len_to_u32(body.len())?;
+                    let mut out = Vec::with_capacity(7 + body.len() + 32);
+                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(&body_len.to_be_bytes());
+                    out.extend_from_slice(&body);
+                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                    out.extend_from_slice(&h);
+                    let p = vm.alloc_host_tlv(&out)?;
+                    vm.set_register(10, p);
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_VRF_EPOCH_SEED => {
+                    use ivm::vrf::VrfEpochSeedRequest;
+
+                    const OK: u64 = 0;
+                    const ERR_TYPE: u64 = 1;
+                    const ERR_DECODE: u64 = 2;
+                    const ERR_OOM: u64 = 3;
+
+                    let ptr = vm.register(10);
+                    let tlv = vm.validate_tlv(ptr)?;
+                    let input_len = tlv.payload.len();
+                    let gas = Self::state_query_gas(input_len);
+                    if tlv.type_id != PointerType::NoritoBytes {
+                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
                         vm.set_register(10, 0);
-                        vm.set_register(11, ERR_OOM);
+                        vm.set_register(11, ERR_TYPE);
+                        return Ok(gas);
                     }
-                }
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
-            | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
-            | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
-            | ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
-            | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
-            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET
-            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
-            | ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
-            | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
-            | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
-                Self::reject_soracloud_syscall(vm, number)
-            }
-            // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
-            ivm::syscalls::SYSCALL_SM3_HASH
-            | ivm::syscalls::SYSCALL_SM2_VERIFY
-            | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
-            | ivm::syscalls::SYSCALL_SM4_GCM_OPEN
-            | ivm::syscalls::SYSCALL_SM4_CCM_SEAL
-            | ivm::syscalls::SYSCALL_SM4_CCM_OPEN => {
-                if !self.crypto.sm_helpers_enabled() {
-                    return Err(ivm::VMError::PermissionDenied);
-                }
-                let result = self.default.syscall(number, vm);
-                #[cfg(feature = "telemetry")]
-                if let Some(telemetry) = self.telemetry.as_ref() {
-                    Self::record_sm_syscall(telemetry, number, &result);
-                }
-                result
-            }
-            // Durable state syscalls backed by WSV.
-            ivm::syscalls::SYSCALL_STATE_GET => {
-                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
-                Self::ensure_contract_state_read_allowed(&path)?;
-                let key = self
-                    .scoped_durable_state_path(&path)?
-                    .unwrap_or_else(|| path.clone());
-                if let Some(entry) = self.durable_state_overlay.get(&key) {
-                    match entry {
-                        Some(stored) => {
-                            let len = Self::durable_state_value_payload_len(stored)?;
-                            let gas = ivm::host::state_value_gas(path_len, len);
+                    let req: VrfEpochSeedRequest = match decode_canonical_norito(tlv.payload) {
+                        Ok(req) => req,
+                        Err(_) => {
                             ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            ivm::host::validate_declared_state_value_payload(vm, &path, stored)?;
-                            let stored = stored.clone();
-                            self.log_state_read_key(path.as_ref());
-                            Self::load_state_value(vm, &stored)?;
-                            return Ok(gas);
-                        }
-                        None => {
-                            let gas = ivm::host::state_path_gas(path_len);
-                            ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                            self.log_state_read_key(path.as_ref());
                             vm.set_register(10, 0);
+                            vm.set_register(11, ERR_DECODE);
                             return Ok(gas);
                         }
+                    };
+
+                    let resp = self.vrf_epoch_seed_response(&req);
+                    let body = Self::encode_norito_payload(&resp)?;
+                    let gas = Self::state_query_gas(input_len.saturating_add(body.len()));
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    let body_len = Self::len_to_u32(body.len())?;
+                    let mut out = Vec::with_capacity(7 + body.len() + 32);
+                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                    out.push(1);
+                    out.extend_from_slice(&body_len.to_be_bytes());
+                    out.extend_from_slice(&body);
+                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
+                    out.extend_from_slice(&h);
+                    match vm.alloc_host_tlv(&out) {
+                        Ok(p) => {
+                            vm.set_register(10, p);
+                            vm.set_register(11, OK);
+                        }
+                        Err(_) => {
+                            vm.set_register(10, 0);
+                            vm.set_register(11, ERR_OOM);
+                        }
+                    }
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE
+                | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION
+                | ivm::syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
+                | ivm::syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL
+                | ivm::syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
+                | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET
+                | ivm::syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL
+                | ivm::syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH
+                | ivm::syscalls::SYSCALL_SORACLOUD_READ_CONFIG
+                | ivm::syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
+                    Self::reject_soracloud_syscall(vm, number)
+                }
+                // SM helper syscalls are gated by crypto configuration and forwarded to DefaultHost.
+                ivm::syscalls::SYSCALL_SM3_HASH
+                | ivm::syscalls::SYSCALL_SM2_VERIFY
+                | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
+                | ivm::syscalls::SYSCALL_SM4_GCM_OPEN
+                | ivm::syscalls::SYSCALL_SM4_CCM_SEAL
+                | ivm::syscalls::SYSCALL_SM4_CCM_OPEN => {
+                    if !self.crypto.sm_helpers_enabled() {
+                        return Err(ivm::VMError::PermissionDenied);
+                    }
+                    let result = self.default.syscall(number, vm);
+                    #[cfg(feature = "telemetry")]
+                    if let Some(telemetry) = self.telemetry.as_ref() {
+                        Self::record_sm_syscall(telemetry, number, &result);
+                    }
+                    result
+                }
+                // Durable state syscalls backed by WSV.
+                ivm::syscalls::SYSCALL_STATE_GET => {
+                    let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                    Self::ensure_contract_state_read_allowed(&path)?;
+                    let key = self
+                        .scoped_durable_state_path(&path)?
+                        .unwrap_or_else(|| path.clone());
+                    if let Some(entry) = self.durable_state_overlay.get(&key) {
+                        match entry {
+                            Some(stored) => {
+                                let len = Self::durable_state_value_payload_len(stored)?;
+                                let gas = ivm::host::state_value_gas(path_len, len);
+                                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                                ivm::host::validate_declared_state_value_payload(
+                                    vm, &path, stored,
+                                )?;
+                                let stored = stored.clone();
+                                self.log_state_read_key(path.as_ref());
+                                Self::load_state_value(vm, &stored)?;
+                                return Ok(gas);
+                            }
+                            None => {
+                                let gas = ivm::host::state_path_gas(path_len);
+                                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                                self.log_state_read_key(path.as_ref());
+                                vm.set_register(10, 0);
+                                return Ok(gas);
+                            }
+                        }
+                    }
+                    if let Some(len) = self.durable_state_base_or_live_value_len(&key)? {
+                        let gas = ivm::host::state_value_gas(path_len, len);
+                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                        let stored = self
+                            .durable_state_base_or_live_get(&key)
+                            .ok_or(ivm::VMError::DecodeError)?;
+                        ivm::host::validate_declared_state_value_payload(
+                            vm,
+                            &path,
+                            stored.as_ref(),
+                        )?;
+                        let stored = stored.into_owned();
+                        self.log_state_read_key(path.as_ref());
+                        Self::load_state_value(vm, &stored)?;
+                        Ok(gas)
+                    } else {
+                        let gas = ivm::host::state_path_gas(path_len);
+                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                        self.log_state_read_key(path.as_ref());
+                        vm.set_register(10, 0);
+                        Ok(gas)
                     }
                 }
-                if let Some(len) = self.durable_state_base_or_live_value_len(&key)? {
-                    let gas = ivm::host::state_value_gas(path_len, len);
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    let stored = self
-                        .durable_state_base_or_live_get(&key)
-                        .ok_or(ivm::VMError::DecodeError)?;
-                    ivm::host::validate_declared_state_value_payload(vm, &path, stored.as_ref())?;
-                    let stored = stored.into_owned();
-                    self.log_state_read_key(path.as_ref());
-                    Self::load_state_value(vm, &stored)?;
+                ivm::syscalls::SYSCALL_STATE_SET => {
+                    let path_ptr = vm.register(10);
+                    let val_ptr = vm.register(11);
+                    let (path, path_len) = self.decode_durable_state_path_payload(vm, path_ptr)?;
+                    Self::ensure_contract_state_write_allowed(&path)?;
+                    let key = self
+                        .scoped_durable_state_path(&path)?
+                        .unwrap_or_else(|| path.clone());
+                    if crate::validation_fee::is_validation_fee_credit_state_key(&key) {
+                        return Err(ivm::VMError::PermissionDenied);
+                    }
+                    ivm::host::validate_declared_state_path(vm, &path)?;
+                    let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
+                    ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
+                    ivm::host::validate_declared_state_value_payload(vm, &path, val_tlv.payload)?;
+                    let gas = ivm::host::state_value_gas(path_len, val_tlv.payload.len());
+                    if !self.try_reserve_durable_state_update(&key, val_tlv.payload.len()) {
+                        return Ok(gas);
+                    }
+                    let stored = val_tlv.payload.to_vec();
+                    self.stage_durable_state_update(key, Some(stored));
+                    self.log_state_write_key(path.as_ref());
                     Ok(gas)
-                } else {
+                }
+                ivm::syscalls::SYSCALL_STATE_DEL => {
+                    let (path, path_len) =
+                        self.decode_durable_state_path_payload(vm, vm.register(10))?;
+                    Self::ensure_contract_state_write_allowed(&path)?;
+                    let scoped_path = self.scoped_durable_state_path(&path)?;
+                    let effective_path = scoped_path.as_ref().unwrap_or(&path);
+                    if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
+                        return Err(ivm::VMError::PermissionDenied);
+                    }
+                    ivm::host::validate_declared_state_path(vm, &path)?;
+                    let key = effective_path.clone();
                     let gas = ivm::host::state_path_gas(path_len);
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    self.log_state_read_key(path.as_ref());
-                    vm.set_register(10, 0);
+                    if !self.try_reserve_durable_state_update(&key, 0) {
+                        return Ok(gas);
+                    }
+                    self.stage_durable_state_update(key, None);
+                    self.log_state_write_key(path.as_ref());
                     Ok(gas)
                 }
-            }
-            ivm::syscalls::SYSCALL_STATE_SET => {
-                let path_ptr = vm.register(10);
-                let val_ptr = vm.register(11);
-                let (path, path_len) = self.decode_durable_state_path_payload(vm, path_ptr)?;
-                Self::ensure_contract_state_write_allowed(&path)?;
-                let key = self
-                    .scoped_durable_state_path(&path)?
-                    .unwrap_or_else(|| path.clone());
-                if crate::validation_fee::is_validation_fee_credit_state_key(&key) {
-                    return Err(ivm::VMError::PermissionDenied);
-                }
-                ivm::host::validate_declared_state_path(vm, &path)?;
-                let val_tlv = Self::expect_tlv(vm, val_ptr, PointerType::NoritoBytes)?;
-                ivm::host::validate_state_value_payload_len(val_tlv.payload.len())?;
-                ivm::host::validate_declared_state_value_payload(vm, &path, val_tlv.payload)?;
-                let gas = ivm::host::state_value_gas(path_len, val_tlv.payload.len());
-                if !self.try_reserve_durable_state_update(&key, val_tlv.payload.len()) {
-                    return Ok(gas);
-                }
-                let stored = val_tlv.payload.to_vec();
-                self.stage_durable_state_update(key, Some(stored));
-                self.log_state_write_key(path.as_ref());
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_STATE_DEL => {
-                let (path, path_len) =
-                    self.decode_durable_state_path_payload(vm, vm.register(10))?;
-                Self::ensure_contract_state_write_allowed(&path)?;
-                let scoped_path = self.scoped_durable_state_path(&path)?;
-                let effective_path = scoped_path.as_ref().unwrap_or(&path);
-                if crate::validation_fee::is_validation_fee_credit_state_key(effective_path) {
-                    return Err(ivm::VMError::PermissionDenied);
-                }
-                ivm::host::validate_declared_state_path(vm, &path)?;
-                let key = effective_path.clone();
-                let gas = ivm::host::state_path_gas(path_len);
-                if !self.try_reserve_durable_state_update(&key, 0) {
-                    return Ok(gas);
-                }
-                self.stage_durable_state_update(key, None);
-                self.log_state_write_key(path.as_ref());
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_STATE_KEYS => {
-                let offset = vm.register(11);
-                let limit = vm.register(12);
-                if limit > ivm::syscalls::STATE_KEYS_MAX_ITEMS {
-                    return Err(ivm::VMError::NoritoInvalid);
-                }
-                let (prefix, path_len) =
-                    self.decode_durable_state_scan_path(vm, vm.register(10))?;
-                let (selected, total, scan_work_gas) =
-                    self.collect_durable_state_keys(vm, &prefix, path_len, offset, limit)?;
-                ivm::host::preflight_reserved_state_keys_page(
-                    vm,
-                    &selected,
-                    scan_work_gas,
-                    0,
-                    u64::try_from(selected.len()).unwrap_or(u64::MAX),
-                )?;
-                self.log_state_read_key(prefix.as_ref());
-                let payload = Self::encode_norito_payload(&selected)?;
-                let gas = ivm::host::STATE_QUERY_GAS_BASE
-                    .saturating_add(scan_work_gas)
-                    .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                let ptr = Self::alloc_norito_bytes(vm, &payload)?;
-                vm.set_register(10, ptr);
-                vm.set_register(11, total);
-                vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_STATE_HAS => {
-                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
-                Self::ensure_contract_state_read_allowed(&path)?;
-                let present = self.durable_state_key_present(&path)?;
-                self.log_state_read_key(path.as_ref());
-                vm.set_register(10, u64::from(present));
-                Ok(ivm::host::state_path_gas(path_len))
-            }
-            ivm::syscalls::SYSCALL_STATE_LEN => {
-                let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
-                Self::ensure_contract_state_read_allowed(&path)?;
-                let gas = ivm::host::state_path_gas(path_len);
-                if let Some(len) = self.durable_state_value_len(&path)? {
+                ivm::syscalls::SYSCALL_STATE_KEYS => {
+                    let offset = vm.register(11);
+                    let limit = vm.register(12);
+                    if limit > ivm::syscalls::STATE_KEYS_MAX_ITEMS {
+                        return Err(ivm::VMError::NoritoInvalid);
+                    }
+                    let (prefix, path_len) =
+                        self.decode_durable_state_scan_path(vm, vm.register(10))?;
+                    let (selected, total, scan_work_gas) =
+                        self.collect_durable_state_keys(vm, &prefix, path_len, offset, limit)?;
+                    ivm::host::preflight_reserved_state_keys_page(
+                        vm,
+                        &selected,
+                        scan_work_gas,
+                        0,
+                        u64::try_from(selected.len()).unwrap_or(u64::MAX),
+                    )?;
+                    self.log_state_read_key(prefix.as_ref());
+                    let payload = Self::encode_norito_payload(&selected)?;
+                    let gas = ivm::host::STATE_QUERY_GAS_BASE
+                        .saturating_add(scan_work_gas)
+                        .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
                     ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    self.log_state_read_key(path.as_ref());
-                    vm.set_register(10, u64::try_from(len).unwrap_or(u64::MAX));
-                    vm.set_register(11, 1);
-                    Ok(gas)
-                } else {
-                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                    self.log_state_read_key(path.as_ref());
-                    vm.set_register(10, 0);
-                    vm.set_register(11, 0);
-                    Ok(gas)
-                }
-            }
-            ivm::syscalls::SYSCALL_STATE_COUNT => {
-                let (prefix, path_len) =
-                    self.decode_durable_state_scan_path(vm, vm.register(10))?;
-                let (_, total, scan_work_gas) =
-                    self.collect_durable_state_keys(vm, &prefix, path_len, u64::MAX, 0)?;
-                let gas = ivm::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
-                ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
-                self.log_state_read_key(prefix.as_ref());
-                vm.set_register(10, total);
-                Ok(gas)
-            }
-            ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
-                if self.entrypoint_argument_record.is_some() =>
-            {
-                let prepared = self
-                    .entrypoint_argument_record
-                    .as_ref()
-                    .cloned()
-                    .ok_or(ivm::VMError::DecodeError)?;
-                let record_pointer = self
-                    .prepared_argument_record_pointer
-                    .ok_or(ivm::VMError::DecodeError)?;
-                let gas = prepared.install_into_vm(vm, record_pointer)?;
-                self.prepared_argument_record_pointer = None;
-                Ok(gas)
-            }
-            // Norito serialization and numeric helpers delegate to the IVM codec host.
-            forwarded if Self::is_codec_forwarded_syscall(forwarded) => {
-                self.codec_host.syscall(forwarded, vm)
-            }
-            // Stateless helpers are safe to forward to DefaultHost.
-            forwarded if Self::is_default_forwarded_syscall(forwarded) => {
-                self.default.syscall(forwarded, vm)
-            }
-
-            // Provide the current authority as a host-owned AccountId pointer.
-            // New format: TLV (type_id:u16, version:u8, len:be u32, payload, hash:32).
-            // Historical len-prefixed payloads are no longer emitted.
-            ivm::syscalls::SYSCALL_GET_AUTHORITY | ivm::syscalls::SYSCALL_SYSVAR_AUTHORITY => {
-                // Encode authority payload
-                let payload = Self::encode_norito_payload(&self.authority)?;
-                let payload_len = Self::len_to_u32(payload.len())?;
-                // Build TLV envelope (AccountId: type_id=1, version=1)
-                let type_id: u16 = 1;
-                let version: u8 = 1;
-                let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
-                blob.extend_from_slice(&type_id.to_be_bytes());
-                blob.push(version);
-                blob.extend_from_slice(&payload_len.to_be_bytes());
-                blob.extend_from_slice(&payload);
-                // Append hash: single ABI requires valid digest
-                let h = iroha_crypto::Hash::new(&payload);
-                blob.extend_from_slice(h.as_ref());
-                // Prefer INPUT and spill to owned HEAP without overwriting earlier TLVs.
-                let ptr = vm.alloc_host_tlv(&blob)?;
-                vm.set_register(10, ptr);
-                Ok(Self::sysvar_gas(payload.len()))
-            }
-            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
-                let subject = self
-                    .current_contract_runtime_context
-                    .as_ref()
-                    .map(|context| &context.contract_subject)
-                    .ok_or(ivm::VMError::PermissionDenied)?;
-                let payload = Self::encode_norito_payload(subject)?;
-                let ptr = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
-                vm.set_register(10, ptr);
-                Ok(Self::sysvar_gas(payload.len()))
-            }
-            ivm::syscalls::SYSCALL_CURRENT_TIME_MS
-            | ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS => {
-                vm.set_register(10, self.current_block_time_ms.unwrap_or(0));
-                Ok(Self::sysvar_gas(0))
-            }
-            ivm::syscalls::SYSCALL_SYSVAR_CHAIN_ID => {
-                if self.chain_id_bytes.is_empty() {
-                    vm.set_register(10, 0);
-                    Ok(Self::sysvar_gas(0))
-                } else {
-                    let ptr = Self::alloc_tlv_payload(vm, PointerType::Blob, &self.chain_id_bytes)?;
+                    let ptr = Self::alloc_norito_bytes(vm, &payload)?;
                     vm.set_register(10, ptr);
-                    Ok(Self::sysvar_gas(self.chain_id_bytes.len()))
+                    vm.set_register(11, total);
+                    vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
+                    Ok(gas)
                 }
-            }
-            ivm::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT => {
-                vm.set_register(10, self.current_block_height.unwrap_or(0));
-                Ok(Self::sysvar_gas(0))
-            }
-            ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS => {
-                let Some(context) = self.current_contract_runtime_context.as_ref() else {
-                    vm.set_register(10, 0);
-                    return Ok(Self::sysvar_gas(0));
-                };
-                let payload = Self::encode_norito_payload(&context.contract_address)?;
-                let ptr = Self::alloc_norito_bytes(vm, &payload)?;
-                vm.set_register(10, ptr);
-                Ok(Self::sysvar_gas(payload.len()))
-            }
-            ivm::syscalls::SYSCALL_SYSVAR_ENTRYPOINT => {
-                let Some(context) = self.current_contract_runtime_context.as_ref() else {
-                    vm.set_register(10, 0);
-                    return Ok(Self::sysvar_gas(0));
-                };
-                let ptr =
-                    Self::alloc_tlv_payload(vm, PointerType::Blob, context.entrypoint.as_bytes())?;
-                vm.set_register(10, ptr);
-                Ok(Self::sysvar_gas(context.entrypoint.len()))
-            }
-            ivm::syscalls::SYSCALL_CORE_QUERY_GET => {
-                let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                self.execute_core_query_get(vm, number, tag)
-            }
-            ivm::syscalls::SYSCALL_CORE_QUERY_PAGE => {
-                let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
-                    .map_err(|_| ivm::VMError::DecodeError)?;
-                let offset = i64::from_ne_bytes(vm.register(11).to_ne_bytes());
-                let limit = vm.register(12);
-                self.execute_core_query_page(vm, number, tag, offset, limit)
-            }
-            ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST => {
-                let code_hash: Hash =
-                    Self::decode_query_key(vm, vm.register(10), PointerType::NoritoBytes)?;
-                let request =
+                ivm::syscalls::SYSCALL_STATE_HAS => {
+                    let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                    Self::ensure_contract_state_read_allowed(&path)?;
+                    let present = self.durable_state_key_present(&path)?;
+                    self.log_state_read_key(path.as_ref());
+                    vm.set_register(10, u64::from(present));
+                    Ok(ivm::host::state_path_gas(path_len))
+                }
+                ivm::syscalls::SYSCALL_STATE_LEN => {
+                    let (path, path_len) = self.decode_durable_state_path(vm, vm.register(10))?;
+                    Self::ensure_contract_state_read_allowed(&path)?;
+                    let gas = ivm::host::state_path_gas(path_len);
+                    if let Some(len) = self.durable_state_value_len(&path)? {
+                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                        self.log_state_read_key(path.as_ref());
+                        vm.set_register(10, u64::try_from(len).unwrap_or(u64::MAX));
+                        vm.set_register(11, 1);
+                        Ok(gas)
+                    } else {
+                        ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                        self.log_state_read_key(path.as_ref());
+                        vm.set_register(10, 0);
+                        vm.set_register(11, 0);
+                        Ok(gas)
+                    }
+                }
+                ivm::syscalls::SYSCALL_STATE_COUNT => {
+                    let (prefix, path_len) =
+                        self.decode_durable_state_scan_path(vm, vm.register(10))?;
+                    let (_, total, scan_work_gas) =
+                        self.collect_durable_state_keys(vm, &prefix, path_len, u64::MAX, 0)?;
+                    let gas = ivm::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
+                    ivm::host::preflight_reserved_syscall_gas(vm, gas)?;
+                    self.log_state_read_key(prefix.as_ref());
+                    vm.set_register(10, total);
+                    Ok(gas)
+                }
+                ivm::syscalls::SYSCALL_DECODE_ARGUMENT_RECORD
+                    if self.entrypoint_argument_record.is_some() =>
+                {
+                    let prepared = self
+                        .entrypoint_argument_record
+                        .as_ref()
+                        .cloned()
+                        .ok_or(ivm::VMError::DecodeError)?;
+                    let record_pointer = self
+                        .prepared_argument_record_pointer
+                        .ok_or(ivm::VMError::DecodeError)?;
+                    let gas = prepared.install_into_vm(vm, record_pointer)?;
+                    self.prepared_argument_record_pointer = None;
+                    Ok(gas)
+                }
+                // Norito serialization and numeric helpers delegate to the IVM codec host.
+                forwarded if Self::is_codec_forwarded_syscall(forwarded) => {
+                    self.codec_host.syscall(forwarded, vm)
+                }
+                // Stateless helpers are safe to forward to DefaultHost.
+                forwarded if Self::is_default_forwarded_syscall(forwarded) => {
+                    self.default.syscall(forwarded, vm)
+                }
+
+                // Provide the current authority as a host-owned AccountId pointer.
+                // New format: TLV (type_id:u16, version:u8, len:be u32, payload, hash:32).
+                // Historical len-prefixed payloads are no longer emitted.
+                ivm::syscalls::SYSCALL_GET_AUTHORITY | ivm::syscalls::SYSCALL_SYSVAR_AUTHORITY => {
+                    // Encode authority payload
+                    let payload = Self::encode_norito_payload(&self.authority)?;
+                    let payload_len = Self::len_to_u32(payload.len())?;
+                    // Build TLV envelope (AccountId: type_id=1, version=1)
+                    let type_id: u16 = 1;
+                    let version: u8 = 1;
+                    let mut blob = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
+                    blob.extend_from_slice(&type_id.to_be_bytes());
+                    blob.push(version);
+                    blob.extend_from_slice(&payload_len.to_be_bytes());
+                    blob.extend_from_slice(&payload);
+                    // Append hash: single ABI requires valid digest
+                    let h = iroha_crypto::Hash::new(&payload);
+                    blob.extend_from_slice(h.as_ref());
+                    // Prefer INPUT and spill to owned HEAP without overwriting earlier TLVs.
+                    let ptr = vm.alloc_host_tlv(&blob)?;
+                    vm.set_register(10, ptr);
+                    Ok(Self::sysvar_gas(payload.len()))
+                }
+                ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_SUBJECT => {
+                    let subject = self
+                        .current_contract_runtime_context
+                        .as_ref()
+                        .map(|context| &context.contract_subject)
+                        .ok_or(ivm::VMError::PermissionDenied)?;
+                    let payload = Self::encode_norito_payload(subject)?;
+                    let ptr = Self::alloc_tlv_payload(vm, PointerType::AccountId, &payload)?;
+                    vm.set_register(10, ptr);
+                    Ok(Self::sysvar_gas(payload.len()))
+                }
+                ivm::syscalls::SYSCALL_CURRENT_TIME_MS
+                | ivm::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS => {
+                    vm.set_register(10, self.current_block_time_ms.unwrap_or(0));
+                    Ok(Self::sysvar_gas(0))
+                }
+                ivm::syscalls::SYSCALL_SYSVAR_CHAIN_ID => {
+                    if self.chain_id_bytes.is_empty() {
+                        vm.set_register(10, 0);
+                        Ok(Self::sysvar_gas(0))
+                    } else {
+                        let ptr =
+                            Self::alloc_tlv_payload(vm, PointerType::Blob, &self.chain_id_bytes)?;
+                        vm.set_register(10, ptr);
+                        Ok(Self::sysvar_gas(self.chain_id_bytes.len()))
+                    }
+                }
+                ivm::syscalls::SYSCALL_SYSVAR_BLOCK_HEIGHT => {
+                    vm.set_register(10, self.current_block_height.unwrap_or(0));
+                    Ok(Self::sysvar_gas(0))
+                }
+                ivm::syscalls::SYSCALL_SYSVAR_CONTRACT_ADDRESS => {
+                    let Some(context) = self.current_contract_runtime_context.as_ref() else {
+                        vm.set_register(10, 0);
+                        return Ok(Self::sysvar_gas(0));
+                    };
+                    let payload = Self::encode_norito_payload(&context.contract_address)?;
+                    let ptr = Self::alloc_norito_bytes(vm, &payload)?;
+                    vm.set_register(10, ptr);
+                    Ok(Self::sysvar_gas(payload.len()))
+                }
+                ivm::syscalls::SYSCALL_SYSVAR_ENTRYPOINT => {
+                    let Some(context) = self.current_contract_runtime_context.as_ref() else {
+                        vm.set_register(10, 0);
+                        return Ok(Self::sysvar_gas(0));
+                    };
+                    let ptr = Self::alloc_tlv_payload(
+                        vm,
+                        PointerType::Blob,
+                        context.entrypoint.as_bytes(),
+                    )?;
+                    vm.set_register(10, ptr);
+                    Ok(Self::sysvar_gas(context.entrypoint.len()))
+                }
+                ivm::syscalls::SYSCALL_CORE_QUERY_GET => {
+                    let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    self.execute_core_query_get(vm, number, tag)
+                }
+                ivm::syscalls::SYSCALL_CORE_QUERY_PAGE => {
+                    let tag = CoreQueryEntityTagV1::try_from(vm.register(10))
+                        .map_err(|_| ivm::VMError::DecodeError)?;
+                    let offset = i64::from_ne_bytes(vm.register(11).to_ne_bytes());
+                    let limit = vm.register(12);
+                    self.execute_core_query_page(vm, number, tag, offset, limit)
+                }
+                ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_MANIFEST => {
+                    let code_hash: Hash =
+                        Self::decode_query_key(vm, vm.register(10), PointerType::NoritoBytes)?;
+                    let request =
                     QueryRequest::Singular(SingularQueryBox::FindContractManifestByCodeHash(
                         iroha_data_model::query::smart_contract::prelude::FindContractManifestByCodeHash {
                             code_hash,
                         },
                     ));
-                self.execute_singular_query_payload(vm, number, request, |output| match output {
-                    SingularQueryOutputBox::ContractManifest(manifest) => {
-                        Self::encode_norito_payload(&manifest)
-                    }
-                    _ => Err(ivm::VMError::DecodeError),
-                })
-            }
-            ivm::syscalls::SYSCALL_QUERY_GET_PARAMETER => {
-                let name: Name = Self::decode_query_key(vm, vm.register(10), PointerType::Name)?;
-                let gas_remaining = vm.remaining_gas();
-                let gas_ctx = QueryGasContext::singular();
-                let Some(state_ref) = self.query_state.get() else {
-                    return Err(ivm::VMError::NotImplemented { syscall: number });
-                };
-                if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
-                    return Err(ivm::VMError::OutOfGas);
+                    self.execute_singular_query_payload(
+                        vm,
+                        number,
+                        request,
+                        |output| match output {
+                            SingularQueryOutputBox::ContractManifest(manifest) => {
+                                Self::encode_norito_payload(&manifest)
+                            }
+                            _ => Err(ivm::VMError::DecodeError),
+                        },
+                    )
                 }
-                let parameter = state_ref.parameter_by_name(&name)?;
-                let payload = Self::encode_norito_payload(&parameter)?;
-                Self::finish_direct_singular_query_payload(vm, gas_remaining, payload)
-            }
-            ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => {
-                let lookup = Self::decode_contract_instance_lookup(vm, vm.register(10))?;
-                let gas_remaining = vm.remaining_gas();
-                let gas_ctx = QueryGasContext::singular();
-                let Some(state_ref) = self.query_state.get() else {
-                    return Err(ivm::VMError::NotImplemented { syscall: number });
-                };
-                if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
-                    return Err(ivm::VMError::OutOfGas);
+                ivm::syscalls::SYSCALL_QUERY_GET_PARAMETER => {
+                    let name: Name =
+                        Self::decode_query_key(vm, vm.register(10), PointerType::Name)?;
+                    let gas_remaining = vm.remaining_gas();
+                    let gas_ctx = QueryGasContext::singular();
+                    let Some(state_ref) = self.query_state.get() else {
+                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                    };
+                    if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
+                        return Err(ivm::VMError::OutOfGas);
+                    }
+                    let parameter = state_ref.parameter_by_name(&name)?;
+                    let payload = Self::encode_norito_payload(&parameter)?;
+                    Self::finish_direct_singular_query_payload(vm, gas_remaining, payload)
                 }
-                let instance = match lookup {
-                    ContractInstanceLookup::Address(address) => {
-                        state_ref.contract_instance_by_address(&address)?
+                ivm::syscalls::SYSCALL_QUERY_GET_CONTRACT_INSTANCE => {
+                    let lookup = Self::decode_contract_instance_lookup(vm, vm.register(10))?;
+                    let gas_remaining = vm.remaining_gas();
+                    let gas_ctx = QueryGasContext::singular();
+                    let Some(state_ref) = self.query_state.get() else {
+                        return Err(ivm::VMError::NotImplemented { syscall: number });
+                    };
+                    if Self::query_execution_budget(&gas_ctx, gas_remaining)?.max_items() == 0 {
+                        return Err(ivm::VMError::OutOfGas);
                     }
-                    ContractInstanceLookup::Alias(alias) => {
-                        state_ref.contract_instance_by_alias(&alias)?
-                    }
-                };
-                let payload = Self::encode_norito_payload(&instance)?;
-                Self::finish_direct_singular_query_payload(vm, gas_remaining, payload)
-            }
-            ivm::syscalls::SYSCALL_CALL_CONTRACT => self.handle_call_contract(vm),
-            ivm::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 => {
-                self.handle_call_contract_quantity2(vm)
-            }
+                    let instance = match lookup {
+                        ContractInstanceLookup::Address(address) => {
+                            state_ref.contract_instance_by_address(&address)?
+                        }
+                        ContractInstanceLookup::Alias(alias) => {
+                            state_ref.contract_instance_by_alias(&alias)?
+                        }
+                    };
+                    let payload = Self::encode_norito_payload(&instance)?;
+                    Self::finish_direct_singular_query_payload(vm, gas_remaining, payload)
+                }
+                ivm::syscalls::SYSCALL_CALL_CONTRACT => self.handle_call_contract(vm),
+                ivm::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 => {
+                    self.handle_call_contract_quantity2(vm)
+                }
 
-            ivm::syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
-            ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
-            ivm::syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
-            ivm::syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
-            ivm::syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
+                ivm::syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
+                ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
+                ivm::syscalls::SYSCALL_AXT_COMMIT => self.handle_axt_commit(vm),
+                ivm::syscalls::SYSCALL_VERIFY_DS_PROOF => self.handle_axt_verify_ds_proof(vm),
+                ivm::syscalls::SYSCALL_USE_ASSET_HANDLE => self.handle_axt_use_asset_handle(vm),
 
-            // All other allowed stateful operations must be routed via ISIs
-            // before this host can execute them directly.
-            _ => Err(ivm::VMError::metered_not_implemented(
-                ivm::gas::G_CONTRACT_ADMIN,
-                number,
-            )),
-        }
+                // All other allowed stateful operations must be routed via ISIs
+                // before this host can execute them directly.
+                _ => Err(ivm::VMError::metered_not_implemented(
+                    ivm::gas::G_CONTRACT_ADMIN,
+                    number,
+                )),
+            }
+        })();
+        self.ensure_output_budget()?;
+        result
     }
 
     /// Downcast support for hosts with extra methods/state.
@@ -12190,6 +12409,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
     }
 
     fn finish_tx(&mut self) -> Result<ivm::host::AccessLog, ivm::VMError> {
+        self.ensure_output_budget()?;
         if !self.access_log_enabled {
             return Ok(ivm::host::AccessLog::default());
         }
@@ -16592,7 +16812,7 @@ mod tests {
     #[cfg(not(feature = "fast_dsl"))]
     use iroha_data_model::query::account::prelude::FindAccounts;
     use iroha_data_model::{
-        parameter::{CustomParameter, Parameter},
+        parameter::{CustomParameter, Parameter, SmartContractParameter},
         privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1},
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId},
         query::{QueryRequest, QueryResponse, SingularQueryBox, prelude::FindParameters},
@@ -16665,7 +16885,7 @@ mod tests {
         );
         let canonical_retained_bytes = {
             let mut host = CoreHost::new(ALICE_ID.clone());
-            host.set_output_limits(HostOutputLimits::new(1, usize::MAX));
+            host.restrict_output_limits(HostOutputLimits::new(1, u64::MAX));
             assert!(host.try_reserve_serialized_output(&value, 1));
             host.retained_output_bytes()
         };
@@ -16694,7 +16914,7 @@ mod tests {
         );
         let retained_under_ambient = {
             let mut host = CoreHost::new(ALICE_ID.clone());
-            host.set_output_limits(HostOutputLimits::new(1, usize::MAX));
+            host.restrict_output_limits(HostOutputLimits::new(1, u64::MAX));
             assert!(host.try_reserve_serialized_output(&value, 1));
             host.retained_output_bytes()
         };
@@ -18541,6 +18761,25 @@ seiyaku DedicatedQueryContract {
             norito::decode_from_bytes(parameter_tlv.payload).expect("decode parameter");
         assert!(matches!(parameter_out, Parameter::Block(_)));
 
+        let output_limit_name: Name = "smart_contract.max_output_items"
+            .parse()
+            .expect("parameter name");
+        let output_limit_ptr =
+            store_tlv(&mut vm, PointerType::Name, &norito_blob(&output_limit_name));
+        vm.set_register(10, output_limit_ptr);
+        host.syscall(ivm_sys::SYSCALL_QUERY_GET_PARAMETER, &mut vm)
+            .expect("get smart-contract output limit");
+        let output_limit_tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("output-limit parameter");
+        let output_limit: Parameter =
+            norito::decode_from_bytes(output_limit_tlv.payload).expect("decode output limit");
+        assert!(matches!(
+            output_limit,
+            Parameter::SmartContract(SmartContractParameter::MaxOutputItems(_))
+        ));
+
         let retired_untyped_parameter_ptr = store_tlv(
             &mut vm,
             PointerType::NoritoBytes,
@@ -20264,7 +20503,7 @@ seiyaku DedicatedQueryContract {
     fn bounded_host_stops_queue_growth_before_push() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
-        host.set_output_limits(HostOutputLimits::new(2, 1024 * 1024));
+        host.restrict_output_limits(HostOutputLimits::new(2, 1024 * 1024));
         let instruction =
             InstructionBox::from(Log::new(iroha_logger::Level::INFO, "bounded".to_owned()));
 
@@ -20283,10 +20522,27 @@ seiyaku DedicatedQueryContract {
     }
 
     #[test]
+    fn tooling_output_limit_cannot_widen_consensus_budget() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        let mut parameters = SmartContractParameters::default();
+        parameters.max_output_items = NonZeroU64::new(7).expect("non-zero item limit");
+        parameters.max_output_bytes = NonZeroU64::new(4096).expect("non-zero byte limit");
+        host.set_output_limits_from_parameters(parameters);
+
+        host.restrict_output_limits(HostOutputLimits::new(70, 40_960));
+
+        assert_eq!(
+            host.instruction_queue_limits,
+            HostOutputLimits::new(7, 4096)
+        );
+    }
+
+    #[test]
     fn bounded_host_stops_unique_durable_state_growth_before_insert() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::new(authority);
-        host.set_output_limits(HostOutputLimits::new(3, 1024 * 1024));
+        host.restrict_output_limits(HostOutputLimits::new(3, 1024 * 1024));
 
         for index in 0..10_000 {
             let key: Name = format!("bounded_state_{index}")
@@ -20897,6 +21153,22 @@ seiyaku OpaqueInstructionSubmission {
     }
 
     #[test]
+    fn create_nfts_for_all_supports_multisig_accounts_without_unwinding() {
+        let authority = (*ALICE_ID).clone();
+        let member = MultisigMember::new(ALICE_KEYPAIR.public_key().clone(), 1)
+            .expect("valid multisig member");
+        let multisig =
+            AccountId::new_multisig(MultisigPolicy::new(1, vec![member]).expect("valid policy"));
+        let mut host = CoreHost::with_accounts(authority, Arc::new(vec![multisig]));
+        let mut vm = ivm::IVM::new(1_000);
+
+        host.syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &mut vm)
+            .expect("multisig account identity must produce a deterministic NFT target");
+
+        assert_eq!(host.queued.len(), 2);
+    }
+
+    #[test]
     fn create_nfts_for_all_preflights_exact_gas_before_queue_mutation() {
         let authority = (*ALICE_ID).clone();
         let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
@@ -21019,10 +21291,32 @@ seiyaku OpaqueInstructionSubmission {
     }
 
     #[test]
+    fn queued_instruction_budget_exhaustion_is_an_immediate_vm_error() {
+        let authority = (*ALICE_ID).clone();
+        let mut host = CoreHost::new(authority);
+        host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
+        let mut vm = ivm::IVM::new(1_000);
+        vm.set_register(10, 3);
+
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH, &mut vm,),
+            Err(ivm::VMError::HostOutputBudgetExceeded {
+                resource: ivm::HostOutputResource::Items,
+                attempted: 1,
+                limit: 0,
+            })
+        );
+        assert!(
+            host.queued.is_empty(),
+            "a rejected instruction must not be retained"
+        );
+    }
+
+    #[test]
     fn fastpq_batch_entry_syscall_returns_transfer_gas() {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::new(authority.clone());
-        host.set_output_limits(HostOutputLimits::new(1, 1024 * 1024));
+        host.restrict_output_limits(HostOutputLimits::new(1, 1024 * 1024));
         let mut vm = IVM::new(1_000);
         vm.load_program(&ivm::ProgramMetadata::default().encode())
             .expect("load meta");
@@ -27483,6 +27777,35 @@ seiyaku DurableOwner {
     }
 
     #[test]
+    fn state_set_budget_exhaustion_traps_without_staging_a_write() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = local_contract_host(authority);
+        host.restrict_output_limits(HostOutputLimits::new(0, u64::MAX));
+        let mut vm = IVM::new(10_000);
+
+        let path: Name = "counter".parse().expect("valid state path");
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        let value_bytes = norito::to_bytes(&1_u64).expect("encode state value");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value_bytes);
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::HostOutputBudgetExceeded {
+                resource: ivm::HostOutputResource::Items,
+                attempted: 1,
+                limit: 0,
+            })
+        );
+        assert!(
+            host.durable_state_overlay.is_empty(),
+            "a rejected durable write must not be staged"
+        );
+    }
+
+    #[test]
     fn contract_state_namespace_access_covers_consensus_owned_prefixes() {
         for key in [
             "sc",
@@ -29839,6 +30162,12 @@ seiyaku DurableOwner {
     fn from_state_hydrates_zk_snapshots() {
         crate::test_alias::ensure();
         let mut world = World::new();
+        let mut parameters = world.parameters.block();
+        parameters.get_mut().smart_contract.max_output_items =
+            NonZeroU64::new(23).expect("non-zero item limit");
+        parameters.get_mut().smart_contract.max_output_bytes =
+            NonZeroU64::new(65_536).expect("non-zero byte limit");
+        parameters.commit();
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("zkd", "universal").unwrap(),
@@ -29884,6 +30213,10 @@ seiyaku DurableOwner {
         let authority: AccountId = fixture_account("alice");
         let mut host = CoreHost::from_state(authority, &state).expect("canonical state snapshots");
 
+        assert_eq!(
+            host.instruction_queue_limits,
+            HostOutputLimits::new(23, 65_536)
+        );
         assert_eq!(host.zk_gas_schedule(), expected_zk_gas_schedule);
         assert_eq!(host.default.zk_gas_schedule(), expected_zk_gas_schedule);
         let halo2 = state.view().zk.halo2.clone();
@@ -31589,6 +31922,92 @@ seiyaku PreparedBoundaryArguments {
     }
 
     #[test]
+    fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
+        use iroha_data_model::asset::AssetTransferAvailability::{Disabled, Enabled};
+
+        let account = fixture_account("alice");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+
+        for (flags, incoming, outgoing, reason) in [
+            (0b00, Disabled, Disabled, None),
+            (0b01, Enabled, Disabled, Some("incoming only".to_owned())),
+            (0b10, Disabled, Enabled, Some("outgoing only".to_owned())),
+            (0b11, Enabled, Enabled, None),
+        ] {
+            let mut vm = IVM::new(10_000);
+            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+            let asset_ptr = store_tlv(
+                &mut vm,
+                PointerType::AssetDefinitionId,
+                &norito_blob(&asset_definition),
+            );
+            let layout = ivm::sum::SumLayoutV1::option(1).expect("reason option layout");
+            let reason_ptr = match &reason {
+                Some(reason) => {
+                    let string_ptr = store_tlv(&mut vm, PointerType::Blob, reason.as_bytes());
+                    ivm::sum::allocate_words(&mut vm, layout, 1, &[string_ptr])
+                        .expect("Option::some reason")
+                }
+                None => {
+                    ivm::sum::allocate_words(&mut vm, layout, 0, &[]).expect("Option::none reason")
+                }
+            };
+            vm.set_register(10, account_ptr);
+            vm.set_register(11, asset_ptr);
+            vm.set_register(12, 7);
+            vm.set_register(13, flags);
+            vm.set_register(14, reason_ptr);
+
+            let mut host = CoreHost::new(account.clone());
+            host.syscall(ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY, &mut vm)
+                .expect("queue transfer-availability instruction");
+            let queued = host.drain_instructions();
+            assert_eq!(queued.len(), 1);
+            let instruction = queued[0]
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetAssetTransferAvailability>()
+                .expect("typed transfer-availability instruction");
+            assert_eq!(instruction.account_id, account);
+            assert_eq!(instruction.asset_definition_id, asset_definition);
+            assert_eq!(instruction.expected_revision, 7);
+            assert_eq!(instruction.incoming, incoming);
+            assert_eq!(instruction.outgoing, outgoing);
+            assert_eq!(instruction.reason, reason);
+        }
+
+        let mut invalid_vm = IVM::new(10_000);
+        let account_ptr = store_tlv(
+            &mut invalid_vm,
+            PointerType::AccountId,
+            &norito_blob(&account),
+        );
+        let asset_ptr = store_tlv(
+            &mut invalid_vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_definition),
+        );
+        let layout = ivm::sum::SumLayoutV1::option(1).expect("reason option layout");
+        let reason_ptr =
+            ivm::sum::allocate_words(&mut invalid_vm, layout, 0, &[]).expect("absent reason");
+        invalid_vm.set_register(10, account_ptr);
+        invalid_vm.set_register(11, asset_ptr);
+        invalid_vm.set_register(12, 0);
+        invalid_vm.set_register(13, 0b100);
+        invalid_vm.set_register(14, reason_ptr);
+        let mut host = CoreHost::new(account);
+        assert_eq!(
+            host.syscall(
+                ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+                &mut invalid_vm,
+            ),
+            Err(ivm::VMError::DecodeError)
+        );
+    }
+
+    #[test]
     fn pointer_abi_daily_limit_preserves_some_and_none() {
         let account = fixture_account("alice");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
@@ -31636,6 +32055,52 @@ seiyaku PreparedBoundaryArguments {
                 iroha_data_model::asset::AssetTransferControlWindow::Day
             );
             assert_eq!(instruction.limits[0].cap_amount, expected);
+        }
+    }
+
+    #[test]
+    fn pointer_abi_holding_limit_preserves_some_and_none() {
+        let account = fixture_account("alice");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+
+        for expected in [Some(Quantity::from(2_500_u64)), None] {
+            let mut vm = IVM::new(10_000);
+            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+            let asset_ptr = store_tlv(
+                &mut vm,
+                PointerType::AssetDefinitionId,
+                &norito_blob(&asset_definition),
+            );
+            let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
+            let limit_ptr = match &expected {
+                Some(amount) => {
+                    let amount_ptr =
+                        store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
+                    ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
+                        .expect("Option::some quantity")
+                }
+                None => ivm::sum::allocate_words(&mut vm, layout, 0, &[])
+                    .expect("Option::none quantity"),
+            };
+            vm.set_register(10, account_ptr);
+            vm.set_register(11, asset_ptr);
+            vm.set_register(12, limit_ptr);
+
+            let mut host = CoreHost::new(account.clone());
+            host.syscall(ivm_sys::SYSCALL_SET_ASSET_HOLDING_LIMIT, &mut vm)
+                .expect("queue holding-limit instruction");
+            let queued = host.drain_instructions();
+            assert_eq!(queued.len(), 1);
+            let instruction = queued[0]
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetAssetHoldingLimit>()
+                .expect("typed holding-limit instruction");
+            assert_eq!(instruction.account_id, account);
+            assert_eq!(instruction.asset_definition_id, asset_definition);
+            assert_eq!(instruction.holding_limit, expected);
         }
     }
 

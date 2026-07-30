@@ -6,28 +6,84 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/openapi.yml"
+      - "Cargo.lock"
       - "Cargo.toml"
+      - "IrohaSwift/**"
+      - "Makefile"
       - "rust-toolchain.toml"
+      - "ci/**"
+      - "ci/check_android_codegen.sh"
       - "crates/**"
       - "xtask/**"
       - "ci/check_openapi_spec.sh"
+      - "csharp/**"
+      - "data_model/**"
+      - "docs/i18n/**"
       - "docs/portal/package.json"
       - "docs/portal/package-lock.json"
       - "docs/portal/scripts/**"
       - "docs/portal/static/openapi/**"
+      - "docs/source/sdk/android/generated/**"
+      - "fixtures/**"
+      - "integration_tests/**"
+      - "java/iroha_android/**"
+      - "java/norito_java/**"
+      - "javascript/iroha_js/**"
+      - "kotlin/**"
+      - "mochi/**"
+      - "python/iroha_python/**"
+      - "python/iroha_torii_client/**"
+      - "release/openapi-cargo-lock-v1.txt"
+      - "release/openapi-generator-inputs-v1.txt"
+      - "release/version-map.toml"
+      - "scripts/android_codegen_docs.py"
+      - "scripts/android_codegen_replay_sorafs_fixture.py"
+      - "scripts/check_android_codegen_parity.py"
+      - "scripts/check_sorafs_release_version_map.py"
+      - "scripts/**"
+      - "tools/**"
+      - "vendor/**"
   push:
     branches: [main]
     paths:
       - ".github/workflows/openapi.yml"
+      - "Cargo.lock"
       - "Cargo.toml"
+      - "IrohaSwift/**"
+      - "Makefile"
       - "rust-toolchain.toml"
+      - "ci/**"
+      - "ci/check_android_codegen.sh"
       - "crates/**"
       - "xtask/**"
       - "ci/check_openapi_spec.sh"
+      - "csharp/**"
+      - "data_model/**"
+      - "docs/i18n/**"
       - "docs/portal/package.json"
       - "docs/portal/package-lock.json"
       - "docs/portal/scripts/**"
       - "docs/portal/static/openapi/**"
+      - "docs/source/sdk/android/generated/**"
+      - "fixtures/**"
+      - "integration_tests/**"
+      - "java/iroha_android/**"
+      - "java/norito_java/**"
+      - "javascript/iroha_js/**"
+      - "kotlin/**"
+      - "mochi/**"
+      - "python/iroha_python/**"
+      - "python/iroha_torii_client/**"
+      - "release/openapi-cargo-lock-v1.txt"
+      - "release/openapi-generator-inputs-v1.txt"
+      - "release/version-map.toml"
+      - "scripts/android_codegen_docs.py"
+      - "scripts/android_codegen_replay_sorafs_fixture.py"
+      - "scripts/check_android_codegen_parity.py"
+      - "scripts/check_sorafs_release_version_map.py"
+      - "scripts/**"
+      - "tools/**"
+      - "vendor/**"
 
 permissions:
   contents: read
@@ -43,11 +99,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: docs/portal/package-lock.json
+      - name: Provision the pinned ignored OpenAPI Cargo lock
+        run: node docs/portal/scripts/provision-openapi-cargo-lock.mjs
+      - name: Verify Cargo lock provisioning keeps the checkout clean
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Install the deterministic portal dependency graph
         working-directory: docs/portal
         run: npm ci --ignore-scripts --no-audit --no-fund
@@ -66,11 +128,14 @@ jobs:
           docs/portal/scripts/__tests__/verify-openapi-versions.test.mjs
           docs/portal/scripts/__tests__/check-openapi-signatures.test.mjs
           docs/portal/scripts/__tests__/openapi-manifest-v2.test.mjs
+          docs/portal/scripts/__tests__/openapi-release-inputs.test.mjs
           docs/portal/scripts/__tests__/openapi-release-contract.test.mjs
           docs/portal/scripts/__tests__/openapi-safe-file.test.mjs
+          docs/portal/scripts/__tests__/provision-openapi-cargo-lock.test.mjs
           docs/portal/scripts/__tests__/openapi-signature.test.mjs
       - name: Verify unsigned development artifact metadata
         run: |
+          node docs/portal/scripts/verify-openapi-release-inputs.mjs
           node docs/portal/scripts/verify-openapi-versions.mjs --allow-unsigned
           node docs/portal/scripts/check-openapi-signatures.mjs \
             --allow-unsigned=2025-q2 \
@@ -97,9 +162,15 @@ jobs:
       OPENAPI_REQUIRE_SIGNED: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
+      - name: Provision the pinned ignored OpenAPI Cargo lock
+        run: node docs/portal/scripts/provision-openapi-cargo-lock.mjs
+      - name: Verify Cargo lock provisioning keeps the checkout clean
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"

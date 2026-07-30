@@ -41,7 +41,7 @@ restant en tâches d'ingénierie traçables.
 ## Workflow d'admission
 
 1. **Création de proposition**
-   - CLI : ajouter `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - CLI : ajouter `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      produisant `ProviderAdmissionProposalV1` + bundle d'attestation.
    - Validation : s'assurer des champs requis, stake > 0, handle chunker canonique dans `profile_id`.
 2. **Endossement de gouvernance**
@@ -68,7 +68,7 @@ Le flux CLI accepte désormais les bundles de certificats intermédiaires (`--en
 
 ### Référence CLI
 
-Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
+Exécutez chaque commande via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - Flags requis : `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -116,7 +116,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
 1. Construisez la paire proposal/advert successeur avec `provider-admission proposal` et `provider-admission sign`, en augmentant `--retention-epoch` et en mettant à jour stake/endpoints si besoin.
 2. Exécutez
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -134,7 +134,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
 #### Révocation d'urgence
 1. Identifiez l'envelope compromis et émettez une révocation :
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

@@ -6,7 +6,6 @@ use ivm::{
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_vector_detection_x86() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     clear_forced_simd();
     clear_thread_forced_simd();
@@ -21,7 +20,6 @@ fn test_vector_detection_x86() {
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn test_vector_detection_aarch64() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     clear_forced_simd();
     clear_thread_forced_simd();
@@ -31,7 +29,6 @@ fn test_vector_detection_aarch64() {
 
 #[test]
 fn test_backend_matches_support() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     clear_forced_simd();
     clear_thread_forced_simd();
@@ -42,7 +39,6 @@ fn test_backend_matches_support() {
 
 #[test]
 fn test_simd_choice_consistency() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     clear_forced_simd();
     clear_thread_forced_simd();
@@ -71,7 +67,6 @@ fn test_simd_choice_consistency() {
 
 #[test]
 fn test_force_simd_override_scalar() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     let prev = set_thread_forced_simd(Some(SimdChoice::Scalar));
     assert_eq!(simd_choice(), SimdChoice::Scalar);
@@ -81,7 +76,6 @@ fn test_force_simd_override_scalar() {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_force_simd_override_avx2() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     let prev = set_thread_forced_simd(Some(SimdChoice::Avx2));
     let expected = if std::is_x86_feature_detected!("avx2") {
@@ -96,7 +90,6 @@ fn test_force_simd_override_avx2() {
 #[cfg(target_arch = "x86_64")]
 #[test]
 fn test_force_simd_override_avx512() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     let prev = set_thread_forced_simd(Some(SimdChoice::Avx512));
     let expected =
@@ -112,7 +105,6 @@ fn test_force_simd_override_avx512() {
 #[cfg(target_arch = "aarch64")]
 #[test]
 fn test_force_simd_override_neon() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     let prev = set_thread_forced_simd(Some(SimdChoice::Neon));
     let expected = if std::arch::is_aarch64_feature_detected!("neon") {
@@ -126,7 +118,6 @@ fn test_force_simd_override_neon() {
 
 #[test]
 fn test_clear_forced_simd_restore_detection() {
-    let _guard = ivm::field_dispatch::field_impl_test_lock();
     let _simd_guard = forced_simd_test_lock();
     let prev = set_thread_forced_simd(None);
     let expected = simd_choice();

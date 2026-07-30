@@ -4192,7 +4192,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.epoch.measured_bytes_extra());
             total = total.saturating_add(self.members.measured_bytes_extra());
             total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.verified.measured_bytes_extra());
             total = total.saturating_add(self.candidate_count.measured_bytes_extra());
             total = total.saturating_add(self.derived_by.measured_bytes_extra());
             total
@@ -4214,7 +4213,6 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.epoch.measured_bytes_extra());
             total = total.saturating_add(self.members.measured_bytes_extra());
             total = total.saturating_add(self.alternates.measured_bytes_extra());
-            total = total.saturating_add(self.verified.measured_bytes_extra());
             total = total.saturating_add(self.candidate_count.measured_bytes_extra());
             total = total.saturating_add(self.derived_by.measured_bytes_extra());
             total

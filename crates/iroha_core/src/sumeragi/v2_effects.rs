@@ -102,6 +102,7 @@ use iroha_data_model::{
     merge::MergeLedgerEntry,
     peer::PeerId,
 };
+#[cfg(test)]
 use norito::codec::Encode as _;
 
 use super::{
@@ -3388,7 +3389,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             | wire::ConsensusMessageV2Payload::PayloadChunk(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
             | wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_)
-            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_) => false,
+            | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+            | wire::ConsensusMessageV2Payload::VrfCommit(_)
+            | wire::ConsensusMessageV2Payload::VrfReveal(_) => false,
         }
     }
 
@@ -18543,7 +18546,7 @@ mod tests {
             commit.subject,
             commit.execution_commitment,
         ));
-        let certified_sources = certified_sources(&fixture, &commit);
+        let commit_certified_sources = certified_sources(&fixture, &commit);
         executor
             .consume_effects(
                 vec![AdapterEffect::FetchBody {
@@ -18551,7 +18554,7 @@ mod tests {
                     round: commit.round,
                     subject: commit.subject,
                     manifest: None,
-                    certified_sources,
+                    certified_sources: commit_certified_sources,
                     certificate: Some(commit.clone()),
                 }],
                 &mut services,
@@ -20527,10 +20530,7 @@ mod tests {
         );
         assert!(!executor.can_admit_local_proposal());
         assert!(
-            !executor.can_admit_network_message_with_ingress_ownership(
-                &response_envelope,
-                &ingress_ownership,
-            ),
+            !executor.retained_dispatch_allows_network_ingress(&response_envelope.payload),
             "later ingress remains behind the exact retained completion"
         );
         assert!(

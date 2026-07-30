@@ -318,9 +318,10 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
         signedTransaction.writeField(Self.encodeSignatureOf(signature.signature))
         signedTransaction.writeField(signable.payloadBytes)
         signedTransaction.writeField(Data([0]))
-        signedTransaction.writeField(Data([0]))
         let signedBytes = signedTransaction.data
-        let transactionHash = IrohaHash.hash(Self.encodeTransactionEntrypoint(signedBytes))
+        let transactionHash = IrohaHash.hash(
+            Self.encodeTransactionEntrypoint(signable.payloadBytes)
+        )
         var versioned = Data([1])
         versioned.append(signedBytes)
         return SignedTransactionEnvelope(norito: versioned,
@@ -329,10 +330,10 @@ public struct SwiftNexusTransactionCodec: NexusTransactionCodec {
                                          transactionHash: transactionHash)
     }
 
-    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+    private static func encodeTransactionEntrypoint(_ transactionPayload: Data) -> Data {
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedTransaction)
+        entrypoint.writeField(transactionPayload)
         return entrypoint.data
     }
 
@@ -594,6 +595,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         payload.writeField(try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32))
         payload.writeField(try feePayment.compactNorito())
         payload.writeField(try encodeMetadata(metadata))
+        payload.writeField(Data([0]))
         return payload.data
     }
 

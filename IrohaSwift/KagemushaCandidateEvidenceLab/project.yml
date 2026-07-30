@@ -1,0 +1,51 @@
+name: KagemushaCandidateEvidenceLab
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: YES
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    MARKETING_VERSION: "1.0"
+    ONLY_ACTIVE_ARCH: YES
+    SUPPORTED_PLATFORMS: iphoneos
+    SUPPORTS_MACCATALYST: NO
+    TARGETED_DEVICE_FAMILY: "1,2"
+targets:
+  KagemushaCandidateEvidenceLabHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.hyperledger.iroha.kagemusha-candidate-lab.host
+  KagemushaCandidateEvidenceLabTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: KagemushaCandidateEvidenceLabHost
+      - framework: ${KAGEMUSHA_CANDIDATE_XCFRAMEWORK_PATH}
+        embed: false
+    settings:
+      base:
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        CLANG_ENABLE_MODULES: YES
+        CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB: "1"
+        OTHER_LDFLAGS: "$(inherited) -all_load"
+        PRODUCT_BUNDLE_IDENTIFIER: org.hyperledger.iroha.kagemusha-candidate-lab.tests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/KagemushaCandidateEvidenceLabHost.app/KagemushaCandidateEvidenceLabHost"
+schemes:
+  KagemushaCandidateEvidenceLab:
+    build:
+      targets:
+        KagemushaCandidateEvidenceLabHost: all
+        KagemushaCandidateEvidenceLabTests: [test]
+    test:
+      targets:
+        - KagemushaCandidateEvidenceLabTests

@@ -348,8 +348,9 @@ final class ConnectQueueJournalTests: XCTestCase {
     }
 
     private func requireBlake3() throws {
-        guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
-            throw XCTSkip("NoritoBridge blake3 hashing unavailable")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil,
+            "NoritoBridge blake3 hashing unavailable"
+        )
     }
 }

@@ -526,7 +526,7 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS)
         assertEquals(8, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
         assertEquals(
-            21_764,
+            256 * 1024,
             KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4,
         )
         assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2)
@@ -1384,7 +1384,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun canonicalPeerCodecsAreTypedAndDefensive() {
-        if (assertNativeArtifactStreamingUnavailableFailsClosed()) return
+        requireNativeArtifactStreaming()
         val requestArchive = archive(
             "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
         )
@@ -1443,7 +1443,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun peerTransportGoldenVectorsAreExact() {
-        if (assertNativeArtifactStreamingUnavailableFailsClosed()) return
+        requireNativeArtifactStreaming()
         val offerArchive = portableOfferFixture("offline_recipient_receive_offer_v2.hex")
         val request = KagemushaPeerPayload.decode(
             offerArchive,
@@ -1469,7 +1469,7 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun qrNfcAndNearbyGoldenVectorsAreExact() {
-        if (assertNativeArtifactStreamingUnavailableFailsClosed()) return
+        requireNativeArtifactStreaming()
         val offerArchive = portableOfferFixture("offline_recipient_receive_offer_v2.hex")
         val request = KagemushaPeerPayload.decode(
             offerArchive,
@@ -1538,22 +1538,11 @@ class KagemushaRecursiveSpendProverTest {
         nearby.fill(0)
     }
 
-    private fun assertNativeArtifactStreamingUnavailableFailsClosed(): Boolean {
-        if (KagemushaRecursiveSpendProver.isArtifactStreamingAvailable()) return false
+    private fun requireNativeArtifactStreaming() {
         assertTrue(
-            System.getenv("IROHA_REQUIRE_KAGEMUSHA_NATIVE") != "1",
-            "The release JNI gate requires a freshly built connect_norito_bridge ABI 21 library",
+            KagemushaRecursiveSpendProver.isArtifactStreamingAvailable(),
+            "A freshly built connect_norito_bridge ABI 21 artifact-streaming library is required",
         )
-        val failure = assertFailsWith<IllegalStateException> {
-            KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(
-                portableOfferFixture("offline_recipient_receive_offer_v2.hex"),
-            )
-        }
-        assertEquals(
-            "connect_norito_bridge ABI 21 artifact streaming is unavailable",
-            failure.message,
-        )
-        return true
     }
 
     private fun ByteArray.readU32BeForTest(): Int =

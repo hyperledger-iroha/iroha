@@ -20,9 +20,7 @@ public final class SorafsGatewayFetchOptionsTests {
   private SorafsGatewayFetchOptionsTests() {}
 
   public static void main(final String[] args) {
-    transportPolicyParsesLabels();
-    anonymityPolicyParsesLabels();
-    writeModeHintParsesLabels();
+    policyLabelParsersAcceptOnlyExactV1Labels();
     builderSerialisesExplicitOptions();
     defaultsProvideGuardPolicy();
     gatewayFetchRequestSerialisesProviders();
@@ -48,31 +46,52 @@ public final class SorafsGatewayFetchOptionsTests {
     System.out.println("[IrohaAndroid] SoraFS gateway option tests passed.");
   }
 
-  private static void transportPolicyParsesLabels() {
+  private static void policyLabelParsersAcceptOnlyExactV1Labels() {
     assert TransportPolicy.SORANET_FIRST == TransportPolicy.fromLabel("soranet-first");
-    assert TransportPolicy.SORANET_FIRST == TransportPolicy.fromLabel("soranet_first");
     assert TransportPolicy.SORANET_STRICT == TransportPolicy.fromLabel("soranet-strict");
-    assert TransportPolicy.SORANET_STRICT == TransportPolicy.fromLabel("soranet_strict");
-    assert TransportPolicy.DIRECT_ONLY == TransportPolicy.fromLabel("DIRECT-ONLY");
-    assert TransportPolicy.fromLabel("unknown") == null;
-  }
-
-  private static void anonymityPolicyParsesLabels() {
-    assert AnonymityPolicy.ANON_GUARD_PQ == AnonymityPolicy.fromLabel("stage-a");
-    assert AnonymityPolicy.ANON_GUARD_PQ == AnonymityPolicy.fromLabel("anon_guard_pq");
-    assert AnonymityPolicy.ANON_MAJORIY_PQ
-        == AnonymityPolicy.fromLabel("ANON-MAJORITY-PQ");
-    assert AnonymityPolicy.ANON_MAJORIY_PQ == AnonymityPolicy.fromLabel("stageb");
-    assert AnonymityPolicy.ANON_STRICT_PQ == AnonymityPolicy.fromLabel("anon_strict_pq");
-    assert AnonymityPolicy.ANON_STRICT_PQ == AnonymityPolicy.fromLabel("stage_c");
-  }
-
-  private static void writeModeHintParsesLabels() {
+    assert TransportPolicy.DIRECT_ONLY == TransportPolicy.fromLabel("direct-only");
+    assert AnonymityPolicy.ANON_GUARD_PQ == AnonymityPolicy.fromLabel("anon-guard-pq");
+    assert AnonymityPolicy.ANON_MAJORITY_PQ
+        == AnonymityPolicy.fromLabel("anon-majority-pq");
+    assert AnonymityPolicy.ANON_STRICT_PQ == AnonymityPolicy.fromLabel("anon-strict-pq");
     assert WriteModeHint.READ_ONLY == WriteModeHint.fromLabel("read-only");
-    assert WriteModeHint.READ_ONLY == WriteModeHint.fromLabel("read_only");
-    assert WriteModeHint.UPLOAD_PQ_ONLY == WriteModeHint.fromLabel("UPLOAD-PQ-ONLY");
-    assert WriteModeHint.UPLOAD_PQ_ONLY == WriteModeHint.fromLabel("upload_pq_only");
-    assert WriteModeHint.fromLabel("unknown") == null;
+    assert WriteModeHint.UPLOAD_PQ_ONLY == WriteModeHint.fromLabel("upload-pq-only");
+
+    for (final String alias :
+        new String[] {
+          "soranet_first",
+          "soranet-only",
+          "SORANET-FIRST",
+          " soranet-first",
+          "soranet-first "
+        }) {
+      assert TransportPolicy.fromLabel(alias) == null : "accepted transport alias " + alias;
+    }
+    for (final String alias :
+        new String[] {
+          "anon_guard_pq",
+          "stage-a",
+          "stage_b",
+          "stagec",
+          "ANON-GUARD-PQ",
+          " anon-guard-pq",
+          "anon-guard-pq "
+        }) {
+      assert AnonymityPolicy.fromLabel(alias) == null : "accepted anonymity alias " + alias;
+    }
+    for (final String alias :
+        new String[] {
+          "read_only",
+          "upload_pq_only",
+          "READ-ONLY",
+          " read-only",
+          "read-only "
+        }) {
+      assert WriteModeHint.fromLabel(alias) == null : "accepted write-mode alias " + alias;
+    }
+    assert TransportPolicy.fromLabel(null) == null;
+    assert AnonymityPolicy.fromLabel(null) == null;
+    assert WriteModeHint.fromLabel(null) == null;
   }
 
   private static void builderSerialisesExplicitOptions() {
@@ -86,7 +105,7 @@ public final class SorafsGatewayFetchOptionsTests {
             .setMaxPeers(3)
             .setRetryBudget(5)
             .setTransportPolicy(TransportPolicy.DIRECT_ONLY)
-            .setAnonymityPolicy(AnonymityPolicy.ANON_MAJORIY_PQ)
+            .setAnonymityPolicy(AnonymityPolicy.ANON_MAJORITY_PQ)
             .setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)
             .build();
 
@@ -100,7 +119,7 @@ public final class SorafsGatewayFetchOptionsTests {
     assert Integer.valueOf(5).equals(json.get("retry_budget"));
     assert "direct-only".equals(json.get("transport_policy"));
     assert "anon-majority-pq".equals(json.get("anonymity_policy"));
-    assert "upload_pq_only".equals(json.get("write_mode_hint"));
+    assert "upload-pq-only".equals(json.get("write_mode_hint"));
     assert json.size() == 10 : "expected ten entries in JSON map";
   }
 

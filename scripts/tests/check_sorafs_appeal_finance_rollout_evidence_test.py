@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -20,13 +21,15 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+
 
 NOW_UNIX = 1_800_200_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
-DEPLOYMENT_ID = "appeal-finance-staging-a"
-ENVIRONMENT = "staging"
+DEPLOYMENT_ID = "appeal-finance-mainnet-a"
+ENVIRONMENT = "production"
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -407,8 +410,51 @@ POLICY_BOUND_FIXTURES = (
 )
 
 
+def write_topology_qualification(root: Path) -> Path:
+    path = root / "l1-topology-qualification.summary"
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(
+            b"appeal-finance-rollout-manifest"
+        ).hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-appeal-finance-rollout-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": DEPLOYMENT_ID,
+            "environment": ENVIRONMENT,
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(CANONICAL_READINESS_LANES),
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+
+
 def run_gate(root: Path, *extra: str) -> int:
-    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
+    return MODULE.main(
+        [
+            "--evidence-dir",
+            str(root),
+            "--now-unix",
+            str(NOW_UNIX),
+            "--topology-qualification-summary",
+            str(write_topology_qualification(root)),
+            *extra,
+        ]
+    )
 
 
 def validation_options() -> object:
@@ -473,6 +519,24 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["pricing_config"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+    assert payload["topology_qualification"]["deployment_id"] == DEPLOYMENT_ID
+    assert payload["topology_qualification"]["environment"] == ENVIRONMENT
+
+
+def test_topology_qualification_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 2
+    )
 
 
 def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
@@ -2175,8 +2239,21 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
         tmp_path / "unknown.json",
         {"schema": "sorafs.appeal_finance.unknown.v1"},
     )
+    topology = write_topology_qualification(tmp_path)
 
-    assert MODULE.main(["--evidence", str(path), "--now-unix", str(NOW_UNIX)]) == 1
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--topology-qualification-summary",
+                str(topology),
+            ]
+        )
+        == 1
+    )
 
 
 def test_unknown_directory_artifact_is_ignored_for_subset_gate(tmp_path: Path) -> None:
@@ -2197,6 +2274,7 @@ def test_invalid_optional_artifact_fails_subset_gate(tmp_path: Path) -> None:
 
 def test_response_file_complete_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
+    topology = write_topology_qualification(tmp_path)
     summary = tmp_path / "summary.json"
     args = tmp_path / "args.txt"
     args.write_text(
@@ -2209,6 +2287,8 @@ def test_response_file_complete_evidence_passes(tmp_path: Path) -> None:
                 str(summary),
                 "--now-unix",
                 str(NOW_UNIX),
+                "--topology-qualification-summary",
+                str(topology),
             ]
         ),
         encoding="utf-8",

@@ -18,6 +18,107 @@ fairness is still required to service the selected parent, and creating a
 child is never classified as progress.
 ***************************************************************************)
 
+(***************************************************************************
+External producer-continuation coverage is a transition invariant needed by
+every runner-owned finite episode below.  It lives at this dependency layer
+so those episodes can discharge the disabled external branch without
+assuming unconditional runner enabledness.  The invariant records an exact
+transport/body carrier, monotone retirement, or durable terminal owner; it
+does not add fairness.
+***************************************************************************)
+
+THEOREM AsyncInitEstablishesCandidateProducerContinuationExternalCoverage ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncCandidateProducerContinuationExternalCoverageInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncCandidateProducerContinuationExternalCoverageInvariant,
+       AsyncCandidateProducerContinuations
+
+THEOREM AsyncNextPreservesCandidateProducerContinuationExternalCoverage ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ AsyncNext
+  => AsyncCandidateProducerContinuationExternalCoverageInvariant'
+BY AsyncCandidateProducerContinuationResetPreservesExactReservation,
+   AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
+   AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
+   AsyncCandidateProducerSemanticHandoffRetirementRequiresAck,
+   IsaT(2400)
+   DEF AsyncCandidateProducerContinuationExternalCoverageInvariant,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationHandoffRetired,
+       AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds,
+       AsyncCandidateProducerContinuationVolatileBodyReconstructionKinds,
+       AsyncCandidateConditionalTransportCarrier,
+       AsyncCandidateConditionalTransportRetired,
+       AsyncCandidateVolatileBodyCarrier,
+       AsyncCandidateVolatileBodyRetired,
+       AsyncCandidateProducerContinuationDeclaredHandoffOwned,
+       AsyncCandidateProducerContinuationDeclaredHandoffRetired,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncCandidateProducerContinuationDurableTerminal,
+       AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateProducerContinuationsAfterReset,
+       AsyncCandidateProducerContinuationRecordAfterReset,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateProducerContinuationStateAfterDeparture,
+       AsyncCandidateProducerContinuationInitialStatusAfter,
+       AsyncControlServiceSlotTransition,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       ServiceIoWorkerWork,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart, FreshRestartCandidateSequence
+
+THEOREM AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []AsyncCandidateProducerContinuationExternalCoverageInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE []AsyncCandidateProducerContinuationExternalCoverageInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => AsyncCandidateProducerContinuationExternalCoverageInvariant
+      BY AsyncInitEstablishesCandidateProducerContinuationExternalCoverage
+    <2>2. []AsyncStrongTypeInvariant
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant
+    <2>3. []AsyncProgressOwnershipInvariant
+      BY <1>1, AsyncSpecAlwaysProgressOwnershipInvariant
+    <2>4. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ [AsyncNext]_AsyncAllVars
+          => AsyncCandidateProducerContinuationExternalCoverageInvariant'
+      BY AsyncNextPreservesCandidateProducerContinuationExternalCoverage,
+         Isa DEF AsyncAllVars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, PTL
+         DEF AsyncSpecAt
+  <1> QED BY <1>1
+
 AsyncCausalRemainingWorkStage(kind) ==
   CASE kind = "BeginTimeout" -> 9
     [] kind \in

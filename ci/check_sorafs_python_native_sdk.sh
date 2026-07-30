@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${SORAFS_PYTHON_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+PYTHON_BIN="${SORAFS_PYTHON_SDK_PYTHON_BIN:-python3}"
+SDK_SESSION="$(mktemp -d "${TMPDIR:-/tmp}/iroha-sorafs-python-sdk.XXXXXX")"
+
+cleanup_sdk_session() {
+  rm -rf -- "${SDK_SESSION}"
+}
+trap cleanup_sdk_session EXIT
+
+export PYTHONDONTWRITEBYTECODE=1
+
+PYTHON_VERSION="$("${PYTHON_BIN}" -I -c \
+  'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+if [[ "${PYTHON_VERSION}" != "3.12" ]]; then
+  echo "error: SoraFS native Python SDK tests require exact Python 3.12; got ${PYTHON_VERSION}" >&2
+  exit 1
+fi
+
+TRACKED_NATIVE_EXTENSIONS="$(
+  git -C "${ROOT_DIR}" ls-files -- \
+    'python/iroha_python/src/iroha_python/*.so' \
+    'python/iroha_python/src/iroha_python/*.so.*' \
+    'python/iroha_python/src/iroha_python/*.dylib' \
+    'python/iroha_python/src/iroha_python/*.pyd' \
+    'python/iroha_python/src/iroha_python/*.dll'
+)"
+if [[ -n "${TRACKED_NATIVE_EXTENSIONS}" ]]; then
+  echo "error: Python native SDK artifacts must be rebuilt in the ABI-21 lane, not tracked:" >&2
+  printf '%s\n' "${TRACKED_NATIVE_EXTENSIONS}" >&2
+  exit 1
+fi
+
+"${PYTHON_BIN}" -m venv "${SDK_SESSION}/venv"
+VENV_PYTHON="${SDK_SESSION}/venv/bin/python"
+export VIRTUAL_ENV="${SDK_SESSION}/venv"
+export PATH="${VIRTUAL_ENV}/bin:${PATH}"
+"${VENV_PYTHON}" -m pip install \
+  --require-hashes \
+  --only-binary=:all: \
+  -r "${ROOT_DIR}/python/iroha_python/requirements-ci.lock"
+"${VENV_PYTHON}" -m pip install --no-deps \
+  "${ROOT_DIR}/python/norito_py" \
+  "${ROOT_DIR}/python/iroha_torii_client"
+
+cd "${ROOT_DIR}/python/iroha_python"
+"${VENV_PYTHON}" -m maturin develop --release --locked
+export PYTHONPATH="${ROOT_DIR}/python/iroha_python/src:${ROOT_DIR}/python/norito_py/src:${ROOT_DIR}/python${PYTHONPATH:+:${PYTHONPATH}}"
+
+NATIVE_EXTENSION="$("${VENV_PYTHON}" -I -c \
+  'import iroha_python._crypto as native; print(native.__file__)')"
+NATIVE_TARGET="$("${VENV_PYTHON}" -I -c \
+  'import platform, sys; print(f"{platform.system().lower()}-{platform.machine().lower()}-python{sys.version_info.major}{sys.version_info.minor}")')"
+NATIVE_MANIFEST="${SDK_SESSION}/python-native-abi21.json"
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py" \
+  record \
+  --artifact "${NATIVE_EXTENSION}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_PYTHON}" \
+  --sdk python \
+  --target "${NATIVE_TARGET}"
+"${VENV_PYTHON}" -I "${ROOT_DIR}/scripts/check_native_sdk_abi21_artifact.py" \
+  verify \
+  --artifact "${NATIVE_EXTENSION}" \
+  --manifest "${NATIVE_MANIFEST}" \
+  --source-root "${ROOT_DIR}" \
+  --python "${VENV_PYTHON}"
+
+JUNIT_REPORT="${SDK_SESSION}/pytest.xml"
+"${VENV_PYTHON}" -m pytest -q -p no:cacheprovider \
+  --junitxml "${JUNIT_REPORT}" \
+  tests/cancel_asset_lock_v1_test.py \
+  tests/client_ledger_helpers_test.py \
+  tests/sorafs_reference_validation_test.py \
+  tests/sorafs_replication_instruction_test.py
+"${VENV_PYTHON}" -I - "${JUNIT_REPORT}" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(Path(sys.argv[1])).getroot()
+suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+skipped = sum(int(suite.attrib.get("skipped", "0")) for suite in suites)
+if skipped:
+    raise SystemExit(
+        f"SoraFS native Python SDK parity may not contain skipped tests; found {skipped}"
+    )
+PY

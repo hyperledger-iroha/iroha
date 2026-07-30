@@ -62,8 +62,12 @@ and rotation by DEK rewrap only after every old ciphertext chunk and the full
 payload digest authenticate. The DEK wrapper is a runtime-only
 `ModerationQuarantineKeyWrapper` boundary for PKCS#11 or a managed KMS.
 Enabling authenticated screening without that wrapper fails node startup.
-Torii and `Iroha::start_with_runtime_deps` can carry the dependency, but the
-standard `irohad` launcher still constructs no deployable provider adapter.
+On Linux and macOS the stock `irohad` launcher resolves this slot through the
+fixed same-service-UID runtime-provider broker. Its canonical handshake pins the
+configured provider qualification and active public key handle; bounded
+wrap/unwrap calls requalify those values before and after use and never carry
+provider credentials. The packaged broker boundary still needs a genuine
+deployment-owned PKCS#11/KMS backend and operator credential.
 `V1-BLOCK-AI-QUARANTINE-KMS-01` therefore remains open; tests-only wrappers,
 file keys, environment keys, and software fallback wrapping cannot close it.
 The repository does not contain operator-supplied genuine trained and
@@ -485,7 +489,7 @@ The production service remains a staged rollout target:
 | Model registry | Stores model artifacts, reproducibility manifests, calibration datasets, and hashes. | Local Torii admission/readback, client/CLI admission tooling, node snapshot/checkpoint foundation, and standalone persistent `registry-serve` HTTP service foundation exist. |
 | AI runner | Executes approved models deterministically and emits model scores. | Deterministic integer `run-local` CLI, bounded loopback `runner-serve` HTTP mode, unary `runner-grpc-serve` gRPC foundation, supervised HTTP runner bundle, and `runner-canary` rollout evidence tooling exist. Torii now requires canonical signed results under the config-pinned governed policy; production signer packaging and deployed isolation evidence remain open. |
 | Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, local `committee-run` quorum aggregation, locked-manifest `committee-serve` HTTP aggregation, supervised committee bundle generation, and `committee-canary` tooling exist. Torii admits an aggregate only by reconstructing it from the complete bounded, unique, policy-authorized signed member set. |
-| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, chunked ChaCha20-Poly1305 payload envelopes, per-object DEKs, authenticated ranges, atomic recovery, role-gated object APIs, and rewrap are present. A runtime wrapper injection seam exists, but standard `irohad` has no deployable PKCS#11/KMS provider adapter; `V1-BLOCK-AI-QUARANTINE-KMS-01` remains open. |
+| Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, chunked ChaCha20-Poly1305 payload envelopes, per-object DEKs, authenticated ranges, atomic recovery, role-gated object APIs, and rewrap are present. Standard `irohad` has a strict authenticated broker path for a deployment-owned wrapper, but no genuine PKCS#11/KMS backend or operator credential is checked in; `V1-BLOCK-AI-QUARANTINE-KMS-01` remains open. |
 | Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff, finalized-chain moderation projections/orchestration, caller-signed native moderation submission, juror notification planning, delivery manifests, outbox/webhook delivery CLI automation and transport canary tooling, commit/reveal coordination, supervised executor tooling, appeal pricing/deposit readback, and transparency readback/source-entry tooling exist; durable production boundary deployment and live rollout evidence remain gates. |
 
 ## Data Model
@@ -916,14 +920,13 @@ live governance-evidence rollout and production quarantine workflow.
 
 ## Remaining Production Gates
 
-- Resolve `V1-BLOCK-AI-QUARANTINE-KMS-01`: package a deployable PKCS#11 or
-  managed-KMS implementation of `ModerationQuarantineKeyWrapper`, construct it
-  from runtime-only credentials in the standard `irohad` launcher, inject it
-  through `IrohaRuntimeDeps`/`ToriiRuntimeDeps`, and prove provider-outage,
-  config/runtime mismatch, wrong key/tag/AAD, chunk reorder, restart recovery,
-  rotation/rewrap, and rollback behavior. The shipped default launcher
-  intentionally supplies no wrapper, so screening-enabled configuration fails
-  closed until this is done.
+- Finish `V1-BLOCK-AI-QUARANTINE-KMS-01`: inject a genuine deployment-owned
+  PKCS#11 or managed-KMS implementation of `ModerationQuarantineKeyWrapper`
+  into the packaged runtime-provider broker using runtime-only credentials, and
+  prove provider-outage, config/runtime mismatch, wrong key/tag/AAD, chunk
+  reorder, restart recovery, rotation/rewrap, and rollback behavior. The stock
+  client and broker protocol are present and fail closed, but the repository
+  intentionally supplies no genuine backend or credential.
 - Collect a payload-free live evidence bundle with
   `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` and require it to pass
   `scripts/check_sorafs_ai_prescreen_rollout_evidence.py`, covering runner,

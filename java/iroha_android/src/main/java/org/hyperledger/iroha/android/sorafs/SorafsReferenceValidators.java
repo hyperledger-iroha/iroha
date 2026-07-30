@@ -25,13 +25,13 @@ public final class SorafsReferenceValidators {
 
   private SorafsReferenceValidators() {}
 
-  /** Returns true when the native bridge is present and new enough for SoraFS validation. */
+  /** Returns true when the exact first-release native bridge is present. */
   public static boolean isNativeAvailable() {
     return NATIVE_AVAILABLE;
   }
 
   static boolean isBridgeAbiSupported(final int abiVersion) {
-    return abiVersion >= REQUIRED_BRIDGE_ABI_VERSION;
+    return abiVersion == REQUIRED_BRIDGE_ABI_VERSION;
   }
 
   static boolean isGovernanceDagBridgeSupported(
@@ -45,6 +45,11 @@ public final class SorafsReferenceValidators {
   }
 
   static boolean isGovernanceLogNodeBridgeSupported(
+      final int abiVersion, final boolean hasSymbols) {
+    return isBridgeAbiSupported(abiVersion) && hasSymbols;
+  }
+
+  static boolean isAppealFinanceBridgeSupported(
       final int abiVersion, final boolean hasSymbols) {
     return isBridgeAbiSupported(abiVersion) && hasSymbols;
   }
@@ -134,6 +139,40 @@ public final class SorafsReferenceValidators {
             labelPayload,
             generatedAtUnix),
         "SoraFS hedging validation");
+  }
+
+  /** Validates one canonical appeal-finance {@code CancelAssetLock} V1 payload. */
+  public static String validateAppealFinanceCancelAssetLockJson(final byte[] noritoBytes) {
+    return validateAppealFinanceCancelAssetLockJson(
+        noritoBytes, null, currentEpochSeconds());
+  }
+
+  /**
+   * Validates one canonical appeal-finance {@code CancelAssetLock} V1 payload with a label.
+   */
+  public static String validateAppealFinanceCancelAssetLockJson(
+      final byte[] noritoBytes, final String label) {
+    return validateAppealFinanceCancelAssetLockJson(
+        noritoBytes, label, currentEpochSeconds());
+  }
+
+  /**
+   * Validates one canonical appeal-finance {@code CancelAssetLock} V1 payload with a
+   * caller-bound outcome timestamp.
+   */
+  public static String validateAppealFinanceCancelAssetLockJson(
+      final byte[] noritoBytes, final String label, final long generatedAtUnix) {
+    requireGeneratedAt(generatedAtUnix);
+    final byte[] payload = requireReferencePayload(noritoBytes, "noritoBytes");
+    final byte[] labelPayload = labelBytes(label, "cancel_asset_lock_v1.to");
+    requireAggregateReferenceBytes(payload.length, labelPayload.length);
+    requireNative();
+    return requireJsonOutput(
+        nativeValidateAppealFinanceCancelAssetLockJson(
+            payload,
+            labelPayload,
+            generatedAtUnix),
+        "SoraFS appeal-finance CancelAssetLock validation");
   }
 
   /** Validate a bounded heterogeneous fixture bundle and canonical cross-links. */
@@ -937,7 +976,9 @@ public final class SorafsReferenceValidators {
       return isGovernanceDagBridgeSupported(abiVersion, nativeHasGovernanceDagSymbols())
           && isFixtureBundleBridgeSupported(abiVersion, nativeHasFixtureBundleSymbols())
           && isGovernanceLogNodeBridgeSupported(
-              abiVersion, nativeHasGovernanceLogNodeSymbols());
+              abiVersion, nativeHasGovernanceLogNodeSymbols())
+          && isAppealFinanceBridgeSupported(
+              abiVersion, nativeHasAppealFinanceSymbols());
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -951,6 +992,8 @@ public final class SorafsReferenceValidators {
 
   private static native boolean nativeHasGovernanceLogNodeSymbols();
 
+  private static native boolean nativeHasAppealFinanceSymbols();
+
   private static native byte[] nativeValidateOrderbookPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
 
@@ -959,6 +1002,9 @@ public final class SorafsReferenceValidators {
 
   private static native byte[] nativeValidateHedgingPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
+
+  private static native byte[] nativeValidateAppealFinanceCancelAssetLockJson(
+      byte[] payload, byte[] label, long generatedAtUnix);
 
   private static native byte[] nativeValidateFixtureBundleJson(
       byte[] kinds,

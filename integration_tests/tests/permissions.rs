@@ -677,7 +677,7 @@ fn permissions_differ_not_only_by_names() {
     let set_hat_color = SetKeyValue::nft(
         hat_nft_id,
         "color".parse().expect("Valid"),
-        "red".parse::<Json>().expect("Valid"),
+        Json::from("red"),
     );
     submit_with_authority(set_hat_color.into(), &bob_id, &bob_keypair)
         .expect("Failed to modify Mouse's hats");
@@ -686,7 +686,7 @@ fn permissions_differ_not_only_by_names() {
     let set_shoes_color = SetKeyValue::nft(
         shoes_nft_id.clone(),
         "color".parse().expect("Valid"),
-        "yellow".parse::<Json>().expect("Valid"),
+        Json::from("yellow"),
     );
     let _err = submit_with_authority(set_shoes_color.clone().into(), &bob_id, &bob_keypair)
         .expect_err("Expected Bob to fail to modify Mouse's shoes");
@@ -741,28 +741,40 @@ fn stored_vs_granted_permission_payload() {
 
     let mouse_asset = AssetId::new(asset_definition_id, mouse_id.clone());
 
-    // Allow alice to mint mouse asset and mint initial value
-    let value_json = Json::from_string_unchecked(format!(
+    // The exact mint permission is rooted in the asset-definition authority, not in the
+    // destination account that happens to hold the asset instance.
+    let value_json = Json::from_raw_json(format!(
         // NOTE: Permissions is created explicitly as a json string to introduce additional whitespace
         // This way, if the executor compares permissions just as JSON strings, the test will fail
         r#"{{ "asset"   :   "{mouse_asset}" }}"#
-    ));
+    ))
+    .expect("valid permission JSON fixture");
 
     let allow_alice_to_mint_mouse_asset = Grant::account_permission(
-        Permission::new("CanMintAsset".parse().unwrap(), value_json),
-        alice_id,
+        Permission::new("CanMintAsset".parse().unwrap(), value_json.clone()),
+        alice_id.clone(),
     );
 
-    let transaction = TransactionBuilder::new(
+    let attempted_holder_grant = TransactionBuilder::new(
         chain_id,
         mouse_id,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_instructions([allow_alice_to_mint_mouse_asset])
+    .with_instructions([allow_alice_to_mint_mouse_asset.clone()])
     .sign(mouse_keypair.private_key());
+    assert!(
+        iroha
+            .submit_transaction_blocking(&attempted_holder_grant)
+            .is_err(),
+        "an asset holder must not manufacture mint authority for another definition"
+    );
+
     iroha
-        .submit_transaction_blocking(&transaction)
-        .expect("Failed to grant permission to alice.");
+        .submit_blocking(
+            allow_alice_to_mint_mouse_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect("asset-definition owner should grant the exact mint permission");
 
     // Check that alice can indeed mint mouse asset
     let mint_asset = Mint::asset_quantity(1_u32, mouse_asset);

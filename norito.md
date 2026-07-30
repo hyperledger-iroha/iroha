@@ -53,7 +53,11 @@ Flag scoping rules:
 - `COMPACT_LEN` affects per-value length prefixes only.
 - Reserved layout bits (`VARINT_OFFSETS`, `COMPACT_SEQ_LEN`) are rejected when decoding headers.
 
-These flags are independent; no heuristic cross-effects are permitted.
+Except for the declared `FIELD_BITSET` dependency, flags have no heuristic
+cross-effects. Encoders and decoders reject `FIELD_BITSET` unless both
+`PACKED_STRUCT` and `COMPACT_LEN` are present. When a hybrid packed struct emits
+a field bitset, its final header retains those two required flags even if every
+field is self-delimiting and therefore no explicit compact size prefix appears.
 
 Default v1 payloads use `COMPACT_LEN` (`flags = 0x02`) while keeping the minor
 version byte fixed at `0x00`. The header flag byte is therefore the source of
@@ -134,6 +138,33 @@ callers. A host must choose cumulative budgets with enough headroom for
 temporary alignment copies and container metadata; accounting is intentionally
 conservative and may charge both a declared field body and a temporary copy.
 
+## Bounded data-model text leaves
+
+The first-release `ChainId`, `Name`, and `Json` wrappers enforce their semantic
+and resource invariants on every safe construction and decode path. A
+`ChainId` is exact, case-sensitive ASCII, is 1–128 bytes, begins and ends with
+an ASCII alphanumeric, and otherwise permits only alphanumerics plus `.`, `_`,
+`:`, and `-`. Its decoder rejects an oversized declared string length before
+reading or allocating the body. A `Name` is
+NFC-normalized, is at most 255 UTF-8 bytes, and rejects whitespace, Unicode
+control characters (including NUL), Unicode bidirectional controls, and the
+reserved `@`, `#`, and `$` delimiters.
+
+A `Json` value is exactly one well-formed Norito JSON document with no
+duplicate object keys or trailing tokens. Its UTF-8 representation is at most
+1,048,576 bytes and its structural depth is at most
+`norito::json::MAX_JSON_VALUE_NESTING_DEPTH`. The fixed type-level limits apply
+before any lower ledger or application-specific metadata limit. Norito
+decoders inspect the nested string length before allocating its backing
+storage; malformed, oversized, or over-depth wire values never become a
+`Json`. Raw JSON producers use the fallible `Json::from_raw_json`, while plain
+text that should become a JSON string uses `Json::new` or `Json::from`.
+
+Typed JSON floating-point values must be finite. Norito rejects literals whose
+decimal exponent overflows `f64`; finite values are rendered with Ryu's
+locale-independent shortest-roundtrip representation, preserving their exact
+IEEE-754 bits when decoded again.
+
 ## Transaction Payload Layout
 
 `TransactionPayload` is an eight-field canonical struct. Its fields are encoded
@@ -158,6 +189,12 @@ metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are not alternate
 encodings of this field and are rejected by transaction construction and
 admission. SDK encoders and fixture exporters must use this eight-field layout;
 the former seven-field payload is not a supported compatibility format.
+`time_to_live_ms` retains its canonical option discriminant so a malformed
+signed payload can be decoded into a typed admission rejection, but
+first-release transactions must encode `Some(positive milliseconds)`. Safe
+builders assign `100_000` ms when no explicit lifetime is selected, and
+stateless admission also enforces the governed
+`transaction.max_time_to_live_ms` ceiling.
 
 The `instructions` field contains the `Executable` enum. Its canonical variant
 tags are stable and append-only:
@@ -178,6 +215,18 @@ batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
 before signing. Existing instruction-only transactions continue to use
 `Executable` tag `0`, so adding the mixed form does not rewrite their canonical
 bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
+
+Dynamic `InstructionBox` and erased `QueryBox` payloads carry a registry wire
+identifier plus the concrete Norito payload. First-release built-ins use
+explicit, frozen identifiers: instruction IDs are inventoried in
+`crates/iroha_data_model/src/isi/registry/wire_ids.rs`, and query IDs are pinned
+by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
+those identifiers rather than deriving new values from the current Rust module
+layout. Registries retain the concrete Rust type name as a decode lookup alias,
+so internal refactors can move an implementation without changing canonical
+bytes or breaking already encoded values. New built-ins must add a unique
+identifier and update the corresponding golden inventory; an existing V1
+identifier must not be renamed or reused for a different layout.
 
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 4 changes the canonical validation-fee governance layout:
@@ -501,7 +550,12 @@ encoded as a single packed payload with one of two layouts:
   bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
   payloads in declaration order. Bit 0 of byte 0 refers to field 0, bit 1 to
   field 1, and so on. Fields that are fixed-size or self-delimiting omit the
-  explicit size header and are decoded sequentially.
+  explicit size header and are decoded sequentially. The bitset is part of the
+  type's canonical layout: a decoder recomputes it from the same compile-time
+  field classification as the encoder and rejects any mismatch, including
+  non-zero padding bits. Each declared size is decoded only as the compact
+  varint advertised by `COMPACT_LEN`; zero is a canonical one-byte varint and
+  is never reinterpreted as a fixed-width `u64`.
 
 Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
 `COMPACT_LEN`) when encoding nested collections or string/blob values.

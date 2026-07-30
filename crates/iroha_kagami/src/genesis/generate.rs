@@ -655,11 +655,11 @@ pub fn generate_default(
 
     let mut builder = builder
         .domain_with_metadata(wonderland_domain.clone(), meta.clone())
-        .account_with_metadata(ALICE_ID.signatory().clone(), meta.clone())
+        .account_with_metadata(ALICE_ID.expect_single_signatory().clone(), meta.clone())
         .asset("rose".parse()?, NumericSpec::default())
         .finish_domain()
         .domain(garden_of_live_flowers_domain.clone())
-        .account(CARPENTER_ID.signatory().clone())
+        .account(CARPENTER_ID.expect_single_signatory().clone())
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
 
@@ -673,7 +673,7 @@ pub fn generate_default(
     );
     let register_account_permission = Permission::new(
         <CanRegisterAccount as iroha_executor_data_model::permission::Permission>::name(),
-        Json::from_string_unchecked(format!("{{\"domain\":\"{}\"}}", wonderland_domain)),
+        Json::from_raw_json(format!("{{\"domain\":\"{}\"}}", wonderland_domain))?,
     );
     let grant_permission_to_set_parameters =
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());

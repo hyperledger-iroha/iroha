@@ -28,7 +28,11 @@ Rollback is authorised when any of the following hold and the duty officer and N
 - **No healthy SoraNet relays:** `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` > 10 over 5 minutes in two regions. Detection: Grafana `dashboards/grafana/sorafs_fetch_observability.json` panel “Failure Reasons”. Escalation: Networking TL + relay on-call.
 - **PQ deficit brownout:** `sorafs_orchestrator_pq_deficit_ratio` or `sorafs_orchestrator_brownouts_total` trips the SNNet-5b alert (`dashboards/grafana/soranet_pq_ratchet.json`). Detection: Alertmanager route `snnet-pq-brownout`. Mitigation requires falling back to `direct-only` until PQ supply recovers.
 - **Telemetry redaction/compliance request:** Governance or compliance demands direct mode (for example, regulator prohibits anonymous relays for a jurisdiction). Detection: `docs/source/sorafs/direct_mode_pack.md` checklist, ticket prefix `SNNET-DIR-***`.
-- **Guard directory mismatch:** `sorafs_cli guard-directory verify` reports `expected-directory-hash` drift or `soranet-directory verify` fails signature validation, indicating the relay directory cannot be trusted.
+- **Guard directory mismatch:** `sorafs_cli guard-directory verify` reports an
+  `expected-snapshot-digest` mismatch or authentication failure. This indicates
+  that the downloaded artefact does not match the exact snapshot approved
+  through the independent governance channel, or is outside its validity
+  window.
 
 ## 3. Prerequisites & Safeguards
 
@@ -38,7 +42,7 @@ Rollback is authorised when any of the following hold and the duty officer and N
   sorafs_cli guard-directory fetch \
     --url "$SNAPSHOT_URL" \
     --output artifacts/rollback/guard_directory_pre_rollback.norito \
-    --expected-directory-hash "$DIRECTORY_HASH"
+    --expected-snapshot-digest "$SNAPSHOT_DIGEST"
 
   cp "$GUARD_CACHE" artifacts/rollback/guard_cache_pre_rollback.norito
   ```

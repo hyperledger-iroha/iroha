@@ -106,8 +106,87 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     func testSharedTypedValidatorStatusContractIsStable() {
         XCTAssertEqual(PrivacyNativeBridge.nativeArchiveMaximumBytes, 256 * 1024)
         XCTAssertEqual(
+            PrivacyNativeBridge.exact12FixtureBundleMaximumBytes,
+            2 * 1024 * 1024
+        )
+        XCTAssertEqual(
             PrivacyCapabilityValidationStatusV1.allCases.map(\.rawValue),
             Array(0...8)
+        )
+        XCTAssertEqual(
+            PrivacyExact12FixtureValidationStatusV1.allCases.map(\.rawValue),
+            Array(0...8)
+        )
+    }
+
+    func testExact12FixturePreflightRejectsEmptyAndOversizeWithoutNativeCalls() throws {
+        XCTAssertEqual(
+            try PrivacyNativeBridge.validateExact12FixtureBundleV1(Data()),
+            .empty
+        )
+        XCTAssertEqual(
+            try PrivacyNativeBridge.validateExact12FixtureBundleV1(
+                Data(
+                    repeating: 0,
+                    count: PrivacyNativeBridge.exact12FixtureBundleMaximumBytes + 1
+                )
+            ),
+            .archiveTooLarge
+        )
+    }
+
+    func testExact12FixtureBundleRoundTripsAndRejectsAdversarialBytes() throws {
+        guard PrivacyNativeBridge.isNativeAvailable else {
+            XCTFail("ABI-21 NoritoBridge with exact-12 fixture symbols is required.")
+            return
+        }
+
+        let canonical = try PrivacyNativeBridge.exact12FixtureBundleV1()
+        XCTAssertFalse(canonical.isEmpty)
+        XCTAssertLessThanOrEqual(
+            canonical.count,
+            PrivacyNativeBridge.exact12FixtureBundleMaximumBytes
+        )
+        XCTAssertEqual(
+            try PrivacyNativeBridge.validateExact12FixtureBundleV1(canonical),
+            .valid
+        )
+        XCTAssertEqual(try PrivacyNativeBridge.exact12FixtureBundleV1(), canonical)
+
+        for truncated in [
+            Data(canonical.dropLast()),
+            Data(canonical.dropFirst()),
+            Data(canonical.prefix(canonical.count / 2)),
+        ] {
+            XCTAssertNotEqual(
+                try PrivacyNativeBridge.validateExact12FixtureBundleV1(truncated),
+                .valid
+            )
+            XCTAssertThrowsError(
+                try PrivacyNativeBridge.requireExact12FixtureBundleV1(truncated)
+            )
+        }
+
+        var trailing = canonical
+        trailing.append(0)
+        XCTAssertNotEqual(
+            try PrivacyNativeBridge.validateExact12FixtureBundleV1(trailing),
+            .valid
+        )
+
+        for index in Set([0, canonical.count / 2, canonical.count - 1]) {
+            var mutated = canonical
+            mutated[index] ^= 0x80
+            XCTAssertNotEqual(
+                try PrivacyNativeBridge.validateExact12FixtureBundleV1(mutated),
+                .valid
+            )
+        }
+
+        let crossSchemaArchive = try PrivacyNativeBridge.capabilitiesArchiveV1()
+        XCTAssertNotEqual(
+            try PrivacyNativeBridge.validateExact12FixtureBundleV1(crossSchemaArchive),
+            .valid
         )
     }
 }

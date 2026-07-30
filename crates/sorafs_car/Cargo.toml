@@ -38,15 +38,15 @@ fetch_cli = ["cli"]
 sorafs_chunker = { path = "../sorafs_chunker" }
 blake3 = "1.8.2"
 thiserror = "2.0.17"
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 futures = { version = "0.3.31", default-features = false, features = ["std", "executor"] }
 ed25519-dalek = { version = "2.2.0", optional = true, default-features = false, features = ["std"] }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false, optional = true }
-iroha_crypto = { workspace = true, optional = true }
-iroha_data_model = { workspace = true, optional = true }
+iroha_crypto = { workspace = true, optional = true, default-features = false, features = ["application"] }
+iroha_data_model = { workspace = true, optional = true, default-features = false, features = ["application-model"] }
 iroha_config = { workspace = true, optional = true }
 iroha_primitives = { workspace = true, optional = true, features = ["simd-accel"] }
-ivm = { workspace = true, optional = true }
+ivm = { workspace = true, optional = true, default-features = false, features = ["runtime"] }
 eyre = { workspace = true, optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 hex = "0.4.3"

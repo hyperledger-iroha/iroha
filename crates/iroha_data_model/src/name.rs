@@ -24,6 +24,13 @@ use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed};
 pub use self::model::*;
 use crate::error::ParseError;
 
+/// Maximum UTF-8 byte length of a canonical [`Name`].
+///
+/// The bound matches the DNS-style full-name ceiling already used by domain
+/// normalization. Counting bytes, rather than Unicode scalar values, also
+/// bounds the canonical Norito representation independently of platform.
+pub const MAX_NAME_BYTES: usize = 255;
+
 type NormalizerCell = OnceLock<ComposingNormalizerBorrowed<'static>>;
 
 /// Lazily initialized NFC normalizer shared across [`Name`] parsing.
@@ -58,6 +65,21 @@ impl Name {
                 reason: "Empty `Name`",
             });
         }
+        if candidate.len() > MAX_NAME_BYTES {
+            return Err(ParseError {
+                reason: "`Name` exceeds the 255-byte UTF-8 limit",
+            });
+        }
+        if candidate.chars().any(char::is_control) {
+            return Err(ParseError {
+                reason: "Unicode control characters are not allowed in `Name` constructs",
+            });
+        }
+        if candidate.chars().any(is_bidi_control) {
+            return Err(ParseError {
+                reason: "Unicode bidirectional control characters are not allowed in `Name` constructs",
+            });
+        }
         if candidate.chars().any(char::is_whitespace) {
             return Err(ParseError {
                 reason: "White space not allowed in `Name` constructs",
@@ -76,8 +98,11 @@ impl Name {
     /// Return a canonical form of the input string according to the Name normalization policy.
     ///
     /// Applies ICU-backed NFC composition so canonically equivalent sequences share the same
-    /// representation (for example, `e\u{0301}` becomes `é`) on every platform. See
-    /// `roadmap.md` ("Names/IDs").
+    /// representation (for example, `e\u{0301}` becomes `é`) on every platform.
+    ///
+    /// The manifest pins both `icu_normalizer` and its baked data package to the same exact
+    /// release because this output is consensus-visible. Any intentional data upgrade must also
+    /// update the normalization regression corpus below.
     fn normalize(candidate: &str) -> Cow<'_, str> {
         // Use ICU compiled data to apply NFC normalization deterministically
         // across platforms. This preserves compatibility forms but composes
@@ -87,6 +112,33 @@ impl Name {
         NFC_NORMALIZER
             .get_or_init(ComposingNormalizer::new_nfc)
             .normalize(candidate)
+    }
+
+    fn parse(candidate: &str) -> Result<Self, ParseError> {
+        Self::validate_str(candidate)?;
+        let normalized = Self::normalize(candidate);
+        Self::validate_str(normalized.as_ref())?;
+        Ok(Self(ConstString::from(normalized.as_ref())))
+    }
+
+    fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
+        let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
+        if len > MAX_NAME_BYTES {
+            return Err(NoritoError::Message(
+                "`Name` exceeds the 255-byte UTF-8 limit".into(),
+            ));
+        }
+        let end = header_len
+            .checked_add(len)
+            .ok_or(NoritoError::LengthMismatch)?;
+        let raw = bytes
+            .get(header_len..end)
+            .ok_or(NoritoError::LengthMismatch)?;
+        let value = core::str::from_utf8(raw).map_err(|_| NoritoError::InvalidUtf8)?;
+        norito::core::reserve_decode_allocation(len)?;
+        let name = Self::parse(value).map_err(|error| NoritoError::Message(error.reason.into()))?;
+        norito::core::note_payload_access(bytes, end);
+        Ok((name, end))
     }
 
     /// Returns true if this name is reserved for internal use.
@@ -132,23 +184,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Name {
                     &payload[..preview_len]
                 );
             }
-            match norito::core::decode_field_canonical::<String>(payload) {
-                Ok((value, _used)) => {
-                    return Name::from_str(&value)
-                        .map_err(|err| norito::core::Error::Message(err.reason.into()));
-                }
-                Err(norito::core::Error::LengthMismatch) => {
-                    if let Ok(raw) = core::str::from_utf8(payload) {
-                        #[cfg(debug_assertions)]
-                        if norito::debug_trace_enabled() {
-                            eprintln!("Name::try_deserialize fallback raw={raw}");
-                        }
-                        return Name::from_str(raw)
-                            .map_err(|err| norito::core::Error::Message(err.reason.into()));
-                    }
-                }
-                Err(err) => return Err(err),
-            }
+            return Self::decode_wire(payload).map(|(name, _)| name);
         }
 
         let string = norito::core::NoritoDeserialize::deserialize(archived.cast::<String>());
@@ -173,9 +209,7 @@ impl FromStr for Name {
     type Err = ParseError;
 
     fn from_str(candidate: &str) -> Result<Self, Self::Err> {
-        Self::validate_str(candidate)?;
-        let normalized = Self::normalize(candidate);
-        Ok(Self(ConstString::from(&*normalized)))
+        Self::parse(candidate)
     }
 }
 
@@ -183,17 +217,13 @@ impl TryFrom<String> for Name {
     type Error = ParseError;
 
     fn try_from(candidate: String) -> Result<Self, Self::Error> {
-        Self::validate_str(&candidate)?;
-        let normalized = Self::normalize(&candidate);
-        Ok(Self(ConstString::from(&*normalized)))
+        Self::parse(&candidate)
     }
 }
 
 impl<'a> DecodeFromSlice<'a> for Name {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
-        let (value, used) = norito::core::decode_field_canonical::<String>(bytes)?;
-        let name = Name::from_str(&value).map_err(|err| NoritoError::Message(err.reason.into()))?;
-        Ok((name, used))
+        Self::decode_wire(bytes)
     }
 }
 
@@ -235,6 +265,17 @@ fn reject_disallowed_unicode(label: &str) -> Result<(), ParseError> {
         return Err(ParseError::new(ERR_DOMAIN_NORMALISATION));
     }
     Ok(())
+}
+
+fn is_bidi_control(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{061C}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2066}'..='\u{2069}'
+    )
 }
 
 #[cfg(feature = "json")]
@@ -332,6 +373,115 @@ mod tests {
     }
 
     #[test]
+    fn name_utf8_byte_limit_is_enforced_by_both_constructors() {
+        let ascii_boundary = "a".repeat(MAX_NAME_BYTES);
+        let ascii_over_limit = "a".repeat(MAX_NAME_BYTES + 1);
+        let unicode_boundary = "é".repeat(MAX_NAME_BYTES / "é".len());
+        let unicode_over_limit = format!("{unicode_boundary}é");
+
+        for valid in [&ascii_boundary, &unicode_boundary] {
+            let parsed = Name::from_str(valid).expect("boundary name must be accepted");
+            let converted =
+                Name::try_from(valid.clone()).expect("owned boundary name must be accepted");
+            assert_eq!(parsed, converted);
+            assert!(parsed.as_ref().len() <= MAX_NAME_BYTES);
+        }
+        for invalid in [&ascii_over_limit, &unicode_over_limit] {
+            assert!(
+                Name::from_str(invalid).is_err(),
+                "borrowed constructor accepted {} UTF-8 bytes",
+                invalid.len()
+            );
+            assert!(
+                Name::try_from(invalid.clone()).is_err(),
+                "owned constructor accepted {} UTF-8 bytes",
+                invalid.len()
+            );
+        }
+    }
+
+    #[test]
+    fn controls_and_bidirectional_controls_are_rejected() {
+        for invalid in [
+            "nul\0suffix",
+            "unit\u{001F}separator",
+            "delete\u{007F}",
+            "c1\u{0080}control",
+            "arabic\u{061C}mark",
+            "left\u{200E}mark",
+            "right\u{200F}mark",
+            "embed\u{202A}text",
+            "override\u{202E}text",
+            "isolate\u{2066}text",
+            "pop\u{2069}text",
+        ] {
+            assert!(
+                Name::from_str(invalid).is_err(),
+                "unsafe identifier text was accepted: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn norito_decoders_cannot_bypass_name_validation() {
+        for invalid in [
+            "nul\0suffix".to_owned(),
+            format!("bidi\u{202E}suffix"),
+            "x".repeat(MAX_NAME_BYTES + 1),
+        ] {
+            let forged = Name(ConstString::from(invalid.as_str()));
+            let encoded = forged.encode();
+
+            let mut cursor = encoded.as_slice();
+            assert!(
+                Name::decode(&mut cursor).is_err(),
+                "Norito Decode accepted invalid Name: {invalid:?}"
+            );
+            assert!(
+                <Name as DecodeFromSlice>::decode_from_slice(&encoded).is_err(),
+                "slice decoder accepted invalid Name: {invalid:?}"
+            );
+
+            let framed = norito::to_bytes(&forged).expect("encode forged Name fixture");
+            assert!(
+                norito::decode_from_bytes::<Name>(&framed).is_err(),
+                "framed decoder accepted invalid Name: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn slice_decoder_rejects_declared_oversize_before_body_access() {
+        let mut declared_oversize = Vec::new();
+        norito::core::write_len_to_vec(
+            &mut declared_oversize,
+            u64::try_from(MAX_NAME_BYTES + 1).expect("name limit fits u64"),
+        );
+
+        let error = <Name as DecodeFromSlice>::decode_from_slice(&declared_oversize)
+            .expect_err("oversized declared Name must fail before its missing body is read");
+        assert!(
+            error.to_string().contains("255-byte"),
+            "decoder reached a generic truncation error before the Name limit: {error}"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn json_decoder_cannot_bypass_name_validation() {
+        for invalid in [
+            "\"nul\\u0000suffix\"".to_owned(),
+            "\"bidi\\u202Esuffix\"".to_owned(),
+            format!("\"{}\"", "x".repeat(MAX_NAME_BYTES + 1)),
+        ] {
+            assert!(
+                norito::json::from_str::<Name>(&invalid).is_err(),
+                "JSON decoder accepted invalid Name: {invalid}"
+            );
+        }
+    }
+
+    #[test]
     fn reserved_name_detection_is_case_insensitive() {
         assert!(Name::from_str("genesis").unwrap().is_reserved());
         assert!(Name::from_str("Genesis").unwrap().is_reserved());
@@ -383,13 +533,26 @@ mod tests {
     }
 
     #[test]
-    fn nfc_normalization_applies() {
-        // "e" + combining acute accent
-        let decomposed = "e\u{0301}";
-        let composed = "é";
-        let name1 = Name::from_str(decomposed).expect("valid");
-        let name2 = Name::from_str(composed).expect("valid");
-        assert_eq!(name1, name2);
-        assert_eq!(name1.as_ref(), composed);
+    fn nfc_normalization_matches_pinned_regression_corpus() {
+        // This corpus exercises canonical decomposition, composition, combining
+        // mark ordering, Hangul composition, and canonical singleton mappings.
+        // Changes are protocol changes and must be reviewed with the exact ICU
+        // algorithm/data pins in Cargo.toml.
+        let cases = [
+            ("e\u{0301}", "\u{00E9}"),
+            ("\u{212B}", "\u{00C5}"),
+            ("\u{2126}", "\u{03A9}"),
+            ("\u{212A}", "K"),
+            ("\u{1100}\u{1161}\u{11A8}", "\u{AC01}"),
+            ("a\u{0315}\u{0300}", "\u{00E0}\u{0315}"),
+            ("\u{1E0A}\u{0323}", "\u{1E0C}\u{0307}"),
+        ];
+
+        for (input, expected) in cases {
+            let normalized = Name::from_str(input).expect("normalization corpus input is valid");
+            let canonical = Name::from_str(expected).expect("normalization corpus output is valid");
+            assert_eq!(normalized, canonical, "NFC mismatch for {input:?}");
+            assert_eq!(normalized.as_ref(), expected, "NFC output for {input:?}");
+        }
     }
 }

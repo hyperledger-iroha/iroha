@@ -2685,7 +2685,7 @@ pub enum NativeAmxQcBuildError {
     /// no votes were supplied for the requested native AMX phase
     #[error("no votes were supplied for the requested native AMX phase")]
     EmptyVotes,
-    /// participant committee is empty, oversized, duplicated, or non-canonical
+    /// participant committee is empty, oversized, duplicated, non-canonical, or has a non-canonical quorum
     #[error("native AMX participant validator set is malformed")]
     InvalidValidatorSet,
     /// signed participant committee hash/count/quorum does not match assembly inputs
@@ -2723,7 +2723,7 @@ pub enum NativeAmxQcValidationError {
     /// certificate body differs from the exact expected body
     #[error("native AMX QC body mismatch")]
     BodyMismatch,
-    /// authoritative participant committee is empty, oversized, duplicated, or non-canonical
+    /// authoritative participant committee is empty, oversized, duplicated, non-canonical, or has a non-canonical quorum
     #[error("native AMX QC validator set is malformed")]
     InvalidValidatorSet,
     /// certificate validator set differs from the authoritative committee
@@ -3063,8 +3063,10 @@ fn native_amx_bodies_match_leg(
 /// the supplied validator-set order before aggregation.
 ///
 /// # Errors
-/// Returns an error when votes do not match `body`, include duplicate or unknown signers, fail to
-/// meet `min_signers`, or cannot be aggregated as BLS-normal signatures.
+/// Returns an error when the committee or its canonical commit threshold is
+/// malformed, votes do not match `body`, include duplicate or unknown signers,
+/// fail to meet `min_signers`, or cannot be aggregated as BLS-normal
+/// signatures.
 pub fn aggregate_votes_to_qc(
     body: NativeAmxAttestationBodyV2,
     validator_set: Vec<PeerId>,
@@ -3075,11 +3077,12 @@ pub fn aggregate_votes_to_qc(
     if votes.is_empty() {
         return Err(NativeAmxQcBuildError::EmptyVotes);
     }
+    let expected_quorum =
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
     if validator_set.is_empty()
         || validator_set.len() > MAX_NATIVE_AMX_VALIDATORS
         || validator_set.windows(2).any(|pair| pair[0] >= pair[1])
-        || min_signers == 0
-        || min_signers > validator_set.len()
+        || min_signers != expected_quorum
     {
         return Err(NativeAmxQcBuildError::InvalidValidatorSet);
     }
@@ -5116,6 +5119,48 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_votes_to_qc_preserves_sparse_high_index_signer_order() {
+        let mut keypairs = (1_u8..=10).map(checked_bls_keypair).collect::<Vec<_>>();
+        keypairs.sort_by_key(|keypair| PeerId::new(keypair.public_key().clone()));
+        let validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let body = body_for_validator_set(NativeAmxPhase::Commit, &validator_set);
+        let validator_set_pops = aligned_pops(&validator_set, &keypairs);
+        let signer_indices = [0_usize, 1, 2, 3, 4, 8, 9];
+        let votes = signer_indices
+            .into_iter()
+            .map(|index| signed_vote(&body, &keypairs[index]))
+            .collect::<Vec<_>>();
+
+        let qc = aggregate_votes_to_qc(body, validator_set.clone(), validator_set_pops, &votes, 7)
+            .expect("exact-threshold sparse native AMX QC");
+        assert_eq!(qc.signers_bitmap, vec![0b0001_1111, 0b0000_0011]);
+        let pops = keypairs
+            .iter()
+            .map(|keypair| {
+                (
+                    keypair.public_key().clone(),
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("prove fixture PoP"),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            validate_native_amx_qc(&qc, &body, &validator_set, 7, &pops),
+            Ok(())
+        );
+
+        let mut high_padding_bit = qc;
+        high_padding_bit.signers_bitmap[1] |= 0b1000_0000;
+        assert_eq!(
+            validate_native_amx_qc(&high_padding_bit, &body, &validator_set, 7, &pops),
+            Err(NativeAmxQcValidationError::InvalidSignerBitmap)
+        );
+    }
+
+    #[test]
     fn aggregate_votes_to_qc_rejects_bad_vote_sets() {
         let keypairs = [checked_bls_keypair(0xD1), checked_bls_keypair(0xD2)];
         let mut validator_set = keypairs
@@ -5222,6 +5267,49 @@ mod tests {
                 2,
             ),
             Err(NativeAmxQcBuildError::BodyMismatch)
+        );
+
+        let keypairs = [
+            checked_bls_keypair(0xD4),
+            checked_bls_keypair(0xD5),
+            checked_bls_keypair(0xD6),
+            checked_bls_keypair(0xD7),
+        ];
+        let mut validator_set = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        validator_set.sort();
+        let mut lowered_body = body_for_validator_set(NativeAmxPhase::Prepare, &validator_set);
+        lowered_body.participant_min_quorum = 2;
+        let lowered_votes = keypairs
+            .iter()
+            .map(|keypair| signed_vote(&lowered_body, keypair))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            aggregate_votes_to_qc(
+                lowered_body,
+                validator_set.clone(),
+                aligned_pops(&validator_set, &keypairs),
+                &lowered_votes,
+                2,
+            ),
+            Err(NativeAmxQcBuildError::InvalidValidatorSet),
+            "a signed committee context must not lower the canonical threshold"
+        );
+
+        let canonical_body = body_for_validator_set(NativeAmxPhase::Prepare, &validator_set);
+        let mut reversed = validator_set.clone();
+        reversed.reverse();
+        assert_eq!(
+            aggregate_votes_to_qc(
+                canonical_body,
+                reversed,
+                aligned_pops(&validator_set, &keypairs),
+                &lowered_votes,
+                3,
+            ),
+            Err(NativeAmxQcBuildError::InvalidValidatorSet)
         );
     }
 

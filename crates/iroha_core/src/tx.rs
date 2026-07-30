@@ -15,16 +15,11 @@ use core::{fmt, str::FromStr as _};
 use std::{
     borrow::Cow,
     collections::BTreeSet,
-    io::{self, Write},
     sync::{Arc, LazyLock, OnceLock},
     time::{Duration, SystemTime, SystemTimeError},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use blake2::{
-    Blake2bVar,
-    digest::{Update as _, VariableOutput as _},
-};
 use eyre::Result;
 use hex;
 pub use iroha_data_model::prelude::*;
@@ -81,47 +76,17 @@ type StateTelemetry = ();
 type NexusDataSpaceId = iroha_data_model::nexus::DataSpaceId;
 type NexusLaneId = iroha_data_model::nexus::LaneId;
 
-/// Hash canonical Norito-framed [`TransactionEntrypoint`] bytes without decoding and re-encoding.
+/// Decode an exact Norito-framed [`TransactionEntrypoint`] and return its canonical identity.
 ///
-/// The outer Norito header is validated and the hash is computed over the archived payload, which
-/// is the same byte sequence used by [`HashOf::new`] for canonical entrypoint frames.
+/// The identity is derived from the decoded signed intent rather than the transport frame. This
+/// prevents alternate framing, authorization-proof changes, or zero-filled logical tails from
+/// creating replay-distinct transaction identifiers.
 pub(crate) fn entrypoint_hash_from_framed_bytes(
     framed: &[u8],
 ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
     let view = norito::core::from_bytes_view(framed)?;
-    if view.schema() != <TransactionEntrypoint as norito::core::NoritoSerialize>::schema_hash() {
-        return Err(norito::core::Error::SchemaMismatch);
-    }
-    Ok(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-        view.as_bytes(),
-    )))
-}
-
-struct Blake2HashWriter(Blake2bVar);
-
-impl Blake2HashWriter {
-    fn new() -> Self {
-        Self(Blake2bVar::new(iroha_crypto::Hash::LENGTH).expect("valid Blake2b output length"))
-    }
-
-    fn finalize(self) -> iroha_crypto::Hash {
-        let mut hash = [0; iroha_crypto::Hash::LENGTH];
-        self.0
-            .finalize_variable(&mut hash)
-            .expect("Blake2b finalization writes the configured output length");
-        iroha_crypto::Hash::prehashed(hash)
-    }
-}
-
-impl Write for Blake2HashWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.update(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
+    let entrypoint: TransactionEntrypoint = view.decode_exact()?;
+    Ok(entrypoint.hash())
 }
 
 /// Stateful admission facts that must be committed only if transaction execution succeeds.
@@ -1311,37 +1276,19 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx: SignedTransaction,
         signed_bytes: Option<Arc<Vec<u8>>>,
     ) -> Self {
-        let (signed_bytes, entrypoint_hash) = if let Some(signed_bytes) = signed_bytes {
-            let entrypoint_hash = Self::external_entrypoint_hash_from_signed_frame(&signed_bytes)
-                .unwrap_or_else(|_| Self::external_entrypoint_hash_from_signed(&tx));
-            (signed_bytes, entrypoint_hash)
-        } else {
-            let (signed_payload, signed_payload_flags) =
-                Self::canonical_signed_payload_with_flags(&tx);
-            let entrypoint_hash =
-                Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
-            let signed_bytes = Arc::new(
-                norito::core::frame_bare_with_header_flags::<SignedTransaction>(
-                    &signed_payload,
-                    signed_payload_flags,
-                )
-                .expect("frame accepted signed transaction"),
-            );
-            (signed_bytes, entrypoint_hash)
-        };
         let (canonical_signed_payload, canonical_signed_payload_flags) =
             Self::canonical_signed_payload_with_flags(&tx);
-        let canonical_signed_bytes =
+        let canonical_signed_bytes = Arc::new(
             norito::core::frame_bare_with_header_flags::<SignedTransaction>(
                 &canonical_signed_payload,
                 canonical_signed_payload_flags,
             )
-            .expect("frame accepted signed transaction for cache check");
-        debug_assert_eq!(
-            signed_bytes.as_slice(),
-            canonical_signed_bytes.as_slice(),
-            "accepted transaction canonical byte cache must match canonical Norito output",
+            .expect("frame accepted signed transaction"),
         );
+        let signed_bytes = signed_bytes
+            .filter(|bytes| bytes.as_slice() == canonical_signed_bytes.as_slice())
+            .unwrap_or(canonical_signed_bytes);
+        let entrypoint_hash = tx.hash_as_entrypoint();
         let encoded_len = signed_bytes.len();
         let payload_hash = HashOf::new(tx.payload());
         let single_ed25519_key = Self::parsed_single_ed25519_key(&tx);
@@ -1390,47 +1337,18 @@ impl<'tx> AcceptedTransaction<'tx> {
         Self::canonical_signed_payload_with_flags(tx).0
     }
 
-    fn external_entrypoint_hash_from_signed_payload(
-        signed_payload: &[u8],
-    ) -> HashOf<TransactionEntrypoint> {
-        let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let mut writer = Blake2HashWriter::new();
-        Self::write_external_entrypoint_hash_prefix(&mut writer, signed_payload.len());
-        writer
-            .write_all(signed_payload)
-            .expect("hash writer accepts signed transaction payload");
-        HashOf::from_untyped_unchecked(writer.finalize())
-    }
-
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
-        let signed_payload = Self::canonical_signed_payload(tx);
-        Self::external_entrypoint_hash_from_signed_payload(&signed_payload)
+        tx.hash_as_entrypoint()
     }
 
     fn external_entrypoint_hash_from_signed_frame(
         signed_frame: &[u8],
     ) -> Result<HashOf<TransactionEntrypoint>, norito::core::Error> {
         let view = norito::core::from_bytes_view(signed_frame)?;
-        if view.schema() != <SignedTransaction as norito::core::NoritoSerialize>::schema_hash() {
-            return Err(norito::core::Error::SchemaMismatch);
-        }
-        Ok(Self::external_entrypoint_hash_from_signed_payload(
-            view.as_bytes(),
-        ))
-    }
-
-    fn write_external_entrypoint_hash_prefix(
-        writer: &mut Blake2HashWriter,
-        signed_payload_len: usize,
-    ) {
-        norito::core::NoritoSerialize::serialize(&0u32, &mut *writer)
-            .expect("u32 discriminant serialization cannot fail");
-        let payload_len =
-            u64::try_from(signed_payload_len).expect("signed transaction payload length fits u64");
-        norito::core::write_len(&mut *writer, payload_len)
-            .expect("hash writer accepts length prefix");
+        let transaction: SignedTransaction = view.decode_exact()?;
+        Ok(transaction.hash_as_entrypoint())
     }
 
     fn external_entrypoint_bytes_from_signed_payload(
@@ -1553,7 +1471,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         let (signed_payload, _signed_payload_flags) = Self::canonical_signed_payload_with_flags(tx);
         let signed_payload_len = signed_payload.len();
         let encoded_len = Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload_len);
-        let entrypoint_hash = Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
+        let entrypoint_hash = tx.hash_as_entrypoint();
         Self::prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
             tx,
             entrypoint_hash,
@@ -1570,7 +1488,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         let (signed_payload, signed_payload_flags) = Self::canonical_signed_payload_with_flags(tx);
         let signed_payload_len = signed_payload.len();
         let encoded_len = Self::framed_encoded_payload_len::<SignedTransaction>(signed_payload_len);
-        let entrypoint_hash = Self::external_entrypoint_hash_from_signed_payload(&signed_payload);
+        let entrypoint_hash = tx.hash_as_entrypoint();
         let signed_bytes = versioned_payload
             .get(1..)
             .filter(|payload| *payload == signed_payload.as_slice())
@@ -1862,7 +1780,12 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
             TransactionSignatureError::AuthorityKeyMismatch
             | TransactionSignatureError::CryptoError(_) => SignatureRejectionCode::InvalidSignature,
-            TransactionSignatureError::InvalidFeePaymentIntent(_) => {
+            TransactionSignatureError::InvalidFeePaymentIntent(_)
+            | TransactionSignatureError::MissingTimeToLive => {
+                SignatureRejectionCode::MalformedSignature
+            }
+            TransactionSignatureError::UnexpectedMultisigSignatures
+            | TransactionSignatureError::NonCanonicalMultisigSignatures => {
                 SignatureRejectionCode::MalformedSignature
             }
             TransactionSignatureError::NoSignatures
@@ -2374,10 +2297,31 @@ impl<'tx> AcceptedTransaction<'tx> {
         reject_retired_heartbeat_metadata(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
         Self::validate_common(tx, expected_chain_id, max_clock_drift, now)?;
 
-        if let Some(ttl) = tx.time_to_live()
-            && let Some(expires_at) = tx.creation_time().checked_add(ttl)
-            && now > expires_at
-        {
+        let ttl = tx.time_to_live().ok_or_else(|| {
+            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                reason: "Transaction `time_to_live_ms` is required and must be signature-bound"
+                    .into(),
+            })
+        })?;
+        let ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
+        let max_ttl_ms = limits.max_time_to_live_ms().get();
+        if ttl_ms > max_ttl_ms {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!(
+                        "Transaction time-to-live {ttl_ms} ms exceeds the governed limit \
+                         {max_ttl_ms} ms"
+                    ),
+                },
+            ));
+        }
+        let expires_at = tx.creation_time().checked_add(ttl).ok_or_else(|| {
+            AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                reason: "Transaction creation time plus time-to-live exceeds the timestamp range"
+                    .into(),
+            })
+        })?;
+        if now > expires_at {
             return Err(AcceptTransactionFail::TransactionExpired {
                 expires_at_ms: expires_at.as_millis(),
                 now_ms: now.as_millis(),
@@ -6324,6 +6268,19 @@ pub mod tests {
     }
 
     #[test]
+    fn malformed_multisig_bundle_shapes_have_stable_rejection_code() {
+        for error in [
+            TransactionSignatureError::UnexpectedMultisigSignatures,
+            TransactionSignatureError::NonCanonicalMultisigSignatures,
+        ] {
+            assert_eq!(
+                AcceptedTransaction::signature_rejection_code(&error),
+                SignatureRejectionCode::MalformedSignature,
+            );
+        }
+    }
+
+    #[test]
     fn multisig_authority_rejected_with_stable_code() {
         let chain: ChainId = "multisig-accept".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6618,7 +6575,7 @@ pub mod tests {
         let role_id: RoleId = format!(
             "MULTISIG_SIGNATORY/{}/{}",
             domain_id,
-            authority_id.signatory()
+            authority_id.expect_single_signatory()
         )
         .parse()
         .expect("static multisig role must parse");
@@ -7476,15 +7433,9 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "borrowed-hash".into())])
         .sign(keypair.private_key());
-        let versioned =
-            <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
 
         assert_eq!(
             AcceptedTransaction::external_entrypoint_hash_from_signed(&signed),
-            signed.hash_as_entrypoint()
-        );
-        assert_eq!(
-            AcceptedTransaction::external_entrypoint_hash_from_signed_payload(&versioned[1..]),
             signed.hash_as_entrypoint()
         );
     }
@@ -8287,6 +8238,80 @@ pub mod tests {
     }
 
     #[test]
+    fn stateless_admission_rejects_missing_signature_bound_ttl() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let chain: ChainId = "required-ttl-chain".parse().expect("chain id");
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "required ttl".to_owned())])
+        .sign(keypair.private_key());
+        let encoded = norito::json::to_json(&signed).expect("serialize transaction");
+        let ttl_field = format!(
+            "\"time_to_live_ms\":{}",
+            iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE.as_millis()
+        );
+        assert!(
+            encoded.contains(&ttl_field),
+            "fixture must carry the builder's signature-bound TTL: {encoded}"
+        );
+        let malformed_json = encoded.replacen(&ttl_field, "\"time_to_live_ms\":null", 1);
+        let malformed: SignedTransaction =
+            norito::json::from_str(&malformed_json).expect("decode malformed wire fixture");
+
+        let error = AcceptedTransaction::validate_with_now(
+            &malformed,
+            &chain,
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+            malformed.creation_time(),
+        )
+        .expect_err("missing TTL must never be stateless-valid");
+        match error {
+            AcceptTransactionFail::TransactionLimit(limit) => assert!(
+                limit.reason.contains("time_to_live_ms") && limit.reason.contains("required"),
+                "unexpected missing-TTL reason: {limit:?}"
+            ),
+            other => panic!("expected TransactionLimit for missing TTL, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stateless_admission_enforces_governed_maximum_ttl() {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let chain: ChainId = "bounded-ttl-chain".parse().expect("chain id");
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "bounded ttl".to_owned())]);
+        builder.set_ttl(Duration::from_millis(5_001));
+        let signed = builder.sign(keypair.private_key());
+        let limits = TransactionParameters::default().with_max_time_to_live_ms(nonzero!(5_000_u64));
+
+        let error = AcceptedTransaction::validate_with_now(
+            &signed,
+            &chain,
+            Duration::ZERO,
+            limits,
+            &iroha_config::parameters::actual::Crypto::default(),
+            signed.creation_time(),
+        )
+        .expect_err("TTL above the governed maximum must be rejected");
+        match error {
+            AcceptTransactionFail::TransactionLimit(limit) => assert!(
+                limit.reason.contains("5001") && limit.reason.contains("5000"),
+                "unexpected maximum-TTL reason: {limit:?}"
+            ),
+            other => panic!("expected TransactionLimit for excessive TTL, got {other:?}"),
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn time_sensitive_instruction_detects_governance_and_non_sensitive() {
         let (authority, _keypair) = gen_account_in("wonderland");
@@ -8332,14 +8357,7 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             repo
         )));
-        let reverse = iroha_data_model::isi::repo::ReverseRepoIsi::new(
-            agreement_id.clone(),
-            counterparty.clone(),
-            authority.clone(),
-            cash_leg.clone(),
-            collateral_leg.clone(),
-            1_700_000_100_000,
-        );
+        let reverse = iroha_data_model::isi::repo::ReverseRepoIsi::new(agreement_id.clone());
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             reverse
         )));
@@ -13274,7 +13292,10 @@ pub mod tests {
     #[test]
     fn sandbox_accounts_are_deterministic() {
         for (name, public, _) in SANDBOX_ACCOUNT_KEYS {
-            assert_eq!(ACCOUNT[name].id.signatory().to_string(), *public);
+            assert_eq!(
+                ACCOUNT[name].id.expect_single_signatory().to_string(),
+                *public
+            );
         }
     }
 
@@ -13452,7 +13473,7 @@ pub mod tests {
     fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
         let account = asset_id.account();
         let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
-            || format!("{}@{}", account.signatory(), DOMAIN_STR),
+            || format!("{}@{}", account.expect_single_signatory(), DOMAIN_STR),
             |alias| format!("{alias}@{DOMAIN_STR}"),
         );
         if asset_id.definition().try_domain() == Some(&*DOMAIN) {

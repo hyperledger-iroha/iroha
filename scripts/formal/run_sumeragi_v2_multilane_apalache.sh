@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Fail-closed bounded Apalache gate for the four Sumeragi v2 multilane
-# closure kernels. The fixed bounds are part of the reviewed contract; they
-# are deliberately not configurable through the environment.
+# refinement kernels plus the layout-only in-flight carrier kernel. The fixed
+# bounds are part of the reviewed contract and are not configurable.
 
 if (($#)); then
   if (($# == 1)) && [[ "$1" == "--help" ]]; then
@@ -183,11 +183,13 @@ readonly AUTOSCALE_MODULE="SumeragiV2AutoscaleLifecycle"
 readonly NATIVE_MODULE="SumeragiV2NativeApplicationEvidence"
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier"
 readonly QUEUE_PLAN_ADMISSION_MODULE="SumeragiV2QueuePlanAdmissionRegistry"
+readonly INFLIGHT_FIRST_RELEASE_MODULE="SumeragiV2InFlightFirstRelease"
 
 run_typecheck "$AUTOSCALE_MODULE"
 run_typecheck "$NATIVE_MODULE"
 run_typecheck "$AUTONOMOUS_MODULE"
 run_typecheck "$QUEUE_PLAN_ADMISSION_MODULE"
+run_typecheck "$INFLIGHT_FIRST_RELEASE_MODULE"
 
 run_positive \
   autoscale-lifecycle \
@@ -213,6 +215,12 @@ run_positive \
   multilane_queue_plan_admission_registry_fixed.cfg \
   8 \
   "QueuePlanAdmissionTypeInvariant, MLAdmissionCasUnique, MLCertificateDurable, MLPublic202Exact, MLExecutionRequiresExactBinding, MLQueueEligibilityExact, MLAdmissionAtMostOnceExecution, MLImmutableAdmissionTombstone, MLCancellationStopsExecution"
+run_positive \
+  inflight-first-release-layout \
+  "$INFLIGHT_FIRST_RELEASE_MODULE" \
+  inflight_first_release_fixed.cfg \
+  10 \
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLPutBatchV4BeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReady, MLCrashPrefixLossFree, MLCommitAndReleaseRetainExactScope, MLExactlyOnceCarrierApplication, MLQueuePlanV4PutBatchBound4096"
 
 final_source_manifest_sha256="$(
   python3 -I -S "$CONTRACT_CHECKER" --print-source-manifest-sha256
@@ -230,7 +238,7 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
   printf 'launcher_sha256\t%s\n' "$APALACHE_LAUNCHER_SHA256"
   printf 'jar_sha256\t%s\n' "$APALACHE_JAR_SHA256"
   printf 'source_manifest_sha256\t%s\n' "$source_manifest_sha256"
-  printf 'result_count\t4\n'
+  printf 'result_count\t5\n'
   printf 'result\tautoscale-lifecycle\t%s\t%s\t8\tNoError\t%s\t%s\t%s\n' \
     "$AUTOSCALE_MODULE" \
     "multilane_autoscale_lifecycle_fixed.cfg" \
@@ -255,7 +263,13 @@ evidence_tmp="$(mktemp "${EVIDENCE_DIR}/.multilane_apalache_evidence.XXXXXX")"
     "$(hash_file "${FORMAL_DIR}/${QUEUE_PLAN_ADMISSION_MODULE}.tla")" \
     "$(hash_file "${FORMAL_DIR}/multilane_queue_plan_admission_registry_fixed.cfg")" \
     "$(hash_file "${LOG_DIR}/queue-plan-admission-registry.check.log")"
+  printf 'result\tinflight-first-release-layout\t%s\t%s\t10\tNoError\t%s\t%s\t%s\n' \
+    "$INFLIGHT_FIRST_RELEASE_MODULE" \
+    "inflight_first_release_fixed.cfg" \
+    "$(hash_file "${FORMAL_DIR}/${INFLIGHT_FIRST_RELEASE_MODULE}.tla")" \
+    "$(hash_file "${FORMAL_DIR}/inflight_first_release_fixed.cfg")" \
+    "$(hash_file "${LOG_DIR}/inflight-first-release-layout.check.log")"
 } >"$evidence_tmp"
 mv -- "$evidence_tmp" "$EVIDENCE_PATH"
 
-echo "[apalache] all 4 source-bound multilane kernels passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"
+echo "[apalache] all 4 source-bound refinement kernels plus the layout-only in-flight carrier passed pinned v${APALACHE_VERSION} bounded checks; no proof status was changed; evidence=${EVIDENCE_PATH}"

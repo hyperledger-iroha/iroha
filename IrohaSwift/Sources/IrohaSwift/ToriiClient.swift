@@ -4335,12 +4335,6 @@ extension ToriiClient {
         let manifestURL = outputDir.appendingPathComponent("manifest_\(sanitized).norito")
         let manifestJsonURL = outputDir.appendingPathComponent("manifest_\(sanitized).json")
         let chunkPlanURL = outputDir.appendingPathComponent("chunk_plan_\(sanitized).json")
-        let samplingPlanURL: URL?
-        if bundle.samplingPlan != nil {
-            samplingPlanURL = outputDir.appendingPathComponent("sampling_plan_\(sanitized).json")
-        } else {
-            samplingPlanURL = nil
-        }
 
         try bundle.manifestBytes.write(to: manifestURL, options: Data.WritingOptions.atomic)
         if let manifestJson = bundle.manifestJson {
@@ -4353,15 +4347,10 @@ extension ToriiClient {
         if let chunkData = chunkPlanString.data(using: .utf8) {
             try chunkData.write(to: chunkPlanURL, options: Data.WritingOptions.atomic)
         }
-        if let samplingPlan = bundle.samplingPlan, let samplingPlanURL {
-            let data = try samplingPlan.jsonPayload().encodedData(prettyPrinted: true)
-            try data.write(to: samplingPlanURL, options: Data.WritingOptions.atomic)
-        }
 
         return ToriiDaManifestPersistedPaths(manifestURL: manifestURL,
                                              manifestJsonURL: manifestJsonURL,
                                              chunkPlanURL: chunkPlanURL,
-                                             samplingPlanURL: samplingPlanURL,
                                              label: sanitized)
     }
 }
@@ -8308,7 +8297,6 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
     public let manifestBytes: Data
     public let manifestJson: ToriiJSONValue?
     public let chunkPlan: ToriiJSONValue
-    public let samplingPlan: ToriiDaSamplingPlan?
 
     public var manifestIdHex: String { manifestHashHex }
 
@@ -8333,7 +8321,6 @@ public struct ToriiDaManifestBundle: Decodable, Sendable, Equatable {
             raw,
             expectedPayloadDigestHex: blobHashHex
         )
-        samplingPlan = try ToriiDaSamplingPlan.parse(raw["sampling_plan"])
     }
 
     /// Render the chunk plan as a JSON string (sorted keys).
@@ -8496,133 +8483,7 @@ public struct ToriiDaManifestPersistedPaths: Sendable, Equatable {
     public let manifestURL: URL
     public let manifestJsonURL: URL
     public let chunkPlanURL: URL
-    public let samplingPlanURL: URL?
     public let label: String
-}
-
-public struct ToriiDaSamplingPlan: Sendable, Equatable {
-    public struct Sample: Sendable, Equatable {
-        public let index: UInt32
-        public let role: String
-        public let group: UInt32
-    }
-
-    public let assignmentHashHex: String
-    public let sampleWindow: UInt16
-    public let samples: [Sample]
-
-    func jsonPayload() -> ToriiJSONValue {
-        let sampleValues = samples.map { sample in
-            ToriiJSONValue.object([
-                "index": .number(Double(sample.index)),
-                "role": .string(sample.role),
-                "group": .number(Double(sample.group)),
-            ])
-        }
-        return .object([
-            "assignment_hash": .string(assignmentHashHex),
-            "sample_window": .number(Double(sampleWindow)),
-            "samples": .array(sampleValues),
-        ])
-    }
-
-    static func parse(_ value: ToriiJSONValue?) throws -> ToriiDaSamplingPlan? {
-        guard let value else { return nil }
-        guard case .object(let record) = value else {
-            throw ToriiClientError.invalidPayload("sampling_plan must be an object")
-        }
-        let assignment = try requireString(record,
-                                           key: "assignment_hash",
-                                           field: "sampling_plan.assignment_hash")
-        guard let assignmentData = Data(hexString: assignment), assignmentData.count == 32 else {
-            throw ToriiClientError.invalidPayload("sampling_plan.assignment_hash must be a 32-byte hex string")
-        }
-        let sampleWindowRaw = try requireUInt64(record,
-                                                key: "sample_window",
-                                                field: "sampling_plan.sample_window",
-                                                allowZero: true)
-        guard sampleWindowRaw <= UInt16.max else {
-            throw ToriiClientError.invalidPayload("sampling_plan.sample_window exceeds UInt16 range")
-        }
-        let sampleWindow = UInt16(sampleWindowRaw)
-        let samplesValue = record["samples"] ?? .array([])
-        guard case .array(let sampleArray) = samplesValue else {
-            throw ToriiClientError.invalidPayload("sampling_plan.samples must be an array")
-        }
-        var samples = [Sample]()
-        for (idx, entry) in sampleArray.enumerated() {
-            guard case .object(let obj) = entry else {
-                throw ToriiClientError.invalidPayload("sampling_plan.samples[\(idx)] must be an object")
-            }
-            let indexRaw = try requireUInt64(obj,
-                                             key: "index",
-                                             field: "sampling_plan.samples[\(idx)].index",
-                                             allowZero: true)
-            let groupRaw = try requireUInt64(obj,
-                                             key: "group",
-                                             field: "sampling_plan.samples[\(idx)].group",
-                                             allowZero: true)
-            guard indexRaw <= UInt32.max else {
-                throw ToriiClientError.invalidPayload("sampling_plan.samples[\(idx)].index exceeds UInt32 range")
-            }
-            guard groupRaw <= UInt32.max else {
-                throw ToriiClientError.invalidPayload("sampling_plan.samples[\(idx)].group exceeds UInt32 range")
-            }
-            let role = try requireString(obj,
-                                         key: "role",
-                                         field: "sampling_plan.samples[\(idx)].role")
-            samples.append(Sample(index: UInt32(indexRaw),
-                                  role: role,
-                                  group: UInt32(groupRaw)))
-        }
-
-        return ToriiDaSamplingPlan(assignmentHashHex: assignment.lowercased(),
-                                   sampleWindow: sampleWindow,
-                                   samples: samples)
-    }
-
-    private static func requireString(_ record: [String: ToriiJSONValue],
-                                      key: String,
-                                      field: String) throws -> String {
-        guard let raw = record[key],
-              let string = trimmedString(raw),
-              !string.isEmpty
-        else {
-            throw ToriiClientError.invalidPayload("\(field) field was missing or empty")
-        }
-        return string
-    }
-
-    private static func requireUInt64(_ record: [String: ToriiJSONValue],
-                                      key: String,
-                                      field: String,
-                                      allowZero: Bool = false) throws -> UInt64 {
-        if let value = optionalUInt64(record, key: key, allowZero: allowZero) {
-            return value
-        }
-        throw ToriiClientError.invalidPayload("\(field) field was missing or invalid")
-    }
-
-    private static func optionalUInt64(_ record: [String: ToriiJSONValue],
-                                       key: String,
-                                       allowZero: Bool) -> UInt64? {
-        guard let raw = record[key] else {
-            return nil
-        }
-        guard let parsed = raw.normalizedUInt64 else {
-            return nil
-        }
-        if !allowZero && parsed == 0 {
-            return nil
-        }
-        return parsed
-    }
-
-    private static func trimmedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        return value.normalizedString
-    }
-
 }
 
 public struct ToriiDaCommitmentProofRequest: Codable, Sendable, Equatable {
@@ -11712,7 +11573,7 @@ fileprivate enum ToriiVerifyingKeyRequestValidation {
         guard trimmed == value else {
             throw ToriiClientError.invalidPayload("\(field) must not contain surrounding whitespace.")
         }
-        guard VerifierBackendRegistryLabels.isSupported(value) else {
+        guard VerifyingKeyBackendTag.isProductionVerifyBackendLabel(value) else {
             throw ToriiClientError.invalidPayload(
                 "\(field) is not an exact supported verifier-registry label: \(value)."
             )
@@ -25278,9 +25139,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func getDaManifestBundle(storageTicketHex: String,
-                                    blockHashHex: String? = nil,
                                     completion: @escaping (Result<ToriiDaManifestBundle, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getDaManifestBundle(storageTicketHex: storageTicketHex, blockHashHex: blockHashHex) }
+        runTask(completion) { try await self.getDaManifestBundle(storageTicketHex: storageTicketHex) }
     }
 
     @discardableResult
@@ -27371,17 +27231,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     // MARK: Data Availability (Async)
 
-    public func getDaManifestBundle(storageTicketHex: String,
-                                    blockHashHex: String? = nil) async throws -> ToriiDaManifestBundle {
+    public func getDaManifestBundle(storageTicketHex: String) async throws -> ToriiDaManifestBundle {
         let normalized = try ToriiClient.normalizeStorageTicketHex(storageTicketHex)
-        var queryItems: [URLQueryItem] = []
-        if let blockHashHex, !blockHashHex.isEmpty {
-            let normalizedBlock = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
-            queryItems.append(URLQueryItem(name: "block_hash", value: normalizedBlock))
-        }
         let request = try makeRequest(
             path: "/v1/da/manifests/\(normalized)",
-            queryItems: queryItems.isEmpty ? nil : queryItems,
             headers: ["Accept": "application/json"]
         )
         let data = try await data(for: request)
@@ -27389,11 +27242,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func getDaManifestBundle(storageTicketHex: String,
-                                    blockHashHex: String? = nil,
                                     outputDir: URL,
                                     label: String? = nil,
                                     fileManager: FileManager = .default) async throws -> (ToriiDaManifestBundle, ToriiDaManifestPersistedPaths) {
-        let bundle = try await getDaManifestBundle(storageTicketHex: storageTicketHex, blockHashHex: blockHashHex)
+        let bundle = try await getDaManifestBundle(storageTicketHex: storageTicketHex)
         let paths = try ToriiClient.persistDaManifestBundle(bundle,
                                                             outputDir: outputDir,
                                                             label: label ?? bundle.storageTicketHex,
@@ -28700,11 +28552,11 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     ) async throws -> FeeQuoteResponse {
         let allowedFields: Set<String> = [
             "chain", "authority", "creation_time_ms", "instructions",
-            "time_to_live_ms", "nonce", "fee_payment", "metadata",
+            "time_to_live_ms", "nonce", "fee_payment", "metadata", "attachments",
         ]
         let requiredFields: Set<String> = [
             "chain", "authority", "creation_time_ms", "instructions",
-            "fee_payment", "metadata",
+            "time_to_live_ms", "fee_payment", "metadata",
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {
@@ -28737,7 +28589,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         _ = try feeValue.decode(as: FeePaymentIntent.self)
-        for optionalInteger in ["time_to_live_ms", "nonce"] {
+        guard case let .number(timeToLiveMs)? = unsignedPayload["time_to_live_ms"],
+              timeToLiveMs.isFinite,
+              timeToLiveMs > 0,
+              timeToLiveMs.rounded(.towardZero) == timeToLiveMs else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.time_to_live_ms must be a positive integer."
+            )
+        }
+        for optionalInteger in ["nonce"] {
             guard let value = unsignedPayload[optionalInteger] else { continue }
             switch value {
             case .null:
@@ -28748,6 +28608,20 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             default:
                 throw ToriiClientError.invalidPayload(
                     "unsignedPayload.\(optionalInteger) must be a positive integer when present."
+                )
+            }
+        }
+        if let attachments = unsignedPayload["attachments"] {
+            if case .null = attachments {
+                // An explicit JSON null is the canonical `Option::None` value.
+            } else if case let .string(encoded) = attachments,
+                      let decoded = Data(base64Encoded: encoded),
+                      !decoded.isEmpty,
+                      decoded.base64EncodedString() == encoded {
+                // `ProofAttachmentList` uses canonical Norito bytes in padded base64 JSON.
+            } else {
+                throw ToriiClientError.invalidPayload(
+                    "unsignedPayload.attachments must be canonical base64 when present."
                 )
             }
         }
@@ -30475,15 +30349,14 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     private func resolveDaManifestBundle(storageTicketHex: String?,
-                                         manifestBundle: ToriiDaManifestBundle?,
-                                         blockHashHex: String? = nil) async throws -> ToriiDaManifestBundle {
+                                         manifestBundle: ToriiDaManifestBundle?) async throws -> ToriiDaManifestBundle {
         if let manifestBundle {
             return manifestBundle
         }
         guard let ticket = storageTicketHex else {
             throw ToriiClientError.invalidPayload("storageTicketHex is required when manifestBundle is not provided")
         }
-        return try await getDaManifestBundle(storageTicketHex: ticket, blockHashHex: blockHashHex)
+        return try await getDaManifestBundle(storageTicketHex: ticket)
     }
 
     private static func resolveChunkerHandle(preferred: String?,

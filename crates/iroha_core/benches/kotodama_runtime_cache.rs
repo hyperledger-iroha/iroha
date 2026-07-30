@@ -86,7 +86,7 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
     // restore the owned VM with dirty-page reset.
     {
         let mut runtime = summary
-            .checkout_runtime(GAS_LIMIT)
+            .checkout_runtime(GAS_LIMIT, ivm::Memory::HEAP_MAX_SIZE)
             .expect("checkout cold benchmark runtime");
         runtime
             .set_program_counter(pc)
@@ -112,7 +112,7 @@ fn bench_production_runtime_cache(c: &mut Criterion) {
                 .summarize_program_with_hash(code_hash, &[])
                 .expect("content-addressed summary hit");
             let mut runtime = summary
-                .checkout_runtime(GAS_LIMIT)
+                .checkout_runtime(GAS_LIMIT, ivm::Memory::HEAP_MAX_SIZE)
                 .expect("checkout warm benchmark runtime");
             runtime
                 .set_program_counter(pc)

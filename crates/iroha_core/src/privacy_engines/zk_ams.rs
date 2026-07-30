@@ -14,23 +14,35 @@
 //! possession proof per ordered anchor. Provisioning then consumes those
 //! admitted seed keys through the closed LSAG suite below.
 
+use core::{num::NonZeroU32, time::Duration};
+
 use curve25519_dalek::{
     RistrettoPoint, constants::RISTRETTO_BASEPOINT_POINT, ristretto::CompressedRistretto,
     scalar::Scalar, traits::Identity,
 };
-use iroha_data_model::account::AccountId;
-use iroha_data_model::privacy::{
-    IrohaZkAmsStatementV1, PrivacyIssuerIdV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-    PrivacyRootV1, PrivacyStatementV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
-    PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
-    PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1, PrivacyZkAmsRegistryIdV1,
-    PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1, ZK_AMS_PHC_VERSION_V1,
+use iroha_data_model::{
+    account::AccountId,
+    isi::privacy::SubmitPrivacyProofV1,
+    metadata::Metadata,
+    prelude::ChainId,
+    privacy::{
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PRIVACY_MAX_CHAIN_ID_BYTES_V1,
+        PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyPolicyDigestV1,
+        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
+        PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
+        PrivacyStatementV1, PrivacyTransactionIntentDigestV1, PrivacyZkAmsActionV1,
+        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
+        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+        ZK_AMS_PHC_VERSION_V1,
+    },
+    transaction::{FeePaymentIntent, TransactionBuilder, TransactionPayload},
 };
 use iroha_zkp_halo2::vega::{
     MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1, MaskedRelaxedRandomErrorV1,
     MaskedRelaxedRandomSourceV1, ZkAmsAdmissionPublicInputV1, ZkAmsAdmissionRelationWitnessV1,
-    ZkAmsMaskedProverConfigV1, ZkAmsProofContextV1, prove_zk_ams_admission_relation_v1,
-    verify_zk_ams_admission_relation_v1,
+    ZkAmsProofContextV1, prove_zk_ams_admission_relation_v1, verify_zk_ams_admission_relation_v1,
 };
 use p256::{
     AffinePoint as P256AffinePoint, FieldBytes as P256FieldBytes,
@@ -54,6 +66,9 @@ use super::{
     prover_randomness::{HealthCheckedCryptoRngV1, ProverRandomnessErrorV1},
 };
 
+/// Deterministic worker configuration for the canonical masked admission prover.
+pub use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
+
 /// Pinned source used for the Iroha ZK-AMS workflow and relation.
 pub const ZK_AMS_SOURCE_PROFILE_V1: &[u8] = b"arxiv:2602.16130v2:algorithms-1-4:appendices-a-c";
 /// Exact Iroha Phase-V suite label.
@@ -65,6 +80,8 @@ pub const ZK_AMS_ADMISSION_POSSESSION_SUITE_V1: &[u8] =
 pub const ZK_AMS_HASH_TO_POINT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.lsag.hash-to-ristretto";
 /// Canonical proof wire version.
 pub const ZK_AMS_LSAG_PROOF_VERSION_V1: u8 = 1;
+/// Canonical composed batch-admission proof wire version.
+pub const ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1: u8 = 1;
 /// Canonical holder-possession proof wire version.
 pub const ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1: u8 = 1;
 /// Smallest closed Phase-V ring.
@@ -87,12 +104,84 @@ pub const MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1: usize =
         + 4 * 1024;
 /// Largest atomic admission batch in the first-release profile.
 pub const ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1: usize = 8;
+/// Sole privacy-action index in a canonical first-release ZK-AMS transaction.
+pub const ZK_AMS_PRIVACY_ACTION_INDEX_V1: u32 = 0;
 
 const RANDOM_REJECTION_ATTEMPTS: u32 = 1 << 16;
 const TRANSCRIPT_VERSION_V1: u8 = 1;
 const GENERATOR_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.generator-digest";
 const REGISTRY_TRANSITION_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:registry-transition:v1";
 const RELATION_PROOF_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:relation-proof:v1";
+
+/// Exact signature-bound transaction fields for one direct ZK-AMS action.
+#[derive(Clone, Debug)]
+pub struct ZkAmsPrivacyActionTransactionContextV1 {
+    /// Exact chain identifier.
+    pub chain_id: ChainId,
+    /// Exact transaction authority.
+    pub authority: AccountId,
+    /// Required creation time, resolved once before intent derivation.
+    pub creation_time: Duration,
+    /// Optional transaction TTL.
+    pub time_to_live: Option<Duration>,
+    /// Optional transaction nonce.
+    pub nonce: Option<NonZeroU32>,
+    /// Exact signature-bound fee payer and maxima.
+    pub fee_payment: FeePaymentIntent,
+    /// Exact transaction metadata.
+    pub metadata: Metadata,
+}
+
+/// Governed ZK-AMS fields shared by admission and provisioning statements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZkAmsPrivacyActionGovernanceV1 {
+    /// Credential issuer governing the common admission relation.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Canonical compressed P-256 issuer key from authoritative state.
+    pub issuer_public_key: PrivacyP256PointV1,
+    /// Digest of the authoritative issuer, policy, and key record.
+    pub issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    /// Admitted-identity and provisioning registry.
+    pub registry_id: PrivacyZkAmsRegistryIdV1,
+    /// Digest of the authoritative registry snapshot.
+    pub registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
+    /// Admission policy identifier.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Digest of the exact governed admission policy.
+    pub policy_digest: PrivacyPolicyDigestV1,
+}
+
+/// Failure while constructing or validating a canonical ZK-AMS transaction intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ZkAmsPrivacyActionIntentErrorV1 {
+    /// The chain identifier is empty or exceeds the consensus maximum.
+    #[error("ZK-AMS action chain id is outside the first-release byte bound")]
+    InvalidChainId,
+    /// Creation time cannot be represented in the transaction wire.
+    #[error("ZK-AMS action creation time cannot be represented in milliseconds")]
+    CreationTimeOutOfRange,
+    /// TTL cannot be represented in the transaction wire.
+    #[error("ZK-AMS action TTL cannot be represented in milliseconds")]
+    TimeToLiveOutOfRange,
+    /// Fee intent, TTL, or fee metadata violates canonical transaction policy.
+    #[error("ZK-AMS action transaction context is not canonical")]
+    InvalidTransactionContext,
+    /// The locally compiled governed ZK-AMS profile is unavailable.
+    #[error("the compiled native ZK-AMS profile is unavailable")]
+    CompiledProfileUnavailable,
+    /// The statement or its exact compiled context is invalid.
+    #[error("the locally produced ZK-AMS statement failed validation")]
+    StatementValidation,
+    /// The typed statement could not derive its canonical digest.
+    #[error("ZK-AMS action statement digest derivation failed")]
+    StatementDigest,
+    /// The unsigned payload could not derive its canonical privacy intent.
+    #[error("ZK-AMS action transaction-intent derivation failed")]
+    TransactionIntent,
+    /// The final one-action payload did not reproduce the stored intent binding.
+    #[error("the locally produced ZK-AMS payload failed intent validation")]
+    FinalIntentBinding,
+}
 
 /// Failure while constructing, decoding, signing, or verifying ZK-AMS Phase V.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -209,6 +298,256 @@ impl From<P256EngineError> for ZkAmsErrorV1 {
     }
 }
 
+fn validate_zk_ams_transaction_context_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+) -> Result<(), ZkAmsPrivacyActionIntentErrorV1> {
+    let chain_id_bytes = context.chain_id.as_str().as_bytes().len();
+    if chain_id_bytes == 0
+        || chain_id_bytes
+            > usize::try_from(PRIVACY_MAX_CHAIN_ID_BYTES_V1)
+                .expect("privacy chain-id bound fits usize")
+    {
+        return Err(ZkAmsPrivacyActionIntentErrorV1::InvalidChainId);
+    }
+    if context.creation_time.as_millis() > u128::from(u64::MAX) {
+        return Err(ZkAmsPrivacyActionIntentErrorV1::CreationTimeOutOfRange);
+    }
+    if context
+        .time_to_live
+        .is_some_and(|ttl| ttl.as_millis() > u128::from(u64::MAX))
+    {
+        return Err(ZkAmsPrivacyActionIntentErrorV1::TimeToLiveOutOfRange);
+    }
+
+    let mut builder = TransactionBuilder::new(
+        context.chain_id.clone(),
+        context.authority.clone(),
+        context.fee_payment.clone(),
+    )
+    .with_metadata(context.metadata.clone());
+    builder.set_creation_time(context.creation_time);
+    if let Some(ttl) = context.time_to_live {
+        builder.set_ttl(ttl);
+    }
+    if let Some(nonce) = context.nonce {
+        builder.set_nonce(nonce);
+    }
+    builder
+        .into_payload()
+        .map(|_| ())
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::InvalidTransactionContext)
+}
+
+fn zk_ams_statement_context_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+) -> PrivacyStatementContextV1 {
+    PrivacyStatementContextV1 {
+        chain_id: context.chain_id.clone(),
+        action_index: ZK_AMS_PRIVACY_ACTION_INDEX_V1,
+        transaction_intent_digest,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+    }
+}
+
+fn zk_ams_transaction_payload_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    envelope: PrivacyProofEnvelopeV1,
+) -> Result<TransactionPayload, ZkAmsPrivacyActionIntentErrorV1> {
+    let mut builder = TransactionBuilder::new(
+        context.chain_id.clone(),
+        context.authority.clone(),
+        context.fee_payment.clone(),
+    )
+    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_metadata(context.metadata.clone());
+    builder.set_creation_time(context.creation_time);
+    if let Some(ttl) = context.time_to_live {
+        builder.set_ttl(ttl);
+    }
+    if let Some(nonce) = context.nonce {
+        builder.set_nonce(nonce);
+    }
+    builder
+        .into_payload()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::InvalidTransactionContext)
+}
+
+fn zk_ams_intent_projection_envelope_v1(
+    profile: crate::privacy_profiles::CompiledPrivacyProfileV1,
+    statement: IrohaZkAmsStatementV1,
+    statement_digest: PrivacyStatementDigestV1,
+) -> PrivacyProofEnvelopeV1 {
+    let proof = match &statement.action {
+        PrivacyZkAmsActionV1::BatchAdmission(_) => {
+            IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(
+                Vec::new(),
+            ))
+        }
+        PrivacyZkAmsActionV1::ProvisionAccount(_) => {
+            IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+                PrivacyProofBytesV1::new(Vec::new()),
+            )
+        }
+    };
+    PrivacyProofEnvelopeV1 {
+        protocol_id: profile.protocol_id,
+        proof_system_id: profile.proof_system_id,
+        engine_id: profile.engine_id,
+        parameter_id: profile.parameter_id,
+        parameter_digest: profile.parameter_digest,
+        verifier_digest: profile.verifier_digest,
+        statement_schema_digest: profile.statement_schema_digest,
+        engine_manifest_digest: profile.engine_manifest_digest,
+        statement_digest,
+        statement: PrivacyStatementV1::IrohaZkAmsV1(statement),
+        proof: PrivacyProofV1::IrohaZkAmsV1(proof),
+    }
+}
+
+fn zk_ams_statement_v1(
+    context: PrivacyStatementContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsActionV1,
+) -> IrohaZkAmsStatementV1 {
+    IrohaZkAmsStatementV1 {
+        context,
+        issuer_id: governance.issuer_id,
+        issuer_public_key: governance.issuer_public_key,
+        issuer_policy_record_digest: governance.issuer_policy_record_digest,
+        registry_id: governance.registry_id,
+        registry_record_digest: governance.registry_record_digest,
+        policy_id: governance.policy_id,
+        policy_digest: governance.policy_digest,
+        action,
+    }
+}
+
+fn prepare_zk_ams_privacy_action_transaction_intent_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsActionV1,
+) -> Result<IrohaZkAmsStatementV1, ZkAmsPrivacyActionIntentErrorV1> {
+    validate_zk_ams_transaction_context_v1(context)?;
+    let profile =
+        crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
+            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let draft_statement = zk_ams_statement_v1(
+        zk_ams_statement_context_v1(
+            context,
+            profile,
+            PrivacyTransactionIntentDigestV1::new([0; 32]),
+        ),
+        governance,
+        action,
+    );
+    let draft_envelope = zk_ams_intent_projection_envelope_v1(
+        profile,
+        draft_statement.clone(),
+        PrivacyStatementDigestV1::new([0; 32]),
+    );
+    let transaction_intent_digest = zk_ams_transaction_payload_v1(context, draft_envelope)?
+        .privacy_transaction_intent_digest_v1()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::TransactionIntent)?;
+    let mut final_statement = draft_statement;
+    final_statement.context.transaction_intent_digest = transaction_intent_digest;
+    let validated =
+        validate_zk_ams_privacy_action_transaction_intent_v1(context, &final_statement)?;
+    if validated != transaction_intent_digest {
+        return Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding);
+    }
+    Ok(final_statement)
+}
+
+/// Construct a canonical single-action ZK-AMS batch-admission statement and
+/// derive its proof-independent transaction-intent digest.
+///
+/// # Errors
+///
+/// Returns a closed error for an invalid transaction context, unavailable
+/// compiled profile, invalid typed action, or final binding drift.
+pub fn prepare_zk_ams_batch_admission_transaction_intent_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsBatchAdmissionV1,
+) -> Result<IrohaZkAmsStatementV1, ZkAmsPrivacyActionIntentErrorV1> {
+    prepare_zk_ams_privacy_action_transaction_intent_v1(
+        context,
+        governance,
+        PrivacyZkAmsActionV1::BatchAdmission(action),
+    )
+}
+
+/// Construct a canonical single-action ZK-AMS account-provisioning statement
+/// and derive its proof-independent transaction-intent digest.
+///
+/// # Errors
+///
+/// Returns a closed error for an invalid transaction context, unavailable
+/// compiled profile, invalid typed action, or final binding drift.
+pub fn prepare_zk_ams_provision_account_transaction_intent_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    governance: ZkAmsPrivacyActionGovernanceV1,
+    action: PrivacyZkAmsProvisionAccountV1,
+) -> Result<IrohaZkAmsStatementV1, ZkAmsPrivacyActionIntentErrorV1> {
+    prepare_zk_ams_privacy_action_transaction_intent_v1(
+        context,
+        governance,
+        PrivacyZkAmsActionV1::ProvisionAccount(action),
+    )
+}
+
+/// Validate a prepared ZK-AMS statement against its exact single-action
+/// transaction context and return the canonical transaction-intent digest.
+///
+/// The local proof-empty envelope exists only long enough to reproduce the
+/// proof-independent data-model projection. It cannot escape this helper or be
+/// submitted as an incomplete proof.
+///
+/// # Errors
+///
+/// Returns a closed error for an invalid context or statement, compiled-profile
+/// drift, canonical encoding failure, or any final intent/digest mismatch.
+pub fn validate_zk_ams_privacy_action_transaction_intent_v1(
+    context: &ZkAmsPrivacyActionTransactionContextV1,
+    statement: &IrohaZkAmsStatementV1,
+) -> Result<PrivacyTransactionIntentDigestV1, ZkAmsPrivacyActionIntentErrorV1> {
+    validate_zk_ams_transaction_context_v1(context)?;
+    let profile =
+        crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
+            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let expected_context = zk_ams_statement_context_v1(
+        context,
+        profile,
+        statement.context.transaction_intent_digest,
+    );
+    if statement.context != expected_context {
+        return Err(ZkAmsPrivacyActionIntentErrorV1::StatementValidation);
+    }
+
+    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    typed_statement
+        .validate(&PrivacyConsensusLimitsV1::taira_default())
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::StatementValidation)?;
+    let statement_digest = typed_statement
+        .digest()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::StatementDigest)?;
+    let envelope =
+        zk_ams_intent_projection_envelope_v1(profile, statement.clone(), statement_digest);
+    let validated = zk_ams_transaction_payload_v1(context, envelope)?
+        .validate_privacy_transaction_intent_binding_v1()
+        .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding)?;
+    if validated != statement.context.transaction_intent_digest {
+        return Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding);
+    }
+    Ok(validated)
+}
+
 /// Zeroizing canonical little-endian Ristretto scalar used as a seed secret.
 pub struct ZkAmsSeedSecretV1 {
     bytes: Zeroizing<[u8; 32]>,
@@ -276,13 +615,32 @@ impl Zeroize for ZkAmsLsagProofWireV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
 )]
 #[norito(decode_from_slice)]
 struct ZkAmsAdmissionPossessionProofWireV1 {
     version: u8,
     commitment: [u8; 32],
     response: [u8; 32],
+}
+
+impl ZkAmsAdmissionPossessionProofWireV1 {
+    /// Exact all-zero sentinel for an unused fixed batch slot.
+    const UNUSED: Self = Self {
+        version: 0,
+        commitment: [0; 32],
+        response: [0; 32],
+    };
+
+    fn is_unused(self) -> bool {
+        self == Self::UNUSED
+    }
 }
 
 impl Zeroize for ZkAmsAdmissionPossessionProofWireV1 {
@@ -300,14 +658,21 @@ impl Zeroize for ZkAmsAdmissionPossessionProofWireV1 {
 struct ZkAmsBatchAdmissionProofWireV1 {
     version: u8,
     relation_proof: Vec<u8>,
-    possession_proofs:
-        [Option<ZkAmsAdmissionPossessionProofWireV1>; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
+    possession_proof_count: u8,
+    possession_proofs: [ZkAmsAdmissionPossessionProofWireV1; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
+}
+
+struct PreflightedZkAmsAdmissionPossessionV1 {
+    public: RistrettoPoint,
+    commitment: RistrettoPoint,
+    response: Scalar,
 }
 
 impl Zeroize for ZkAmsBatchAdmissionProofWireV1 {
     fn zeroize(&mut self) {
         self.version.zeroize();
         self.relation_proof.zeroize();
+        self.possession_proof_count.zeroize();
         self.possession_proofs.zeroize();
     }
 }
@@ -334,8 +699,9 @@ fn zk_ams_possession_decode_limits(payload_len: usize) -> norito::DecodeLimits {
 
 fn zk_ams_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
     // The only variable-length member is the masked-relation byte string.
-    // Possession proofs occupy a fixed eight-slot Option array, so no nested
-    // attacker-selected vector count can amplify allocation.
+    // Possession proofs occupy a fixed eight-slot value array with an explicit
+    // count and canonical unused sentinel, so no nested attacker-selected
+    // vector count can amplify allocation.
     norito::DecodeLimits::new(
         MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
         payload_len,
@@ -343,6 +709,97 @@ fn zk_ams_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
         MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1.saturating_mul(4),
         16,
     )
+}
+
+fn preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes: &[u8]) -> Result<(), ZkAmsErrorV1> {
+    if proof_bytes.len() > MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1 {
+        return Err(ZkAmsErrorV1::BatchProofTooLarge {
+            actual: proof_bytes.len(),
+            max: MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
+        });
+    }
+    Ok(())
+}
+
+fn decode_zk_ams_batch_admission_wire_v1(
+    proof_bytes: &[u8],
+    expected_possession_proof_count: usize,
+) -> Result<ZkAmsBatchAdmissionProofWireV1, ZkAmsErrorV1> {
+    preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes)?;
+    if expected_possession_proof_count > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    let proof =
+        norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
+            proof_bytes,
+            zk_ams_batch_decode_limits(proof_bytes.len()),
+        )
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    let count = usize::from(proof.possession_proof_count);
+    if proof.version != ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1
+        || count != expected_possession_proof_count
+        || count > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+        || proof.possession_proofs[..count]
+            .iter()
+            .any(|possession| possession.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1)
+        || proof.possession_proofs[count..]
+            .iter()
+            .copied()
+            .any(|possession| !possession.is_unused())
+        || norito::codec::encode_adaptive(&proof) != proof_bytes
+    {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    Ok(proof)
+}
+
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn zk_ams_batch_admission_adversarial_wires_v1(
+    canonical_proof_bytes: &[u8],
+    expected_possession_proof_count: usize,
+) -> Result<Vec<Vec<u8>>, ZkAmsErrorV1> {
+    let canonical = decode_zk_ams_batch_admission_wire_v1(
+        canonical_proof_bytes,
+        expected_possession_proof_count,
+    )?;
+    let mut mutations = Vec::new();
+    mutations
+        .try_reserve_exact(5)
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+
+    let mut wrong_version = canonical.clone();
+    wrong_version.version ^= 1;
+    mutations.push(norito::codec::encode_adaptive(&wrong_version));
+
+    let mut zero_count = canonical.clone();
+    zero_count.possession_proof_count = 0;
+    mutations.push(norito::codec::encode_adaptive(&zero_count));
+
+    let mut excessive_count = canonical.clone();
+    excessive_count.possession_proof_count = u8::try_from(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 + 1)
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    mutations.push(norito::codec::encode_adaptive(&excessive_count));
+
+    if expected_possession_proof_count == 0 {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    let mut used_zero_sentinel = canonical.clone();
+    used_zero_sentinel.possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1::UNUSED;
+    mutations.push(norito::codec::encode_adaptive(&used_zero_sentinel));
+
+    if expected_possession_proof_count < ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
+        let mut nonzero_unused_tail = canonical;
+        nonzero_unused_tail.possession_proofs[expected_possession_proof_count].commitment[0] ^= 1;
+        mutations.push(norito::codec::encode_adaptive(&nonzero_unused_tail));
+    }
+
+    if mutations.iter().any(|mutation| {
+        mutation == canonical_proof_bytes
+            || mutation.len() > MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1
+    }) {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    Ok(mutations)
 }
 
 fn decode_zk_ams_possession_wire_v1(
@@ -609,13 +1066,17 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut possession_proofs = core::array::from_fn(|_| None);
+    let possession_proof_count = u8::try_from(encoded_possession_proofs.len())
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    let mut possession_proofs =
+        [ZkAmsAdmissionPossessionProofWireV1::UNUSED; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
     for (slot, encoded) in possession_proofs.iter_mut().zip(encoded_possession_proofs) {
-        *slot = Some(decode_zk_ams_possession_wire_v1(&encoded)?);
+        *slot = decode_zk_ams_possession_wire_v1(&encoded)?;
     }
     let proof = Zeroizing::new(ZkAmsBatchAdmissionProofWireV1 {
-        version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+        version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
         relation_proof,
+        possession_proof_count,
         possession_proofs,
     });
     let encoded = Zeroizing::new(norito::codec::encode_adaptive(&*proof));
@@ -645,32 +1106,22 @@ pub fn verify_zk_ams_batch_admission_v1(
     binding: &TranscriptBindingV1<'_>,
     proof_bytes: &[u8],
 ) -> Result<VerifiedZkAmsBatchAdmissionV1, ZkAmsErrorV1> {
-    if proof_bytes.len() > MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1 {
-        return Err(ZkAmsErrorV1::BatchProofTooLarge {
-            actual: proof_bytes.len(),
-            max: MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
-        });
-    }
+    preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes)?;
     let (public_inputs, _) = build_admission_public_inputs(statement, binding)?;
     let batch = batch_action(statement)?;
-    let proof =
-        norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
-            proof_bytes,
-            zk_ams_batch_decode_limits(proof_bytes.len()),
-        )
-        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
     let anchor_count = batch.anchors.len();
-    if proof.version != ZK_AMS_LSAG_PROOF_VERSION_V1
-        || proof.possession_proofs[..anchor_count]
-            .iter()
-            .any(Option::is_none)
-        || proof.possession_proofs[anchor_count..]
-            .iter()
-            .any(Option::is_some)
-        || norito::codec::encode_adaptive(&proof) != proof_bytes
-    {
-        return Err(ZkAmsErrorV1::InvalidProofEncoding);
-    }
+    let proof = decode_zk_ams_batch_admission_wire_v1(proof_bytes, anchor_count)?;
+    let preflighted_possessions = batch
+        .anchors
+        .iter()
+        .zip(&proof.possession_proofs[..anchor_count])
+        .map(|(anchor, possession)| {
+            preflight_zk_ams_admission_possession_wire_v1(
+                *anchor.seed_public_key.as_bytes(),
+                possession,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let relation_context = relation_context(binding);
     verify_zk_ams_admission_relation_v1(&relation_context, &public_inputs, &proof.relation_proof)
         .map_err(|_| ZkAmsErrorV1::AdmissionRelation)?;
@@ -678,18 +1129,16 @@ pub fn verify_zk_ams_batch_admission_v1(
     for (index, (anchor, possession)) in batch
         .anchors
         .iter()
-        .zip(&proof.possession_proofs[..anchor_count])
+        .zip(preflighted_possessions)
         .enumerate()
     {
-        verify_zk_ams_admission_possession_wire_v1(
+        verify_preflighted_zk_ams_admission_possession_v1(
             binding,
             u32::try_from(index).expect("batch is bounded to eight"),
             *anchor.phc_hash.as_bytes(),
             *anchor.seed_public_key.as_bytes(),
             relation_digest,
-            possession
-                .as_ref()
-                .ok_or(ZkAmsErrorV1::InvalidProofEncoding)?,
+            possession,
         )?;
     }
     Ok(VerifiedZkAmsBatchAdmissionV1 {
@@ -984,12 +1433,47 @@ fn verify_zk_ams_admission_possession_wire_v1(
     if phc_hash == [0; 32] || relation_proof_digest == [0; 32] {
         return Err(ZkAmsErrorV1::InvalidBinding);
     }
-    let public = decode_nonidentity_point(seed_public_key)?;
+    let preflight = preflight_zk_ams_admission_possession_wire_v1(seed_public_key, proof)?;
+    verify_preflighted_zk_ams_admission_possession_v1(
+        binding,
+        anchor_index,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        preflight,
+    )
+}
+
+fn preflight_zk_ams_admission_possession_wire_v1(
+    seed_public_key: [u8; 32],
+    proof: &ZkAmsAdmissionPossessionProofWireV1,
+) -> Result<PreflightedZkAmsAdmissionPossessionV1, ZkAmsErrorV1> {
     if proof.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1 {
         return Err(ZkAmsErrorV1::InvalidProofEncoding);
     }
+    let public = decode_nonidentity_point(seed_public_key)?;
     let commitment = decode_nonidentity_point(proof.commitment)?;
     let response = scalar_from_canonical(proof.response)?;
+    Ok(PreflightedZkAmsAdmissionPossessionV1 {
+        public,
+        commitment,
+        response,
+    })
+}
+
+fn verify_preflighted_zk_ams_admission_possession_v1(
+    binding: &TranscriptBindingV1<'_>,
+    anchor_index: u32,
+    phc_hash: [u8; 32],
+    seed_public_key: [u8; 32],
+    relation_proof_digest: [u8; 32],
+    preflight: PreflightedZkAmsAdmissionPossessionV1,
+) -> Result<(), ZkAmsErrorV1> {
+    let PreflightedZkAmsAdmissionPossessionV1 {
+        public,
+        commitment,
+        response,
+    } = preflight;
     let challenge = admission_possession_challenge(
         binding,
         anchor_index,
@@ -1594,16 +2078,24 @@ fn append_field(hash: &mut Sha3_512, label: &[u8], value: &[u8]) -> Result<(), Z
 
 #[cfg(test)]
 mod tests {
+    use core::{
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
+
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId,
+        metadata::Metadata,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsSubjectCommitmentV1,
+            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsPhcHashV1, PrivacyZkAmsSubjectCommitmentV1,
         },
+        transaction::FeePaymentIntent,
     };
+    use iroha_primitives::json::Json;
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
     use rand_core_06::Error as RngError;
 
@@ -1614,6 +2106,14 @@ mod tests {
         version: u8,
         relation_proof: Vec<u8>,
         possession_proofs: Vec<Vec<u8>>,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyZkAmsOptionSlotsBatchAdmissionProofWireV1 {
+        version: u8,
+        relation_proof: Vec<u8>,
+        possession_proofs:
+            [Option<ZkAmsAdmissionPossessionProofWireV1>; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
     }
 
     #[derive(Clone, Copy)]
@@ -1909,46 +2409,157 @@ mod tests {
 
     #[test]
     fn batch_decoder_preflights_relation_count_and_rejects_inexact_wires() {
-        let empty = ZkAmsBatchAdmissionProofWireV1 {
-            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
-            relation_proof: Vec::new(),
-            possession_proofs: core::array::from_fn(|_| None),
+        let mut possession_proofs =
+            [ZkAmsAdmissionPossessionProofWireV1::UNUSED; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1 {
+            version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+            commitment: [1; 32],
+            response: [2; 32],
         };
-        let canonical = norito::codec::encode_adaptive(&empty);
-        let decode = |bytes: &[u8]| {
+        let canonical_wire = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+            relation_proof: Vec::new(),
+            possession_proof_count: 1,
+            possession_proofs,
+        };
+        let canonical = norito::codec::encode_adaptive(&canonical_wire);
+        let decode_raw = |bytes: &[u8]| {
             norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
                 bytes,
                 zk_ams_batch_decode_limits(bytes.len()),
             )
         };
-        assert_eq!(decode(&canonical).expect("canonical empty wire"), empty);
+        assert_eq!(
+            decode_zk_ams_batch_admission_wire_v1(&canonical, 1)
+                .expect("canonical fixed-slot wire"),
+            canonical_wire
+        );
 
         let legacy = LegacyZkAmsBatchAdmissionProofWireV1 {
-            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
             relation_proof: Vec::new(),
             possession_proofs: Vec::new(),
         };
         let legacy_bytes = norito::codec::encode_adaptive(&legacy);
         assert_ne!(legacy_bytes, canonical);
         assert!(
-            decode(&legacy_bytes).is_err(),
+            decode_zk_ams_batch_admission_wire_v1(&legacy_bytes, 1).is_err(),
             "the unreleased nested-Vec wire must not survive the first-release schema"
         );
 
-        assert!(decode(&canonical[..canonical.len() - 1]).is_err());
-        let mut trailing = canonical;
+        let mut legacy_option_slots = [None; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        legacy_option_slots[0] = Some(ZkAmsAdmissionPossessionProofWireV1 {
+            version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+            commitment: [1; 32],
+            response: [2; 32],
+        });
+        let legacy_option_array =
+            norito::codec::encode_adaptive(&LegacyZkAmsOptionSlotsBatchAdmissionProofWireV1 {
+                version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+                relation_proof: Vec::new(),
+                possession_proofs: legacy_option_slots,
+            });
+        assert_ne!(legacy_option_array, canonical);
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(&legacy_option_array, 1).is_err(),
+            "the unreleased Option-array wire must not reach the first-release decoder"
+        );
+
+        let max_wire = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+            relation_proof: Vec::new(),
+            possession_proof_count: ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 as u8,
+            possession_proofs: [ZkAmsAdmissionPossessionProofWireV1 {
+                version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+                commitment: [3; 32],
+                response: [4; 32],
+            }; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
+        };
+        let max_encoded = norito::codec::encode_adaptive(&max_wire);
+        assert_eq!(
+            decode_zk_ams_batch_admission_wire_v1(
+                &max_encoded,
+                ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1,
+            )
+            .expect("all eight canonical slots"),
+            max_wire
+        );
+
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(&canonical[..canonical.len() - 1], 1).is_err()
+        );
+        let mut trailing = canonical.clone();
         trailing.push(0);
-        assert!(decode(&trailing).is_err());
+        assert!(decode_zk_ams_batch_admission_wire_v1(&trailing, 1).is_err());
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(&canonical, 0).is_err(),
+            "wire count must equal the statement anchor count"
+        );
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(
+                &canonical,
+                ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 + 1,
+            )
+            .is_err(),
+            "an expected count above the fixed profile must fail before decoding"
+        );
+
+        for (label, malformed) in [
+            ("outer version", {
+                let mut proof = canonical_wire.clone();
+                proof.version ^= 1;
+                proof
+            }),
+            ("zero count", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proof_count = 0;
+                proof
+            }),
+            ("count beyond statement", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proof_count = 2;
+                proof
+            }),
+            ("count beyond profile", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proof_count = u8::try_from(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 + 1)
+                    .expect("fixed test count fits u8");
+                proof
+            }),
+            ("used zero sentinel", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1::UNUSED;
+                proof
+            }),
+            ("unused nonzero version", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proofs[1].version = ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1;
+                proof
+            }),
+            ("unused nonzero body", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proofs[1].commitment[0] = 1;
+                proof
+            }),
+        ] {
+            let encoded = norito::codec::encode_adaptive(&malformed);
+            assert!(
+                decode_zk_ams_batch_admission_wire_v1(&encoded, 1).is_err(),
+                "{label} unexpectedly passed the canonical fixed-slot decoder"
+            );
+        }
 
         let oversized_count = MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 + 1;
         let oversized = ZkAmsBatchAdmissionProofWireV1 {
-            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
             relation_proof: vec![0; oversized_count],
-            possession_proofs: core::array::from_fn(|_| None),
+            possession_proof_count: 0,
+            possession_proofs: [ZkAmsAdmissionPossessionProofWireV1::UNUSED;
+                ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
         };
         let encoded = norito::codec::encode_adaptive(&oversized);
         assert!(matches!(
-            decode(&encoded),
+            decode_raw(&encoded),
             Err(norito::Error::SequenceLengthExceeded { length, limit })
                 if length == oversized_count as u64
                     && limit == MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
@@ -1961,13 +2572,10 @@ mod tests {
             .expect("oversized relation count is present in canonical wire");
         let mut forged = encoded;
         forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(matches!(
-            decode(&forged),
-            Err(norito::Error::SequenceLengthExceeded {
-                length: u64::MAX,
-                limit
-            }) if limit == MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
-        ));
+        assert!(
+            decode_raw(&forged).is_err(),
+            "a forged maximum relation length must fail before allocation"
+        );
     }
 
     #[test]
@@ -2292,6 +2900,46 @@ mod tests {
         PrivacyP256PointV1::new(bytes)
     }
 
+    fn typed_batch_statement() -> IrohaZkAmsStatementV1 {
+        let issuer_id = PrivacyIssuerIdV1::new([0x31; 32]);
+        let registry_id = PrivacyZkAmsRegistryIdV1::new([0x33; 32]);
+        let current_root = PrivacyRootV1::new([0x37; 32]);
+        let current_epoch = 9;
+        let next_epoch = current_epoch + 1;
+        let anchor = PrivacyZkAmsAdmissionAnchorV1 {
+            phc_hash: PrivacyZkAmsPhcHashV1::new([0x41; 32]),
+            seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(
+                &seed_secret(41),
+            )),
+        };
+        let next_root = zk_ams_registry_transition_root_v1(
+            registry_id,
+            current_root,
+            current_epoch,
+            next_epoch,
+            1,
+            0,
+            anchor,
+        );
+        IrohaZkAmsStatementV1 {
+            context: typed_context(),
+            issuer_id,
+            issuer_public_key: issuer_key(),
+            issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([0x32; 32]),
+            registry_id,
+            registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new([0x34; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0x35; 32]),
+            policy_digest: PrivacyPolicyDigestV1::new([0x36; 32]),
+            action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
+                account_registry_root: current_root,
+                account_registry_root_epoch: current_epoch,
+                next_account_registry_root: next_root,
+                next_account_registry_root_epoch: next_epoch,
+                anchors: vec![anchor],
+            }),
+        }
+    }
+
     fn typed_provision_statement(
         ring: &[([u8; 32], ZkAmsSeedSecretV1)],
         key_image: [u8; 32],
@@ -2315,6 +2963,187 @@ mod tests {
                 account_id: account(40),
                 key_image: PrivacyZkAmsKeyImageV1::new(key_image),
             }),
+        }
+    }
+
+    fn intent_governance(statement: &IrohaZkAmsStatementV1) -> ZkAmsPrivacyActionGovernanceV1 {
+        ZkAmsPrivacyActionGovernanceV1 {
+            issuer_id: statement.issuer_id,
+            issuer_public_key: statement.issuer_public_key,
+            issuer_policy_record_digest: statement.issuer_policy_record_digest,
+            registry_id: statement.registry_id,
+            registry_record_digest: statement.registry_record_digest,
+            policy_id: statement.policy_id,
+            policy_digest: statement.policy_digest,
+        }
+    }
+
+    fn intent_transaction_context(
+        creation_time_ms: u64,
+        nonce: u32,
+    ) -> ZkAmsPrivacyActionTransactionContextV1 {
+        ZkAmsPrivacyActionTransactionContextV1 {
+            chain_id: ChainId::from("taira-zk-ams-transaction-intent-v1"),
+            authority: account(60),
+            creation_time: Duration::from_millis(creation_time_ms),
+            time_to_live: Some(Duration::from_secs(60)),
+            nonce: NonZeroU32::new(nonce),
+            fee_payment: FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(5_000_000)),
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn prepared_intent_statements() -> Vec<(
+        ZkAmsPrivacyActionTransactionContextV1,
+        IrohaZkAmsStatementV1,
+    )> {
+        let admission_template = typed_batch_statement();
+        let PrivacyZkAmsActionV1::BatchAdmission(admission_action) =
+            admission_template.action.clone()
+        else {
+            unreachable!()
+        };
+        let admission_context = intent_transaction_context(1_800_000_000_010, 11);
+        let admission = prepare_zk_ams_batch_admission_transaction_intent_v1(
+            &admission_context,
+            intent_governance(&admission_template),
+            admission_action,
+        )
+        .expect("derive canonical batch-admission transaction intent");
+
+        let ring = sorted_ring(ZK_AMS_MIN_RING_SIZE_V1);
+        let key_image = zk_ams_key_image_v1(&ring[5].1).expect("canonical key image");
+        let provision_template = typed_provision_statement(&ring, key_image);
+        let PrivacyZkAmsActionV1::ProvisionAccount(provision_action) =
+            provision_template.action.clone()
+        else {
+            unreachable!()
+        };
+        let provision_context = intent_transaction_context(1_800_000_000_011, 12);
+        let provision = prepare_zk_ams_provision_account_transaction_intent_v1(
+            &provision_context,
+            intent_governance(&provision_template),
+            provision_action,
+        )
+        .expect("derive canonical provisioning transaction intent");
+
+        vec![
+            (admission_context, admission),
+            (provision_context, provision),
+        ]
+    }
+
+    #[test]
+    fn canonical_single_action_transaction_intents_bind_admission_then_provision() {
+        let prepared = prepared_intent_statements();
+        assert_eq!(prepared.len(), 2);
+        assert!(prepared[0].0.creation_time < prepared[1].0.creation_time);
+        assert!(
+            prepared[0].0.nonce.expect("admission nonce")
+                < prepared[1].0.nonce.expect("provision nonce")
+        );
+        assert!(matches!(
+            &prepared[0].1.action,
+            PrivacyZkAmsActionV1::BatchAdmission(_)
+        ));
+        assert!(matches!(
+            &prepared[1].1.action,
+            PrivacyZkAmsActionV1::ProvisionAccount(_)
+        ));
+
+        let digests = prepared
+            .iter()
+            .map(|(context, statement)| {
+                assert_eq!(
+                    statement.context.action_index,
+                    ZK_AMS_PRIVACY_ACTION_INDEX_V1
+                );
+                let digest =
+                    validate_zk_ams_privacy_action_transaction_intent_v1(context, statement)
+                        .expect("canonical intent binding validates");
+                assert_eq!(digest, statement.context.transaction_intent_digest);
+                assert!(!digest.is_zero());
+                digest
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(
+            digests[0], digests[1],
+            "sequential state-dependent actions require distinct transaction intents"
+        );
+    }
+
+    #[test]
+    fn transaction_intents_reject_fee_ttl_nonce_metadata_and_action_index_mutations() {
+        for (context, statement) in prepared_intent_statements() {
+            let mut changed_fee = context.clone();
+            changed_fee.fee_payment =
+                FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(6_000_000));
+            assert_eq!(
+                validate_zk_ams_privacy_action_transaction_intent_v1(&changed_fee, &statement),
+                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
+                "fee mutation must invalidate the stored intent"
+            );
+
+            let mut changed_ttl = context.clone();
+            changed_ttl.time_to_live = Some(Duration::from_secs(61));
+            assert_eq!(
+                validate_zk_ams_privacy_action_transaction_intent_v1(&changed_ttl, &statement),
+                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
+                "TTL mutation must invalidate the stored intent"
+            );
+
+            let mut changed_nonce = context.clone();
+            changed_nonce.nonce = NonZeroU32::new(
+                context
+                    .nonce
+                    .expect("fixture nonce")
+                    .get()
+                    .checked_add(1)
+                    .expect("fixture nonce increment"),
+            );
+            assert_eq!(
+                validate_zk_ams_privacy_action_transaction_intent_v1(&changed_nonce, &statement),
+                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
+                "nonce mutation must invalidate the stored intent"
+            );
+
+            let mut changed_metadata = context.clone();
+            changed_metadata.metadata.insert(
+                "zk_ams_intent_mutation"
+                    .parse()
+                    .expect("canonical metadata key"),
+                Json::new(1_u32),
+            );
+            assert_eq!(
+                validate_zk_ams_privacy_action_transaction_intent_v1(&changed_metadata, &statement),
+                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
+                "metadata mutation must invalidate the stored intent"
+            );
+
+            let mut changed_creation_time = context.clone();
+            changed_creation_time.creation_time = changed_creation_time
+                .creation_time
+                .checked_add(Duration::from_millis(1))
+                .expect("fixture creation time increment");
+            assert_eq!(
+                validate_zk_ams_privacy_action_transaction_intent_v1(
+                    &changed_creation_time,
+                    &statement,
+                ),
+                Err(ZkAmsPrivacyActionIntentErrorV1::FinalIntentBinding),
+                "creation-time mutation must invalidate the stored intent"
+            );
+
+            let mut impossible_second_action = statement.clone();
+            impossible_second_action.context.action_index = 1;
+            assert_eq!(
+                validate_zk_ams_privacy_action_transaction_intent_v1(
+                    &context,
+                    &impossible_second_action,
+                ),
+                Err(ZkAmsPrivacyActionIntentErrorV1::StatementValidation),
+                "Taira's single-action transaction limit must reject action index one"
+            );
         }
     }
 
@@ -2534,6 +3363,56 @@ mod tests {
             verify_zk_ams_batch_admission_v1(&statement, &binding, &corrupted).is_err(),
             "one-bit proof corruption must fail closed"
         );
+    }
+
+    #[test]
+    fn batch_preflights_possession_body_before_expensive_relation_verification() {
+        let statement = typed_batch_statement();
+        let binding = binding_for_statement(&statement);
+        let mut possession_proofs =
+            [ZkAmsAdmissionPossessionProofWireV1::UNUSED; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1 {
+            version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+            commitment: zk_ams_seed_public_key_v1(&seed_secret(42)),
+            response: [0; 32],
+        };
+        let mut wire = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+            relation_proof: vec![0xff],
+            possession_proof_count: 1,
+            possession_proofs,
+        };
+
+        let mut wrong_binding = binding;
+        wrong_binding.action_index ^= 1;
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(
+                &statement,
+                &wrong_binding,
+                &vec![0; MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1 + 1],
+            ),
+            Err(ZkAmsErrorV1::BatchProofTooLarge { .. })
+        ));
+
+        let invalid_relation = norito::codec::encode_adaptive(&wire);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &invalid_relation),
+            Err(ZkAmsErrorV1::AdmissionRelation)
+        ));
+
+        wire.possession_proofs[0].response = [0xff; 32];
+        let invalid_scalar = norito::codec::encode_adaptive(&wire);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &invalid_scalar),
+            Err(ZkAmsErrorV1::InvalidScalar)
+        ));
+
+        wire.possession_proofs[0].commitment = [0; 32];
+        let identity_commitment = norito::codec::encode_adaptive(&wire);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &identity_commitment),
+            Err(ZkAmsErrorV1::InvalidPoint)
+        ));
     }
 
     #[test]

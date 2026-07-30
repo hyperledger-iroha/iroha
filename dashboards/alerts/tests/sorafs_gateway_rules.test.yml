@@ -1,0 +1,83 @@
+rule_files:
+  - ../sorafs_gateway_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-a",result="success"}'
+        values: '0+99x24'
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-a",result="error"}'
+        values: '0+1x24'
+      - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-a",le="100"}'
+        values: '0+0x24'
+      - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-a",le="200"}'
+        values: '0+10x24'
+      - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-a",le="+Inf"}'
+        values: '0+10x24'
+      - series: 'sorafs_gateway_proof_verifications_total{profile_version="sf1",result="failure",error_code="sequence_invalid"}'
+        values: '0+1x24'
+    alert_rule_test:
+      - alertname: SoraFSGatewayAvailabilityBreached
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSGatewayAvailabilityBreached
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              endpoint: edge-a
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS gateway availability below target"
+              description: |
+                Endpoint edge-a observed availability 0.9900 over the last 10 minutes.
+      - alertname: SoraFSGatewayTtfbP95High
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSGatewayTtfbP95High
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              endpoint: edge-a
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS gateway TTFB P95 above 120ms"
+              description: |
+                Endpoint edge-a exceeded the TTFB SLO (P95 195.0 ms over 5 minutes).
+      - alertname: SoraFSProofFailureSpike
+        eval_time: 10m
+        exp_alerts: []
+      - alertname: SoraFSProofFailureSpike
+        eval_time: 17m
+        exp_alerts:
+          - exp_labels:
+              profile_version: sf1
+              error_code: sequence_invalid
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS proof failure spike"
+              description: |
+                Profile sf1 reported 10 proof failures (sequence_invalid) in the last 10 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-b",result="success"}'
+        values: '0+100x20'
+      - series: 'sorafs_gateway_responses_total{endpoint="edge-b",result="error"}'
+        values: '0+0x20'
+      - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-b",le="100"}'
+        values: '0+10x20'
+      - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-b",le="200"}'
+        values: '0+10x20'
+      - series: 'sorafs_gateway_ttfb_ms_bucket{endpoint="edge-b",le="+Inf"}'
+        values: '0+10x20'
+      - series: 'sorafs_gateway_proof_verifications_total{profile_version="sf1",result="failure",error_code="sequence_invalid"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - alertname: SoraFSGatewayAvailabilityBreached
+        eval_time: 20m
+        exp_alerts: []
+      - alertname: SoraFSGatewayTtfbP95High
+        eval_time: 20m
+        exp_alerts: []
+      - alertname: SoraFSProofFailureSpike
+        eval_time: 20m
+        exp_alerts: []

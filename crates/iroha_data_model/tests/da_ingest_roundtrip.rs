@@ -2,7 +2,7 @@
 
 use std::{convert::TryFrom, str::FromStr};
 
-use iroha_crypto::{PublicKey, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use iroha_data_model::{da::prelude::*, nexus::LaneId, sorafs::pin_registry::StorageClass};
 use norito::{core::NoritoDeserialize, from_bytes};
 
@@ -93,6 +93,86 @@ fn da_ingest_request_norito_roundtrip() {
     let archived = from_bytes::<DaIngestRequest>(&buf).expect("decode request");
     let decoded = DaIngestRequest::deserialize(archived);
     assert_eq!(decoded, request);
+}
+
+#[test]
+fn da_ingest_signature_binds_complete_request_intent() {
+    let key_pair = KeyPair::try_from_seed(vec![0x19; 32], Algorithm::Ed25519)
+        .expect("derive deterministic DA submitter");
+    let intent = DaIngestRequestIntentV1 {
+        client_blob_id: sample_digest(0x11),
+        lane_id: LaneId::new(2),
+        epoch: 42,
+        sequence: 7,
+        blob_class: BlobClass::TaikaiSegment,
+        codec: BlobCodec::new("cmaf"),
+        erasure_profile: ErasureProfile {
+            data_shards: 8,
+            parity_shards: 4,
+            row_parity_stripes: 2,
+            chunk_alignment: 12,
+            fec_scheme: FecScheme::Rs12_10,
+        },
+        retention_policy: RetentionPolicy {
+            hot_retention_secs: 86_400,
+            cold_retention_secs: 30 * 86_400,
+            required_replicas: 4,
+            storage_class: StorageClass::Hot,
+            governance_tag: GovernanceTag::new("da.test"),
+        },
+        chunk_size: 1 << 20,
+        total_size: 23,
+        compression: Compression::Identity,
+        norito_manifest: Some(vec![0xAA, 0xBB, 0xCC]),
+        payload: b"hello data availability".to_vec(),
+        metadata: ExtraMetadata {
+            items: vec![MetadataEntry::new(
+                "content_type",
+                b"video/mp4".to_vec(),
+                MetadataVisibility::Public,
+            )],
+        },
+    };
+    let expected_digest = intent.signing_digest();
+    assert_eq!(
+        hex::encode_upper(expected_digest),
+        "F73B79FFD1DB5BF28EE57E42AA42F10BA4AF865BA1E466471167818BBBC896E8",
+        "DA intent digest is a cross-SDK protocol vector"
+    );
+    let request = intent
+        .try_sign(&key_pair)
+        .expect("sign complete DA request intent");
+
+    assert_eq!(request.signing_digest(), expected_digest);
+    request
+        .verify_signature()
+        .expect("unchanged request must verify");
+
+    let mut changed_profile = request.clone();
+    changed_profile.erasure_profile.parity_shards += 1;
+    assert!(changed_profile.verify_signature().is_err());
+
+    let mut changed_lane = request.clone();
+    changed_lane.lane_id = LaneId::new(3);
+    assert!(changed_lane.verify_signature().is_err());
+
+    let mut changed_payload = request.clone();
+    changed_payload.payload[0] ^= 0xFF;
+    assert!(changed_payload.verify_signature().is_err());
+
+    let mut changed_metadata = request.clone();
+    changed_metadata.metadata.items.push(MetadataEntry::new(
+        "tampered",
+        b"yes".to_vec(),
+        MetadataVisibility::Public,
+    ));
+    assert!(changed_metadata.verify_signature().is_err());
+
+    let other = KeyPair::try_from_seed(vec![0x20; 32], Algorithm::Ed25519)
+        .expect("derive alternate DA submitter");
+    let mut changed_submitter = request;
+    changed_submitter.submitter = other.public_key().clone();
+    assert!(changed_submitter.verify_signature().is_err());
 }
 
 #[test]

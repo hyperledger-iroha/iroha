@@ -29,10 +29,27 @@ after the configured endpoint quorum agrees. Provider VRF submissions are
 signature-checked, bound to provider/manifest/epoch/drand inputs, persisted
 with replay state, and supplied to the coordinator through the verified feed.
 `sorafs.por.enabled = true` fails startup when this configuration is
-missing or internally inconsistent; `randomness_seed_hex` is never accepted as
-authenticated drand. Remaining SF-9a work is live multi-provider drand/VRF/
-auditor evidence and any production governance archive handoff required by the
-operator, not implementation of the local verified feeds. Each deployment's
+missing or internally inconsistent. It also requires the complete non-secret
+`[sorafs.por.potr_runtime]` binding and injected
+`PotrRuntimeSignerRolesV1`; every configured signer, qualification, gateway
+key, reader/source/resolver identity, and baseline finalized admission field
+must match the injected roles exactly. The provider qualification is the
+baseline admission sequence/digest. Partial or disabled-stale bindings,
+test-marked/shared handles, identity collisions, and injected roles without
+enabled configuration fail closed. `randomness_seed_hex` is never accepted as
+authenticated drand. The exact configuration/startup binding is
+source-complete, while focused/workspace Cargo validation remains pending.
+Weekly governance reporting now prepares the previous completed ISO week,
+uses that cycle's exact end boundary for `generated_at`, and persists both the
+canonical report and its publication acknowledgement before advancing.
+Publication failure, process restart, and a multi-week outage therefore retry
+the same report bytes and catch up one unskipped ISO week at a time. The
+updated hard-cut coordinator snapshot intentionally has no compatibility
+decoder for the former pre-release layout. Focused/workspace validation of
+this newest report-state change remains pending.
+Remaining SF-9a work is live multi-provider drand/VRF/auditor evidence and any
+production governance archive handoff required by the operator, not
+implementation of the local verified feeds. Each deployment's
 SQL/Parquet archive backend decision is part of the checked reporting/archive
 evidence, and operator-required governance archive handoff evidence must carry
 a fingerprinted digest.
@@ -168,6 +185,26 @@ struct PorSampleProofV1 {
 All payloads carry Norito headers for canonical decoding. Torii accepts
 authenticated provider proofs at `/v1/sorafs/capacity/por-proof` and
 trusted-threshold auditor verdicts at `/v1/sorafs/capacity/por-verdict`.
+V1 validators perform an exact whole-payload sizing preflight before nested
+work and fail closed when an exact size is unavailable. Canonical ceilings are
+64 KiB for a challenge, 128 KiB for a challenge publication, 16 MiB for a
+proof, 256 KiB for an audit verdict, 16 KiB for one status, 32 MiB for a weekly
+report, and 4 KiB for one provider VRF submission. Proofs are limited to 500
+samples with at most 64 authentication-path nodes per sample; Ed25519 public
+keys and signatures have exact 32- and 64-byte lengths. Torii bounds the proof
+and verdict JSON wrappers to the exact padded-base64 ceiling plus their fixed
+field overhead before base64 decoding, and then uses the typed bounded
+canonical decoders. The coordinator's 64 MiB persisted snapshot input also has
+an absolute 512 MiB cumulative decode-allocation ceiling.
+
+Status material is outcome-specific: `Pending` carries no response or outcome
+material; `Verified` carries the proof digest and response timestamp;
+`Failed` requires a canonical failure reason and native repair task but may be
+proofless; and `Repaired` retains both the failure reason and proof response
+while carrying no repair task. A forced challenge without a verdict remains
+`Forced` even after a proof arrives. Weekly slashing events are strictly
+ordered by `(decided_at, provider_id, manifest_digest, verdict_cid)` and
+duplicates are rejected.
 No external challenge-submission route is mounted. The verified coordinator
 scheduler is the only permitted production challenge
 authority, and PoR automation enablement fails closed until its external
@@ -201,6 +238,57 @@ publisher are ready. Coordinator status surfaces are under
    - If submission fails due to transport, provider may retry until deadline; the coordinator keeps the earliest valid proof.
    - Exact failed-verdict replay reuses the retained native task identifier without invoking the repair handoff again; a different terminal verdict for the same challenge is rejected.
 
+## Finalized replay archive and reputation handoff
+
+Finalized verdicts now retain a canonical, sequence-bound PoR terminal outcome
+until the committed reputation runtime returns a durable exact-replay-aware
+admission result. The node checkpoints the matching sequence and work digest
+before it becomes eligible for compaction. A supervised `irohad` worker bounds
+both reconciliation and compaction per tick, and always performs reputation
+admission before archive removal. While the configured reputation runtime is
+still assembling its deployment-owned dependencies, its explicit `Deferred`
+state produces a zero-work tick: no admission, acknowledgement, or archive
+compaction occurs. Once the runtime becomes `Active`, every gate revalidates the
+finalized-query, journal-submitter, threshold-signer, and Governance DAG
+bindings; an outage or drift is a hard worker failure and cannot be downgraded
+back to deferred.
+
+The optional `[sorafs.storage.por_replay_archive]` binding contains only a
+stable production handle, archive identity, non-zero revision, public-policy
+digest, Ed25519 verification key, bounded worker settings, and independent
+maximum successor-receipt count and canonical successor-proof byte limit.
+Runtime-provider slot 46 supplies the deployment-owned immutable archive.
+Startup and every challenge, verdict, and compaction operation recheck the exact
+handle and signed binding before and after the authenticated operation;
+missing, unrequested, test-marked, substituted, stale, or drifting providers
+fail closed. Archive receipts sign the canonical record, the retained
+reputation-work digest, and the predecessor head.
+
+Every lookup names the caller's exact signed checkpoint head. Presence requires
+the canonical record plus a bounded, signed, contiguous successor suffix that
+ends at that head. Absence is a separate HSM signature over the challenge id and
+that exact head; an unbound `None` result is never accepted. A transport-backed
+provider must enforce the configured count and framed-byte ceilings from its
+outer envelope before allocating or decoding the suffix; the typed boundary
+then enforces the count and canonical decoded-byte bounds again. On restart, a
+live-ahead head is accepted only when one bounded proof matches every receipt
+to the exact acknowledged contiguous prefix still retained locally. The node
+then checkpoints that reconciled head before serving. This also covers a first
+external append committed immediately before the local checkpoint; a fresh
+state with no retained acknowledgement remains rejected. Rollback, fork,
+missing or substituted local intent, missing ancestry, and over-limit proofs
+fail startup. An exact append retry must return its original receipt even after
+successors exist and must not change the monotonic current head. Compaction
+removes local replay state only after an authenticated `current_head` readback
+equals the final appended receipt and the provider binding remains unchanged;
+a signed receipt that was not installed as the authoritative head rolls the
+local mutation back for exact retry.
+
+This closes the local contract, hard-cut configuration, route wiring, and
+bounded worker seam. It does not supply archive credentials, an HSM private key,
+an immutable storage backend, or deployment evidence. Those remain operator
+qualification and rollout requirements.
+
 ## Proof Verification
 - `sorafs_manifest::reference::validate_por_challenge_proof_bytes` validates
   canonical Norito decoding, `PorChallengeV1` and `PorProofV1` structural
@@ -209,8 +297,9 @@ publisher are ready. Coordinator status surfaces are under
 - Torii records challenges, proofs, and auditor verdicts through the capacity
   PoR submission routes and exposes the resulting history through the
   coordinator status/export/report endpoints.
-- Full live auditor verification against external drand/VRF feeds and any
-  deployment-specific Merkle replay archive remain rollout evidence items.
+- Full live auditor verification against external drand/VRF feeds plus genuine
+  qualification of the deployment-owned immutable replay archive and HSM
+  signer remain rollout evidence items.
 
 ## Telemetry & Alerts
 - Implemented Torii runtime metrics (Prometheus):
@@ -240,9 +329,14 @@ snapshot (`por-coordinator.to`), verified drand high-water
 `governance_dir`, `governance_dag_dir`, and independently configurable drand or
 VRF state paths are rejected; this directory never serves as a competing
 Governance DAG sink. `PorCoordinator::with_persistence` writes the canonical
-Norito coordinator snapshot there. The SQL shape below remains the production
-warehouse/archive target for operators that need long-retention analytics
-outside the node snapshot.
+Norito coordinator snapshot there. That snapshot retains the exact prepared
+weekly report and a durable published flag. A report is persisted before the
+Governance DAG call, the acknowledgement is persisted after success, pending
+bytes block cycle advancement, and restart catch-up advances through every
+missing ISO week in order. This is a V1 hard cut: snapshots using the earlier
+pre-release field set fail decoding instead of being guessed or migrated. The
+SQL shape below remains the production warehouse/archive target for operators
+that need long-retention analytics outside the node snapshot.
 
 ```sql
 CREATE TABLE sorafs_por_history (
@@ -286,8 +380,13 @@ CREATE TABLE sorafs_vrf_history (
   `spawn`, and Torii constructs it only from the verified drand and durable
   provider-VRF adapters. `sorafs.por.enabled = true` is rejected at
   startup unless pinned drand chain/endpoints/quorum/state and provider-VRF
-  state are configured consistently and the embedded node has a fully bound
-  runtime Ed25519 Governance DAG signer/publisher. The legacy optional
+  state are configured consistently, the exact
+  `[sorafs.por.potr_runtime]` public pins match the injected independent
+  gateway/provider signer roles, and the embedded node has a fully bound
+  runtime Ed25519 Governance DAG signer/publisher. The checked-in
+  [`potr_runtime_binding.toml`](sorafs/snippets/potr_runtime_binding.toml)
+  fragment enumerates the public PoTR fields; credentials and private keys
+  remain runtime-only. The legacy optional
   `randomness_seed_hex` is deterministic test material and cannot satisfy this
   readiness gate; defaults keep automation disabled.
 - **Storage hooks:** The runtime uses `sorafs_node::NodeHandle` as its `PorStorage`, plans
@@ -299,9 +398,14 @@ CREATE TABLE sorafs_vrf_history (
 - **Governance events:** Validated `PorChallengePublicationV1` envelopes and
   `PorWeeklyReportV1` reports share the embedded node's durable outbox and
   runtime-signed canonical Governance DAG chain. Startup fails when that
-  publisher is absent; publication failures remain queued for ordered retry.
-  Status, export, and report endpoints expose coordinator history as canonical
-  Norito payloads.
+  publisher is absent. The scheduler reports only the previous completed ISO
+  week; its end boundary is the canonical `generated_at`, and prepared bytes
+  plus the publication acknowledgement survive restart. Failed or
+  committed-unknown publication is retried exactly, an unpublished cycle
+  blocks advancement, and extended downtime catches up one week at a time.
+  The report endpoint returns the retained exact report when that cycle is
+  currently prepared. Status, export, and report endpoints expose coordinator
+  history as canonical Norito payloads.
 - **Alerts:** `dashboards/alerts/sorafs_por_rules.yml` covers scheduler failures, forced
   challenges, ingestion backlog, and duplicate sample spikes.
 

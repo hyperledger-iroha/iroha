@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-02-07
 | نقطة النهاية توثیق | إن الإعلان عن نقطة نهاية لـ mTLS أو تقرير سريع للرياضة أمر ضروري. | Norito الحمولة `EndpointAttestationV1` هي تسعيرة البطاقة وحزمة القبول الخاصة بها هي نقطة النهاية للاندرويد. |
 
 ## قبولیت کا وک فلو1. **منتجات البروبوزل**
-   - سطر الأوامر: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - سطر الأوامر: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      تتضمن الحزمة `ProviderAdmissionProposalV1` + الحزمة الصحية.
    - ويليمي: القطع الأساسي، الحصة > 0، و`profile_id` هو مقبض القطع الكنسي الذي يستخدم.
 2. **الإمساك بالطعام**
@@ -53,7 +53,7 @@ translation_last_reviewed: 2026-02-07
 
 ### حوالة CLI
 
-لقد تم التحكم به من خلال `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+لقد تم التحكم به من خلال `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - دركار فليغز: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وأكمل من `--endpoint=<kind:host>`.
@@ -89,7 +89,7 @@ translation_last_reviewed: 2026-02-07
    تتميز `--retention-epoch` بالقدرة والضرورة التي تتوافق مع حصة/نقاط النهاية.
 2. البهجة
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -107,7 +107,7 @@ translation_last_reviewed: 2026-02-07
    CI (`ci/check_sorafs_fixtures.sh`) Norito هناك المزيد من الاستقرار.#### ہنگامی منسوخی
 1. مظروف متعدد الاستخدامات للبطاقات الائتمانية والإلكترونية:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

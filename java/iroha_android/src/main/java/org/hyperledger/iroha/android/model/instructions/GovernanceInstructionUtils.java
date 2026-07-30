@@ -63,32 +63,6 @@ public final class GovernanceInstructionUtils {
     }
   }
 
-  /** Derivation kind recorded for persisted councils. */
-  public enum CouncilDerivationKind {
-    VRF("Vrf");
-
-    private final String wireValue;
-
-    CouncilDerivationKind(final String wireValue) {
-      this.wireValue = wireValue;
-    }
-
-    public String wireValue() {
-      return wireValue;
-    }
-
-    public static CouncilDerivationKind parse(final String raw) {
-      if (raw == null || raw.isBlank()) {
-        throw new IllegalArgumentException("derived_by must not be blank");
-      }
-      final String normalised = raw.trim().toLowerCase(Locale.ROOT);
-      if ("vrf".equals(normalised)) {
-        return VRF;
-      }
-      throw new IllegalArgumentException("Unknown council derivation: " + raw);
-    }
-  }
-
   static void appendAtWindow(
       final Map<String, String> arguments, final AtWindow window, final String prefix) {
     Objects.requireNonNull(arguments, "arguments");

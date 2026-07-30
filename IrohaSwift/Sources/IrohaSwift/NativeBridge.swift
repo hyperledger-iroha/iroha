@@ -103,6 +103,7 @@ enum NoritoBridgeLoader {
         "connect_norito_canonical_json_blake3_v1",
         "connect_norito_encode_account_onboarding_plan_body_v1",
         "connect_norito_alias_instruction_round_trip_v1",
+        "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
         "connect_norito_sorafs_reference_validate_bundle_json",
         "connect_norito_sorafs_reference_validate_governance_json",
         "connect_norito_sorafs_reference_validate_governance_dag_block_json",
@@ -731,7 +732,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         defer {
             free(pointer)
         }
-        guard length <= CUnsignedLong(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
+        guard length <= CUnsignedLong(
+            KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes
+        ) else {
             throw NativeBridgeError.kagemushaProve
         }
         return Data(bytes: pointer, count: Int(length))
@@ -739,6 +742,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     #endif
 
     static let privacyNativeArchiveMaxBytes = 256 * 1024
+    static let privacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
 
     #if canImport(Darwin)
@@ -1308,8 +1312,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UInt64,
-        UInt32,
-        UInt8,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -1325,8 +1327,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UInt64,
-        UInt32,
-        UInt8,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
@@ -1775,6 +1775,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias SorafsReferenceSinglePayloadFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias SorafsReferenceFixtureBundleFn = @convention(c) (
         UnsafeRawPointer?, CUnsignedLong,
         UInt64, UInt64,
@@ -1897,6 +1903,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias PrivacyValidateCapabilitiesFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong
+    ) -> Int32
+    private typealias PrivacyExact12FixtureBundleFn = @convention(c) (
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias PrivacyValidateExact12FixtureBundleFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong
     ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
@@ -2040,6 +2052,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
     private var sorafsReferenceValidatePopPayloadFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceValidateHedgingPayloadFn: SorafsReferencePayloadFn? = nil
+    private var sorafsReferenceValidateAppealFinanceCancelAssetLockFn: SorafsReferenceSinglePayloadFn? = nil
     private var sorafsReferenceValidateFixtureBundleFn: SorafsReferenceFixtureBundleFn? = nil
     private var sorafsReferenceValidateGovernanceLogNodeFn: SorafsReferenceGovernanceLogNodeFn? = nil
     private var sorafsReferenceValidateGovernanceDagBlockFn: SorafsReferenceGovernanceDagBlockFn? = nil
@@ -2057,6 +2070,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var canonicalJSONBlake3Fn: CanonicalJSONBlake3Fn? = nil
     private var privacyCapabilitiesFn: PrivacyCapabilitiesFn? = nil
     private var privacyValidateCapabilitiesFn: PrivacyValidateCapabilitiesFn? = nil
+    private var privacyExact12FixtureBundleFn: PrivacyExact12FixtureBundleFn? = nil
+    private var privacyValidateExact12FixtureBundleFn: PrivacyValidateExact12FixtureBundleFn? = nil
     private var privacyFreeFn: FreeFn? = nil
     private var privacyNativeProbeOk = false
 #else
@@ -2169,6 +2184,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
     private let sorafsReferenceValidatePopPayloadFn: Any? = nil
     private let sorafsReferenceValidateHedgingPayloadFn: Any? = nil
+    private let sorafsReferenceValidateAppealFinanceCancelAssetLockFn: Any? = nil
     private let sorafsReferenceValidateFixtureBundleFn: Any? = nil
     private let sorafsReferenceValidateGovernanceLogNodeFn: Any? = nil
     private let sorafsReferenceValidatePdpPayloadFn: Any? = nil
@@ -2184,6 +2200,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let canonicalJSONBlake3Fn: Any? = nil
     private let privacyCapabilitiesFn: Any? = nil
     private let privacyValidateCapabilitiesFn: Any? = nil
+    private let privacyExact12FixtureBundleFn: Any? = nil
+    private let privacyValidateExact12FixtureBundleFn: Any? = nil
     private let privacyFreeFn: Any? = nil
     private let privacyNativeProbeOk = false
 #endif
@@ -2196,6 +2214,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard let handle else {
             self.privacyCapabilitiesFn = nil
             self.privacyValidateCapabilitiesFn = nil
+            self.privacyExact12FixtureBundleFn = nil
+            self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
             return
         }
@@ -2211,6 +2231,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.privacyValidateCapabilitiesFn = nil
+        }
+        if let fixtureSymbol = dlsym(handle, "iroha_privacy_exact12_fixture_bundle_v1") {
+            self.privacyExact12FixtureBundleFn = unsafeBitCast(
+                fixtureSymbol,
+                to: PrivacyExact12FixtureBundleFn.self
+            )
+        } else {
+            self.privacyExact12FixtureBundleFn = nil
+        }
+        if let validateFixtureSymbol = dlsym(
+            handle,
+            "iroha_privacy_validate_exact12_fixture_bundle_v1"
+        ) {
+            self.privacyValidateExact12FixtureBundleFn = unsafeBitCast(
+                validateFixtureSymbol,
+                to: PrivacyValidateExact12FixtureBundleFn.self
+            )
+        } else {
+            self.privacyValidateExact12FixtureBundleFn = nil
         }
         if let freeSymbol = dlsym(handle, "iroha_privacy_free_buffer") {
             self.privacyFreeFn = unsafeBitCast(freeSymbol, to: FreeFn.self)
@@ -2928,6 +2967,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsReferenceValidateHedgingPayloadFn = nil
             }
+            if let symbol = dlsym(
+                handle,
+                "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json"
+            ) {
+                self.sorafsReferenceValidateAppealFinanceCancelAssetLockFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceSinglePayloadFn.self
+                )
+            } else {
+                self.sorafsReferenceValidateAppealFinanceCancelAssetLockFn = nil
+            }
             if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_bundle_json") {
                 self.sorafsReferenceValidateFixtureBundleFn = unsafeBitCast(
                     symbol,
@@ -3167,6 +3217,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
             self.sorafsReferenceValidatePopPayloadFn = nil
             self.sorafsReferenceValidateHedgingPayloadFn = nil
+            self.sorafsReferenceValidateAppealFinanceCancelAssetLockFn = nil
             self.sorafsReferenceValidateFixtureBundleFn = nil
             self.sorafsReferenceValidateGovernanceLogNodeFn = nil
             self.sorafsReferenceValidatePdpPayloadFn = nil
@@ -3182,6 +3233,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.canonicalJSONBlake3Fn = nil
             self.privacyCapabilitiesFn = nil
             self.privacyValidateCapabilitiesFn = nil
+            self.privacyExact12FixtureBundleFn = nil
+            self.privacyValidateExact12FixtureBundleFn = nil
             self.privacyFreeFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
@@ -3273,12 +3326,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         status: Int32,
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
-        validate: PrivacyValidateCapabilitiesFn?
+        validate: PrivacyValidateCapabilitiesFn?,
+        maximumBytes: Int
     ) -> Bool {
         guard status == 0,
               let outPtr,
               outLen > 0,
-              outLen <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes),
+              outLen <= CUnsignedLong(maximumBytes),
               let validate else {
             return false
         }
@@ -3286,12 +3340,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func probePrivacyNativeAvailability() {
-        privacyNativeProbeOk = probePrivacyCapabilitiesFunction(privacyCapabilitiesFn)
+        privacyNativeProbeOk =
+            probePrivacyArchiveFunction(
+                privacyCapabilitiesFn,
+                validate: privacyValidateCapabilitiesFn,
+                maximumBytes: Self.privacyNativeArchiveMaxBytes
+            )
+            && probePrivacyArchiveFunction(
+                privacyExact12FixtureBundleFn,
+                validate: privacyValidateExact12FixtureBundleFn,
+                maximumBytes: Self.privacyExact12FixtureBundleMaxBytes
+            )
     }
 
-    private func probePrivacyCapabilitiesFunction(_ function: PrivacyCapabilitiesFn?) -> Bool {
+    private func probePrivacyArchiveFunction(
+        _ function: PrivacyCapabilitiesFn?,
+        validate: PrivacyValidateCapabilitiesFn?,
+        maximumBytes: Int
+    ) -> Bool {
         guard let function,
-              let validate = privacyValidateCapabilitiesFn,
+              let validate,
               let freePrivacyFn = privacyFreeFn ?? freeFn else {
             return false
         }
@@ -3303,6 +3371,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             outPtr: outPtr,
             outLen: outLen,
             validate: validate,
+            maximumBytes: maximumBytes,
             free: freePrivacyFn
         )
     }
@@ -3312,16 +3381,22 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         outPtr: UnsafeMutablePointer<UInt8>?,
         outLen: CUnsignedLong,
         validate: PrivacyValidateCapabilitiesFn?,
+        maximumBytes: Int,
         free: FreeFn
     ) -> Bool {
         let expected = Self.isValidPrivacyNativeProbeResult(
             status: status,
             outPtr: outPtr,
             outLen: outLen,
-            validate: validate
+            validate: validate,
+            maximumBytes: maximumBytes
         )
         if let outPtr {
-            Self.clearPrivacyNativeBuffer(outPtr, length: outLen)
+            Self.clearPrivacyNativeBuffer(
+                outPtr,
+                length: outLen,
+                maximumBytes: maximumBytes
+            )
             free(outPtr)
         }
         return expected
@@ -3360,6 +3435,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return sorafsReferenceValidateOrderbookFn != nil
             && sorafsReferenceValidatePopPayloadFn != nil
             && sorafsReferenceValidateHedgingPayloadFn != nil
+            && sorafsReferenceValidateAppealFinanceCancelAssetLockFn != nil
             && sorafsReferenceValidateFixtureBundleFn != nil
             && sorafsReferenceValidateGovernanceLogNodeFn != nil
             && sorafsReferenceValidatePdpPayloadFn != nil
@@ -3385,6 +3461,15 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return sorafsReferenceValidateHedgingPayloadFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceAppealFinanceValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidateAppealFinanceCancelAssetLockFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -3459,6 +3544,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard bridgeEnabledForRuntime else { return false }
         return privacyCapabilitiesFn != nil
             && privacyValidateCapabilitiesFn != nil
+            && privacyExact12FixtureBundleFn != nil
+            && privacyValidateExact12FixtureBundleFn != nil
             && (privacyFreeFn != nil || freeFn != nil)
             && privacyNativeProbeOk
         #else
@@ -6076,8 +6163,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
         epoch: UInt64,
-        candidatesCount: UInt32,
-        derivedBy: UInt8,
         membersJson: Data,
         feePaymentJSON: Data,
         privateKey: Data,
@@ -6123,8 +6208,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         ttlValue,
                                         ttlFlag,
                                         epoch,
-                                        candidatesCount,
-                                        derivedBy,
                                         membersPtr, UInt(membersJson.count),
                                         feePaymentPtr, UInt(feePaymentJSON.count),
                                         keyPtr, UInt(privateKey.count),
@@ -6142,8 +6225,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                                         ttlValue,
                                         ttlFlag,
                                         epoch,
-                                        candidatesCount,
-                                        derivedBy,
                                         membersPtr, UInt(membersJson.count),
                                         feePaymentPtr, UInt(feePaymentJSON.count),
                                         keyPtr, UInt(privateKey.count),
@@ -6407,7 +6488,40 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return try Self.readPrivacyNativeOutput(
             pointer: outPtr,
             length: outLen,
-            validate: privacyValidateCapabilitiesFn
+            validate: privacyValidateCapabilitiesFn,
+            maximumBytes: Self.privacyNativeArchiveMaxBytes
+        ) { pointer in
+            freePrivacyFn(pointer)
+        }
+        #else
+        return nil
+        #endif
+    }
+
+    func privacyExact12FixtureBundleV1() throws -> Data? {
+        #if canImport(Darwin)
+        guard let privacyExact12FixtureBundleFn,
+              let privacyValidateExact12FixtureBundleFn,
+              let freePrivacyFn = privacyFreeFn ?? freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = privacyExact12FixtureBundleFn(&outPtr, &outLen)
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freePrivacyFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        return try Self.readPrivacyNativeOutput(
+            pointer: outPtr,
+            length: outLen,
+            validate: privacyValidateExact12FixtureBundleFn,
+            maximumBytes: Self.privacyExact12FixtureBundleMaxBytes
         ) { pointer in
             freePrivacyFn(pointer)
         }
@@ -6420,16 +6534,21 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         pointer: UnsafeMutablePointer<UInt8>?,
         length: CUnsignedLong,
         validate: PrivacyValidateCapabilitiesFn,
+        maximumBytes: Int,
         free: (UnsafeMutablePointer<UInt8>?) -> Void
     ) throws -> Data {
         guard let pointer else {
             throw NativeBridgeError.nullPointer
         }
         defer {
-            Self.clearPrivacyNativeBuffer(pointer, length: length)
+            Self.clearPrivacyNativeBuffer(
+                pointer,
+                length: length,
+                maximumBytes: maximumBytes
+            )
             free(pointer)
         }
-        guard length > 0, length <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes) else {
+        guard length > 0, length <= CUnsignedLong(maximumBytes) else {
             throw NativeBridgeError.invalidPrivacyOutput
         }
         guard validate(UnsafePointer(pointer), length) == 0 else {
@@ -6456,13 +6575,32 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    func privacyExact12FixtureValidationStatusV1(_ archive: Data) -> Int32? {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime,
+              let privacyValidateExact12FixtureBundleFn,
+              archive.count <= Self.privacyExact12FixtureBundleMaxBytes else {
+            return nil
+        }
+        return archive.withUnsafeBytes { bytes in
+            privacyValidateExact12FixtureBundleFn(
+                bytes.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(archive.count)
+            )
+        }
+        #else
+        return nil
+        #endif
+    }
+
     private static func clearPrivacyNativeBuffer(
         _ pointer: UnsafeMutablePointer<UInt8>,
-        length: CUnsignedLong
+        length: CUnsignedLong,
+        maximumBytes: Int
     ) {
         guard
             length > 0,
-            length <= CUnsignedLong(Self.privacyNativeArchiveMaxBytes),
+            length <= CUnsignedLong(maximumBytes),
             let count = Int(exactly: length)
         else {
             return
@@ -7619,6 +7757,41 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         let status = withDataPointer(payload) { payloadPtr, payloadLen in
             withDataPointer(labelData) { labelPtr, labelLen in
                 function(kind, payloadPtr, payloadLen, labelPtr, labelLen, generatedAtUnix, &outPtr, &outLen)
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidateAppealFinanceCancelAssetLock(
+        payload: Data,
+        label: String,
+        generatedAtUnix: UInt64
+    ) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidateAppealFinanceCancelAssetLockFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                function(
+                    payloadPtr,
+                    payloadLen,
+                    labelPtr,
+                    labelLen,
+                    generatedAtUnix,
+                    &outPtr,
+                    &outLen
+                )
             }
         }
         guard status == 0 else {

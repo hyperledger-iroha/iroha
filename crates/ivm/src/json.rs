@@ -239,7 +239,7 @@ fn json_from_value_ref(value: &njson::Value) -> Result<Json, VMError> {
     // `Value`; the only otherwise-invalid payloads (non-finite numbers and
     // excessive depth) were rejected explicitly. Avoid reparsing into another
     // deeply nested owned `Value` merely to validate and recursively drop it.
-    Ok(Json::from_string_unchecked(output))
+    Json::from_raw_json(output).map_err(|_| VMError::DecodeError)
 }
 
 fn load_tlv<'a>(
@@ -1290,11 +1290,12 @@ mod tests {
             .spawn(|| {
                 let mut vm = IVM::new(u64::MAX);
                 let nesting = MAX_STATE_VALUE_NODES - 1;
-                let expected = Json::from_string_unchecked(format!(
+                let expected = Json::from_raw_json(format!(
                     "{}true{}",
                     "[".repeat(nesting),
                     "]".repeat(nesting)
-                ));
+                ))
+                .expect("valid deep JSON fixture");
                 let expected_payload =
                     encode_canonical_norito(&expected).expect("canonical deep JSON payload");
 

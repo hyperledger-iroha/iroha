@@ -48,7 +48,7 @@ automation.
   },
   "telemetry_region": "iad-prod",
   "max_providers": 6,
-  "transport_policy": "soranet_first"
+  "transport_policy": "soranet-first"
 }
 ```
 
@@ -143,7 +143,7 @@ new flags control the workflow:
 
 | Flag | Purpose |
 |------|---------|
-| `--guard-directory <PATH>` | Points to a JSON file describing the latest relay consensus (subset shown below). Passing the directory refreshes the guard cache before executing the fetch. |
+| `--guard-directory <PATH>` / `--guard-directory-digest <HEX>` | Points to the Norito snapshot and supplies the independently distributed, domain-separated BLAKE3 digest of those exact bytes. Both are required before the directory may refresh the guard cache. |
 | `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
 | `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
 | `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
@@ -165,7 +165,13 @@ The `--guard-directory` flag now expects a Norito-encoded
   carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
   signatures.
 
-The CLI verifies every bundle against the declared issuer keys before merging the directory with
+The CLI verifies every bundle against the declared issuer keys before merging
+the directory. Runtime authentication also requires the independently
+distributed exact snapshot digest and enforces
+`valid_after_unix <= now < valid_until_unix`; embedded issuer keys alone prove
+only self-consistency. SRCv2 decoding rejects oversized containers before
+allocation (16 endpoints, 8 tags per endpoint, 2 handshake suites, 2,048 URL
+bytes, 64 tag bytes, 56 KiB per certificate, and 64 KiB per bundle).
 
 Invoke the CLI with `--guard-directory` to merge the latest consensus with the
 existing cache. The selector preserves pinned guards that are still within the
@@ -203,16 +209,17 @@ Use the CLI helpers to keep snapshots in sync with publishers:
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./state/guard_directory.norito \
-  --expected-directory-hash <directory-hash-hex>
+  --expected-snapshot-digest <trusted-snapshot-digest-hex>
 
 sorafs_cli guard-directory verify \
   --path ./state/guard_directory.norito \
-  --expected-directory-hash <directory-hash-hex>
+  --expected-snapshot-digest <trusted-snapshot-digest-hex>
 ```
 
-`fetch` downloads and verifies the SRCv2 snapshot before writing it to disk,
-while `verify` replays the validation pipeline for artefacts sourced from other
-teams, emitting a JSON summary that mirrors the CLI/SDK guard selector output.
+`fetch` authenticates the exact SRCv2 snapshot and its current validity before
+writing it to disk, while `verify` replays the same pipeline. Use
+`guard-directory inspect --path ...` only for local structural diagnostics and
+digest calculation; its output is explicitly marked unauthenticated.
 
 ### 1.5 Circuit Lifecycle Manager
 

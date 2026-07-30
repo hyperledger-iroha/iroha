@@ -121,7 +121,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
         },
         network_acl: None,
         network: None,
-        confidential_gas: None,
         soranet_handshake: None,
         transport: None,
         compute_pricing: None,
@@ -150,7 +149,6 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
             require_sm_openssl_preview_match: Some(false),
             lane_profile: None,
         }),
-        confidential_gas: None,
         soranet_handshake: Some(SoranetHandshakeUpdate {
             descriptor_commit_hex: Some(descriptor_hex.clone()),
             client_capabilities_hex: Some("010203".to_owned()),
@@ -307,7 +305,6 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
         },
         network_acl: None,
         network: None,
-        confidential_gas: None,
         soranet_handshake: Some(SoranetHandshakeUpdate {
             descriptor_commit_hex: None,
             client_capabilities_hex: None,

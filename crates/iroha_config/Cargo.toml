@@ -18,10 +18,10 @@ sm-ffi-openssl = []
 
 [dependencies]
 iroha_config_base = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 iroha_primitives = { workspace = true }
-iroha_crypto = { workspace = true, features = ["pqc"] }
-norito = {workspace = true}
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 error-stack = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "ansi", "env-filter"] }
@@ -41,5 +41,5 @@ blake2 = { workspace = true }
 [dev-dependencies]
 expect-test = { workspace = true }
 assertables = { workspace = true }
-iroha_crypto = { workspace = true, features = ["rand", "gost"] }
-norito = {workspace = true}
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost"] }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }

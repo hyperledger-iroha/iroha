@@ -1,11 +1,24 @@
-//! Helper test to dump the syscalls touched by executor fixtures.
+//! Executor fixture admission and migration-boundary tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use core::num::NonZeroU64;
 use std::{fs, path::PathBuf};
 
+#[cfg(not(feature = "iroha-core-tests"))]
+use iroha_core::{
+    executor::Executor as RuntimeExecutor,
+    kura::Kura,
+    query::store::LiveQueryStore,
+    state::{State, World, WorldReadOnly},
+};
+#[cfg(not(feature = "iroha-core-tests"))]
+use iroha_data_model::{
+    ChainId, executor::Executor as DataModelExecutor, transaction::executable::IvmBytecode,
+};
 use iroha_data_model::{block::BlockHeader, smart_contract::payloads::ExecutorContext};
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, Memory, VMError, host::IVMHost};
+#[cfg(not(feature = "iroha-core-tests"))]
+use norito::codec::Encode;
 
 struct LoggingHost;
 
@@ -49,4 +62,59 @@ fn print_syscalls() {
     vm.set_register(10, Memory::HEAP_START);
     vm.set_gas_limit(50_000_000);
     let _ = vm.run();
+}
+
+#[test]
+#[cfg(not(feature = "iroha-core-tests"))]
+fn tiny_halt_bytecode_cannot_select_fixture_migration_behavior() {
+    let state = State::new_with_chain_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+        ChainId::from("executor-fixture-migration-regression"),
+    );
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(1).expect("nonzero block height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(block_header);
+    let mut state_transaction = block.transaction();
+    let original_data_model = state_transaction.world.executor_data_model().clone();
+    let mut executor = RuntimeExecutor::Initial;
+
+    for vector_length in 1..=8 {
+        let mut bytecode = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length,
+            max_cycles: 1_000_000,
+            abi_version: 1,
+        }
+        .encode();
+        bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        let raw = DataModelExecutor::new(IvmBytecode::from_compiled(bytecode));
+
+        let error = executor
+            .migrate(raw, &mut state_transaction, &ALICE_ID)
+            .expect_err("a HALT-only program does not return a canonical migration result");
+        assert_eq!(
+            error,
+            VMError::DecodeError,
+            "vector-length metadata must not select host fixture behavior"
+        );
+        assert!(
+            matches!(executor, RuntimeExecutor::Initial),
+            "failed guest migration must not install its executor"
+        );
+        assert_eq!(
+            state_transaction.world.executor_data_model(),
+            &original_data_model,
+            "failed guest migration must not apply a host-side fixture model"
+        );
+    }
 }

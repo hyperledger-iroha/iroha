@@ -2981,18 +2981,13 @@ fn native_fee_asset_movement_wire_id(
             {
                 return Some(RepoIsi::WIRE_ID);
             }
-            RepoInstructionBox::Reverse(isi)
-                if repo_touches_fee_asset(
-                    isi.cash_leg.asset_definition_id(),
-                    isi.collateral_leg.asset_definition_id(),
-                    fee_asset_definition_id,
-                ) =>
-            {
+            // Reversal terms are loaded from the immutable on-chain agreement rather than
+            // committed in the signed instruction. Without a signed effect plan, admission
+            // cannot prove that the policy asset is untouched, so this path must fail closed.
+            RepoInstructionBox::Reverse(_) => {
                 return Some(ReverseRepoIsi::WIRE_ID);
             }
-            RepoInstructionBox::Initiate(_)
-            | RepoInstructionBox::Reverse(_)
-            | RepoInstructionBox::MarginCall(_) => {}
+            RepoInstructionBox::Initiate(_) | RepoInstructionBox::MarginCall(_) => {}
         }
     }
 
@@ -3006,12 +3001,10 @@ fn native_fee_asset_movement_wire_id(
         return Some(RepoIsi::WIRE_ID);
     }
 
-    if let Some(isi) = instruction.as_any().downcast_ref::<ReverseRepoIsi>()
-        && repo_touches_fee_asset(
-            isi.cash_leg.asset_definition_id(),
-            isi.collateral_leg.asset_definition_id(),
-            fee_asset_definition_id,
-        )
+    if instruction
+        .as_any()
+        .downcast_ref::<ReverseRepoIsi>()
+        .is_some()
     {
         return Some(ReverseRepoIsi::WIRE_ID);
     }
@@ -3251,12 +3244,12 @@ fn native_instruction_ds_effect_disposition(
         };
     }
 
-    // Repo and settlement paths with no policy-DS leg were audited above. Margin calls do not
-    // move assets. Any policy-DS leg was already rejected.
+    // Repo initiation and settlement paths with signed non-policy-DS legs were audited above.
+    // Reverse-repo settlement is always rejected because its legs are state-derived. Margin calls
+    // do not move assets. Any signed policy-DS leg was already rejected.
     audited_no_ds_effect!(
         RepoInstructionBox,
         RepoIsi,
-        ReverseRepoIsi,
         iroha_data_model::isi::repo::RepoMarginCallIsi,
         SettlementInstructionBox,
         DvpIsi,
@@ -3278,9 +3271,9 @@ fn native_instruction_ds_effect_disposition(
             }
         };
     }
-    // Freezes, blacklists, and limits do not change balances, but applying them to the policy DS
+    // Availability, blacklists, and limits do not change balances, but applying them to the policy DS
     // would encumber treasury/user holdings outside the signed transfer-and-fee effect.
-    reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferFreeze);
+    reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferAvailability);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferBlacklist);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetTransferControl);
     reject_fee_asset_transfer_control!(iroha_data_model::isi::SetAssetHoldingLimit);
@@ -3884,7 +3877,6 @@ mod tests {
                     epoch: 1,
                     members: vec![member.clone()],
                     alternates: Vec::new(),
-                    verified: 1,
                     candidate_count: 1,
                     derived_by: Default::default(),
                 },
@@ -4688,24 +4680,8 @@ mod tests {
         )
     }
 
-    fn repo_reverse(
-        agreement: &str,
-        initiator: &AccountId,
-        counterparty: &AccountId,
-        cash_asset: &AssetDefinitionId,
-        collateral_asset: &AssetDefinitionId,
-    ) -> ReverseRepoIsi {
-        ReverseRepoIsi::new(
-            agreement.parse().expect("repo agreement id"),
-            initiator.clone(),
-            counterparty.clone(),
-            RepoCashLeg {
-                asset_definition_id: cash_asset.clone(),
-                quantity: Quantity::from(1_u64),
-            },
-            RepoCollateralLeg::new(collateral_asset.clone(), Quantity::from(1_u64)),
-            1_000,
-        )
+    fn repo_reverse(agreement: &str) -> ReverseRepoIsi {
+        ReverseRepoIsi::new(agreement.parse().expect("repo agreement id"))
     }
 
     fn settlement_leg(
@@ -5067,18 +5043,21 @@ mod tests {
     fn policy_ds_transfer_controls_cannot_encumber_balances() {
         let treasury = account(3);
         let policy = policy(&treasury);
-        let freeze: InstructionBox = iroha_data_model::isi::SetAssetTransferFreeze::new(
-            treasury,
-            policy_fee_asset(&policy),
-            true,
-            Some("encumber policy DS".to_owned()),
-        )
-        .into();
+        let availability: InstructionBox =
+            iroha_data_model::isi::SetAssetTransferAvailability::new(
+                treasury,
+                policy_fee_asset(&policy),
+                0,
+                iroha_data_model::asset::AssetTransferAvailability::Disabled,
+                iroha_data_model::asset::AssetTransferAvailability::Disabled,
+                Some("encumber policy DS".to_owned()),
+            )
+            .into();
         let instruction_wire_id =
-            core::any::type_name::<iroha_data_model::isi::SetAssetTransferFreeze>();
+            core::any::type_name::<iroha_data_model::isi::SetAssetTransferAvailability>();
 
         assert_eq!(
-            enforce_policy(&tx(1, vec![freeze], Metadata::default()), &policy),
+            enforce_policy(&tx(1, vec![availability], Metadata::default()), &policy),
             Err(
                 ValidationFeeAdmissionError::UnsupportedNativeFeeAssetMovement {
                     context_index: 0,
@@ -5478,22 +5457,12 @@ mod tests {
             ),
             (
                 InstructionBox::from(RepoInstructionBox::Reverse(repo_reverse(
-                    "reverse_repo_ds_cash",
-                    &initiator,
-                    &counterparty,
-                    &fee_asset,
-                    &xor,
+                    "reverse_repo_state_derived_boxed",
                 ))),
                 ReverseRepoIsi::WIRE_ID,
             ),
             (
-                InstructionBox::from(RepoInstructionBox::Reverse(repo_reverse(
-                    "reverse_repo_ds_collateral",
-                    &initiator,
-                    &counterparty,
-                    &xor,
-                    &fee_asset,
-                ))),
+                InstructionBox::from(repo_reverse("reverse_repo_state_derived_direct")),
                 ReverseRepoIsi::WIRE_ID,
             ),
         ];

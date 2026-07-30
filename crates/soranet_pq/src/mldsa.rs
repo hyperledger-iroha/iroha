@@ -17,6 +17,8 @@ use crate::{
 
 #[path = "mldsa_backend.rs"]
 mod backend;
+#[path = "mldsa_primitives.rs"]
+mod mldsa_primitives;
 
 /// Maximum context length accepted by FIPS 204 ML-DSA signing and verification.
 pub const ML_DSA_CONTEXT_MAX_LEN: usize = 255;
@@ -210,14 +212,6 @@ pub enum MlDsaError {
     /// Signature verification failed.
     #[error("signature verification failed: {0}")]
     VerificationFailed(VerificationError),
-    /// Key generation failed.
-    #[error("{suite:?} key generation failed with status {status}")]
-    KeyGenerationFailed {
-        /// Suite identifier.
-        suite: MlDsaSuite,
-        /// Status code returned by `PQClean`.
-        status: i32,
-    },
     /// Context exceeded the FIPS 204 one-byte context length field.
     #[error("ML-DSA context length must be at most 255 bytes, found {len}")]
     ContextTooLong {
@@ -320,24 +314,34 @@ pub struct MlDsaEncodingError {
 ///
 /// # Errors
 ///
-/// Returns [`MlDsaError::KeyGenerationFailed`] if the underlying `PQClean`
-/// routines report a failure, or [`MlDsaError::BadEncoding`] when the produced
-/// key material cannot be converted into the Norito-friendly encoding.
+/// Returns an error when generated material fails strict FIPS 204 encoding and
+/// consistency validation.
 pub fn generate_mldsa_keypair(
     suite: MlDsaSuite,
     rng: &mut HedgedChaCha20Rng,
 ) -> Result<MlDsaKeyPair, MlDsaError> {
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
-    generate_mldsa_keypair_from_coins(suite, &coins)
+    generate_mldsa_keypair_from_fips_seed(suite, &coins)
 }
 
-fn generate_mldsa_keypair_from_coins(
+/// Deterministically generate an ML-DSA keypair from the 32-byte seed input
+/// defined by FIPS 204.
+///
+/// This is the lowest-level deterministic key-generation entry point. Callers
+/// that start with arbitrary-length secret material should first run a
+/// domain-separated KDF and zeroize the derived seed after this function
+/// returns.
+///
+/// # Errors
+/// Returns an error when `seed` is all zero, or when generated material fails
+/// canonical key validation.
+pub fn generate_mldsa_keypair_from_fips_seed(
     suite: MlDsaSuite,
-    coins: &[u8; 32],
+    seed: &[u8; 32],
 ) -> Result<MlDsaKeyPair, MlDsaError> {
-    validate_mldsa_material_not_all_zero(suite, "ML-DSA keypair coins", coins)?;
-    let keypair = backend::generate_keypair(suite, coins)?;
+    validate_mldsa_material_not_all_zero(suite, "ML-DSA keypair seed", seed)?;
+    let keypair = backend::generate_keypair(suite, seed)?;
     validate_generated_mldsa_keypair(suite, &keypair)?;
     Ok(keypair)
 }
@@ -745,10 +749,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_keypair_rejects_all_zero_coin_material() {
+    fn direct_fips_keypair_rejects_all_zero_seed_material() {
         let suite = MlDsaSuite::MlDsa44;
-        let err = generate_mldsa_keypair_from_coins(suite, &[0_u8; 32])
-            .expect_err("all-zero ML-DSA keypair coins must be rejected");
+        let err = generate_mldsa_keypair_from_fips_seed(suite, &[0_u8; 32])
+            .expect_err("all-zero ML-DSA FIPS keypair seed must be rejected");
 
         match err {
             MlDsaError::InertKeyMaterial {
@@ -756,9 +760,9 @@ mod tests {
                 kind,
             } => {
                 assert_eq!(actual.suite_id(), suite.suite_id());
-                assert_eq!(kind, "ML-DSA keypair coins");
+                assert_eq!(kind, "ML-DSA keypair seed");
             }
-            other => panic!("expected ML-DSA inert keypair coin error, got {other:?}"),
+            other => panic!("expected ML-DSA inert FIPS keypair seed error, got {other:?}"),
         }
     }
 
@@ -831,6 +835,32 @@ mod tests {
             assert_eq!(first.public_key(), second.public_key());
             assert_eq!(first.secret_key(), second.secret_key());
         }
+    }
+
+    #[test]
+    fn fips_seed_keypair_is_deterministic_and_suite_separated() {
+        let seed = [0xD5; 32];
+        let keypair_44 = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa44, &seed)
+            .expect("ML-DSA-44 FIPS seed should generate a keypair");
+        let keypair_44_replay = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa44, &seed)
+            .expect("ML-DSA-44 FIPS seed should replay");
+        let keypair_65 = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa65, &seed)
+            .expect("ML-DSA-65 FIPS seed should generate a keypair");
+
+        assert_eq!(keypair_44.public_key(), keypair_44_replay.public_key());
+        assert_eq!(keypair_44.secret_key(), keypair_44_replay.secret_key());
+        assert_ne!(
+            &keypair_44.public_key()[..32],
+            &keypair_65.public_key()[..32]
+        );
+    }
+
+    #[test]
+    fn fips_seed_keypair_rejects_inert_seed() {
+        let err = generate_mldsa_keypair_from_fips_seed(MlDsaSuite::MlDsa65, &[0_u8; 32])
+            .expect_err("all-zero FIPS key seed must be rejected");
+
+        assert_inert_key_material(err, MlDsaSuite::MlDsa65, "keypair seed");
     }
 
     #[test]

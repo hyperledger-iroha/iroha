@@ -564,7 +564,10 @@ mod tests {
         let spec = sample_spec(&domain, &signer);
         let policy = MultisigPolicy::new(
             spec.quorum.get(),
-            vec![MultisigMember::new(signer.signatory().clone(), 1).expect("valid member")],
+            vec![
+                MultisigMember::new(signer.expect_single_signatory().clone(), 1)
+                    .expect("valid member"),
+            ],
         )
         .expect("valid policy");
         let multisig_account = AccountId::new_multisig(policy);

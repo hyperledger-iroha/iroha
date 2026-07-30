@@ -3,8 +3,10 @@ import XCTest
 
 final class ConnectEnvelopeTests: XCTestCase {
     private func requireBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect crypto symbols not linked")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect crypto symbols not linked"
+        )
     }
 
     func testDecodeSignRequestTxPayload() throws {
@@ -164,13 +166,17 @@ final class ConnectEnvelopeTests: XCTestCase {
                                                                                        code: 1000,
                                                                                        reason: reason,
                                                                                        retryable: false) else {
-            throw XCTSkip("NoritoBridge encodeEnvelopeControlClose not linked")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge encodeEnvelopeControlClose not linked"
+            )
         }
         guard let frameBytes = NoritoNativeBridge.shared.connectEncryptEnvelope(key: key,
                                                                                 sessionID: sessionID,
                                                                                 direction: .walletToApp,
                                                                                 envelope: envelopeBytes) else {
-            throw XCTSkip("NoritoBridge connectEncryptEnvelope not linked")
+            try failRequiredNativeTestCapability(
+                "NoritoBridge connectEncryptEnvelope not linked"
+            )
         }
 
         let frame = try ConnectCodec.decode(frameBytes)

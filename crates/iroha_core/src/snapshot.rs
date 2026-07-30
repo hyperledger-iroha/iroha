@@ -3339,13 +3339,11 @@ pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes(state))
 }
 
-/// Canonical hash of the exact WSV surface that `state_block.commit()` would publish.
+/// Canonical bytes of the exact WSV surface that `state_block.commit()` would publish.
 ///
 /// The block remains an uncommitted MVCC overlay, so callers can reject a mismatched
 /// durable checkpoint without mutating live state.
-pub(crate) fn canonical_staged_state_snapshot_hash(
-    state_block: &StateBlock<'_>,
-) -> iroha_crypto::Hash {
+pub(crate) fn canonical_staged_state_snapshot_bytes(state_block: &StateBlock<'_>) -> Vec<u8> {
     let mut json = String::new();
     serialize_staged_state_snapshot(state_block, &mut json);
     let mut value: json::Value =
@@ -3364,10 +3362,19 @@ pub(crate) fn canonical_staged_state_snapshot_hash(
     normalize_mv_cell_fields_in_state_value(&mut value);
     normalize_set_like_parameter_fields_in_state_value(&mut value);
     redact_consensus_sidecars_from_state_value(&mut value);
-    let canonical = json::to_json(&value)
+    json::to_json(&value)
         .expect("staged state snapshot canonical serialization must succeed")
-        .into_bytes();
-    iroha_crypto::Hash::new(canonical)
+        .into_bytes()
+}
+
+/// Canonical hash of the exact WSV surface that `state_block.commit()` would publish.
+///
+/// The block remains an uncommitted MVCC overlay, so callers can reject a mismatched
+/// durable checkpoint without mutating live state.
+pub(crate) fn canonical_staged_state_snapshot_hash(
+    state_block: &StateBlock<'_>,
+) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new(canonical_staged_state_snapshot_bytes(state_block))
 }
 
 #[cfg(test)]

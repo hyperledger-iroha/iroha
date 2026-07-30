@@ -1033,6 +1033,12 @@ impl Reducer {
             Ok(outcome) => {
                 let transition = self.transition_projection(&audit_event, &next, outcome.effects());
                 let Some(checked_refinement) = refinement::check(transition) else {
+                    let diagnostic = refinement::diagnose(transition);
+                    iroha_logger::error!(
+                        event = ?audit_event,
+                        ?diagnostic,
+                        "Sumeragi v2 reducer rejected the transition refinement predicate"
+                    );
                     return Err(ReducerError::RefinementViolation);
                 };
                 let durable_intent_trace = ProductionDurableIntentTraceProjection {
@@ -1057,6 +1063,11 @@ impl Reducer {
                 let Some(checked_transition) =
                     check_production_durable_intent_transition(durable_intent_trace)
                 else {
+                    iroha_logger::error!(
+                        event = ?audit_event,
+                        ?durable_intent_trace,
+                        "Sumeragi v2 reducer rejected the durable-intent refinement predicate"
+                    );
                     return Err(ReducerError::RefinementViolation);
                 };
                 if let Some(violation) = next.progress_witness_violation() {
@@ -1069,6 +1080,14 @@ impl Reducer {
             }
             Err(error) => {
                 if !self.transition_refines(&audit_event, self, &[]) {
+                    let transition = self.transition_projection(&audit_event, self, &[]);
+                    let diagnostic = refinement::diagnose(transition);
+                    iroha_logger::error!(
+                        event = ?audit_event,
+                        ?diagnostic,
+                        reducer_error = %error,
+                        "Sumeragi v2 reducer error path rejected its exact-stutter refinement predicate"
+                    );
                     return Err(ReducerError::RefinementViolation);
                 }
                 if let Some(violation) = self.progress_witness_violation() {
@@ -4959,9 +4978,8 @@ mod source_link_tests {
 
     #[test]
     fn same_round_timeout_upgrade_accepts_the_last_generation() {
-        let (mut pending, event) = pending_same_round_timeout_upgrade_at_generation(
-            Generation::new(u64::MAX - 1),
-        );
+        let (mut pending, event) =
+            pending_same_round_timeout_upgrade_at_generation(Generation::new(u64::MAX - 1));
 
         let outcome = pending
             .step(event)

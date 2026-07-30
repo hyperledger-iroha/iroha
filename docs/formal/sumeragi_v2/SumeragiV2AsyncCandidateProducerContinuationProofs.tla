@@ -161,6 +161,13 @@ BY FS_Singleton, FS_Subset, FS_Union, IsaT(900)
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
        SerializedRuntimeStep,
        SerializedRuntimePrecedesServeIngressStep,
        SerializedLocalPrecedesServeIngressStep,
@@ -376,11 +383,12 @@ THEOREM AsyncCandidateProducerContinuationUnselectedActiveRecordIsFixed ==
     /\ record.status \in {"Reserved", "Materialized"}
     /\ ~AsyncCandidateProducerContinuationTerminalAfter(record)
     /\ ~AsyncCandidateProducerContinuationSelectedForResolution(record)
-    /\ ~AsyncCandidateProducerContinuationSelectedForRunnerResolution(
-         record)
+    /\ ~AsyncCandidateProducerContinuationSelectedForAcknowledgement(record)
       => AsyncCandidateProducerContinuationRecordAfterStep(
            state, record) = record
-BY SMT DEF AsyncCandidateProducerContinuationRecordAfterStep
+BY SMT
+   DEF AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement
 
 THEOREM ResolveCandidateProducerContinuationNeverReplaysDrainedParent ==
   \A node \in ValidatorIds:
@@ -394,6 +402,7 @@ THEOREM CandidateProducerContinuationBlocksRunnerUntilHandoffResolution ==
     RunNodeWork(node)
       => \/ ~AsyncCandidateProducerContinuationResolutionRequired(node)
          \/ ResolveRunNodeCandidateProducerContinuation(node)
+         \/ ReplayRunNodeCandidateProducerContinuation(node)
 BY DEF RunNodeWork
 
 THEOREM CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner ==
@@ -411,6 +420,20 @@ THEOREM CandidateProducerContinuationResolutionSelectsMinimumFrozenOwner ==
 BY Isa
    DEF AsyncCandidateProducerContinuationResolutionRequired,
        AsyncCandidateProducerContinuationSelectedResolutionRecord
+
+THEOREM ExternalCandidateProducerContinuationSelectionIsReady ==
+  \A node \in ValidatorIds:
+    /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+    /\ AsyncCandidateProducerContinuationResolutionRequired(node)
+    /\ (AsyncCandidateProducerContinuationSelectedResolutionRecord(node))
+         .sourceClass \in {"ConditionalTransport", "VolatileBody"}
+      => AsyncCandidateProducerContinuationResolutionReady(node)
+BY Isa
+   DEF AsyncCandidateProducerContinuationExternalCoverageInvariant,
+       AsyncCandidateProducerContinuationResolutionReady,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationDurableTerminal
 
 AsyncCandidateProducerContinuationDescendsOrReplayExitsAfter(record) ==
   \/ AsyncCandidateProducerContinuationRecordsForIdentityIn(
@@ -606,6 +629,98 @@ BY AsyncCandidateProducerContinuationResetPreservesExactReservation,
        AsyncRunnerStep, AsyncNonRunnerStep,
        PreGstResponsiveRestart, PreGstResponsiveReplay
 
+THEOREM AsyncInitEstablishesCandidateProducerContinuationExternalCoverage ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => AsyncCandidateProducerContinuationExternalCoverageInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
+       AsyncCandidateProducerContinuationExternalCoverageInvariant,
+       AsyncCandidateProducerContinuations
+
+THEOREM AsyncNextPreservesCandidateProducerContinuationExternalCoverage ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+  /\ AsyncNext
+  => AsyncCandidateProducerContinuationExternalCoverageInvariant'
+BY AsyncCandidateProducerContinuationResetPreservesExactReservation,
+   AsyncCandidateProducerSemanticHandoffReservedPersistsWithoutAck,
+   AsyncCandidateProducerSemanticHandoffMaterializationRequiresSuccessor,
+   AsyncCandidateProducerSemanticHandoffRetirementRequiresAck,
+   IsaT(2400)
+   DEF AsyncCandidateProducerContinuationExternalCoverageInvariant,
+       AsyncCandidateProducerContinuationConcreteSuccessorOwned,
+       AsyncCandidateProducerContinuationHandoffOwned,
+       AsyncCandidateProducerContinuationHandoffRetired,
+       AsyncCandidateProducerContinuationConditionalResponsiveTransportKinds,
+       AsyncCandidateProducerContinuationVolatileBodyReconstructionKinds,
+       AsyncCandidateConditionalTransportCarrier,
+       AsyncCandidateConditionalTransportRetired,
+       AsyncCandidateVolatileBodyCarrier,
+       AsyncCandidateVolatileBodyRetired,
+       AsyncCandidateProducerContinuationDeclaredHandoffOwned,
+       AsyncCandidateProducerContinuationDeclaredHandoffRetired,
+       AsyncCandidateProducerContinuationLocalReplayCarrier,
+       AsyncCandidateProducerContinuationDurableTerminal,
+       AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuationSelectedForAcknowledgement,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateProducerContinuationsAfterReset,
+       AsyncCandidateProducerContinuationRecordAfterReset,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncCandidateProducerContinuationStateAfterDeparture,
+       AsyncCandidateProducerContinuationInitialStatusAfter,
+       AsyncControlServiceSlotTransition,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       EnqueueCandidate,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
+       AdmitIngressPacket, AdmitHiddenPacket,
+       CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
+       ServiceIoWorkerWork,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart, FreshRestartCandidateSequence
+
+THEOREM AsyncSpecAlwaysCandidateProducerContinuationExternalCoverage ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []AsyncCandidateProducerContinuationExternalCoverageInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext)
+         PROVE []AsyncCandidateProducerContinuationExternalCoverageInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => AsyncCandidateProducerContinuationExternalCoverageInvariant
+      BY AsyncInitEstablishesCandidateProducerContinuationExternalCoverage
+    <2>2. []AsyncStrongTypeInvariant
+      BY <1>1, AsyncSpecAlwaysStrongTypeInvariant
+    <2>3. []AsyncProgressOwnershipInvariant
+      BY <1>1, AsyncSpecAlwaysProgressOwnershipInvariant
+    <2>4. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ AsyncCandidateProducerContinuationExternalCoverageInvariant
+           /\ [AsyncNext]_AsyncAllVars
+          => AsyncCandidateProducerContinuationExternalCoverageInvariant'
+      BY AsyncNextPreservesCandidateProducerContinuationExternalCoverage,
+         Isa DEF AsyncAllVars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, PTL
+         DEF AsyncSpecAt
+  <1> QED BY <1>1
+
 (***************************************************************************
 Frozen producer-continuation episode rank.
 
@@ -761,29 +876,84 @@ HistoricalCandidateProducerContinuationSelectedAtStatus(
   /\ record =
        AsyncCandidateProducerContinuationSelectedResolutionRecord(node)
 
-THEOREM HistoricalCandidateProducerContinuationTurnIsResolutionOnly ==
+THEOREM HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay ==
   \A node \in ValidatorIds:
     /\ AsyncCandidateProducerContinuationResolutionRequired(node)
     /\ RunHistoricalRecoveryNode(node)
-      => /\ ResolveRunNodeCandidateProducerContinuation(node)
-         /\ UNCHANGED vars
-         /\ UNCHANGED asyncCausalQueues
-         /\ UNCHANGED AsyncSchedulerExceptCausalControlAndNodeService
+      => \/ /\ AsyncCandidateProducerContinuationResolutionReady(node)
+               /\ ResolveRunNodeCandidateProducerContinuation(node)
+               /\ UNCHANGED vars
+               /\ UNCHANGED asyncCausalQueues
+               /\ UNCHANGED
+                    AsyncSchedulerExceptCausalControlAndNodeService
+         \/ /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
+               /\ ReplayRunNodeCandidateProducerContinuation(node)
 BY DEF RunHistoricalRecoveryNode, RunNodeWork,
-       ResolveRunNodeCandidateProducerContinuation
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation
 
-THEOREM HistoricalCandidateProducerContinuationTurnTerminalizesSelected ==
+THEOREM HistoricalCandidateProducerContinuationNonreadyTurnUsesLocalReplay ==
+  \A node \in ValidatorIds:
+    /\ AsyncCandidateProducerContinuationResolutionRequired(node)
+    /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
+    /\ RunHistoricalRecoveryNode(node)
+      => /\ (AsyncCandidateProducerContinuationSelectedResolutionRecord(node))
+               .sourceClass = "Local"
+         /\ ReplayRunNodeCandidateProducerContinuation(node)
+BY HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay,
+   Isa
+   DEF ReplayRunNodeCandidateProducerContinuation
+
+THEOREM HistoricalCandidateProducerContinuationLocalReplayTurnApproachesReady ==
+  \A node \in ValidatorIds:
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ AsyncCandidateProducerContinuationResolutionRequired(node)
+    /\ ~AsyncCandidateProducerContinuationResolutionReady(node)
+    /\ RunHistoricalRecoveryNode(node)
+      => \/ (AsyncCandidateProducerContinuationResolutionReady(node))'
+         \/ /\ asyncRunnerPhase[node] \in {"Ingress", "Runtime"}
+               /\ asyncRunnerPhase'[node] = "Local"
+BY HistoricalCandidateProducerContinuationNonreadyTurnUsesLocalReplay,
+   AsyncCandidateProducerContinuationExactLocalReplayRetainsReservation,
+   AsyncCandidateProducerContinuationStoredCarrierMakesSelectedRecordReady,
+   IsaT(1200)
+   DEF ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationRuntimeReplayCarrier,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationRecordAfterStep,
+       AsyncCandidateProducerContinuations,
+       AsyncCandidateServiceStateAfterReclamation,
+       AsyncControlServiceSlotTransition
+
+THEOREM HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage ==
   \A state,
      record \in AsyncCandidateProducerContinuationRecordSet:
     /\ record.status \in {"Reserved", "Materialized"}
     /\ AsyncCandidateProducerContinuationSelectedForRunnerResolution(
          record)
-      => (AsyncCandidateProducerContinuationRecordAfterStep(
-            state, record)).status = "Terminal"
-BY SMT
-   DEF AsyncCandidateProducerContinuationRecordAfterStep
+      => \/ /\ record.status = "Materialized"
+               /\ (AsyncCandidateProducerContinuationRecordAfterStep(
+                     state, record)).status = "Terminal"
+         \/ /\ record.status = "Reserved"
+               /\ AsyncCandidateProducerContinuationHandoffRetiredAfterIn(
+                    state, record)
+               /\ (AsyncCandidateProducerContinuationRecordAfterStep(
+                     state, record)).status = "Terminal"
+         \/ /\ record.status = "Reserved"
+               /\ AsyncCandidateProducerContinuationConcreteSuccessorOwnedAfterIn(
+                    state, record)
+               /\ (AsyncCandidateProducerContinuationRecordAfterStep(
+                     state, record)).status = "Materialized"
+BY AsyncCandidateProducerContinuationRunnerResolutionConsumesExactStage
 
-THEOREM HistoricalCandidateProducerContinuationTurnExitsSelectedStatus ==
+THEOREM HistoricalCandidateProducerContinuationReadyTurnExitsSelectedStatus ==
   \A node \in ValidatorIds,
      record \in AsyncCandidateProducerContinuationRecordSet,
      status \in {"Reserved", "Materialized"}:
@@ -791,11 +961,12 @@ THEOREM HistoricalCandidateProducerContinuationTurnExitsSelectedStatus ==
     /\ AsyncControlServiceSlotTransition
     /\ HistoricalCandidateProducerContinuationSelectedAtStatus(
          node, record, status)
+    /\ AsyncCandidateProducerContinuationResolutionReady(node)
     /\ PostGstRunHistoricalRecoveryNode(node)
       => AsyncCandidateProducerContinuationTargetStatusExit(
            record.identity, status)'
-BY HistoricalCandidateProducerContinuationTurnIsResolutionOnly,
-   HistoricalCandidateProducerContinuationTurnTerminalizesSelected,
+BY HistoricalCandidateProducerContinuationTurnIsResolutionOrExactReplay,
+   HistoricalCandidateProducerContinuationReadyTurnConsumesExactStage,
    IsaT(900)
    DEF HistoricalCandidateProducerContinuationSelectedAtStatus,
        HistoricalCandidateProducerContinuationAtStatus,

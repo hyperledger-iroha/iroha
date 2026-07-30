@@ -41,7 +41,7 @@ SoraFS Architecture RFC-де сипатталған және қалған жұм
 ## Қабылдау жұмыс процесі
 
 1. **Ұсынысты құру**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` қосыңыз
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …` қосыңыз
      `ProviderAdmissionProposalV1` + аттестаттау бумасын шығару.
    - Тексеру: талап етілетін өрістерді қамтамасыз етіңіз, ставка > 0, `profile_id` ішіндегі канондық chunker дескрипті.
 2. **Басқаруды растау**
@@ -70,7 +70,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
 
 ### CLI анықтамасы
 
-Әрбір пәрменді `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` арқылы іске қосыңыз.
+Әрбір пәрменді `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …` арқылы іске қосыңыз.
 
 - `proposal`
   - Қажетті жалаушалар: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -117,7 +117,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
 1. `provider-admission proposal` және `provider-admission sign` арқылы мұрагер ұсыныс/жарнама жұбын құрастырыңыз, `--retention-epoch` көбейтіңіз және талап етілетін үлес/соңғы нүктелерді жаңартыңыз.
 2. Орындау  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
 #### Төтенше жағдайда жою
 1. Бұзылған конвертті анықтаңыз және кері қайтарып алуды беріңіз:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

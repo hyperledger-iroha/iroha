@@ -88,6 +88,12 @@ reconfiguration inputs. Legacy collectors, phase-specific/adaptive timeouts, the
 boolean, and mutable BLS-domain strings are excluded. The former full-parameter fingerprint is
 available only to archival tooling and is never an input to live v2 admission.
 
+The peer handshake carries the canonical `ivm::gas::schedule_hash()` as an
+independent execution capability. Admission requires an exact match before a
+peer can join the online set. A binary whose opcode, host-formula, staged-phase,
+or syscall metering differs therefore cannot participate silently even when its
+wire protocol and genesis fingerprint are otherwise identical.
+
 Node role is deliberately outside this shared fingerprint because an observer must be able to use
 the same chain configuration without voting. Worker counts, local scheduling budgets, paths,
 caches, and telemetry are also local-only. The DA encoding, chunk geometry, maximum chunk count,

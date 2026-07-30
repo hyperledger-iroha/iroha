@@ -5094,7 +5094,7 @@ mod tests {
 
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         // Register matching peer so validator admission passes.
-        let peer_id = crate::PeerId::from(validator.signatory().clone());
+        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
 
         RegisterPublicLaneValidator {
@@ -5135,7 +5135,7 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.signatory().clone());
+        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
 
         RegisterPublicLaneValidator {
@@ -5264,7 +5264,7 @@ mod tests {
 
         let lane_id = LaneId::new(34);
         let (validator, _, _, asset_def_id) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.signatory().clone());
+        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
         let _ = stx.world.peers.push(peer_id);
 
         RegisterPublicLaneValidator {
@@ -5506,7 +5506,7 @@ mod tests {
         let mut stx = state_block.transaction();
 
         let (validator, _, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.signatory().clone());
+        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(31),
@@ -5565,7 +5565,7 @@ mod tests {
 
         let lane_id = LaneId::new(32);
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
-        let peer_id = crate::PeerId::from(validator.signatory().clone());
+        let peer_id = crate::PeerId::from(validator.expect_single_signatory().clone());
 
         RegisterPublicLaneValidator {
             lane_id,

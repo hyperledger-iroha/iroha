@@ -19,3 +19,4 @@ pricing_config,quote_api,deposit_lifecycle,settlement_execution,settlement_submi
 900
 --min-peers
 4
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

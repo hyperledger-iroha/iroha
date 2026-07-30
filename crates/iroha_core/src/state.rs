@@ -160,7 +160,7 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestAliasId, ManifestAliasRecord, ManifestDigest, PinManifestRecord,
-            ReplicationOrderId, ReplicationOrderRecord,
+            ProviderIngestCompletionAuthorityV1, ReplicationOrderId, ReplicationOrderRecord,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
@@ -172,9 +172,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::{
-    nft::{CanModifyNftMetadata, CanTransferNft},
-    sorafs::CanOperateSorafsRepair,
-    trigger::CanExecuteTrigger,
+    nft::CanModifyNftMetadata, sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::{
@@ -716,6 +714,9 @@ macro_rules! build_world_block {
             sorafs_pricing: $state.sorafs_pricing.$method(),
             provider_credit_ledger: $state.provider_credit_ledger.$method(),
             provider_owners: $state.provider_owners.$method(),
+            provider_ingest_completion_authorities: $state
+                .provider_ingest_completion_authorities
+                .$method(),
             da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.$method(),
             da_pin_intents_by_alias: $state.da_pin_intents_by_alias.$method(),
             da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.$method(),
@@ -963,6 +964,9 @@ macro_rules! build_world_transaction {
             sorafs_pricing: $state.sorafs_pricing.transaction(),
             provider_credit_ledger: $state.provider_credit_ledger.transaction(),
             provider_owners: $state.provider_owners.transaction(),
+            provider_ingest_completion_authorities: $state
+                .provider_ingest_completion_authorities
+                .transaction(),
             da_pin_intents_by_ticket: $state.da_pin_intents_by_ticket.transaction(),
             da_pin_intents_by_alias: $state.da_pin_intents_by_alias.transaction(),
             da_pin_intents_by_manifest: $state.da_pin_intents_by_manifest.transaction(),
@@ -4000,8 +4004,10 @@ pub struct World {
     #[norito(skip)]
     pub(crate) provider_credit_ledger: Storage<ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    #[norito(skip)]
     pub(crate) provider_owners: Storage<ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket: Storage<StorageTicketId, DaPinIntentWithLocation>,
@@ -4599,8 +4605,10 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) provider_credit_ledger: StorageBlock<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
-    #[norito(skip)]
     pub(crate) provider_owners: StorageBlock<'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     #[norito(skip)]
     pub(crate) da_pin_intents_by_ticket:
@@ -5124,6 +5132,7 @@ impl<'world> WorldBlock<'world> {
             capacity_disputes,
             provider_credit_ledger,
             provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket,
             da_pin_intents_by_alias,
             da_pin_intents_by_manifest,
@@ -5692,6 +5701,9 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
     pub(crate) provider_owners: StorageTransaction<'block, 'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
         StorageTransaction<'block, 'world, StorageTicketId, DaPinIntentWithLocation>,
@@ -7088,42 +7100,6 @@ pub struct WorldView<'world> {
         crate::privacy_state::PrivacyActivationKeyV1,
         iroha_data_model::privacy::PrivacyProtocolActivationRecordV1,
     >,
-    /// Canonical encrypted Anonymous PGC account state keyed by pool and public key.
-    pub(crate) privacy_pgc_accounts: StorageView<
-        'world,
-        crate::privacy_state::PrivacyPgcAccountKeyV1,
-        crate::privacy_state::PrivacyPgcAccountStateV1,
-    >,
-    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
-    pub(crate) privacy_pgc_pool_invariants: StorageView<
-        'world,
-        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
-        crate::privacy_state::PrivacyPgcPoolInvariantV1,
-    >,
-    /// Scoped consumed nullifiers used for deterministic replay prevention.
-    pub(crate) privacy_nullifiers: StorageView<
-        'world,
-        crate::privacy_state::PrivacyNullifierKeyV1,
-        crate::privacy_state::PrivacyStateItemRecordV1,
-    >,
-    /// Scoped commitments admitted by successfully verified privacy actions.
-    pub(crate) privacy_commitments: StorageView<
-        'world,
-        crate::privacy_state::PrivacyCommitmentKeyV1,
-        crate::privacy_state::PrivacyStateItemRecordV1,
-    >,
-    /// Ordered exact root membership retained for privacy proof admission.
-    pub(crate) privacy_roots: StorageView<
-        'world,
-        crate::privacy_state::PrivacyRootKeyV1,
-        crate::privacy_state::PrivacyRootProvenanceV1,
-    >,
-    /// Single current root for each independent namespace and semantic role.
-    pub(crate) privacy_root_heads: StorageView<
-        'world,
-        crate::privacy_state::PrivacyRootHeadKeyV1,
-        crate::privacy_state::PrivacyRootHeadRecordV1,
-    >,
     /// Records of proof verification outcomes keyed by proof id.
     pub(crate) proofs:
         StorageView<'world, iroha_data_model::proof::ProofId, iroha_data_model::proof::ProofRecord>,
@@ -7262,6 +7238,9 @@ pub struct WorldView<'world> {
     pub(crate) provider_credit_ledger: StorageView<'world, ProviderId, ProviderCreditRecord>,
     /// Owner bindings for `SoraFS` providers.
     pub(crate) provider_owners: StorageView<'world, ProviderId, AccountId>,
+    /// Chain-authoritative completion-owner and signer-policy bindings.
+    pub(crate) provider_ingest_completion_authorities:
+        StorageView<'world, ProviderId, ProviderIngestCompletionAuthorityV1>,
     /// DA pin intents keyed by storage ticket (on-chain registry).
     pub(crate) da_pin_intents_by_ticket:
         StorageView<'world, StorageTicketId, DaPinIntentWithLocation>,
@@ -11694,6 +11673,17 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_commitments_in_tx: u32,
     /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
     pub(crate) native_anonymous_escrow_transfer_depth: u32,
+    /// Number of synchronously nested trigger entrypoints currently executing.
+    ///
+    /// This counter is deliberately wider than the `u8` on-chain limit so the
+    /// runtime can represent and reject the first out-of-budget depth without
+    /// wrapping when the configured limit is [`u8::MAX`].
+    active_trigger_execution_depth: u16,
+    /// Active multisig proposals whose deferred instructions are executing in this transaction.
+    pub(crate) multisig_deferred_execution_stack: Vec<(
+        AccountId,
+        HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+    )>,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -12906,7 +12896,7 @@ where
                 if let Some(peer_id) = validator_peer_ids_by_account.get(&acct) {
                     return Some(peer_id.clone());
                 }
-                let peer_id = PeerId::from(acct.signatory().clone());
+                let peer_id = PeerId::from(acct.try_signatory()?.clone());
                 if !present_peers.contains(&peer_id) {
                     return None;
                 }
@@ -14077,6 +14067,40 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn council_multisig_member_without_peer_binding_is_ignored_without_unwinding() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let keypair = crate::state::checked_keypair();
+        let peer = PeerId::from(keypair.public_key().clone());
+        let single_key_account = DMAccountId::of(keypair.public_key().clone());
+        let member =
+            iroha_data_model::account::MultisigMember::new(keypair.public_key().clone(), 1)
+                .expect("valid multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("valid multisig policy");
+        let multisig_account = DMAccountId::new_multisig(policy);
+
+        let mut world = state.world.block();
+        let _ = world.peers.get_mut().push(peer.clone());
+        seed_consensus_key(&mut world, &peer, ConsensusKeyStatus::Active, 0);
+        world.council.insert(
+            0,
+            CouncilState {
+                epoch: 0,
+                members: vec![multisig_account, single_key_account],
+                candidate_count: 2,
+                ..CouncilState::default()
+            },
+        );
+        world.commit();
+
+        let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0)
+            .expect("single-key council member remains eligible");
+        assert_eq!(roster, vec![peer]);
+    }
+
+    #[test]
     fn council_explicit_peer_bindings_survive_topology_widening() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -14095,8 +14119,8 @@ mod stake_snapshot_tests {
         let new_account = DMAccountId::of(new_account_key.public_key().clone());
         let old_peer = PeerId::from(old_peer_key.public_key().clone());
         let new_peer = PeerId::from(new_peer_key.public_key().clone());
-        assert_ne!(old_peer.public_key(), old_account.signatory());
-        assert_ne!(new_peer.public_key(), new_account.signatory());
+        assert_ne!(old_peer.public_key(), old_account.expect_single_signatory());
+        assert_ne!(new_peer.public_key(), new_account.expect_single_signatory());
 
         let mut wb = state.world.block();
         {
@@ -14184,7 +14208,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: active_validator.clone(),
-                peer_id: PeerId::from(active_validator.signatory().clone()),
+                peer_id: PeerId::from(active_validator.expect_single_signatory().clone()),
                 stake_account: active_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -14200,7 +14224,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: jailed_validator.clone(),
-                peer_id: PeerId::from(jailed_validator.signatory().clone()),
+                peer_id: PeerId::from(jailed_validator.expect_single_signatory().clone()),
                 stake_account: jailed_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
@@ -14318,7 +14342,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: present_validator.clone(),
-                peer_id: PeerId::from(present_validator.signatory().clone()),
+                peer_id: PeerId::from(present_validator.expect_single_signatory().clone()),
                 stake_account: present_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -14334,7 +14358,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: missing_validator.clone(),
-                peer_id: PeerId::from(missing_validator.signatory().clone()),
+                peer_id: PeerId::from(missing_validator.expect_single_signatory().clone()),
                 stake_account: missing_validator,
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
@@ -16171,12 +16195,6 @@ impl NameIntern {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-enum AssetEventScriptEntry {
-    Added(u32),
-    Removed(u32),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionDeltaOp {
     Grant,
@@ -16210,28 +16228,14 @@ enum DetachedPermissionOp {
 
 #[derive(Default, Debug, Clone)]
 /// Detached, per-transaction delta suitable for parallel execution outside of
-/// a live `StateBlock` borrow. Initially supports only side-effect-free ISIs
-/// like `Log`. Future extensions will record map mutations and merge them back
-/// deterministically.
-pub struct DetachedStateTransactionDelta {
-    // SoA: asset balance deltas
-    asset_add_ids: Vec<iroha_data_model::asset::AssetId>,
-    asset_add_qtys: Vec<Quantity>,
-    asset_sub_ids: Vec<iroha_data_model::asset::AssetId>,
-    asset_sub_qtys: Vec<Quantity>,
+/// a live `StateBlock` borrow. Only mutations with a complete, canonical
+/// replay primitive belong here; supply-changing asset operations always fall
+/// back to sequential execution.
+pub(crate) struct DetachedStateTransactionDelta {
     // SoA: transparent asset-quantity transfers.
     asset_transfer_source_ids: Vec<iroha_data_model::asset::AssetId>,
     asset_transfer_destination_accounts: Vec<iroha_data_model::account::AccountId>,
     asset_transfer_amounts: Vec<Quantity>,
-    /// Event replay script describing the per-operation ordering for asset changes.
-    asset_event_script: Vec<AssetEventScriptEntry>,
-    // SoA: total supply deltas per asset definition
-    asset_def_add_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
-    asset_def_add_qtys: Vec<Quantity>,
-    asset_def_sub_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
-    asset_def_sub_qtys: Vec<Quantity>,
-    flip_mintable_to_not:
-        std::collections::BTreeMap<iroha_data_model::asset::AssetDefinitionId, u32>,
     // Intern pool shared by metadata operations
     name_intern: NameIntern,
     // Account key-value deltas (SoA + interned keys)
@@ -16255,28 +16259,6 @@ pub struct DetachedStateTransactionDelta {
     nft_kv_set_vals: Vec<iroha_primitives::json::Json>,
     nft_kv_del_ids: Vec<iroha_data_model::nft::NftId>,
     nft_kv_del_key_ids: Vec<NameId>,
-    nft_transfer: std::collections::BTreeMap<
-        iroha_data_model::nft::NftId,
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::account::AccountId,
-        ),
-    >,
-    // Owner transfers (domain, asset definition)
-    domain_owner_transfer: std::collections::BTreeMap<
-        iroha_data_model::domain::DomainId,
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::account::AccountId,
-        ),
-    >,
-    asset_def_owner_transfer: std::collections::BTreeMap<
-        iroha_data_model::asset::AssetDefinitionId,
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::account::AccountId,
-        ),
-    >,
     // AssetDefinition metadata
     asset_def_kv_set_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
     asset_def_kv_set_key_ids: Vec<NameId>,
@@ -16329,33 +16311,6 @@ pub(crate) struct DetachedMergeContext {
     pub(crate) current_lane_id: Option<iroha_data_model::nexus::LaneId>,
     /// Dataspace used by the transaction currently being merged.
     pub(crate) current_dataspace_id: Option<iroha_data_model::nexus::DataSpaceId>,
-}
-
-fn aggregate_quantities<K>(
-    ids: &[K],
-    qtys: &[Quantity],
-) -> Result<Vec<(K, Quantity)>, iroha_data_model::ValidationFail>
-where
-    K: Ord + Clone,
-{
-    debug_assert_eq!(ids.len(), qtys.len());
-    let mut order: Vec<(K, Quantity)> = Vec::with_capacity(ids.len());
-    let mut positions: BTreeMap<K, usize> = BTreeMap::new();
-    for (id, qty) in ids.iter().zip(qtys.iter()) {
-        if let Some(existing_index) = positions.get(id) {
-            let entry = &mut order[*existing_index].1;
-            *entry = entry.checked_add(qty).map_err(|_| {
-                iroha_data_model::ValidationFail::InstructionFailed(Error::Math(
-                    MathError::Overflow,
-                ))
-            })?;
-        } else {
-            let next_index = order.len();
-            positions.insert(id.clone(), next_index);
-            order.push((id.clone(), qty.clone()));
-        }
-    }
-    Ok(order)
 }
 
 fn gather_last_wins_keyed<E, V>(
@@ -16414,16 +16369,6 @@ impl DetachedStateTransactionDelta {
         let transfer_only = self.asset_transfer_source_ids.len() == 1
             && self.asset_transfer_destination_accounts.len() == 1
             && self.asset_transfer_amounts.len() == 1
-            && self.asset_add_ids.is_empty()
-            && self.asset_add_qtys.is_empty()
-            && self.asset_sub_ids.is_empty()
-            && self.asset_sub_qtys.is_empty()
-            && self.asset_event_script.is_empty()
-            && self.asset_def_add_ids.is_empty()
-            && self.asset_def_add_qtys.is_empty()
-            && self.asset_def_sub_ids.is_empty()
-            && self.asset_def_sub_qtys.is_empty()
-            && self.flip_mintable_to_not.is_empty()
             && self.account_kv_set_accounts.is_empty()
             && self.account_kv_set_key_ids.is_empty()
             && self.account_kv_set_vals.is_empty()
@@ -16441,9 +16386,6 @@ impl DetachedStateTransactionDelta {
             && self.nft_kv_set_vals.is_empty()
             && self.nft_kv_del_ids.is_empty()
             && self.nft_kv_del_key_ids.is_empty()
-            && self.nft_transfer.is_empty()
-            && self.domain_owner_transfer.is_empty()
-            && self.asset_def_owner_transfer.is_empty()
             && self.asset_def_kv_set_ids.is_empty()
             && self.asset_def_kv_set_key_ids.is_empty()
             && self.asset_def_kv_set_vals.is_empty()
@@ -16484,6 +16426,13 @@ impl DetachedStateTransactionDelta {
                 asset: destination_id.clone(),
                 amount: amount.clone(),
             })),
+            data_pre::DataEvent::from(data_pre::AssetEvent::Transferred(
+                data_pre::AssetTransferred {
+                    source: source_id.clone(),
+                    destination: destination_id.clone(),
+                    amount: amount.clone(),
+                },
+            )),
         ];
 
         state_transaction.world.account(&destination).is_ok()
@@ -16510,28 +16459,8 @@ impl DetachedStateTransactionDelta {
         self.single_transfer_delta().is_some()
     }
 
-    /// Record an addition to an account's asset balance.
-    pub fn add_asset_add(&mut self, id: iroha_data_model::asset::AssetId, qty: Quantity) {
-        let idx = self.asset_add_ids.len();
-        self.asset_add_ids.push(id);
-        self.asset_add_qtys.push(qty);
-        self.asset_event_script.push(AssetEventScriptEntry::Added(
-            idx.try_into()
-                .expect("detached asset event script exceeded u32::MAX"),
-        ));
-    }
-    /// Record a subtraction from an account's asset balance.
-    pub fn add_asset_sub(&mut self, id: iroha_data_model::asset::AssetId, qty: Quantity) {
-        let idx = self.asset_sub_ids.len();
-        self.asset_sub_ids.push(id);
-        self.asset_sub_qtys.push(qty);
-        self.asset_event_script.push(AssetEventScriptEntry::Removed(
-            idx.try_into()
-                .expect("detached asset event script exceeded u32::MAX"),
-        ));
-    }
     /// Record a source-signed transparent asset-quantity transfer.
-    pub fn transfer_asset(
+    pub(crate) fn transfer_asset(
         &mut self,
         source_id: iroha_data_model::asset::AssetId,
         destination: iroha_data_model::account::AccountId,
@@ -16541,31 +16470,8 @@ impl DetachedStateTransactionDelta {
         self.asset_transfer_destination_accounts.push(destination);
         self.asset_transfer_amounts.push(amount);
     }
-    /// Record an increase in total supply for an asset definition.
-    pub fn add_total_add(&mut self, id: iroha_data_model::asset::AssetDefinitionId, qty: Quantity) {
-        self.asset_def_add_ids.push(id);
-        self.asset_def_add_qtys.push(qty);
-    }
-    /// Record a decrease in total supply for an asset definition.
-    pub fn add_total_sub(&mut self, id: iroha_data_model::asset::AssetDefinitionId, qty: Quantity) {
-        self.asset_def_sub_ids.push(id);
-        self.asset_def_sub_qtys.push(qty);
-    }
-    /// Record mintability consumption for an asset definition.
-    pub fn record_mint_consumption(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        count: u32,
-    ) {
-        if count == 0 {
-            return;
-        }
-        let entry = self.flip_mintable_to_not.entry(id).or_default();
-        *entry = entry.saturating_add(count);
-    }
-
     /// Record a key-value insertion/update on an account.
-    pub fn set_account_kv(
+    pub(crate) fn set_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
         key: iroha_data_model::name::Name,
@@ -16577,7 +16483,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an account.
-    pub fn remove_account_kv(
+    pub(crate) fn remove_account_kv(
         &mut self,
         id: iroha_data_model::account::AccountId,
         key: iroha_data_model::name::Name,
@@ -16587,7 +16493,7 @@ impl DetachedStateTransactionDelta {
         self.account_kv_del_key_ids.push(key_id);
     }
     /// Record a key-value insertion/update on a domain.
-    pub fn set_domain_kv(
+    pub(crate) fn set_domain_kv(
         &mut self,
         id: iroha_data_model::domain::DomainId,
         key: iroha_data_model::name::Name,
@@ -16599,7 +16505,7 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_set_vals.push(val);
     }
     /// Record a key-value removal on a domain.
-    pub fn remove_domain_kv(
+    pub(crate) fn remove_domain_kv(
         &mut self,
         id: iroha_data_model::domain::DomainId,
         key: iroha_data_model::name::Name,
@@ -16609,15 +16515,15 @@ impl DetachedStateTransactionDelta {
         self.domain_kv_del_key_ids.push(key_id);
     }
     /// Record an NFT creation.
-    pub fn register_nft(&mut self, nft: iroha_data_model::nft::Nft) {
+    pub(crate) fn register_nft(&mut self, nft: iroha_data_model::nft::Nft) {
         self.nft_create.insert(nft.id().clone(), nft);
     }
     /// Record an NFT deletion.
-    pub fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
+    pub(crate) fn unregister_nft(&mut self, id: iroha_data_model::nft::NftId) {
         self.nft_delete.insert(id);
     }
     /// Record a key-value insertion/update on an NFT.
-    pub fn set_nft_kv(
+    pub(crate) fn set_nft_kv(
         &mut self,
         id: iroha_data_model::nft::NftId,
         key: iroha_data_model::name::Name,
@@ -16629,7 +16535,7 @@ impl DetachedStateTransactionDelta {
         self.nft_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an NFT.
-    pub fn remove_nft_kv(
+    pub(crate) fn remove_nft_kv(
         &mut self,
         id: iroha_data_model::nft::NftId,
         key: iroha_data_model::name::Name,
@@ -16638,35 +16544,8 @@ impl DetachedStateTransactionDelta {
         self.nft_kv_del_ids.push(id);
         self.nft_kv_del_key_ids.push(key_id);
     }
-    /// Record an NFT ownership transfer.
-    pub fn transfer_nft(
-        &mut self,
-        id: iroha_data_model::nft::NftId,
-        from: iroha_data_model::account::AccountId,
-        to: iroha_data_model::account::AccountId,
-    ) {
-        self.nft_transfer.insert(id, (from, to));
-    }
-    /// Record a domain ownership transfer.
-    pub fn transfer_domain(
-        &mut self,
-        id: iroha_data_model::domain::DomainId,
-        from: iroha_data_model::account::AccountId,
-        to: iroha_data_model::account::AccountId,
-    ) {
-        self.domain_owner_transfer.insert(id, (from, to));
-    }
-    /// Record an asset definition ownership transfer.
-    pub fn transfer_asset_def(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        from: iroha_data_model::account::AccountId,
-        to: iroha_data_model::account::AccountId,
-    ) {
-        self.asset_def_owner_transfer.insert(id, (from, to));
-    }
     /// Record a key-value insertion/update on an asset definition.
-    pub fn set_asset_def_kv(
+    pub(crate) fn set_asset_def_kv(
         &mut self,
         id: iroha_data_model::asset::AssetDefinitionId,
         key: iroha_data_model::name::Name,
@@ -16678,7 +16557,7 @@ impl DetachedStateTransactionDelta {
         self.asset_def_kv_set_vals.push(val);
     }
     /// Record a key-value removal on an asset definition.
-    pub fn remove_asset_def_kv(
+    pub(crate) fn remove_asset_def_kv(
         &mut self,
         id: iroha_data_model::asset::AssetDefinitionId,
         key: iroha_data_model::name::Name,
@@ -16689,7 +16568,7 @@ impl DetachedStateTransactionDelta {
     }
 
     /// Record a permission grant to an account.
-    pub fn grant_permission(
+    pub(crate) fn grant_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
         perm: iroha_data_model::permission::Permission,
@@ -16704,7 +16583,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a permission revoke from an account.
-    pub fn revoke_permission(
+    pub(crate) fn revoke_permission(
         &mut self,
         account: iroha_data_model::account::AccountId,
         perm: iroha_data_model::permission::Permission,
@@ -16719,7 +16598,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role grant to an account.
-    pub fn grant_role(
+    pub(crate) fn grant_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
         role: iroha_data_model::role::RoleId,
@@ -16730,7 +16609,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role revoke from an account.
-    pub fn revoke_role(
+    pub(crate) fn revoke_role(
         &mut self,
         account: iroha_data_model::account::AccountId,
         role: iroha_data_model::role::RoleId,
@@ -16741,7 +16620,7 @@ impl DetachedStateTransactionDelta {
             .push(DetachedPermissionOp::RoleAssignment { account, role, op });
     }
     /// Record a role-permission grant.
-    pub fn grant_role_permission(
+    pub(crate) fn grant_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
         perm: iroha_data_model::permission::Permission,
@@ -16756,7 +16635,7 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a role-permission revoke.
-    pub fn revoke_role_permission(
+    pub(crate) fn revoke_role_permission(
         &mut self,
         role: iroha_data_model::role::RoleId,
         perm: iroha_data_model::permission::Permission,
@@ -16771,12 +16650,12 @@ impl DetachedStateTransactionDelta {
             });
     }
     /// Record a peer registration.
-    pub fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
+    pub(crate) fn register_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         let _ = self.peer_removes.remove(&id);
         self.peer_adds.insert(id);
     }
     /// Record a peer unregistration.
-    pub fn unregister_peer(&mut self, id: iroha_data_model::peer::PeerId) {
+    pub(crate) fn unregister_peer(&mut self, id: iroha_data_model::peer::PeerId) {
         let _ = self.peer_adds.remove(&id);
         self.peer_removes.insert(id);
     }
@@ -16788,13 +16667,10 @@ impl DetachedStateTransactionDelta {
         authority: &AccountId,
         nft_id: &NftId,
     ) -> Result<bool, ValidationFail> {
-        let domain_owner = match self.domain_owner_transfer.get(nft_id.domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(nft_id.domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
+        let domain_owner = world
+            .domain(nft_id.domain())
+            .map(|domain| domain.owned_by().clone())
+            .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
 
         if &domain_owner == authority {
             return Ok(true);
@@ -16887,13 +16763,10 @@ impl DetachedStateTransactionDelta {
             else {
                 continue;
             };
-            let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
-                Some((_, to)) => to.clone(),
-                None => world
-                    .domain(&domain_id)
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-            };
+            let domain_owner = world
+                .domain(&domain_id)
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
 
             if &domain_owner == authority {
                 return Ok(true);
@@ -16958,177 +16831,12 @@ impl DetachedStateTransactionDelta {
         Ok(false)
     }
 
-    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
-    pub(crate) fn can_transfer_domain(
-        &self,
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transfer: &iroha_data_model::isi::Transfer<
-            iroha_data_model::account::Account,
-            iroha_data_model::domain::DomainId,
-            iroha_data_model::account::Account,
-        >,
-        now_ms: u64,
-    ) -> Result<bool, ValidationFail> {
-        if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        for alias in world.bound_account_aliases(transfer.source()) {
-            if crate::sns::resolve_active_account_alias(
-                world,
-                world.dataspace_catalog(),
-                &alias,
-                now_ms,
-            )
-            .as_ref()
-                != Some(transfer.source())
-            {
-                continue;
-            }
-            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
-                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
-            })?
-            else {
-                continue;
-            };
-            let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
-                Some((_, to)) => to.clone(),
-                None => world
-                    .domain(&domain_id)
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-            };
-
-            if &source_domain_owner == authority {
-                return Ok(true);
-            }
-        }
-
-        let transferred_domain_owner = match self.domain_owner_transfer.get(transfer.object()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(transfer.object())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-
-        Ok(&transferred_domain_owner == authority)
-    }
-
-    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
-    pub(crate) fn can_transfer_asset_definition(
-        &self,
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transfer: &iroha_data_model::isi::Transfer<
-            iroha_data_model::account::Account,
-            iroha_data_model::asset::AssetDefinitionId,
-            iroha_data_model::account::Account,
-        >,
-    ) -> Result<bool, ValidationFail> {
-        if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        let transferred_owner = match self.asset_def_owner_transfer.get(transfer.object()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .asset_definition(transfer.object())
-                .map(|definition| definition.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-        Ok(&transferred_owner == authority)
-    }
-
-    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
-    pub(crate) fn can_transfer_nft(
-        &self,
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transfer: &iroha_data_model::isi::Transfer<
-            iroha_data_model::account::Account,
-            iroha_data_model::nft::NftId,
-            iroha_data_model::account::Account,
-        >,
-    ) -> Result<bool, ValidationFail> {
-        if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        let nft_domain_owner = match self.domain_owner_transfer.get(transfer.object().domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(transfer.object().domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-        if &nft_domain_owner == authority {
-            return Ok(true);
-        }
-
-        let target_perm: Permission = CanTransferNft {
-            nft: transfer.object().clone(),
-        }
-        .into();
-        let direct_op = self
-            .perm_ops
-            .get(&(authority.clone(), target_perm.clone()))
-            .copied();
-        match direct_op {
-            Some(PermissionDeltaOp::Grant) => return Ok(true),
-            Some(PermissionDeltaOp::Revoke) => {}
-            None => {
-                let permissions = world
-                    .account_permissions_iter(authority)
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-                if permissions.into_iter().any(|perm| perm == &target_perm) {
-                    return Ok(true);
-                }
-            }
-        }
-
-        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        for ((acc, role), op) in &self.role_ops {
-            if acc != authority {
-                continue;
-            }
-            match op {
-                RoleDeltaOp::Grant => {
-                    roles.insert(role.clone());
-                }
-                RoleDeltaOp::Revoke => {
-                    roles.remove(role);
-                }
-            }
-        }
-
-        for role in roles {
-            match self
-                .role_perm_ops
-                .get(&(role.clone(), target_perm.clone()))
-                .copied()
-            {
-                Some(PermissionDeltaOp::Grant) => return Ok(true),
-                Some(PermissionDeltaOp::Revoke) => continue,
-                None => {}
-            }
-            if let Some(role_def) = world.roles().get(&role)
-                && role_def.permissions.iter().any(|perm| perm == &target_perm)
-            {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
     /// Record a parameter update to be applied at merge.
-    pub fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
+    pub(crate) fn set_parameter(&mut self, param: iroha_data_model::parameter::Parameter) {
         self.param_updates.push(param);
     }
     /// Record an `ExecuteTrigger` (by‑call) to be executed at merge.
-    pub fn execute_trigger_by_call(
+    pub(crate) fn execute_trigger_by_call(
         &mut self,
         evt: iroha_data_model::events::execute_trigger::ExecuteTriggerEvent,
     ) {
@@ -17141,7 +16849,7 @@ impl DetachedStateTransactionDelta {
     /// # Errors
     /// Returns a `ValidationFail` when applying an instruction fails validation or invariants.
     #[allow(clippy::too_many_lines)]
-    pub fn merge_into(
+    pub(crate) fn merge_into(
         self,
         state_block: &mut StateBlock<'_>,
         authority: &iroha_data_model::account::AccountId,
@@ -17248,9 +16956,8 @@ impl DetachedStateTransactionDelta {
         use iroha_data_model::isi::{Grant, Revoke, SetParameter};
         use iroha_data_model::{
             events::data::prelude::{
-                AccountEvent, AssetChanged, AssetDefinitionEvent, AssetDefinitionOwnerChanged,
-                AssetEvent, ConfigurationEvent, DomainEvent, DomainOwnerChanged, MetadataChanged,
-                NftEvent, NftOwnerChanged, ParameterChanged, PeerEvent,
+                AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent,
+                MetadataChanged, NftEvent, ParameterChanged, PeerEvent,
             },
             transaction::error::TransactionRejectionReason,
         };
@@ -17291,18 +16998,6 @@ impl DetachedStateTransactionDelta {
             stx.world.current_dataspace_id = Some(dataspace_id);
         }
         let result: Result<(), iroha_data_model::ValidationFail> = (|| {
-            let resolved_asset_add_ids = self
-                .asset_add_ids
-                .iter()
-                .map(|id| stx.world.resolve_asset_id_for_current_scope(id))
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-            let asset_adds = aggregate_quantities(&resolved_asset_add_ids, &self.asset_add_qtys)?;
-            let asset_subs = aggregate_quantities(&self.asset_sub_ids, &self.asset_sub_qtys)?;
-            let asset_def_adds =
-                aggregate_quantities(&self.asset_def_add_ids, &self.asset_def_add_qtys)?;
-            let asset_def_subs =
-                aggregate_quantities(&self.asset_def_sub_ids, &self.asset_def_sub_qtys)?;
             let account_kv_sets = gather_last_wins_keyed(
                 &self.account_kv_set_accounts,
                 &self.account_kv_set_key_ids,
@@ -17330,41 +17025,6 @@ impl DetachedStateTransactionDelta {
             );
             let asset_def_kv_dels =
                 gather_set_keyed(&self.asset_def_kv_del_ids, &self.asset_def_kv_del_key_ids);
-            for (id, qty) in &asset_subs {
-                let def = stx.world.asset_definition(id.definition())?;
-                let spec = def.spec();
-                ensure_asset_quantity_value(qty, spec)
-                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                if let Some(value) = stx.world.assets.get(id) {
-                    ensure_asset_quantity_value(value.as_ref(), spec)
-                        .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                }
-            }
-            // Enforce mintability: if a def is recorded for flip, ensure not Not; flip when Once
-            for (def_id, count) in &self.flip_mintable_to_not {
-                for _ in 0..*count {
-                    {
-                        let def = stx.world.asset_definition(def_id)?;
-                        match def.mintable() {
-                            iroha_data_model::asset::Mintable::Not => {
-                                return Err(iroha_data_model::ValidationFail::NotPermitted(
-                                    format!("minting not allowed for {def_id}"),
-                                ));
-                            }
-                            iroha_data_model::asset::Mintable::Infinitely => {
-                                // No budget consumption required.
-                                break;
-                            }
-                            iroha_data_model::asset::Mintable::Once
-                            | iroha_data_model::asset::Mintable::Limited(_) => {}
-                        }
-                    }
-                    let def_mut = stx.world.asset_definition_mut(def_id)?;
-                    def_mut.consume_mintability().map_err(|e| {
-                        iroha_data_model::ValidationFail::NotPermitted(format!("{e:?}"))
-                    })?;
-                }
-            }
 
             // Apply transparent transfers through the same asset module path as sequential ISI
             // execution so policy gates, events, and FASTPQ transcripts stay identical.
@@ -17389,136 +17049,6 @@ impl DetachedStateTransactionDelta {
                 )
                 .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
             }
-
-            // Apply asset subtractions (aggregated per id)
-            for (id, qty) in &asset_subs {
-                // Mutate value and record pre/post within a limited scope to drop the mutable borrow
-                // before possibly removing the entry from the map.
-                let remove_it = {
-                    let cur = stx.world.assets.get_mut(id).ok_or_else(|| {
-                        iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "asset not found: {id}"
-                        ))
-                    })?;
-                    let qref: &mut Quantity = &mut *cur;
-                    // Witness: record pre-value
-                    crate::sumeragi::witness::record_read_asset(id, Some(qref));
-                    let updated = qref.checked_sub(qty).map_err(|_| {
-                        iroha_data_model::ValidationFail::NotPermitted(
-                            "not enough quantity".to_owned(),
-                        )
-                    })?;
-                    *qref = updated;
-                    let is_zero = qref.is_zero();
-                    // Witness: record post-value (after mutation)
-                    crate::sumeragi::witness::record_write_asset(id, qref);
-                    is_zero
-                };
-                if remove_it {
-                    let _ = stx.world.remove_asset_and_metadata(id);
-                }
-            }
-            // Apply asset additions (aggregated per id) through the checked credit primitive and
-            // defer event emission until totals update. Checking at this mutation boundary
-            // accounts for transfers and subtractions applied earlier in the detached delta. The
-            // enclosing state transaction is discarded on error, so a rejected credit cannot
-            // commit any preceding mutations.
-            for (id, qty) in &asset_adds {
-                let previous = stx
-                    .world
-                    .assets
-                    .get(id)
-                    .map(|value| value.as_ref().clone())
-                    .unwrap_or_else(Quantity::zero);
-                crate::sumeragi::witness::record_read_asset(id, Some(&previous));
-                stx.world
-                    .deposit_numeric_asset_exact(id, qty)
-                    .map_err(iroha_data_model::ValidationFail::InstructionFailed)?;
-                let updated = stx
-                    .world
-                    .assets
-                    .get(id)
-                    .expect("checked exact deposit must leave the destination balance present");
-                crate::sumeragi::witness::record_write_asset(id, updated.as_ref());
-            }
-            // Update asset definition totals
-            for (def, qty) in &asset_def_adds {
-                // Witness: record pre total
-                if let Ok(def_ro) = stx.world.asset_definition(def) {
-                    crate::sumeragi::witness::record_read_asset_def_total(
-                        def,
-                        Some(def_ro.total_quantity()),
-                    );
-                } else {
-                    crate::sumeragi::witness::record_read_asset_def_total(def, None);
-                }
-                stx.world.increase_asset_total_amount(def, qty)?;
-                // Witness: record post total
-                if let Ok(def_ro) = stx.world.asset_definition(def) {
-                    crate::sumeragi::witness::record_write_asset_def_total(
-                        def,
-                        def_ro.total_quantity(),
-                    );
-                }
-            }
-            for (def, qty) in &asset_def_subs {
-                if let Ok(def_ro) = stx.world.asset_definition(def) {
-                    crate::sumeragi::witness::record_read_asset_def_total(
-                        def,
-                        Some(def_ro.total_quantity()),
-                    );
-                } else {
-                    crate::sumeragi::witness::record_read_asset_def_total(def, None);
-                }
-                stx.world.decrease_asset_total_amount(def, qty)?;
-                if let Ok(def_ro) = stx.world.asset_definition(def) {
-                    crate::sumeragi::witness::record_write_asset_def_total(
-                        def,
-                        def_ro.total_quantity(),
-                    );
-                }
-            }
-            // Emit asset events in the order operations were recorded so detached execution matches sequential traces.
-            for entry in &self.asset_event_script {
-                match entry {
-                    AssetEventScriptEntry::Removed(index) => {
-                        let idx = usize::try_from(*index)
-                            .expect("asset event script index exceeds usize::MAX");
-                        let asset = self
-                            .asset_sub_ids
-                            .get(idx)
-                            .expect("asset event references missing subtraction id");
-                        let qty = self
-                            .asset_sub_qtys
-                            .get(idx)
-                            .cloned()
-                            .expect("asset event references missing subtraction qty");
-                        stx.world
-                            .emit_events(Some(AssetEvent::Removed(AssetChanged {
-                                asset: asset.clone(),
-                                amount: qty,
-                            })));
-                    }
-                    AssetEventScriptEntry::Added(index) => {
-                        let idx = usize::try_from(*index)
-                            .expect("asset event script index exceeds usize::MAX");
-                        let asset = self
-                            .asset_add_ids
-                            .get(idx)
-                            .expect("asset event references missing addition id");
-                        let qty = self
-                            .asset_add_qtys
-                            .get(idx)
-                            .cloned()
-                            .expect("asset event references missing addition qty");
-                        stx.world.emit_events(Some(AssetEvent::Added(AssetChanged {
-                            asset: asset.clone(),
-                            amount: qty,
-                        })));
-                    }
-                }
-            }
-            // Note: mintable flip already applied above when applicable.
 
             // Apply account metadata operations in recorded order.
             for (acc, key_id, val) in &account_kv_sets {
@@ -17680,64 +17210,6 @@ impl DetachedStateTransactionDelta {
                         value: val,
                     })));
             }
-            for (id, (from, to)) in self.nft_transfer {
-                {
-                    let nft = stx.world.nft_mut(&id)?;
-                    if nft.owned_by != from {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "source does not own NFT {id}"
-                        )));
-                    }
-                    nft.owned_by = to.clone();
-                }
-                stx.world.replace_nft_owner_index(&id, &from, &to);
-                stx.world
-                    .emit_events(Some(NftEvent::OwnerChanged(NftOwnerChanged {
-                        nft: id,
-                        new_owner: to,
-                    })));
-            }
-
-            // Apply domain owner transfers
-            for (dom, (from, to)) in self.domain_owner_transfer {
-                {
-                    let d = stx.world.domain_mut(&dom)?;
-                    if d.owned_by() != &from {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "source does not own domain {dom}"
-                        )));
-                    }
-                    d.set_owned_by(to.clone());
-                }
-                stx.world.replace_domain_owner_index(&dom, &from, &to);
-                stx.world
-                    .emit_events(Some(DomainEvent::OwnerChanged(DomainOwnerChanged {
-                        domain: dom,
-                        new_owner: to,
-                    })));
-            }
-
-            // Apply asset definition owner transfers
-            for (ad, (from, to)) in self.asset_def_owner_transfer {
-                {
-                    let def = stx.world.asset_definition_mut(&ad)?;
-                    if def.owned_by() != &from {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "source does not own asset definition {ad}"
-                        )));
-                    }
-                    def.set_owned_by(to.clone());
-                }
-                stx.world
-                    .replace_asset_definition_owner_index(&ad, &from, &to);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
-                        asset_definition: ad,
-                        new_owner: to,
-                    }),
-                )));
-            }
-
             // Apply peer registrations/removals
             for pid in self.peer_adds {
                 use iroha_primitives::unique_vec::PushResult;
@@ -17808,7 +17280,16 @@ impl DetachedStateTransactionDelta {
                         if custom.id
                             == iroha_data_model::nexus::LaneLifecycleParameterV1::parameter_id()
                 );
+                let is_ivm_heap_parameter = matches!(
+                    &param,
+                    iroha_data_model::parameter::Parameter::SmartContract(
+                        iroha_data_model::parameter::SmartContractParameter::Memory(_)
+                    ) | iroha_data_model::parameter::Parameter::Executor(
+                        iroha_data_model::parameter::SmartContractParameter::Memory(_)
+                    )
+                );
                 if is_consensus_lane_lifecycle
+                    || is_ivm_heap_parameter
                     || matches!(&param, iroha_data_model::parameter::Parameter::Sumeragi(_))
                 {
                     if let Err(err) = SetParameter::new(param).execute(authority, &mut stx) {
@@ -17898,6 +17379,13 @@ impl DetachedStateTransactionDelta {
                                 Transaction(TransactionParameter::MaxMetadataDepth)
                             )
                         }
+                        iroha_data_model::parameter::TransactionParameter::MaxTimeToLiveMs(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Transaction(x),
+                                Transaction(TransactionParameter::MaxTimeToLiveMs)
+                            )
+                        }
                         iroha_data_model::parameter::TransactionParameter::RequireHeightTtl(_) => {
                             set_param_and_emit!(
                                 params,
@@ -17935,6 +17423,20 @@ impl DetachedStateTransactionDelta {
                                 SmartContract(SmartContractParameter::ExecutionDepth)
                             )
                         }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputItems(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::SmartContract(x),
+                                SmartContract(SmartContractParameter::MaxOutputItems)
+                            )
+                        }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputBytes(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::SmartContract(x),
+                                SmartContract(SmartContractParameter::MaxOutputBytes)
+                            )
+                        }
                     },
                     iroha_data_model::parameter::Parameter::Executor(x) => match x {
                         iroha_data_model::parameter::SmartContractParameter::Fuel(_) => {
@@ -17956,6 +17458,20 @@ impl DetachedStateTransactionDelta {
                                 params,
                                 iroha_data_model::parameter::Parameter::Executor(x),
                                 Executor(SmartContractParameter::ExecutionDepth)
+                            )
+                        }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputItems(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Executor(x),
+                                Executor(SmartContractParameter::MaxOutputItems)
+                            )
+                        }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputBytes(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Executor(x),
+                                Executor(SmartContractParameter::MaxOutputBytes)
                             )
                         }
                     },
@@ -18223,6 +17739,14 @@ impl World {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub fn provider_owners_mut_for_testing(&mut self) -> &mut Storage<ProviderId, AccountId> {
         &mut self.provider_owners
+    }
+
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
     }
 
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
@@ -18570,6 +18094,7 @@ impl World {
             sorafs_pricing: Cell::default(),
             provider_credit_ledger: Storage::default(),
             provider_owners: Storage::default(),
+            provider_ingest_completion_authorities: Storage::default(),
             da_pin_intents_by_ticket: Storage::default(),
             da_pin_intents_by_alias: Storage::default(),
             da_pin_intents_by_manifest: Storage::default(),
@@ -19394,12 +18919,6 @@ impl World {
             runtime_upgrades: self.runtime_upgrades.view(),
             privacy_consensus_policy: self.privacy_consensus_policy.view(),
             privacy_activations: self.privacy_activations.view(),
-            privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
-            privacy_pgc_pool_invariants: self.privacy_pgc_pool_invariants.view(),
-            privacy_nullifiers: self.privacy_nullifiers.view(),
-            privacy_commitments: self.privacy_commitments.view(),
-            privacy_roots: self.privacy_roots.view(),
-            privacy_root_heads: self.privacy_root_heads.view(),
             proofs: self.proofs.view(),
             proofs_by_status: self.proofs_by_status.view(),
             proof_tags: self.proof_tags.view(),
@@ -19461,6 +18980,9 @@ impl World {
             sorafs_pricing: self.sorafs_pricing.view(),
             provider_credit_ledger: self.provider_credit_ledger.view(),
             provider_owners: self.provider_owners.view(),
+            provider_ingest_completion_authorities: self
+                .provider_ingest_completion_authorities
+                .view(),
             da_pin_intents_by_ticket: self.da_pin_intents_by_ticket.view(),
             da_pin_intents_by_alias: self.da_pin_intents_by_alias.view(),
             da_pin_intents_by_manifest: self.da_pin_intents_by_manifest.view(),
@@ -20298,6 +19820,10 @@ pub trait WorldReadOnly {
     fn provider_credit_ledger(&self) -> &impl StorageReadOnly<ProviderId, ProviderCreditRecord>;
     /// Owner bindings for registered `SoraFS` providers (read-only).
     fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId>;
+    /// Provider-ingest completion-owner and signer-policy bindings (read-only).
+    fn provider_ingest_completion_authorities(
+        &self,
+    ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1>;
     /// DA pin intents keyed by storage ticket (read-only).
     fn da_pin_intents_by_ticket(
         &self,
@@ -21814,6 +21340,11 @@ macro_rules! impl_world_ro {
             fn provider_owners(&self) -> &impl StorageReadOnly<ProviderId, AccountId> {
                 &self.provider_owners
             }
+            fn provider_ingest_completion_authorities(
+                &self,
+            ) -> &impl StorageReadOnly<ProviderId, ProviderIngestCompletionAuthorityV1> {
+                &self.provider_ingest_completion_authorities
+            }
             fn da_pin_intents_by_ticket(
                 &self,
             ) -> &impl StorageReadOnly<StorageTicketId, DaPinIntentWithLocation> {
@@ -22028,6 +21559,14 @@ impl<'world> WorldBlock<'world> {
         &mut self,
     ) -> &mut StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord> {
         &mut self.replication_orders
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable provider-ingest completion-authority registry accessor for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ProviderId, ProviderIngestCompletionAuthorityV1> {
+        &mut self.provider_ingest_completion_authorities
     }
 
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
@@ -22264,6 +21803,7 @@ impl<'world> WorldBlock<'world> {
             sorafs_pricing,
             provider_credit_ledger,
             provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket,
             da_pin_intents_by_alias,
             da_pin_intents_by_manifest,
@@ -22383,6 +21923,7 @@ impl<'world> WorldBlock<'world> {
         sorafs_pricing.commit();
         provider_credit_ledger.commit();
         provider_owners.commit();
+        provider_ingest_completion_authorities.commit();
         da_pin_intents_by_ticket.commit();
         da_pin_intents_by_alias.commit();
         da_pin_intents_by_manifest.commit();
@@ -22518,7 +22059,8 @@ impl<'world> WorldBlock<'world> {
 }
 
 impl<'block, 'world> WorldTransaction<'block, 'world> {
-    /// Update the executor data model and synchronize derived parameter defaults.
+    /// Update the executor data model, purge permissions it no longer declares, and synchronize
+    /// derived parameter defaults.
     pub fn apply_executor_data_model(&mut self, mut executor_data_model: ExecutorDataModel) {
         executor_data_model
             .parameters
@@ -22527,6 +22069,45 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .get_mut()
             .custom
             .retain(|_, parameter| !is_retired_sccp_registry_parameter(parameter));
+        let declared_permissions = executor_data_model.permissions().clone();
+        let permission_is_declared = |permission: &Permission| {
+            declared_permissions
+                .iter()
+                .any(|declared| declared.as_str() == permission.name())
+        };
+
+        let account_ids: Vec<_> = self
+            .account_permissions
+            .iter()
+            .map(|(account_id, _)| account_id.clone())
+            .collect();
+        for account_id in account_ids {
+            let remove_entry =
+                self.account_permissions
+                    .get_mut(&account_id)
+                    .is_some_and(|permissions| {
+                        permissions.retain(|permission| permission_is_declared(permission));
+                        permissions.is_empty()
+                    });
+            if remove_entry {
+                self.account_permissions.remove(account_id);
+            }
+        }
+
+        let role_ids: Vec<_> = self
+            .roles
+            .iter()
+            .map(|(role_id, _)| role_id.clone())
+            .collect();
+        for role_id in role_ids {
+            if let Some(role) = self.roles.get_mut(&role_id) {
+                role.permissions
+                    .retain(|permission| permission_is_declared(permission));
+                role.permission_epochs
+                    .retain(|permission, _| permission_is_declared(permission));
+            }
+        }
+
         let prev = core::mem::replace(self.executor_data_model.get_mut(), executor_data_model);
         self.update_parameters_from_executor(&prev);
     }
@@ -23255,6 +22836,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, ReplicationOrderId, ReplicationOrderRecord> {
         &mut self.replication_orders
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to provider-ingest completion authorities for tests.
+    pub fn provider_ingest_completion_authorities_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, ProviderId, ProviderIngestCompletionAuthorityV1>
+    {
+        &mut self.provider_ingest_completion_authorities
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -27208,11 +26798,6 @@ impl State {
             query_projection_checkpoint: query_projection_checkpoint_journal,
         } = load_state_journals(&kura, None, true);
         let pipeline = iroha_config::parameters::actual::Pipeline {
-            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -27360,17 +26945,7 @@ impl State {
             tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
             zk: iroha_config::parameters::actual::Zk {
-                halo2: iroha_config::parameters::actual::Halo2 {
-                    enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
-                    curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-                    backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-                    max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
-                    verifier_budget_ms:
-                        iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                    verifier_max_batch:
-                        iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                    ..iroha_config::parameters::actual::Halo2::default()
-                },
+                halo2: iroha_config::parameters::actual::Halo2::default(),
                 fastpq: iroha_config::parameters::actual::Fastpq {
                     execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
                     poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -30249,11 +29824,17 @@ impl State {
                     entry.activation_root,
                     &entry.lane_snapshots,
                 )?;
-                self.validate_merge_queue_plan_admissions(
+                self.validate_merge_queue_plan_admissions_with_canonical_history(
                     &entry.queue_plan_admissions,
                     &entry.active_lanes,
                     entry.merge_qc.carrier_height,
                     false,
+                    |authority_height| {
+                        usize::try_from(authority_height)
+                            .ok()
+                            .and_then(NonZeroUsize::new)
+                            .and_then(|height| self.kura.get_durable_block_hash(height))
+                    },
                 )?;
                 self.validate_merge_quorum_certificate(entry, false, false)?;
                 self.validate_merge_lane_drain_certificate_payload(
@@ -34091,12 +33672,37 @@ impl State {
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
         MergeLedgerCommitError,
     > {
+        let block_hashes = self.block_hashes.view();
+        self.validate_merge_queue_plan_admissions_with_canonical_history(
+            admissions,
+            active_lanes,
+            carrier_height,
+            validate_live_authority,
+            |authority_height| {
+                usize::try_from(authority_height)
+                    .ok()
+                    .and_then(|height| height.checked_sub(1))
+                    .and_then(|index| block_hashes.get(index).copied())
+            },
+        )
+    }
+
+    fn validate_merge_queue_plan_admissions_with_canonical_history(
+        &self,
+        admissions: &[Vec<u8>],
+        active_lanes: &[MergeLaneBinding],
+        carrier_height: u64,
+        validate_live_authority: bool,
+        canonical_block_hash_at_height: impl Fn(u64) -> Option<HashOf<BlockHeader>>,
+    ) -> Result<
+        Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
+        MergeLedgerCommitError,
+    > {
         if !merge_queue_plan_admissions_within_limits(admissions) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "queue-plan admission controls exceed their count or byte bounds".to_owned(),
             ));
         }
-        let block_hashes = self.block_hashes.view();
         let mut validated = Vec::with_capacity(admissions.len());
         let mut previous_registry_key = None;
         for bytes in admissions {
@@ -34130,10 +33736,7 @@ impl State {
             let exact_predecessor = if context.authority_height == 0 {
                 None
             } else {
-                usize::try_from(context.authority_height)
-                    .ok()
-                    .and_then(|height| height.checked_sub(1))
-                    .and_then(|index| block_hashes.get(index).copied())
+                canonical_block_hash_at_height(context.authority_height)
             };
             if exact_predecessor != context.predecessor_block_hash {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -45619,15 +45222,7 @@ pub fn compute_vk_set_hash_at_height(world: &impl WorldReadOnly, height: u64) ->
 #[must_use]
 pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
     iroha_config::parameters::actual::Zk {
-        halo2: iroha_config::parameters::actual::Halo2 {
-            enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
-            curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-            backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-            max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
-            verifier_budget_ms: iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-            verifier_max_batch: iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-            ..iroha_config::parameters::actual::Halo2::default()
-        },
+        halo2: iroha_config::parameters::actual::Halo2::default(),
         fastpq: iroha_config::parameters::actual::Fastpq {
             execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
             poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -48302,6 +47897,8 @@ impl<'state> StateBlock<'state> {
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             native_anonymous_escrow_transfer_depth: 0,
+            active_trigger_execution_depth: 0,
+            multisig_deferred_execution_stack: Vec::new(),
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,
@@ -49674,6 +49271,22 @@ impl<'state> StateBlock<'state> {
             .try_into()
             .expect("INTERNAL BUG: Block height exceeds usize::MAX");
         let signed_block = block.as_ref();
+        if matches!(commit_roster_authority, CommitRosterAuthority::V2Finality)
+            && !signed_block.header().is_genesis()
+        {
+            let height = signed_block.header().height().get();
+            let context = self
+                .state_ref
+                .sumeragi_v2_height_context(height)
+                .expect("committed v2 block must have a readable finality context")
+                .expect("committed v2 block must have an exact finality context");
+            crate::sumeragi::v2_npos::validate_candidate_records(
+                &context,
+                self.state_ref,
+                signed_block.npos_consensus_effects(),
+            )
+            .expect("committed v2 block must carry valid NPoS consensus effects");
+        }
         let transactions: std::collections::HashSet<_> = if let Some(entrypoints) =
             signed_block.external_entrypoints_slice()
         {
@@ -51168,26 +50781,29 @@ impl<'state> StateBlock<'state> {
         let current_block_height = self._curr_block.height().get();
         let current_block_time_ms = u64::try_from(self._curr_block.creation_time().as_millis())
             .expect("block creation timestamp must fit into u64");
+        let max_time_trigger_invocations_u64 = self
+            .world
+            .parameters
+            .get()
+            .block()
+            .max_transactions()
+            .get()
+            .min(u64::from(u32::MAX));
+        let max_time_trigger_invocations =
+            usize::try_from(max_time_trigger_invocations_u64).unwrap_or(usize::MAX);
 
-        // Match time triggers against the event, but exclude any trigger that was registered during this block.
+        // Match time triggers against the event. The trigger set excludes
+        // current-block registrations and bounds materialisation before any
+        // repeated ids are allocated.
         let matched: Vec<_> = self
             .world
             .triggers
-            .match_time_event(time_event, current_block_height, current_block_time_ms)
-            .filter(|(_id, action)| {
-                // Reserved internal metadata keys set at registration time
-                let key_h = match "__registered_block_height".parse::<Name>() {
-                    Ok(k) => k,
-                    Err(_) => return true,
-                };
-                // Skip triggers registered in the current block (by height).
-                let registered_height = action
-                    .metadata()
-                    .get(&key_h)
-                    .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                registered_height.is_some_and(|height| height != current_block_height)
-            })
-            .map(|(id, _)| id)
+            .match_time_event(
+                time_event,
+                current_block_height,
+                current_block_time_ms,
+                max_time_trigger_invocations,
+            )
             .collect();
         let matched_count = matched.len();
         if matched_count > 0 {
@@ -52612,7 +52228,7 @@ mod tiered_snapshot_diff_tests {
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-            ChainId::from(chain_id),
+            chain_id.parse().expect("canonical SCCP snapshot chain id"),
         );
         let (fixture, _) = exact_sccp_finalized_block_fixture();
         let finality =
@@ -53589,6 +53205,68 @@ mod tiered_snapshot_diff_tests {
                 "missing required {field} produced unexpected error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn provider_ingest_completion_authority_snapshot_is_required_and_owner_bound() {
+        let owner = AccountId::new(checked_keypair().public_key().clone());
+        let provider_id = ProviderId::new([0xA1; 32]);
+        let authority = ProviderIngestCompletionAuthorityV1::new(
+            owner.clone(),
+            iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0xA2; 32],
+                revision: 1,
+                predecessor_digest: None,
+                policy_digest: [0xA3; 32],
+            },
+        );
+        let mut world = World::default();
+        let (owner_id, owner_value) = iroha_data_model::account::Account::new(owner.clone())
+            .build(&owner)
+            .into_key_value();
+        world.accounts.insert(owner_id, owner_value);
+        world.provider_owners.insert(provider_id, owner);
+        world
+            .provider_ingest_completion_authorities
+            .insert(provider_id, authority.clone());
+
+        let decoded =
+            decode_sccp_world_snapshot(world).expect("decode completion-authority snapshot");
+        assert_eq!(
+            decoded
+                .view()
+                .world
+                .provider_ingest_completion_authorities
+                .get(&provider_id),
+            Some(&authority)
+        );
+
+        for field in ["provider_owners", "provider_ingest_completion_authorities"] {
+            let mut snapshot = sccp_state_snapshot_value(World::default(), SCCP_SNAPSHOT_CHAIN_ID);
+            state_snapshot_world_mut(&mut snapshot).remove(field);
+            let error = decode_state_snapshot_value(snapshot)
+                .err()
+                .unwrap_or_else(|| panic!("snapshot missing {field} must fail"));
+            assert!(
+                error.to_string().contains(field),
+                "missing required {field} produced unexpected error: {error}"
+            );
+        }
+
+        let mut mismatched = World::default();
+        mismatched
+            .provider_ingest_completion_authorities
+            .insert(provider_id, authority);
+        let error = match decode_sccp_world_snapshot(mismatched) {
+            Ok(_) => panic!("completion authority without its registered owner must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("provider_ingest_completion_authorities"),
+            "owner mismatch produced unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -56799,7 +56477,6 @@ fn ensure_replayed_results_match_committed(
 
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
-/// Uses the genesis-selected consensus mode when resolving topology rotation.
 ///
 /// # Errors
 /// Returns an error if retrieval, validation, deterministic execution parity, checkpoint
@@ -56807,18 +56484,9 @@ fn ensure_replayed_results_match_committed(
 pub fn replay_blocks_from_kura(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
-    topology: &crate::sumeragi::network_topology::Topology,
     block_count: usize,
-    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
-    replay_blocks_from_kura_range(
-        kura,
-        state,
-        topology,
-        1,
-        block_count,
-        fallback_consensus_mode,
-    )
+    replay_blocks_from_kura_range(kura, state, 1, block_count)
 }
 
 #[derive(Debug, Default)]
@@ -57199,10 +56867,11 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
 
 /// Replay blocks from the local Kura store into the provided [`State`], starting at `start_height`
 /// and continuing through `block_count` (inclusive). Use this to catch up from a snapshot.
-/// Uses the genesis-selected consensus mode when resolving topology rotation.
 /// Every full-body block must have an exact WSV checkpoint, every block signature is verified,
 /// and re-executed transaction results must match their durable commitments exactly. Audited
 /// hash-only hard-fork snapshot prefixes are exempt because they do not contain executable bodies.
+/// Validator ordering, voting power, and mode come only from the genesis- or snapshot-rooted
+/// finality lineage; caller-supplied topology is not a replay authority.
 /// Every non-empty range, including a single block, is first executed against an isolated exact
 /// State snapshot with all external publication suppressed. The block bodies, checkpoints,
 /// manifests, finality artifacts, and merge carriers are authenticated once into an immutable
@@ -57219,10 +56888,8 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
 pub fn replay_blocks_from_kura_range(
     kura: &std::sync::Arc<Kura>,
     state: &mut State,
-    topology: &crate::sumeragi::network_topology::Topology,
     start_height: usize,
     block_count: usize,
-    fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
 ) -> Result<()> {
     if block_count == 0 || start_height > block_count {
         return Ok(());
@@ -57246,8 +56913,6 @@ pub fn replay_blocks_from_kura_range(
     let dry_run = replay_blocks_from_kura_range_inner(
         &bundle,
         &mut isolated,
-        topology,
-        fallback_consensus_mode,
         &replay_time_source,
         &mut geometry,
     );
@@ -57563,8 +57228,6 @@ fn publish_replay_receipt(
 fn replay_blocks_from_kura_range_inner(
     bundle: &ReplayBundle,
     state: &mut State,
-    _topology: &crate::sumeragi::network_topology::Topology,
-    _fallback_consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     time_source: &TimeSource,
     geometry: &mut Vec<PendingAutoscaleLaneLifecycle>,
 ) -> Result<()> {
@@ -57580,6 +57243,9 @@ fn replay_blocks_from_kura_range_inner(
         drop(view);
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
+    let genesis_signatory = genesis_account.try_signatory().ok_or_else(|| {
+        eyre!("genesis account in world state must use a single-key controller during replay")
+    })?;
     for bundle_entry in &bundle.entries {
         replay_timing.blocks = replay_timing.blocks.saturating_add(1);
         let ReplayBundleEntry::Full {
@@ -57636,7 +57302,7 @@ fn replay_blocks_from_kura_range_inner(
             }
             signature
                 .signature()
-                .verify_hash(genesis_account.signatory(), candidate.hash())
+                .verify_hash(genesis_signatory, candidate.hash())
                 .map_err(|error| eyre!(error))
                 .wrap_err_with(|| {
                     format!("failed to verify replayed genesis block #{height} signatures")
@@ -57710,6 +57376,19 @@ fn replay_blocks_from_kura_range_inner(
                 });
             }
         };
+        if signed_block.header().is_genesis() {
+            crate::sumeragi::v2_context::validate_staged_genesis_v2_authority(
+                &iroha_genesis::GenesisBlock(signed_block.clone()),
+                &state_block,
+                &finality.height_context,
+                &finality.validator_set_pops,
+            )
+            .map_err(|error| {
+                eyre!(
+                    "replayed genesis finality authority differs from deterministic signed genesis state: {error}"
+                )
+            })?;
+        }
         let witness = state_block.take_exec_witness().ok_or_else(|| {
             eyre!("replayed block #{height} did not produce a v2 execution witness")
         })?;
@@ -57990,7 +57669,6 @@ mod replay_validation_tests {
                 &mut voting_block,
                 false,
                 false,
-                false,
             )
             .unpack(|_| {})
             .map_err(|(_block, error)| eyre!(error))
@@ -58145,7 +57823,6 @@ mod replay_validation_tests {
                 state,
                 &mut voting_block,
                 false,
-                true,
                 true,
             )
         } else {
@@ -58329,7 +58006,8 @@ mod replay_validation_tests {
         } else {
             "height-one"
         };
-        let chain_id = ChainId::from(format!("iroha:test:missing-replay-checkpoint:{suffix}"));
+        let chain_id = ChainId::try_from(format!("iroha:test:missing-replay-checkpoint:{suffix}"))
+            .expect("canonical replay-checkpoint test chain id");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let tx = TransactionBuilder::new(
             chain_id.clone(),
@@ -59941,7 +59619,7 @@ mod permission_cache_tests {
         let raw_payload = "{  \"trigger\"  :   \"trigger_alpha\" }";
         let permission = iroha_data_model::permission::Permission::new(
             "CanExecuteTrigger".into(),
-            Json::from_string_unchecked(raw_payload.to_owned()),
+            Json::from_raw_json(raw_payload.to_owned()).expect("valid permission JSON fixture"),
         );
 
         stx.world
@@ -62243,7 +61921,11 @@ impl StateTransaction<'_, '_> {
         if self.world.internal_event_buf.is_empty() {
             return Ok(Vec::new());
         }
-        let mut stack: Vec<(EventBox, TriggerId, u8)> = self
+        // A `u16` depth can represent the first rejected depth (`u8::MAX + 1`).
+        // Keeping the counter wider than the on-chain limit makes the boundary
+        // deterministic in debug and release builds instead of relying on
+        // wrapping or saturating arithmetic.
+        let mut stack: Vec<(EventBox, TriggerId, u16)> = self
             .capture_data_events()
             .into_iter()
             // Preserve the order of the matched triggers
@@ -62252,7 +61934,7 @@ impl StateTransaction<'_, '_> {
             .collect();
         let mut steps = Vec::new();
         while let Some((event, trg_id, depth)) = stack.pop() {
-            let max_depth = self.world.parameters.smart_contract().execution_depth();
+            let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
             }
@@ -62309,11 +61991,14 @@ impl StateTransaction<'_, '_> {
             };
             steps.push(step);
 
+            // The guard above proves `depth <= u8::MAX`, so the wider counter
+            // can represent `depth + 1` even at the maximum configured limit.
+            let next_depth = depth + 1;
             let next_items = self
                 .capture_data_events()
                 .into_iter()
                 .rev()
-                .map(|(e, t)| (e, t, depth + 1));
+                .map(|(e, t)| (e, t, next_depth));
             stack.extend(next_items);
         }
 
@@ -62384,6 +62069,38 @@ impl StateTransaction<'_, '_> {
             let AccountEvent::Asset(asset_event) = account_event else {
                 return Json::from(payload);
             };
+            if let AssetEvent::Transferred(transfer) = asset_event {
+                let source = transfer.source();
+                let destination = transfer.destination();
+                let mut details = norito::json::Map::new();
+                details.insert("kind".to_owned(), norito::json!("asset_transfer"));
+                details.insert("op".to_owned(), norito::json!("transferred"));
+                details.insert(
+                    "asset_definition_id".to_owned(),
+                    norito::json!(source.definition().to_string()),
+                );
+                details.insert(
+                    "source_asset_id".to_owned(),
+                    norito::json!(source.to_string()),
+                );
+                details.insert(
+                    "destination_asset_id".to_owned(),
+                    norito::json!(destination.to_string()),
+                );
+                details.insert(
+                    "source_account_id".to_owned(),
+                    norito::json!(source.account().to_string()),
+                );
+                details.insert(
+                    "destination_account_id".to_owned(),
+                    norito::json!(destination.account().to_string()),
+                );
+                details.insert(
+                    "amount".to_owned(),
+                    norito::json!(transfer.amount().to_string()),
+                );
+                return Json::from(norito::json::Value::Object(details));
+            }
             let (op, changed) = match asset_event {
                 AssetEvent::Added(changed) => ("added", changed),
                 AssetEvent::Removed(changed) => ("removed", changed),
@@ -62516,6 +62233,7 @@ impl StateTransaction<'_, '_> {
             gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
         }
 
+        let heap_limit = self.world.parameters.get().smart_contract().memory().get();
         let ivm_cache = self.ivm_cache;
         let mut cache = ivm_cache.lock();
         let prepared_contract_cache = cache.prepared_contract_cache();
@@ -62525,7 +62243,7 @@ impl StateTransaction<'_, '_> {
             ))
         })?;
         let mut vm = cache
-            .checkout_generic_runtime(summary, gas_limit)
+            .checkout_generic_runtime(summary, gas_limit, heap_limit)
             .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
         vm.set_max_cycles(eff_cycles.get());
         vm.set_gas_limit(gas_limit);
@@ -62541,6 +62259,7 @@ impl StateTransaction<'_, '_> {
             accounts,
             host_args,
         );
+        host.set_output_limits_from_parameters(self.world.parameters.get().smart_contract());
         host.set_generic_execution();
         host.set_prepared_contract_cache(prepared_contract_cache);
         host.set_amx_analysis(amx_analysis);
@@ -62680,9 +62399,37 @@ impl StateTransaction<'_, '_> {
     /// Execute any condition of trigger, staging its state changes.
     ///
     /// Returns the execution step on success, or the rejection reason on failure.
+    fn execute_trigger(
+        &mut self,
+        id: &TriggerId,
+        authority: &AccountId,
+        executable: &ExecutableRef,
+        event: EventBox,
+        step_index: u32,
+        nft_seq_base_override: Option<u64>,
+    ) -> Result<ExecutionStep, TransactionRejectionReason> {
+        let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
+        if self.active_trigger_execution_depth >= max_depth {
+            return Err(TriggerExecutionFail::MaxDepthExceeded.into());
+        }
+
+        self.active_trigger_execution_depth += 1;
+        let result = self.execute_trigger_within_depth_budget(
+            id,
+            authority,
+            executable,
+            event,
+            step_index,
+            nft_seq_base_override,
+        );
+        self.active_trigger_execution_depth -= 1;
+        result
+    }
+
+    /// Execute a trigger after the shared synchronous depth budget has been reserved.
     #[allow(clippy::needless_pass_by_value)]
     #[allow(clippy::too_many_lines)]
-    fn execute_trigger(
+    fn execute_trigger_within_depth_budget(
         &mut self,
         id: &TriggerId,
         authority: &AccountId,
@@ -62950,8 +62697,9 @@ impl StateTransaction<'_, '_> {
                         contract_subject,
                         gas_limit,
                     )?;
+                let heap_limit = self.world.parameters.get().smart_contract().memory().get();
                 let mut vm = summary
-                    .checkout_runtime(gas_limit)
+                    .checkout_runtime(gas_limit, heap_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                 if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
                     let code_len = vm.memory.code_len();
@@ -62974,6 +62722,9 @@ impl StateTransaction<'_, '_> {
                         accounts,
                         contract_call_context.prepared_argument_record().cloned(),
                     );
+                host.set_output_limits_from_parameters(
+                    self.world.parameters.get().smart_contract(),
+                );
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 host.hydrate_axt_state(self).map_err(|error| {
                     ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
@@ -63186,8 +62937,10 @@ impl StateTransaction<'_, '_> {
                             contract_call_context
                                 .bind_runtime_identity(runtime_identity, contract_subject);
                             let prepared_cache = self.pipeline_ivm_prepared_cache.clone();
+                            let heap_limit =
+                                self.world.parameters.get().smart_contract().memory().get();
                             let mut vm = prepared_cache
-                                .checkout_runtime(prepared_contract, gas_limit)
+                                .checkout_runtime(prepared_contract, gas_limit, heap_limit)
                                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                             if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
                                 let code_len = vm.memory.code_len();
@@ -63214,6 +62967,9 @@ impl StateTransaction<'_, '_> {
                             accounts,
                             host_args,
                         );
+                            host.set_output_limits_from_parameters(
+                                self.world.parameters.get().smart_contract(),
+                            );
                             if let Some(record) = contract_call_context.prepared_argument_record() {
                                 host.set_entrypoint_argument_record(Some(record.clone()));
                             }
@@ -64742,6 +64498,25 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn validate_provider_ingest_completion_authorities(
+        provider_owners: &Storage<ProviderId, AccountId>,
+        authorities: &Storage<ProviderId, ProviderIngestCompletionAuthorityV1>,
+    ) -> Result<(), json::Error> {
+        let owners = provider_owners.view();
+        for (provider_id, authority) in authorities.view().iter() {
+            if !authority.is_valid() || owners.get(provider_id) != Some(&authority.provider_owner) {
+                return Err(json::Error::InvalidField {
+                    field: "provider_ingest_completion_authorities".to_owned(),
+                    message: format!(
+                        "provider {} has a noncanonical or owner-mismatched completion authority",
+                        hex::encode(provider_id.as_bytes())
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_ram_lfe_program_policies(
         policies: &Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     ) -> Result<(), json::Error> {
@@ -65285,6 +65060,13 @@ pub(crate) mod deserialize {
             &mut map,
             "soracloud_private_uploaded_model_execution_receipts",
         )?;
+        let provider_owners = take_required(&mut map, "provider_owners")?;
+        let provider_ingest_completion_authorities =
+            take_required(&mut map, "provider_ingest_completion_authorities")?;
+        validate_provider_ingest_completion_authorities(
+            &provider_owners,
+            &provider_ingest_completion_authorities,
+        )?;
         let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
@@ -65469,7 +65251,8 @@ pub(crate) mod deserialize {
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
             capacity_disputes: Storage::default(),
-            provider_owners: Storage::default(),
+            provider_owners,
+            provider_ingest_completion_authorities,
             da_pin_intents_by_ticket: Storage::default(),
             da_pin_intents_by_alias: Storage::default(),
             da_pin_intents_by_manifest: Storage::default(),
@@ -65813,11 +65596,6 @@ pub(crate) mod deserialize {
 
     fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         iroha_config::parameters::actual::Pipeline {
-            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -65885,17 +65663,7 @@ pub(crate) mod deserialize {
 
     pub(super) fn default_zk() -> iroha_config::parameters::actual::Zk {
         iroha_config::parameters::actual::Zk {
-            halo2: iroha_config::parameters::actual::Halo2 {
-                enabled: iroha_config::parameters::defaults::zk::halo2::ENABLED,
-                curve: iroha_config::parameters::actual::ZkCurve::Pallas,
-                backend: iroha_config::parameters::actual::Halo2Backend::Ipa,
-                max_k: iroha_config::parameters::defaults::zk::halo2::MAX_K,
-                verifier_budget_ms:
-                    iroha_config::parameters::defaults::zk::halo2::VERIFIER_BUDGET_MS,
-                verifier_max_batch:
-                    iroha_config::parameters::defaults::zk::halo2::VERIFIER_MAX_BATCH,
-                ..iroha_config::parameters::actual::Halo2::default()
-            },
+            halo2: iroha_config::parameters::actual::Halo2::default(),
             fastpq: iroha_config::parameters::actual::Fastpq {
                 execution_mode: iroha_config::parameters::actual::FastpqExecutionMode::Cpu,
                 poseidon_mode: iroha_config::parameters::actual::FastpqPoseidonMode::Cpu,
@@ -66317,8 +66085,8 @@ mod tests {
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
         isi::{
-            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue,
-            SetKeyValue, Transfer, Unregister, error::InstructionExecutionError,
+            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetKeyValue, SetKeyValue, Transfer,
+            Unregister, error::InstructionExecutionError,
         },
         merge::MergeQuorumCertificate,
         name::Name,
@@ -66968,7 +66736,7 @@ seiyaku SequentialNfts {
                 let name = format!(
                     "nft_number_{}_for_{}",
                     expected_sequence,
-                    account.signatory()
+                    hex::encode(HashOf::new(account).as_ref())
                 )
                 .parse()
                 .expect("fixture account produces a valid NFT name");
@@ -68385,30 +68153,6 @@ seiyaku SequentialNfts {
         assert!(
             error.to_string().contains("violates numeric spec"),
             "{error}"
-        );
-    }
-
-    #[test]
-    fn detached_delta_rejects_negative_quantity_before_recording() {
-        let (state, _, asset_id) = snapshot_state_with_numeric_asset();
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.add_asset_add(asset_id.clone(), Quantity::one());
-        let error = Quantity::try_from_numeric(Numeric::new(-1_i32, 0))
-            .expect_err("negative detached delta must be rejected at its nominal boundary");
-        assert!(matches!(
-            error,
-            iroha_primitives::numeric::NumericOperationError::NegativeQuantity
-        ));
-        assert_eq!(delta.asset_add_qtys, [Quantity::one()]);
-        assert_eq!(
-            state
-                .view()
-                .world()
-                .assets()
-                .get(&asset_id)
-                .expect("asset remains")
-                .as_ref(),
-            &Quantity::from(5_u32)
         );
     }
 
@@ -69932,7 +69676,7 @@ seiyaku SequentialNfts {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -69948,7 +69692,7 @@ seiyaku SequentialNfts {
             PublicLaneValidatorRecord {
                 lane_id: mismatched_lane,
                 validator: mismatched_validator.clone(),
-                peer_id: PeerId::from(mismatched_validator.signatory().clone()),
+                peer_id: PeerId::from(mismatched_validator.expect_single_signatory().clone()),
                 stake_account: mismatched_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -70042,7 +69786,7 @@ seiyaku SequentialNfts {
             &PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -71142,6 +70886,65 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn trigger_args_from_asset_transfer_bind_both_participants() {
+        let asset_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let (source, _) = gen_account_in("transfer-source");
+        let (destination, _) = gen_account_in("transfer-destination");
+        let asset_definition = AssetDefinitionId::new(asset_domain, "ds".parse().unwrap());
+        let source_asset = AssetId::new(asset_definition.clone(), source.clone());
+        let destination_asset = AssetId::new(asset_definition.clone(), destination.clone());
+        let amount = Quantity::from(17_u32);
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Transferred(
+                data_pre::AssetTransferred {
+                    source: source_asset.clone(),
+                    destination: destination_asset.clone(),
+                    amount: amount.clone(),
+                },
+            )),
+        ));
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let stx = state_block.transaction();
+
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let object = payload.as_object().expect("trigger args object");
+        assert_eq!(object.get("kind"), Some(&norito::json!("asset_transfer")));
+        assert_eq!(object.get("op"), Some(&norito::json!("transferred")));
+        assert_eq!(
+            object.get("source_account_id"),
+            Some(&norito::json!(source.to_string()))
+        );
+        assert_eq!(
+            object.get("destination_account_id"),
+            Some(&norito::json!(destination.to_string()))
+        );
+        assert_eq!(
+            object.get("source_asset_id"),
+            Some(&norito::json!(source_asset.to_string()))
+        );
+        assert_eq!(
+            object.get("destination_asset_id"),
+            Some(&norito::json!(destination_asset.to_string()))
+        );
+        assert_eq!(
+            object.get("asset_definition_id"),
+            Some(&norito::json!(asset_definition.to_string()))
+        );
+        assert_eq!(
+            object.get("amount"),
+            Some(&norito::json!(amount.to_string()))
+        );
+        assert!(object.get("account_id").is_none());
+    }
+
+    #[test]
     fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_missing() {
         let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
         let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
@@ -71859,6 +71662,71 @@ seiyaku SequentialNfts {
                 .custom()
                 .get(&retired_id)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn executor_data_model_reconciliation_purges_undeclared_permissions_statefully() {
+        let retained: Permission =
+            iroha_executor_data_model::permission::parameter::CanSetParameters.into();
+        let retired = Permission::new("RetiredPermission".to_owned(), Json::new(()));
+        let role_id: RoleId = "executor_reconciliation_role".parse().expect("role id");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: BTreeSet::from([retained.clone(), retired.clone()]),
+            permission_epochs: BTreeMap::from([(retained.clone(), 4), (retired.clone(), 5)]),
+        };
+        let mut world = World::with_assets_and_roles(
+            [],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+            [],
+            [],
+            [role],
+        );
+        world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([retained.clone(), retired.clone()]),
+        );
+        let data_model = ExecutorDataModel::new(
+            BTreeMap::new(),
+            BTreeSet::new(),
+            BTreeSet::from([retained.name().to_owned()]),
+            Json::new(()),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut transaction = block.transaction();
+
+        transaction
+            .world
+            .apply_executor_data_model(data_model.clone());
+
+        let account_permissions = transaction
+            .world
+            .account_permissions
+            .get(&ALICE_ID)
+            .expect("retained account permission entry");
+        assert_eq!(account_permissions, &BTreeSet::from([retained.clone()]));
+        let role = transaction
+            .world
+            .roles
+            .get(&role_id)
+            .expect("reconciled role");
+        assert_eq!(
+            role.permissions().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from([retained.clone()]),
+        );
+        assert_eq!(role.permission_epochs().get(&retained), Some(&4));
+        assert!(!role.permission_epochs().contains_key(&retired));
+        assert_eq!(
+            transaction.world.executor_data_model.get(),
+            &data_model,
+            "the permission purge and model update must be one stateful operation",
         );
     }
 
@@ -77245,7 +77113,7 @@ seiyaku SequentialNfts {
         let retained_lane = LaneId::SINGLE;
         let stale_lane = LaneId::new(9);
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -77484,7 +77352,7 @@ seiyaku SequentialNfts {
         let stale_lane = LaneId::new(9);
         let retained_lane = LaneId::SINGLE;
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -79458,7 +79326,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 retired_lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -82771,7 +82639,7 @@ seiyaku SequentialNfts {
                 world.lane_relay_emergency_validators.insert(
                     lane_id,
                     LaneRelayEmergencyValidatorSet {
-                        peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                        peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                         expires_at_height: 100,
                         metadata: Metadata::default(),
                     },
@@ -83178,7 +83046,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 LaneId::new(1),
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -83833,7 +83701,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 retired_lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -84407,7 +84275,7 @@ seiyaku SequentialNfts {
         state_block.world.lane_relay_emergency_validators.insert(
             retired_lane_id,
             LaneRelayEmergencyValidatorSet {
-                peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                 expires_at_height: 10,
                 metadata: Metadata::default(),
             },
@@ -85076,7 +84944,7 @@ seiyaku SequentialNfts {
             block.lane_relay_emergency_validators.insert(
                 retired_lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -85084,7 +84952,7 @@ seiyaku SequentialNfts {
             block.lane_relay_emergency_validators.insert(
                 LaneId::SINGLE,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(BOB_ID.signatory().clone())],
+                    peers: vec![PeerId::from(BOB_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -88662,7 +88530,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: epoch.saturating_add(10),
                     metadata: Metadata::default(),
                 },
@@ -90628,7 +90496,7 @@ seiyaku SequentialNfts {
         seed_da_pin_intent_world_indexes_for_test(&state, future_pin_intent.clone(), 5, 0);
         seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 5, 1);
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -93471,7 +93339,7 @@ seiyaku SequentialNfts {
         wb.lane_relay_emergency_validators.insert(
             removed,
             LaneRelayEmergencyValidatorSet {
-                peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                 expires_at_height: 10,
                 metadata: Metadata::default(),
             },
@@ -93526,7 +93394,7 @@ seiyaku SequentialNfts {
         let added = LaneId::new(1);
         let stale_unknown = LaneId::new(9);
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -94654,7 +94522,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 reset_lane,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -94865,7 +94733,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 reset_lane,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -104426,7 +104294,7 @@ seiyaku SequentialNfts {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
@@ -114515,27 +114383,24 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn recording_axt_envelope_advances_policy_counters() {
+    fn recording_axt_envelope_is_transactional_and_advances_only_on_apply() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::new(), kura, query_handle);
 
         let dsid = DataSpaceId::new(33);
         let lane = LaneId::new(2);
-        state.set_axt_policy(
-            dsid,
-            AxtPolicyEntry {
-                manifest_root: [0xAA; 32],
-                target_lane: lane,
-                min_handle_era: 1,
-                min_sub_nonce: 1,
-                current_slot: 0,
-            },
-        );
+        let initial_policy = AxtPolicyEntry {
+            manifest_root: [0xAA; 32],
+            target_lane: lane,
+            min_handle_era: 1,
+            min_sub_nonce: 1,
+            current_slot: 0,
+        };
+        state.set_axt_policy(dsid, initial_policy);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        let mut stx = block.transaction();
 
         let binding = AxtBinding::new([0xAB; 32]);
         let handle = iroha_data_model::nexus::AssetHandle {
@@ -114587,6 +114452,36 @@ seiyaku SequentialNfts {
             commit_height: 1,
         };
 
+        {
+            let mut rejected = block.transaction();
+            rejected.record_axt_envelope(envelope.clone());
+            let staged = rejected
+                .world
+                .axt_policies()
+                .get(&dsid)
+                .expect("policy staged in transaction");
+            assert_eq!(staged.min_handle_era, handle.handle_era);
+            assert_eq!(staged.min_sub_nonce, handle.sub_nonce.saturating_add(1));
+        }
+        assert_eq!(
+            block.world.axt_policies.get(&dsid).copied(),
+            Some(initial_policy),
+            "dropping a rejected transaction must restore the AXT ratchet"
+        );
+        assert!(
+            block.axt_envelopes().is_empty(),
+            "a rejected transaction must not publish its pending envelope"
+        );
+        assert!(
+            block
+                .world
+                .axt_replay_ledger
+                .get(&AxtHandleReplayKey::from_handle(&handle))
+                .is_none(),
+            "a rejected transaction must not publish its replay entry"
+        );
+
+        let mut stx = block.transaction();
         stx.record_axt_envelope(envelope);
         stx.apply();
 
@@ -115554,20 +115449,6 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn record_mint_consumption_tracks_counts() {
-        use iroha_data_model::asset::AssetDefinitionId;
-
-        let mut delta = DetachedStateTransactionDelta::default();
-        let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        delta.record_mint_consumption(def_id.clone(), 1);
-        delta.record_mint_consumption(def_id.clone(), 2);
-        assert_eq!(delta.flip_mintable_to_not.get(&def_id).copied(), Some(3));
-    }
-
-    #[test]
     fn detached_can_modify_nft_metadata_allows_domain_owner() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
@@ -115659,277 +115540,6 @@ seiyaku SequentialNfts {
                 .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "domain owner must be allowed to modify account metadata"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_domain_denies_non_owner() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let transferred_domain_id: DomainId =
-            DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-
-        let mut world = World::with(
-            [alice_domain, users_domain, transferred_domain],
-            [alice_account, user1_account, user2_account],
-            [],
-        );
-        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
-        let view = world.view();
-        let transfer =
-            iroha_data_model::isi::Transfer::domain(user1, transferred_domain_id, user2.clone());
-        let delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "authority that owns neither source account/domain nor transferred domain must be denied"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_domain_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let transferred_domain_id: DomainId =
-            DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-
-        let mut world = World::with(
-            [
-                alice_domain,
-                users_domain.clone(),
-                transferred_domain.clone(),
-            ],
-            [alice_account, user1_account, user2_account],
-            [],
-        );
-        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::domain(
-            user1.clone(),
-            transferred_domain_id.clone(),
-            user2,
-        );
-        let mut delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "baseline should deny authority before pending owner updates"
-        );
-
-        delta.transfer_domain(users_domain_id.clone(), user1.clone(), ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "pending source-domain transfer should authorize subsequent transfer"
-        );
-
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.transfer_domain(transferred_domain_id.clone(), user1, ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "pending transferred-domain ownership should authorize subsequent transfer"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_asset_definition_denies_non_owner() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let definition_domain_id: DomainId =
-            DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let asset_definition_id =
-            AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
-        let asset_definition = {
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }
-        .build(&user1);
-
-        let world = World::with(
-            [alice_domain, users_domain, definition_domain],
-            [alice_account, user1_account, user2_account],
-            [asset_definition],
-        );
-        let view = world.view();
-        let transfer =
-            iroha_data_model::isi::Transfer::asset_definition(user1, asset_definition_id, user2);
-        let delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "authority that owns neither source account nor asset definition must be denied"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_asset_definition_considers_pending_owner_transfer() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let definition_domain_id: DomainId =
-            DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let asset_definition_id =
-            AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
-        let asset_definition = {
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }
-        .build(&user1);
-
-        let world = World::with(
-            [
-                alice_domain,
-                users_domain.clone(),
-                definition_domain.clone(),
-            ],
-            [alice_account, user1_account, user2_account],
-            [asset_definition],
-        );
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::asset_definition(
-            user1.clone(),
-            asset_definition_id,
-            user2,
-        );
-        let mut delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "baseline should deny authority before pending owner updates"
-        );
-
-        delta.transfer_asset_def(transfer.object().clone(), user1.clone(), ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "pending asset-definition owner transfer should authorize subsequent transfer"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_nft_denies_non_owner() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
-        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
-
-        let world = World::with_assets(
-            [alice_domain, users_domain],
-            [alice_account, user1_account, user2_account],
-            [],
-            [],
-            [nft],
-        );
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::nft(user1, nft_id, user2);
-        let delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_nft(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "authority that owns neither source account/domain nor nft domain must be denied"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_nft_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
-        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
-
-        let world = World::with_assets(
-            [alice_domain, users_domain.clone()],
-            [alice_account, user1_account, user2_account],
-            [],
-            [],
-            [nft],
-        );
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::nft(user1.clone(), nft_id, user2);
-        let mut delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_nft(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "baseline should deny authority before pending owner updates"
-        );
-
-        delta.transfer_domain(users_domain_id, user1, ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_nft(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "pending source-domain transfer should authorize subsequent transfer"
         );
     }
 
@@ -116150,71 +115760,6 @@ seiyaku SequentialNfts {
                     InstructionExecutionError::Find(FindError::Permission(_)),
                 ),
             ) => {}
-            other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn delta_merge_rejects_over_minting_limited_assets() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(World::default(), kura, query_handle);
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let mut stx = state_block.transaction();
-
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register domain");
-        Register::account(new_sample_account(&ALICE_ID))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register account");
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        Register::asset_definition({
-            let __asset_definition_id = asset_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register asset definition");
-        let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "tulip".parse().unwrap(),
-        );
-        Register::asset_definition({
-            let __asset_definition_id = other_asset_def_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        })
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register secondary asset definition");
-        stx.world
-            .asset_definition_mut(&asset_def_id)
-            .expect("definition exists")
-            .set_mintable(Mintable::limited_from_u32(3).expect("limited budget"));
-        stx.apply();
-
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.record_mint_consumption(asset_def_id.clone(), 5);
-
-        let err = delta
-            .merge_into(&mut state_block, &ALICE_ID)
-            .expect_err("over-budget minting must fail");
-
-        match err {
-            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::NotPermitted(msg),
-            ) => {
-                assert!(
-                    msg.contains("minting not allowed"),
-                    "unexpected error message: {msg}"
-                );
-            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
@@ -116777,9 +116322,9 @@ seiyaku SequentialNfts {
 
     #[allow(clippy::too_many_lines)]
     #[test]
-    fn detached_merge_matches_sequential_state_and_events() {
+    fn detached_metadata_merge_matches_sequential_state_and_events() {
         use iroha_data_model::{
-            isi::{Mint, RemoveKeyValue, SetKeyValue},
+            isi::{RemoveKeyValue, SetKeyValue},
             prelude::*,
         };
         use iroha_primitives::{json::Json, numeric::Quantity};
@@ -116828,9 +116373,6 @@ seiyaku SequentialNfts {
         let mut block_seq = state_seq.block(header);
         {
             let mut stx = block_seq.transaction();
-            Mint::asset_quantity(5_u32, asset_id.clone())
-                .execute(&authority, &mut stx)
-                .expect("mint");
             SetKeyValue::account(authority.clone(), account_key.clone(), Json::new(1u32))
                 .execute(&authority, &mut stx)
                 .expect("account kv insert");
@@ -116867,9 +116409,6 @@ seiyaku SequentialNfts {
         let state_det = State::new(world_det, kura_det, query_det);
         let mut block_det = state_det.block(header);
         let mut delta = DetachedStateTransactionDelta::default();
-        let mint_amount = Quantity::from(5_u32);
-        delta.add_asset_add(asset_id.clone(), mint_amount.clone());
-        delta.add_total_add(asset_def_id.clone(), mint_amount.clone());
         delta.set_account_kv(authority.clone(), account_key.clone(), Json::new(1u32));
         delta.remove_account_kv(authority.clone(), account_key.clone());
         delta.set_domain_kv(domain_id.clone(), domain_key.clone(), Json::new(7u32));
@@ -118876,6 +118415,163 @@ seiyaku SequentialNfts {
     }
 
     #[test]
+    fn self_calling_trigger_stops_at_synchronous_execution_depth() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.smart_contract.execution_depth = 3;
+            parameters.commit();
+        }
+
+        let trigger_id: TriggerId = "bounded_self_call".parse().expect("valid trigger id");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain"),
+        ))
+        .execute(&ALICE_ID, &mut transaction)
+        .expect("register domain");
+        Register::account(new_sample_account(&ALICE_ID))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register account");
+
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                [InstructionBox::from(ExecuteTrigger::new(
+                    trigger_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(ALICE_ID.clone()),
+            ),
+        );
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register self-calling trigger");
+
+        let event = ExecuteTriggerEvent {
+            trigger_id: trigger_id.clone(),
+            authority: ALICE_ID.clone(),
+            args: Json::default(),
+        };
+        let error = transaction
+            .execute_called_trigger(&trigger_id, &event)
+            .expect_err("self-call must stop at the configured trigger depth");
+
+        assert!(
+            format!("{error:?}").contains("MaxDepthExceeded"),
+            "unexpected self-call rejection: {error:?}"
+        );
+        assert_eq!(
+            transaction.active_trigger_execution_depth, 0,
+            "the synchronous depth reservation must unwind after rejection"
+        );
+        assert_eq!(
+            transaction
+                .world
+                .triggers
+                .by_call_triggers()
+                .get(&trigger_id)
+                .expect("trigger remains staged")
+                .repeats,
+            Repeats::Exactly(1),
+            "a rejected recursive execution must not consume the repeat budget"
+        );
+    }
+
+    #[test]
+    fn data_trigger_depth_u8_max_rejects_without_panicking_or_wrapping() {
+        use iroha_data_model::prelude::DataEvent;
+
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.set_parameter(iroha_data_model::parameter::Parameter::SmartContract(
+                iroha_data_model::parameter::SmartContractParameter::ExecutionDepth(u8::MAX),
+            ));
+            parameters.commit();
+        }
+
+        let trigger_id: TriggerId = "max_depth_data_trigger".parse().expect("valid trigger id");
+        let flag_key: Name = "max_depth_flag".parse().expect("valid metadata key");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        {
+            let mut transaction = block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").expect("valid domain"),
+            ))
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("register domain");
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register account");
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    [InstructionBox::from(SetKeyValue::account(
+                        ALICE_ID.clone(),
+                        flag_key,
+                        Json::from(true),
+                    ))],
+                    Repeats::Exactly(u32::from(u8::MAX) + 1),
+                    ALICE_ID.clone(),
+                    data_pre::DataEventFilter::Any,
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register data trigger");
+            transaction.apply();
+        }
+        block.commit().expect("commit trigger setup");
+
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(DomainId::try_new("depth_seed", "universal").expect("valid seed domain"))
+                .build(&ALICE_ID),
+        );
+        transaction
+            .world
+            .internal_event_buf
+            .push(Arc::new(DataEvent::Domain(event)));
+
+        let error = transaction
+            .execute_data_triggers_dfs(&ALICE_ID)
+            .expect_err("the first depth beyond 255 must be rejected");
+        assert_eq!(
+            error,
+            TransactionRejectionReason::TriggerExecution(TriggerExecutionFail::MaxDepthExceeded)
+        );
+        assert_eq!(
+            transaction
+                .world
+                .triggers
+                .data_triggers()
+                .get(&trigger_id)
+                .expect("trigger remains staged after direct traversal rejection")
+                .repeats,
+            Repeats::Exactly(1),
+            "depth 256 must be rejected before its trigger executes"
+        );
+    }
+
+    #[test]
     fn authenticated_generic_ivm_trigger_executes_without_contract_identity() {
         use iroha_data_model::{
             events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
@@ -119678,7 +119374,8 @@ seiyaku IdentitylessRawCallback {
             let event = ExecuteTriggerEvent {
                 trigger_id: trigger_id.clone(),
                 authority: ALICE_ID.clone(),
-                args: Json::from_string_unchecked(r#"{"condition_code":7}"#.to_owned()),
+                args: Json::from_raw_json(r#"{"condition_code":7}"#.to_owned())
+                    .expect("valid trigger arguments JSON"),
             };
             let denied_events_before = stx.world.external_event_buf.len();
             ivm::reset_argument_record_decode_count();
@@ -121287,10 +120984,6 @@ seiyaku IdentitylessRawCallback {
         )
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the fixture assembles and signs one complete multi-route admission certificate"
-    )]
     fn queue_plan_admission_certificate_for_state_test(
         state: &State,
         routing_plan: crate::queue::RoutingPlan,
@@ -121751,6 +121444,143 @@ seiyaku IdentitylessRawCallback {
             state.validate_certified_merge_entry_for_global_order(&forged_entry),
             Err(MergeLedgerCommitError::IncarnationContext(_))
         ));
+    }
+
+    #[test]
+    fn restart_authenticates_queue_plan_predecessor_from_durable_kura_before_state_replay() {
+        let (state, validator_keypairs, commit_keypairs, parent) =
+            configured_single_lane_merge_state();
+        let kura = Arc::clone(&state.kura);
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x52,
+        );
+        let candidate = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![certificate],
+            )
+            .expect("canonical QueuePlan candidate construction")
+            .expect("QueuePlan controls produce a standalone candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        kura.store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+            .expect("persist QueuePlan merge carrier before State publication");
+        drop(state);
+
+        let mut restarted = State::try_new_with_chain(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("durable QueuePlan predecessor authenticates before State block replay");
+        assert_eq!(
+            restarted.committed_height(),
+            0,
+            "startup recovery must not pretend future Kura carriers are in State"
+        );
+        assert!(
+            restarted.merge_ledger().is_empty(),
+            "the future carrier remains unpublished until exact State replay"
+        );
+
+        restarted.push_block_hash_for_testing(parent.hash());
+        restarted.push_block_hash_for_testing(carrier.hash());
+        restarted
+            .recover_merge_ledger_from_kura()
+            .expect("exact State replay hydrates the authenticated QueuePlan carrier");
+        assert_eq!(restarted.merge_ledger().snapshot()[0].as_ref(), &entry);
+    }
+
+    #[test]
+    fn restart_rejects_queue_plan_predecessor_conflicting_with_durable_kura() {
+        let (state, validator_keypairs, commit_keypairs, parent) =
+            configured_single_lane_merge_state();
+        let kura = Arc::clone(&state.kura);
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let (_, valid_certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan.clone(),
+            &validator_keypairs,
+            1,
+            0x53,
+        );
+        let mut candidate = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![valid_certificate],
+            )
+            .expect("canonical QueuePlan candidate construction")
+            .expect("QueuePlan controls produce a standalone candidate");
+
+        let conflicting_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"conflicting-queue-plan-restart-predecessor",
+        ));
+        {
+            let mut block_hashes = state.block_hashes.block_and_revert();
+            block_hashes.push(conflicting_predecessor);
+            block_hashes.commit();
+        }
+        let (_, conflicting_certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x54,
+        );
+        {
+            let mut block_hashes = state.block_hashes.block_and_revert();
+            block_hashes.push(parent.hash());
+            block_hashes.commit();
+        }
+        candidate.queue_plan_admissions = vec![conflicting_certificate];
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        kura.store_block_with_merge_entry(Arc::new(carrier), &entry)
+            .expect("persist cryptographically valid conflicting QueuePlan carrier");
+        drop(state);
+
+        let recovery = State::try_new_with_chain(
+            World::default(),
+            kura,
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        );
+        let error = match recovery {
+            Ok(_) => panic!("durable Kura history must reject a conflicting QueuePlan predecessor"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                error,
+                MergeLedgerCommitError::ExecutionBatchInvalid(ref message)
+                    if message.contains(
+                        "queue-plan admission predecessor is absent or differs from canonical history"
+                    )
+            ),
+            "unexpected conflicting predecessor rejection: {error}"
+        );
     }
 
     #[test]
@@ -122769,6 +122599,60 @@ seiyaku IdentitylessRawCallback {
         assert!(
             kura.read_roster_metadata(1).is_none(),
             "v2 authority must not populate the legacy roster sidecar"
+        );
+    }
+
+    #[test]
+    fn v2_authority_requires_exact_context_before_post_execution_mutation() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypairs = configure_commit_topology(&state, 4);
+        let topology = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let genesis: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, Some(&genesis))
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let block_hash = block.hash();
+        let mut state_block = state.block(block.header());
+        let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                state_block.apply_without_execution_with_verified_v2_finality(&committed, topology);
+        }));
+
+        let panic = match failure {
+            Ok(_) => panic!("v2 apply without an exact context must fail closed"),
+            Err(payload) => panic_payload_text(payload),
+        };
+        assert!(
+            panic.contains("committed v2 block must have an exact finality context"),
+            "unexpected v2 context failure: {panic}"
+        );
+        assert!(
+            state_block
+                .block_hashes
+                .iter()
+                .all(|hash| *hash != block_hash),
+            "failed v2 pre-apply validation must not publish the block hash"
+        );
+        assert!(
+            !state_block.transactions.has_staged_block(),
+            "failed v2 pre-apply validation must not publish transaction history"
         );
     }
 
@@ -125471,172 +125355,6 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
-    fn aggregate_quantities_merges_duplicate_ids() {
-        let ids = vec![1, 1, 2];
-        let qtys = vec![
-            Quantity::from(5_u32),
-            Quantity::from(3_u32),
-            Quantity::from(2_u32),
-        ];
-
-        let aggregated = aggregate_quantities(&ids, &qtys)
-            .expect("valid non-negative quantities should aggregate without overflow");
-
-        assert_eq!(aggregated.len(), 2, "duplicate ids should coalesce");
-        assert_eq!(aggregated[0], (1, Quantity::from(8_u32)));
-        assert_eq!(aggregated[1], (2, Quantity::from(2_u32)));
-    }
-
-    #[test]
-    fn detached_merge_quantity_aggregation_overflow_is_atomic() {
-        let mut maximum_bytes = vec![0xff_u8; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
-        *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7f;
-        let maximum_mantissa = iroha_primitives::bigint::BigInt::from_twos_bytes(&maximum_bytes)
-            .expect("maximum signed 512-bit mantissa");
-        let maximum = Quantity::from_canonical_numeric(Numeric::new(maximum_mantissa, 0))
-            .expect("maximum signed mantissa is a valid quantity");
-
-        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        let initial_balance = state_block
-            .world
-            .assets
-            .get(&asset_id)
-            .expect("asset exists")
-            .as_ref()
-            .clone();
-        let initial_total = state_block
-            .world
-            .asset_definition(&definition_id)
-            .expect("asset definition exists")
-            .total_quantity()
-            .clone();
-        assert!(
-            state_block.world.external_event_buf.is_empty(),
-            "fixture starts without buffered events"
-        );
-
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.add_asset_add(asset_id.clone(), maximum.clone());
-        delta.add_asset_add(asset_id.clone(), Quantity::one());
-        delta.add_total_add(definition_id.clone(), maximum);
-        delta.add_total_add(definition_id.clone(), Quantity::one());
-
-        let error = delta
-            .merge_into(&mut state_block, &ALICE_ID)
-            .expect_err("duplicate quantity aggregation must reject overflow");
-        assert!(matches!(
-            error,
-            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::InstructionFailed(
-                    iroha_data_model::isi::error::InstructionExecutionError::Math(
-                        iroha_data_model::isi::error::MathError::Overflow
-                    )
-                )
-            )
-        ));
-        assert_eq!(
-            state_block
-                .world
-                .assets
-                .get(&asset_id)
-                .expect("asset remains")
-                .as_ref(),
-            &initial_balance,
-            "failed aggregation must not mutate the asset balance"
-        );
-        assert_eq!(
-            state_block
-                .world
-                .asset_definition(&definition_id)
-                .expect("asset definition remains")
-                .total_quantity(),
-            &initial_total,
-            "failed aggregation must not mutate the asset total"
-        );
-        assert!(
-            state_block.world.external_event_buf.is_empty(),
-            "failed aggregation must not emit events"
-        );
-    }
-
-    #[test]
-    fn detached_asset_credit_over_holding_limit_is_atomic() {
-        let (state, definition_id, asset_id) = snapshot_state_with_numeric_asset();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut state_block = state.block(header);
-        {
-            let mut setup = state_block.transaction();
-            SetAssetHoldingLimit::new(
-                ALICE_ID.clone(),
-                definition_id.clone(),
-                Some(Quantity::from(5_u32)),
-            )
-            .execute(&ALICE_ID, &mut setup)
-            .expect("asset owner sets a holding limit at the current balance");
-            setup.apply();
-        }
-        let _ = state_block.world.take_external_events();
-
-        let initial_balance = state_block
-            .world
-            .assets
-            .get(&asset_id)
-            .expect("asset exists")
-            .as_ref()
-            .clone();
-        let initial_total = state_block
-            .world
-            .asset_definition(&definition_id)
-            .expect("asset definition exists")
-            .total_quantity()
-            .clone();
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.add_asset_add(asset_id.clone(), Quantity::one());
-        delta.add_total_add(definition_id.clone(), Quantity::one());
-
-        let error = delta
-            .merge_into(&mut state_block, &ALICE_ID)
-            .expect_err("detached credit above the holding limit must fail");
-        assert!(matches!(
-            error,
-            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
-                iroha_data_model::ValidationFail::InstructionFailed(
-                    InstructionExecutionError::AssetTransferAdmission(
-                        iroha_data_model::isi::error::AssetTransferAdmissionError::HoldingLimitExceeded(
-                            _
-                        )
-                    )
-                )
-            )
-        ));
-        assert_eq!(
-            state_block
-                .world
-                .assets
-                .get(&asset_id)
-                .expect("asset remains")
-                .as_ref(),
-            &initial_balance,
-            "rejected detached credit must not mutate the balance"
-        );
-        assert_eq!(
-            state_block
-                .world
-                .asset_definition(&definition_id)
-                .expect("asset definition remains")
-                .total_quantity(),
-            &initial_total,
-            "rejected detached credit must not mutate total supply"
-        );
-        assert!(
-            state_block.world.external_event_buf.is_empty(),
-            "rejected detached credit must not emit events"
-        );
-    }
-
-    #[test]
     fn gather_last_wins_preserves_latest_value() {
         let owners = vec!["acct", "acct", "acct"];
         let key_ids = vec![1u32, 1u32, 2u32];
@@ -127426,6 +127144,11 @@ seiyaku IdentitylessRawCallback {
             [],
         );
         let state = State::new(world, kura.clone(), query_handle);
+        {
+            let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.block_cadence_ms = nonzero!(1_u64);
+            parameters.commit();
+        }
 
         let block1 = new_dummy_block_with_payload(|header| {
             header.set_height(NonZeroU64::new(1).unwrap());
@@ -127854,7 +127577,9 @@ seiyaku IdentitylessRawCallback {
             .prepare_contract_query_program(code_hash, &program)
             .expect("cold preparation");
         let allocation = {
-            let mut runtime = first.checkout_runtime(GAS_LIMIT).expect("cold runtime");
+            let mut runtime = first
+                .checkout_runtime(GAS_LIMIT, ivm::Memory::HEAP_MAX_SIZE)
+                .expect("cold runtime");
             let allocation = runtime
                 .memory
                 .load_region(0, 1)
@@ -127873,7 +127598,9 @@ seiyaku IdentitylessRawCallback {
         let second = state
             .prepare_contract_query_program(code_hash, &[])
             .expect("content-addressed hit");
-        let runtime = second.checkout_runtime(GAS_LIMIT).expect("warm runtime");
+        let runtime = second
+            .checkout_runtime(GAS_LIMIT, ivm::Memory::HEAP_MAX_SIZE)
+            .expect("warm runtime");
         assert_eq!(runtime.register(7), 0);
         assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
         assert_eq!(
@@ -129893,47 +129620,6 @@ seiyaku MissingBytecodeTrigger {
         );
 
         assert!(stx.world.asset_metadata.get(&asset_id).is_none());
-    }
-
-    #[test]
-    fn detached_merge_removes_asset_metadata_on_zero_balance() {
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        );
-        let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-        let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let asset_def = {
-            let __asset_definition_id = asset_def_id;
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }
-        .build(&ALICE_ID);
-        let asset = Asset::new(asset_id.clone(), 1_u32);
-
-        let mut world = World::with_assets([domain], [account], [asset_def], [asset], []);
-        let mut metadata = Metadata::default();
-        let key: Name = "tag".parse().unwrap();
-        let value = Json::from(norito::json!("detached"));
-        metadata.insert(key, value);
-        world.asset_metadata.insert(asset_id.clone(), metadata);
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query);
-
-        let block = new_dummy_block_with_payload(|_| {});
-        let mut state_block = state.block(block.as_ref().header());
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.add_asset_sub(asset_id.clone(), Quantity::from(1_u32));
-        delta
-            .merge_into(&mut state_block, &ALICE_ID)
-            .expect("detached merge succeeds");
-
-        assert!(state_block.world.assets.get(&asset_id).is_none());
-        assert!(state_block.world.asset_metadata.get(&asset_id).is_none());
     }
 
     #[tokio::test]

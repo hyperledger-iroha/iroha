@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -18,10 +19,49 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+
 
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
     return path
+
+
+def write_topology_qualification(path: Path) -> Path:
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(b"release-runner-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-release-runner-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": "reference-sdk-release-20260701",
+            "environment": "production",
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(CANONICAL_READINESS_LANES),
+        "recognized_lane_slot_count": len(CANONICAL_READINESS_LANES),
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def topology_args(tmp_path: Path) -> list[str]:
+    return [
+        "--topology-qualification-summary",
+        str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+    ]
 
 
 def complete_args(tmp_path: Path) -> list[str]:
@@ -40,10 +80,13 @@ def complete_args(tmp_path: Path) -> list[str]:
         "5",
         "--max-smoke-duration-secs",
         "1800",
+        *topology_args(tmp_path),
         "--release-archive-evidence",
         str(write_payload(payload_dir / "release-archive.json")),
         "--signed-manifest-evidence",
         str(write_payload(payload_dir / "signed-manifest.json")),
+        "--supply-chain-evidence",
+        str(write_payload(payload_dir / "supply-chain.json")),
         "--downstream-bindings-evidence",
         str(write_payload(payload_dir / "downstream-bindings.json")),
         "--cookbook-smoke-evidence",
@@ -94,6 +137,9 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert plan["external_evidence"]["release_archive"] == [
         str(tmp_path / "payloads" / "release-archive.json")
     ]
+    assert plan["external_evidence"]["supply_chain"] == [
+        str(tmp_path / "payloads" / "supply-chain.json")
+    ]
     assert plan["evidence_contract"]["release_archive"]["schema"] == (
         "sorafs.reference_sdk.release_archive_canary.v1"
     )
@@ -107,6 +153,13 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert (
         "private_key_absent"
         in plan["evidence_contract"]["signed_manifest"]["required_payload_fields"]
+    )
+    assert plan["evidence_contract"]["supply_chain"]["schema"] == (
+        "sorafs.reference_sdk.supply_chain_canary.v1"
+    )
+    assert (
+        "vulnerability_report_digest_hex"
+        in plan["evidence_contract"]["supply_chain"]["required_payload_fields"]
     )
     assert (
         "policy_digest_hex"
@@ -145,6 +198,7 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert "check_sorafs_reference_sdk_release_evidence.py" in verifier[1]
     assert "--evidence" in verifier
     assert str(tmp_path / "payloads" / "cookbook-smoke.json") in verifier
+    assert str(tmp_path / "payloads" / "supply-chain.json") in verifier
     assert verifier.count("--release-archive-evidence") == 0
     assert verifier.count("--require-kind") == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert "--max-smoke-duration-secs" in verifier
@@ -359,6 +413,7 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800700000",
+            *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -483,6 +538,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800700000",
+            *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -510,6 +566,7 @@ def test_subset_gate_rejects_evidence_for_unrequired_kind(
         [
             "--out-dir",
             str(tmp_path / "evidence"),
+            *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -534,6 +591,7 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
             [
                 "--out-dir",
                 str(tmp_path / "evidence"),
+                *topology_args(tmp_path),
                 "--require-kind",
                 "unknown",
                 "--dry-run",

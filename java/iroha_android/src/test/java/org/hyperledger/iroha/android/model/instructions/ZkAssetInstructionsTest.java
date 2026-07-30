@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.model.instructions;
 import java.util.Arrays;
 import java.util.Collections;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.NativeSignedTransaction;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
@@ -107,18 +108,28 @@ public final class ZkAssetInstructionsTest {
   }
 
   private static void proofAttachmentValidatesBackendAndJsonShape() {
+    final byte[] proofBytes = new byte[] {0x40, 0x41};
     final ProofAttachment attachment =
         new ProofAttachment(
             "halo2/ipa",
-            new byte[] {0x40, 0x41},
+            proofBytes,
             new ProofVerifierKeyRef("halo2/ipa", "unshield-v3"),
             fill(0x55, 32),
-            fill(0x66, 32));
+            IrohaHash.prehash(proofBytes));
     final String json = attachment.toNativeJson();
     assert json.contains("\"backend\":\"halo2/ipa\"");
     assert json.contains("\"proof_b64\":\"QEE=\"");
     assert json.contains("\"vk_ref\":{\"backend\":\"halo2/ipa\",\"name\":\"unshield-v3\"}");
+    assert json.contains(
+        "\"envelope_hash_hex\":\"99108c58a4d312fe46d8e0d5d36340d62413cd2ffb4b1c4ec8d78ea40b8679a1\"");
     assert !json.contains("vk_inline");
+    assert new ProofAttachment(
+            "halo2/ipa",
+            proofBytes,
+            new ProofVerifierKeyRef("halo2/ipa", "unshield-v3"))
+        .toNativeJson()
+        .contains(
+            "\"envelope_hash_hex\":\"99108c58a4d312fe46d8e0d5d36340d62413cd2ffb4b1c4ec8d78ea40b8679a1\"");
 
     expectThrows(
         () -> new ProofAttachment(
@@ -133,6 +144,13 @@ public final class ZkAssetInstructionsTest {
             new ProofVerifierKeyRef("halo2/ipa", "vk"),
             new byte[32],
             null));
+    expectThrows(
+        () -> new ProofAttachment(
+            "halo2/ipa",
+            proofBytes,
+            new ProofVerifierKeyRef("halo2/ipa", "vk"),
+            null,
+            fill(0x66, 32)));
     expectThrows(() -> ProofVerifierKeyRef.fromWireId("missing-separator"));
   }
 
@@ -324,8 +342,10 @@ public final class ZkAssetInstructionsTest {
   private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
     assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 21;
+    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 1;
     if (!NativeSignerBridge.isNativeAvailable()) {
-      return;
+      throw new AssertionError(
+          "connect_norito_bridge ABI 21 native-signer contract revision 1 is required");
     }
 
     final byte[] seed = new byte[32];

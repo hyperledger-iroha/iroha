@@ -29,6 +29,13 @@ SPEC.loader.exec_module(MODULE)
 
 import check_sorafs_production_readiness as CHECKER  # noqa: E402
 import sccp_release_common as RELEASE_CRYPTO  # noqa: E402
+from sorafs_resilience_test_support import (  # noqa: E402
+    DEFAULT_SIGNING_SEED as RESILIENCE_SIGNING_SEED,
+    public_key_from_seed as resilience_public_key_from_seed,
+    render_summary as render_resilience_summary,
+    resilience_summary as build_resilience_summary,
+    write_resilience_summary,
+)
 
 
 NOW_UNIX = 1_800_900_000
@@ -39,6 +46,97 @@ DEPLOYMENT_ID = "sorafs-mainnet-2026-07"
 ENVIRONMENT = "production"
 RELEASE_SEQUENCE = 1
 PREDECESSOR_SHA256 = "00" * 32
+RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
+    RESILIENCE_SIGNING_SEED
+)
+
+
+def topology_qualification_path(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> Path:
+    """Write one exact non-promotable four-validator qualification summary."""
+
+    path = tmp_path / "l1-topology-qualification.json"
+    payload = {
+        "schema": "sorafs.l1.deployment_qualification.summary.v1",
+        "status": "configuration-qualified",
+        "qualification_scope": "pre-deployment-configuration",
+        "live_evidence_recognized": False,
+        "promotion_eligible": False,
+        "manifest_sha256": hashlib.sha256(b"exact-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-manifest"
+        ).hexdigest(),
+        "deployment": {
+            "deployment_id": deployment_id,
+            "environment": environment,
+        },
+        "validator_count": 4,
+        "storage_provider_count": 2,
+        "gateway_count": 2,
+        "governance_dag_instance_count": 2,
+        "runtime_handle_kinds": ["monitoring", "hsm", "kms", "webauthn"],
+        "runtime_material_policy_valid": True,
+        "signed_model_artifact_count": 1,
+        "required_lane_slots": list(CHECKER.DEFAULT_REQUIRED_GATES),
+        "recognized_lane_slot_count": 17,
+        "errors": [],
+    }
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def topology_binding(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> dict[str, str]:
+    """Return the exact binding derived from the test qualification bytes."""
+
+    path = topology_qualification_path(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    )
+    return {
+        "qualification_summary_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "manifest_sha256": hashlib.sha256(b"exact-manifest").hexdigest(),
+        "canonical_manifest_sha256": hashlib.sha256(
+            b"canonical-manifest"
+        ).hexdigest(),
+        "deployment_id": deployment_id,
+        "environment": environment,
+    }
+
+
+def resilience_qualification_path(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    generated_at_unix: int = GENERATED_AT_UNIX,
+) -> Path:
+    """Write one trusted resilience summary bound to the test topology."""
+
+    path, public_key, _binding = write_resilience_summary(
+        CHECKER,
+        tmp_path / "l1-resilience-qualification.summary",
+        deployment_id=deployment_id,
+        environment=environment,
+        topology_qualification=topology_binding(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+        ),
+        generated_at_unix=generated_at_unix,
+        captured_at_unix=generated_at_unix - 1,
+    )
+    assert public_key == RESILIENCE_SIGNER_PUBLIC_KEY
+    return path
 
 
 def public_key_from_seed(seed: bytes) -> bytes:
@@ -92,24 +190,70 @@ def signer() -> tuple[bytes, bytes]:
 
 
 def prerequisite_specs(
+    tmp_path: Path,
     *,
     evidence_at_unix: int = EVIDENCE_AT_UNIX,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
 ) -> list[str]:
-    """Return exact ordered temporary evidence-anchor arguments."""
+    """Write exact prerequisite manifests and return ordered ID=PATH inputs."""
 
-    return [
-        "{}:{}:{}".format(
-            prerequisite_id,
-            hashlib.sha256(
-                f"temporary:{prerequisite_id}:evidence".encode("ascii")
-            ).hexdigest(),
-            evidence_at_unix,
+    summary_path = tmp_path / "authoritative-gateway-load-summary.json"
+    if not summary_path.exists():
+        summary_path.write_text(
+            json.dumps(
+                gateway_load_summary(
+                    tmp_path,
+                    deployment_id=deployment_id,
+                    environment=environment,
+                    generated_at_unix=evidence_at_unix,
+                ),
+                sort_keys=True,
+            ),
+            encoding="utf-8",
         )
-        for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS
-    ]
+    summary_sha256 = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+    values: list[str] = []
+    for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS:
+        package_path = tmp_path / (
+            "prerequisite-" + prerequisite_id.lower().replace("-", "_") + ".json"
+        )
+        if not package_path.exists():
+            package = {
+                "schema": MODULE.FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_SCHEMA,
+                "prerequisite_id": prerequisite_id,
+                "status": "verified",
+                "deployment": {
+                    "deployment_id": deployment_id,
+                    "environment": environment,
+                },
+                "evidence_generated_at_unix": evidence_at_unix,
+                "topology_qualification": topology_binding(
+                    tmp_path,
+                    deployment_id=deployment_id,
+                    environment=environment,
+                ),
+                "readiness_summary": {
+                    "gate": "gateway_load",
+                    "path": summary_path.name,
+                    "sha256": summary_sha256,
+                },
+                "errors": [],
+            }
+            package_path.write_text(
+                json.dumps(package, sort_keys=True),
+                encoding="utf-8",
+            )
+        values.append(f"{prerequisite_id}={package_path}")
+    return values
 
 
-def lane_summary_paths(tmp_path: Path) -> list[tuple[str, Path]]:
+def lane_summary_paths(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+) -> list[tuple[str, Path]]:
     """Create exact temporary lane-summary bytes for the signing fixture."""
 
     rows: list[tuple[str, Path]] = []
@@ -117,11 +261,20 @@ def lane_summary_paths(tmp_path: Path) -> list[tuple[str, Path]]:
         path = tmp_path / f"reviewed-{gate_name}.json"
         if not path.exists():
             payload = (
-                gateway_load_summary()
+                gateway_load_summary(
+                    tmp_path,
+                    deployment_id=deployment_id,
+                    environment=environment,
+                )
                 if gate_name == "gateway_load"
                 else {
                     "schema": CHECKER.GATE_BY_NAME[gate_name].schema,
                     "status": "ready",
+                    "topology_qualification": topology_binding(
+                        tmp_path,
+                        deployment_id=deployment_id,
+                        environment=environment,
+                    ),
                 }
             )
             path.write_text(
@@ -150,6 +303,24 @@ def prepare_args(
 
     values = [
         "prepare",
+        "--topology-qualification-summary",
+        str(
+            topology_qualification_path(
+                tmp_path,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        ),
+        "--resilience-qualification-summary",
+        str(
+            resilience_qualification_path(
+                tmp_path,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        ),
+        "--resilience-qualification-signer-public-key-hex",
+        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
         "--deployment-id",
         deployment_id,
         "--environment",
@@ -173,9 +344,23 @@ def prepare_args(
         values.extend(
             ["--previous-envelope", str(tmp_path / previous_envelope_name)]
         )
-    for spec in prerequisite_specs() if specs is None else specs:
+    selected_specs = (
+        prerequisite_specs(
+            tmp_path,
+            evidence_at_unix=min(EVIDENCE_AT_UNIX, generated_at_unix),
+            deployment_id=deployment_id,
+            environment=environment,
+        )
+        if specs is None
+        else specs
+    )
+    for spec in selected_specs:
         values.extend(["--prerequisite", spec])
-    for gate_name, path in lane_summary_paths(tmp_path):
+    for gate_name, path in lane_summary_paths(
+        tmp_path,
+        deployment_id=deployment_id,
+        environment=environment,
+    ):
         values.extend(["--lane-summary", f"{gate_name}={path}"])
     return values
 
@@ -198,6 +383,24 @@ def finalize_args(
 
     values = [
         "finalize",
+        "--topology-qualification-summary",
+        str(
+            topology_qualification_path(
+                tmp_path,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        ),
+        "--resilience-qualification-summary",
+        str(
+            resilience_qualification_path(
+                tmp_path,
+                deployment_id=deployment_id,
+                environment=environment,
+            )
+        ),
+        "--resilience-qualification-signer-public-key-hex",
+        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
         "--signing-payload",
         str(tmp_path / payload_name),
         "--signature-file",
@@ -256,7 +459,13 @@ def write_signing_payload(path: Path, unsigned: dict) -> bytes:
     return payload
 
 
-def gateway_load_summary() -> dict:
+def gateway_load_summary(
+    tmp_path: Path,
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    generated_at_unix: int = GENERATED_AT_UNIX,
+) -> dict:
     """Build one temporary ready lane summary for direct aggregate acceptance."""
 
     gate = CHECKER.GATE_BY_NAME["gateway_load"]
@@ -264,9 +473,9 @@ def gateway_load_summary() -> dict:
     for kind_name in gate.required_kinds:
         kind_schema = CHECKER.GATE_REQUIRED_KIND_SCHEMAS["gateway_load"][kind_name]
         fingerprint = {
-            "generated_at_unix": GENERATED_AT_UNIX,
-            "deployment_id": DEPLOYMENT_ID,
-            "environment": ENVIRONMENT,
+            "generated_at_unix": generated_at_unix,
+            "deployment_id": deployment_id,
+            "environment": environment,
             "deployment_context_reviewed": True,
             "metric_count": len(CHECKER.GATEWAY_LOAD_REQUIRED_METRICS),
             "metrics": list(CHECKER.GATEWAY_LOAD_REQUIRED_METRICS),
@@ -274,6 +483,50 @@ def gateway_load_summary() -> dict:
             "staging_report_digest_hex": "bc" * 32,
             "suite_report_digest_hex": "cd" * 32,
         }
+        if kind_name == "staging_load":
+            streams = [
+                {"name": f"gateway-load-stream-{index:04d}"}
+                for index in range(1_200)
+            ]
+            providers = [
+                {"name": "gateway-load-provider-a"},
+                {"name": "gateway-load-provider-b"},
+                {"name": "gateway-load-provider-c"},
+                {"name": "gateway-load-provider-d"},
+            ]
+            fingerprint.update(
+                {
+                    "schema": kind_schema,
+                    "fixture_bundle_digest_hex": "ef" * 32,
+                    "gateway_version": "iroha-gateway 1.0.0-rc.1",
+                    "hardware_profile": {
+                        "name": "gateway-load-hardware-c6i-2xlarge"
+                    },
+                    "cache_coverage": {
+                        "cold_cache_exercised": True,
+                        "warm_cache_exercised": True,
+                        "mixed_cache_exercised": True,
+                    },
+                    "duration_seconds": 86_400,
+                    "stream_count": len(streams),
+                    "streams": streams,
+                    "peak_concurrent_range_streams": 1_000,
+                    "provider_count": len(providers),
+                    "providers": providers,
+                    "load_conditions": {
+                        "corruption_injection_bps": 100,
+                        "revocation_exercised": True,
+                        "malformed_flood_exercised": True,
+                        "denylist_pressure_exercised": True,
+                        "rate_limit_pressure_exercised": True,
+                        "failover_exercised": True,
+                    },
+                    "success_rate_bps": 9_950,
+                    "error_rate_bps": 50,
+                    "p95_latency_ms": 1_200,
+                    "p99_latency_ms": 2_200,
+                }
+            )
         required_rows[kind_name] = {
             "schema": kind_schema,
             "present": True,
@@ -300,6 +553,11 @@ def gateway_load_summary() -> dict:
     return {
         "schema": gate.schema,
         "status": "ready",
+        "topology_qualification": topology_binding(
+            tmp_path,
+            deployment_id=deployment_id,
+            environment=environment,
+        ),
         "required_kinds": list(gate.required_kinds),
         "thresholds": {"max_evidence_bytes": 2_097_152},
         "evidence_file_count": len(gate.required_kinds),
@@ -334,8 +592,23 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     assert [row["id"] for row in unsigned["prerequisites"]] == list(
         MODULE.FOUNDATIONAL_PREREQUISITE_IDS
     )
+    assert all(
+        set(row) == MODULE.FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
+        for row in unsigned["prerequisites"]
+    )
+    expected_prerequisite_hashes = [
+        hashlib.sha256(Path(spec.partition("=")[2]).read_bytes()).hexdigest()
+        for spec in prerequisite_specs(tmp_path)
+    ]
+    assert [
+        row["evidence_anchor_sha256"] for row in unsigned["prerequisites"]
+    ] == expected_prerequisite_hashes
     assert [row["gate"] for row in unsigned["lane_summaries"]] == list(
         CHECKER.DEFAULT_REQUIRED_GATES
+    )
+    assert (
+        set(unsigned["resilience_qualification"])
+        == CHECKER.RESILIENCE_QUALIFICATION_BINDING_FIELDS
     )
     assert signing_payload == MODULE.foundational_signing_payload(unsigned)
 
@@ -364,6 +637,95 @@ def test_prepare_and_finalize_external_signer_roundtrip(
     )
     assert errors == []
     assert context == (DEPLOYMENT_ID, ENVIRONMENT)
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("missing", "failed to load evidence JSON"),
+        ("stale", "exceeds max summary artifact age"),
+        ("tampered", "receipt signature verification failed"),
+        ("wrong_deployment", "deployment_id must match --deployment-id"),
+    ],
+)
+def test_prepare_rejects_invalid_resilience_qualification(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+    case: str,
+    expected: str,
+) -> None:
+    """Foundational prepare must authenticate the exact resilience attachment."""
+
+    _seed, public_key = signer
+    args = prepare_args(tmp_path, public_key)
+    resilience_path = tmp_path / "l1-resilience-qualification.summary"
+    if case == "missing":
+        resilience_path.unlink()
+    elif case == "stale":
+        stale_generated_at = NOW_UNIX - MAX_AGE_SECS - 1
+        stale = build_resilience_summary(
+            CHECKER,
+            deployment_id=DEPLOYMENT_ID,
+            environment=ENVIRONMENT,
+            topology_qualification=topology_binding(tmp_path),
+            generated_at_unix=stale_generated_at,
+            captured_at_unix=stale_generated_at,
+        )
+        resilience_path.write_bytes(render_resilience_summary(stale))
+    elif case == "tampered":
+        tampered = json.loads(resilience_path.read_text(encoding="utf-8"))
+        signature = tampered["receipt_authentication"]["signature_hex"]
+        tampered["receipt_authentication"]["signature_hex"] = (
+            ("0" if signature[0] != "0" else "1") + signature[1:]
+        )
+        resilience_path.write_bytes(render_resilience_summary(tampered))
+    else:
+        foreign = build_resilience_summary(
+            CHECKER,
+            deployment_id="sorafs-mainnet-foreign",
+            environment=ENVIRONMENT,
+            topology_qualification=topology_binding(tmp_path),
+            generated_at_unix=GENERATED_AT_UNIX,
+            captured_at_unix=EVIDENCE_AT_UNIX,
+        )
+        resilience_path.write_bytes(render_resilience_summary(foreign))
+
+    assert MODULE.main(args) == 2
+    assert expected in capsys.readouterr().err
+
+
+def test_prepare_and_finalize_reject_substituted_topology_summary(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+) -> None:
+    """Reject a valid-looking qualification whose exact binding was not reviewed."""
+
+    seed, public_key = signer
+    original = topology_qualification_path(tmp_path)
+    substitute = tmp_path / "substituted-topology-qualification.json"
+    substituted_payload = json.loads(original.read_text(encoding="utf-8"))
+    substituted_payload["manifest_sha256"] = hashlib.sha256(
+        b"substituted-exact-manifest"
+    ).hexdigest()
+    substitute.write_text(
+        json.dumps(substituted_payload, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    prepare = prepare_args(tmp_path, public_key)
+    prepare[prepare.index("--topology-qualification-summary") + 1] = str(substitute)
+    assert MODULE.main(prepare) == 2
+    assert "must match the reviewed topology" in capsys.readouterr().err
+
+    prepare_and_sign(tmp_path, seed, public_key)
+    finalize = finalize_args(tmp_path, public_key)
+    finalize[finalize.index("--topology-qualification-summary") + 1] = str(
+        substitute
+    )
+    assert MODULE.main(finalize) == 2
+    assert "must match the reviewed topology" in capsys.readouterr().err
 
 
 def test_prepare_rejects_missing_and_reordered_lane_summary_inventory(
@@ -533,8 +895,14 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
     aggregate_out = tmp_path / "aggregate-summary.json"
     assert (
         CHECKER.main(
-            [
-                "--evidence-dir",
+                    [
+                        "--topology-qualification-summary",
+                        str(topology_qualification_path(tmp_path)),
+                        "--resilience-qualification-summary",
+                        str(resilience_qualification_path(tmp_path)),
+                        "--resilience-qualification-signer-public-key-hex",
+                        RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
+                        "--evidence-dir",
                 str(evidence_dir),
                 "--require-gate",
                 "gateway_load",
@@ -559,7 +927,7 @@ def test_finalized_envelope_is_accepted_by_direct_aggregate_gate(
         == 0
     )
     aggregate = json.loads(aggregate_out.read_text(encoding="utf-8"))
-    assert aggregate["status"] == "ready"
+    assert aggregate["status"] == CHECKER.NON_PROMOTABLE_STATUS
     assert aggregate["recognized_summary_count"] == 1
     assert aggregate["foundational_prerequisites"]["valid"] is True
 
@@ -595,95 +963,98 @@ def test_prepare_is_byte_deterministic_and_supports_reviewed_response_files(
 
 
 @pytest.mark.parametrize(
-    ("mutate", "expected"),
+    ("case", "expected"),
     [
+        ("missing", "exactly nine --prerequisite values are required"),
+        ("wrong_id", "prerequisite_id must match its ordered command-line id"),
+        ("reordered", "canonical order"),
         (
-            lambda values: values[:-1],
-            "exactly nine --prerequisite values are required",
+            "wrong_schema",
+            "evidence package schema must match the foundational prerequisite",
         ),
         (
-            lambda values: [values[0], values[0], *values[2:]],
-            "must not contain duplicate ids",
+            "underlying_schema",
+            "readiness_summary schema must match its gate",
         ),
-        (
-            lambda values: [values[1], values[0], *values[2:]],
-            "canonical order",
-        ),
-        (
-            lambda values: [
-                values[0],
-                values[1].replace("SF-1:", "SF-99:", 1),
-                *values[2:],
-            ],
-            "contain unknown ids",
-        ),
-        (
-            lambda values: [
-                values[0].replace(values[0].split(":")[1], "00" * 32),
-                *values[1:],
-            ],
-            "anchor must not be zero",
-        ),
-        (
-            lambda values: [
-                values[0].replace(
-                    values[0].split(":")[1],
-                    values[0].split(":")[1].upper(),
-                ),
-                *values[1:],
-            ],
-            "anchor must be canonical lowercase SHA-256",
-        ),
-        (
-            lambda values: [
-                values[0],
-                "{}:{}:{}".format(
-                    "SF-1",
-                    values[0].split(":")[1],
-                    EVIDENCE_AT_UNIX,
-                ),
-                *values[2:],
-            ],
-            "must use unique evidence anchors",
-        ),
-        (
-            lambda values: [
-                "{}:{}:{}".format(
-                    values[0].split(":")[0],
-                    values[0].split(":")[1],
-                    NOW_UNIX - MAX_AGE_SECS - 1,
-                ),
-                *values[1:],
-            ],
-            "exceeds max summary artifact age",
-        ),
-        (
-            lambda values: [
-                "{}:{}:{}".format(
-                    values[0].split(":")[0],
-                    values[0].split(":")[1],
-                    GENERATED_AT_UNIX + 1,
-                ),
-                *values[1:],
-            ],
-            "must not be later than the signed envelope",
-        ),
+        ("path_swap", "prerequisite_id must match its ordered command-line id"),
+        ("stale", "exceeds max summary artifact age"),
+        ("tamper", "digest does not match the exact file"),
     ],
 )
-def test_prepare_rejects_missing_duplicate_reordered_or_bad_anchors(
+def test_prepare_rejects_invalid_prerequisite_evidence_packages(
     tmp_path: Path,
     signer: tuple[bytes, bytes],
     capsys,
-    mutate,
+    case: str,
     expected: str,
 ) -> None:
-    """Reject malformed foundational inventories before writing signable bytes."""
+    """Reject wrong identities, ordering, schema, paths, freshness, and bytes."""
 
     _seed, public_key = signer
-    args = prepare_args(tmp_path, public_key, specs=mutate(prerequisite_specs()))
+    evidence_at_unix = (
+        NOW_UNIX - MAX_AGE_SECS - 1 if case == "stale" else EVIDENCE_AT_UNIX
+    )
+    specs = prerequisite_specs(
+        tmp_path,
+        evidence_at_unix=evidence_at_unix,
+    )
+    if case == "missing":
+        specs = specs[:-1]
+    elif case == "wrong_id":
+        package_path = Path(specs[0].partition("=")[2])
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        package["prerequisite_id"] = "SF-1"
+        package_path.write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+    elif case == "reordered":
+        specs[0], specs[1] = specs[1], specs[0]
+    elif case == "wrong_schema":
+        package_path = Path(specs[0].partition("=")[2])
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+        package["schema"] = "sorafs.production_readiness.unknown.v1"
+        package_path.write_text(json.dumps(package, sort_keys=True), encoding="utf-8")
+    elif case == "underlying_schema":
+        summary_path = tmp_path / "authoritative-gateway-load-summary.json"
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        summary["schema"] = "sorafs.production_readiness.unknown.v1"
+        summary_path.write_text(json.dumps(summary, sort_keys=True), encoding="utf-8")
+        summary_sha256 = hashlib.sha256(summary_path.read_bytes()).hexdigest()
+        for spec in specs:
+            package_path = Path(spec.partition("=")[2])
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+            package["readiness_summary"]["sha256"] = summary_sha256
+            package_path.write_text(
+                json.dumps(package, sort_keys=True),
+                encoding="utf-8",
+            )
+    elif case == "path_swap":
+        first_id, _, first_path = specs[0].partition("=")
+        second_id, _, second_path = specs[1].partition("=")
+        specs[0] = f"{first_id}={second_path}"
+        specs[1] = f"{second_id}={first_path}"
+    elif case == "tamper":
+        summary_path = tmp_path / "authoritative-gateway-load-summary.json"
+        summary_path.write_bytes(summary_path.read_bytes() + b"\n")
+    args = prepare_args(tmp_path, public_key, specs=specs)
     assert MODULE.main(args) == 2
     captured = capsys.readouterr()
     assert expected in captured.err
+    assert not (tmp_path / "foundational-signing-payload.bin").exists()
+
+
+def test_prepare_rejects_digest_only_prerequisite_rows(
+    tmp_path: Path,
+    signer: tuple[bytes, bytes],
+    capsys,
+) -> None:
+    """Do not retain the former caller-supplied digest/timestamp production path."""
+
+    _seed, public_key = signer
+    legacy = [
+        f"{prerequisite_id}:{'ab' * 32}:{EVIDENCE_AT_UNIX}"
+        for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS
+    ]
+    assert MODULE.main(prepare_args(tmp_path, public_key, specs=legacy)) == 2
+    assert "must use ID=PATH" in capsys.readouterr().err
     assert not (tmp_path / "foundational-signing-payload.bin").exists()
 
 
@@ -704,7 +1075,7 @@ def test_prepare_rejects_missing_duplicate_reordered_or_bad_anchors(
         ),
         (
             {"deployment_id": "bearer_token=runtime-only-value"},
-            "must not contain secret-looking values",
+            "topology qualification deployment_id must be",
         ),
         (
             {"environment": "development"},

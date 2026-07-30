@@ -624,7 +624,6 @@ __all__ = [
     "I105NetworkPrefix",
     "CouncilMember",
     "CouncilCurrentStatus",
-    "CouncilAuditMetadata",
     "GovernanceProposalStatus",
     "GovernanceLockCustody",
     "GovernanceLockRecord",
@@ -645,8 +644,6 @@ __all__ = [
     "BallotSubmitResult",
     "ProtectedNamespacesApplyResult",
     "ProtectedNamespacesStatus",
-    "VrfCandidate",
-    "CouncilPersistResult",
     "PeerInfo",
     "PeerTelemetryConfig",
     "PeerTelemetryLocation",
@@ -6013,18 +6010,6 @@ class CouncilCurrentStatus:
 
 
 @dataclass(frozen=True)
-class CouncilAuditMetadata:
-    """Seed and beacon metadata from ``GET /v1/gov/council/audit``."""
-
-    epoch: int
-    seed_hex: str
-    beacon_hex: str
-    chain_id: str
-    members_count: int
-    candidate_count: int
-
-
-@dataclass(frozen=True)
 class GovernanceProposalStatus:
     """Result returned by ``GET /v1/gov/proposals/{id}``."""
 
@@ -6578,34 +6563,6 @@ class ProtectedNamespacesStatus:
 
     found: bool
     namespaces: List[str]
-
-
-@dataclass(frozen=True)
-class VrfCandidate:
-    """VRF candidate descriptor for council persistence."""
-
-    account_id: str
-    variant: str
-    pk_b64: str
-    proof_b64: str
-
-    def to_payload(self) -> Dict[str, str]:
-        return {
-            "account_id": self.account_id,
-            "variant": self.variant,
-            "pk_b64": self.pk_b64,
-            "proof_b64": self.proof_b64,
-        }
-
-
-@dataclass(frozen=True)
-class CouncilPersistResult:
-    """Response from ``POST /v1/gov/council/persist``."""
-
-    epoch: int
-    members: List[CouncilMember]
-    total_candidates: int
-    verified: int
 
 
 @dataclass(frozen=True)
@@ -11359,8 +11316,16 @@ class ToriiClient:
         return ConfigurationSnapshot.from_payload(mapping)
 
     def update_configuration(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Update node configuration (`POST /v1/configuration`)."""
+        """Update mutable node configuration (`POST /v1/configuration`).
 
+        Confidential gas is consensus-relevant startup state and is rejected here.
+        """
+
+        if "confidential_gas" in payload:
+            raise ValueError(
+                "confidential_gas is read-only runtime state; change the startup "
+                "configuration and restart the node"
+            )
         response = self._request(
             "POST",
             "/v1/configuration",
@@ -11374,37 +11339,10 @@ class ToriiClient:
         return self._ensure_mapping(body, "configuration update response")
 
     def get_confidential_gas_schedule(self) -> Optional[ConfidentialGasSchedule]:
-        """Return the advertised confidential verification gas schedule."""
+        """Return the read-only confidential verification gas schedule."""
 
         snapshot = self.get_configuration()
         return snapshot.confidential_gas
-
-    def set_confidential_gas_schedule(
-        self,
-        *,
-        proof_base: int,
-        per_public_input: int,
-        per_proof_byte: int,
-        per_nullifier: int,
-        per_commitment: int,
-    ) -> Mapping[str, Any]:
-        """Update confidential gas schedule while preserving the logger settings."""
-
-        snapshot = self.get_configuration()
-        logger_payload = snapshot.logger.to_payload()
-        schedule = ConfidentialGasSchedule(
-            proof_base=int(proof_base),
-            per_public_input=int(per_public_input),
-            per_proof_byte=int(per_proof_byte),
-            per_nullifier=int(per_nullifier),
-            per_commitment=int(per_commitment),
-        )
-        return self.update_configuration(
-            {
-                "logger": logger_payload,
-                "confidential_gas": schedule.to_payload(),
-            }
-        )
 
     def get_time_now(self) -> NetworkTimeSnapshot:
         """Fetch the Network Time Service snapshot (`GET /v1/time/now`)."""
@@ -13463,25 +13401,6 @@ class ToriiClient:
         members = self._parse_council_members(members_value)
         return CouncilCurrentStatus(epoch=epoch, members=members)
 
-    def get_council_audit(self, *, epoch: Optional[int] = None) -> CouncilAuditMetadata:
-        """Expose seed/beacon metadata for the council derivation process."""
-
-        params = {"epoch": epoch} if epoch is not None else None
-        payload = self._get_json_object(
-            "/v1/gov/council/audit",
-            params=params,
-            context="council audit",
-        )
-        epoch_value = epoch if epoch is not None else payload.get("epoch")
-        return CouncilAuditMetadata(
-            epoch=self._coerce_int(epoch_value, "council_audit.epoch"),
-            seed_hex=str(payload.get("seed_hex", "")),
-            beacon_hex=str(payload.get("beacon_hex", "")),
-            chain_id=str(payload.get("chain_id", "")),
-            members_count=self._coerce_int(payload.get("members_count"), "council_audit.members_count"),
-            candidate_count=self._coerce_int(payload.get("candidate_count"), "council_audit.candidate_count"),
-        )
-
     def propose_contract_deploy(
         self,
         *,
@@ -13751,39 +13670,6 @@ class ToriiClient:
                 namespaces.append(entry)
         found = bool(body.get("found"))
         return ProtectedNamespacesStatus(found=found, namespaces=namespaces)
-
-    def persist_council(
-        self,
-        *,
-        committee_size: int,
-        candidates: Sequence[VrfCandidate],
-        epoch: Optional[int] = None,
-        authority: Optional[str] = None,
-        private_key: Optional[str] = None,
-    ) -> CouncilPersistResult:
-        """Persist a VRF-derived council via ``POST /v1/gov/council/persist``."""
-
-        payload: Dict[str, Any] = {
-            "committee_size": int(committee_size),
-            "candidates": [candidate.to_payload() for candidate in candidates],
-        }
-        if epoch is not None:
-            payload["epoch"] = int(epoch)
-        if authority:
-            payload["authority"] = authority
-        if private_key:
-            payload["private_key"] = private_key
-        body = self._post_json(
-            "/v1/gov/council/persist",
-            payload,
-            context="council persist",
-        )
-        return CouncilPersistResult(
-            epoch=self._coerce_int(body.get("epoch"), "council.epoch"),
-            members=self._parse_council_members(body.get("members", [])),
-            total_candidates=self._coerce_int(body.get("total_candidates"), "council.total_candidates"),
-            verified=self._coerce_int(body.get("verified"), "council.verified"),
-        )
 
     # ------------------------------------------------------------------
     # Trigger registry helpers

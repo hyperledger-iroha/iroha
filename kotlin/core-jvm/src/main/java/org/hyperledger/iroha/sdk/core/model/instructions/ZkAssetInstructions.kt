@@ -6,6 +6,7 @@ import java.util.Arrays
 import org.bouncycastle.crypto.agreement.X25519Agreement
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
+import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.numeric.KotodamaQuantity
 import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
@@ -189,6 +190,12 @@ class ProofAttachment(
         require(verifyingKeyRef.backend == this.backend) {
             "verifyingKeyRef.backend must match backend"
         }
+        require(
+            _envelopeHash == null ||
+                _envelopeHash.contentEquals(IrohaHash.prehash(_proofBytes)),
+        ) {
+            "envelopeHash must match proofBytes"
+        }
     }
 
     val proofBytes: ByteArray get() = _proofBytes.copyOf()
@@ -220,10 +227,8 @@ class ProofAttachment(
             append(",\"vk_commitment_hex\":")
             appendJsonString(hexLower(it))
         }
-        _envelopeHash?.let {
-            append(",\"envelope_hash_hex\":")
-            appendJsonString(hexLower(it))
-        }
+        append(",\"envelope_hash_hex\":")
+        appendJsonString(hexLower(_envelopeHash ?: IrohaHash.prehash(_proofBytes)))
         append('}')
     }
 

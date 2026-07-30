@@ -7,7 +7,8 @@ import XCTest
 final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
     func testRegistrationAndChallengeMatchRustCurrentModel() throws {
         let rust = try rustFixture()
-        XCTAssertEqual(rust.count, 5)
+        XCTAssertEqual(rust.fixture, "offline_device_attestation_abi21")
+        XCTAssertEqual(rust.generatedBy, "kotlin-fixture-gen offline-device-attestation")
         let assertionPublicKey = try XCTUnwrap(Data(hexString: Self.p256Generator))
         let devicePublicKey = try KagemushaDevicePublicKeyV2(
             sec1Bytes: assertionPublicKey
@@ -20,7 +21,7 @@ final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
             platform: KagemushaDeviceAttestation.androidKeyMintPlatform,
             keyId: Data(SHA256.hash(data: assertionPublicKey)).hexLowercased(),
             deviceId: "abi20-android-unit-test-device",
-            accountId: rust[3],
+            accountId: rust.accountId,
             assetDefinitionId: nil,
             iosTeamId: nil,
             iosBundleId: nil,
@@ -41,11 +42,17 @@ final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
             expiresAtMs: 2_000_000_000_000
         )
 
-        XCTAssertEqual(try registration.noritoEncoded(), try XCTUnwrap(Data(hexString: rust[0])))
-        XCTAssertEqual(registration.challengeHash, try XCTUnwrap(Data(hexString: rust[2])))
+        XCTAssertEqual(
+            try registration.noritoEncoded(),
+            try XCTUnwrap(Data(hexString: rust.registrationHex))
+        )
+        XCTAssertEqual(
+            registration.challengeHash,
+            try XCTUnwrap(Data(hexString: rust.challengeHashHex))
+        )
         XCTAssertEqual(
             registration.canonicalRegistrationId,
-            try XCTUnwrap(Data(hexString: rust[4]))
+            try XCTUnwrap(Data(hexString: rust.registrationIdHex))
         )
         XCTAssertEqual(
             registration.canonicalRegistrationId,
@@ -53,48 +60,33 @@ final class OfflineDeviceAttestationABI21ParityTests: XCTestCase {
         )
     }
 
-    private func rustFixture() throws -> [String] {
-        let source = URL(fileURLWithPath: #filePath)
-        let repoRoot = source
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let process = Process()
-        process.currentDirectoryURL = repoRoot
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
-            "CARGO_TARGET_DIR=\(repoRoot.appendingPathComponent("target/kotlin-fixture-gen-test").path)",
-            "cargo",
-            "run",
-            "-q",
-            "-p",
-            "kotlin-fixture-gen",
-            "--",
-            "offline-device-attestation"
-        ]
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        try process.run()
-        let output = stdout.fileHandleForReading.readDataToEndOfFile()
-        let error = stderr.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw NSError(
-                domain: "OfflineDeviceAttestationABI21ParityTests",
-                code: Int(process.terminationStatus),
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        String(data: error, encoding: .utf8) ?? "Rust fixture generator failed"
-                ]
-            )
+    private func rustFixture() throws -> RustFixture {
+        let url = try XCTUnwrap(
+            Bundle.module.url(
+                forResource: "offline_device_attestation_abi21",
+                withExtension: "json"
+            ),
+            "The checked-in Rust-authored ABI-21 fixture is required."
+        )
+        return try JSONDecoder().decode(RustFixture.self, from: Data(contentsOf: url))
+    }
+
+    private struct RustFixture: Decodable {
+        let fixture: String
+        let generatedBy: String
+        let registrationHex: String
+        let challengeHashHex: String
+        let accountId: String
+        let registrationIdHex: String
+
+        private enum CodingKeys: String, CodingKey {
+            case fixture
+            case generatedBy = "generated_by"
+            case registrationHex = "registration_hex"
+            case challengeHashHex = "challenge_hash_hex"
+            case accountId = "account_id"
+            case registrationIdHex = "registration_id_hex"
         }
-        return try XCTUnwrap(String(data: output, encoding: .utf8))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\n")
-            .map(String.init)
     }
 
     private static let p256Generator =

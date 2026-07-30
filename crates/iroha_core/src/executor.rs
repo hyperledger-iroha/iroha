@@ -17,6 +17,8 @@ use std::{
 use base64::Engine as _;
 use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::parameter::CustomParameter;
 use iroha_data_model::{
     Identifiable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
@@ -46,7 +48,7 @@ use iroha_data_model::{
         FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVaultKey,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
     },
-    parameter::{CustomParameter, CustomParameterId},
+    parameter::CustomParameterId,
     permission::Permission,
     prelude::{Account, Burn, Domain, DomainId, Mint, Register, Transfer, Trigger, Unregister},
     query::{AnyQueryBox, QueryRequest, SingularQueryBox},
@@ -418,10 +420,14 @@ pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
+#[cfg(any(test, feature = "iroha-core-tests"))]
 const FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST: u64 = 31_000_000;
+#[cfg(any(test, feature = "iroha-core-tests"))]
 const FIXTURE_DOMAIN_LIMITS_PARAMETER_ID: &str = "DomainLimits";
+#[cfg(any(test, feature = "iroha-core-tests"))]
 const FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES: &str = "CanControlDomainLives";
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FixtureExecutorKind {
     WithAdmin,
@@ -434,6 +440,7 @@ enum FixtureExecutorKind {
     WithCustomParameter,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 impl FixtureExecutorKind {
     const fn from_vector_length(vector_length: u8) -> Option<Self> {
         match vector_length {
@@ -458,7 +465,7 @@ impl FixtureExecutorKind {
 /// to sequential execution.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn execute_instruction_detached(
-    _authority: &AccountId,
+    authority: &AccountId,
     instruction: &iroha_data_model::isi::InstructionBox,
     delta: &mut crate::state::DetachedStateTransactionDelta,
 ) -> Result<(), ValidationFail> {
@@ -500,18 +507,20 @@ pub(crate) fn execute_instruction_detached(
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
         match tb {
             TransferBox::Asset(t) => {
+                if t.source.account() != authority {
+                    return Err(ValidationFail::InternalError(
+                        "detached: delegated asset transfer requires sequential authorization"
+                            .to_owned(),
+                    ));
+                }
                 let src = t.source.clone();
                 let qty = t.object.clone();
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
-            TransferBox::Domain(t) => {
-                delta.transfer_domain(t.object.clone(), t.source.clone(), t.destination.clone());
-            }
-            TransferBox::AssetDefinition(t) => {
-                delta.transfer_asset_def(t.object.clone(), t.source.clone(), t.destination.clone());
-            }
-            TransferBox::Nft(t) => {
-                delta.transfer_nft(t.object.clone(), t.source.clone(), t.destination.clone());
+            TransferBox::Domain(_) | TransferBox::AssetDefinition(_) | TransferBox::Nft(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: ownership transfer requires sequential authorization".to_owned(),
+                ));
             }
         }
         return Ok(());
@@ -5545,8 +5554,15 @@ impl Executor {
             contract_subject,
             effective_limit,
         )?;
+        let heap_limit = state_transaction
+            .world
+            .parameters
+            .get()
+            .smart_contract()
+            .memory()
+            .get();
         let mut runtime = summary
-            .checkout_runtime(effective_limit)
+            .checkout_runtime(effective_limit, heap_limit)
             .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
         runtime.set_max_cycles(effective_cycles.get());
         runtime.set_gas_limit(effective_limit);
@@ -5574,6 +5590,9 @@ impl Executor {
             authority.clone(),
             Arc::clone(&accounts),
             contract_call_context.argument_record,
+        );
+        host.set_output_limits_from_parameters(
+            state_transaction.world.parameters.get().smart_contract(),
         );
         host.set_prepared_contract_cache(summary.prepared_contract_cache());
         host.hydrate_axt_state(state_transaction).map_err(|error| {
@@ -5732,6 +5751,12 @@ impl Executor {
         transaction: SignedTransaction,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), ValidationFail> {
+        if transaction.authority() != authority {
+            return Err(ValidationFail::InternalError(
+                "executor authority argument does not match signed transaction authority"
+                    .to_owned(),
+            ));
+        }
         trace!("Running transaction execution");
         state_transaction.bind_privacy_transaction_intent_v1(None);
         let privacy_intent_binding =
@@ -6415,14 +6440,24 @@ impl Executor {
                             );
                         let bound_contract_records =
                             code::snapshot_bound_contract_records_by_subject(state_transaction);
+                        let heap_limit = state_transaction
+                            .world
+                            .parameters
+                            .get()
+                            .smart_contract()
+                            .memory()
+                            .get();
                         let mut runtime = ivm_cache
-                            .checkout_generic_runtime(&summary, effective_limit)
+                            .checkout_generic_runtime(&summary, effective_limit, heap_limit)
                             .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                         runtime.set_max_cycles(effective_cycles.get());
                         runtime.set_gas_limit(effective_limit);
                         let accounts = state_transaction.accounts_snapshot();
                         let mut host =
                             CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                        host.set_output_limits_from_parameters(
+                            state_transaction.world.parameters.get().smart_contract(),
+                        );
                         host.set_generic_execution();
                         host.set_prepared_contract_cache(prepared_contract_cache);
                         host.set_amx_analysis(amx_analysis);
@@ -6569,8 +6604,15 @@ impl Executor {
                         context,
                     )?;
                 }
+                let heap_limit = state_transaction
+                    .world
+                    .parameters
+                    .get()
+                    .smart_contract()
+                    .memory()
+                    .get();
                 let mut runtime = summary
-                    .checkout_runtime(effective_limit)
+                    .checkout_runtime(effective_limit, heap_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
                 runtime.set_max_cycles(effective_cycles.get());
                 runtime.set_gas_limit(effective_limit);
@@ -6608,6 +6650,9 @@ impl Executor {
                 } else {
                     CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
                 };
+                host.set_output_limits_from_parameters(
+                    state_transaction.world.parameters.get().smart_contract(),
+                );
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 host.hydrate_axt_state(state_transaction).map_err(|error| {
                     ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
@@ -7378,6 +7423,7 @@ impl Executor {
                 query,
             ),
             Self::UserProvided(loaded_executor) => {
+                #[cfg(any(test, feature = "iroha-core-tests"))]
                 if let Some(kind) = detect_fixture_executor_kind(loaded_executor) {
                     return validate_query_with_fixture(kind, query);
                 }
@@ -7403,9 +7449,16 @@ impl Executor {
                     QueryRequest::Continue(_) => unreachable!("continue queries return early"),
                 };
 
-                let gas_limit = world_ro.parameters().executor().fuel.get();
-                let report =
-                    run_executor_validation(loaded_executor, &payload, query_label, gas_limit)?;
+                let executor_parameters = world_ro.parameters().executor();
+                let gas_limit = executor_parameters.fuel().get();
+                let heap_limit = executor_parameters.memory().get();
+                let report = run_executor_validation(
+                    loaded_executor,
+                    &payload,
+                    query_label,
+                    gas_limit,
+                    heap_limit,
+                )?;
                 match report.verdict {
                     Ok(()) => Ok(()),
                     Err(err) => {
@@ -7440,15 +7493,17 @@ impl Executor {
     ) -> Result<(), VMError> {
         trace!("Running executor migration");
 
-        // NOTE: We no longer emulate failure modes based on metadata tags.
-        // Migration outcome should be determined by the executor's own logic.
-
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor)?;
 
+        // Synthetic host emulation is retained only for explicitly opted-in
+        // test builds. Default production builds always continue into the
+        // admitted guest migration entrypoint below.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
         if let Some(kind) = detect_fixture_executor_kind(&loaded_executor) {
             apply_fixture_migration(kind, state_transaction, authority)
                 .map_err(map_migration_fail_to_vm_error)?;
+            purge_legacy_escalation_permissions(state_transaction);
             *self = Self::UserProvided(loaded_executor);
             return Ok(());
         }
@@ -7459,21 +7514,19 @@ impl Executor {
             curr_block,
         };
 
-        let gas_limit = state_transaction
-            .world
-            .parameters
-            .get()
-            .executor()
-            .fuel
-            .get();
-        let maybe_data_model = run_executor_migration(&loaded_executor, &context, gas_limit)
-            .map_err(map_migration_fail_to_vm_error)?;
+        let executor_parameters = state_transaction.world.parameters.get().executor();
+        let gas_limit = executor_parameters.fuel().get();
+        let heap_limit = executor_parameters.memory().get();
+        let maybe_data_model =
+            run_executor_migration(&loaded_executor, &context, gas_limit, heap_limit)
+                .map_err(map_migration_fail_to_vm_error)?;
         if let Some(data_model) = maybe_data_model {
             debug!("executor migrate entrypoint supplied a new data model");
             state_transaction
                 .world
                 .apply_executor_data_model(data_model);
         }
+        purge_legacy_escalation_permissions(state_transaction);
 
         *self = Self::UserProvided(loaded_executor);
         Ok(())
@@ -7485,10 +7538,12 @@ struct ExecutorValidationReport {
     gas_used: u64,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn detect_fixture_executor_kind(executor: &LoadedExecutor) -> Option<FixtureExecutorKind> {
     detect_fixture_executor_kind_from_bytecode(executor.raw_executor.bytecode().as_ref())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn detect_fixture_executor_kind_from_bytecode(bytecode: &[u8]) -> Option<FixtureExecutorKind> {
     // Placeholder samples are tiny deterministic programs with this exact layout:
     // authenticated header + one HALT instruction.
@@ -7531,6 +7586,7 @@ pub(crate) fn initial_executor_data_model_fallback() -> ExecutorDataModel {
     )
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn baseline_executor_data_model(world_ro: &impl WorldReadOnly) -> ExecutorDataModel {
     let current = world_ro.executor_data_model();
     if current.permissions().is_empty() {
@@ -7540,6 +7596,7 @@ fn baseline_executor_data_model(world_ro: &impl WorldReadOnly) -> ExecutorDataMo
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn make_can_control_domain_lives_permission() -> Permission {
     // `CanControlDomainLives` is a unit struct, therefore its canonical JSON payload is `null`.
     Permission::new(
@@ -7548,6 +7605,7 @@ fn make_can_control_domain_lives_permission() -> Permission {
     )
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn remove_permissions_by_name(
     permissions: &mut BTreeSet<Permission>,
     permission_name: &str,
@@ -7566,6 +7624,66 @@ fn remove_permissions_by_name(
     true
 }
 
+/// Permission payloads issued under pre-release rules that admitted authorities which did not
+/// control the effective capability.
+///
+/// Ledger permissions do not retain grant provenance, so a migration cannot distinguish a
+/// legitimate token from one planted through an old escalation rule. The first-release migration
+/// therefore resets these narrow capability families and requires their legitimate roots to issue
+/// fresh grants under the corrected policy.
+const LEGACY_ESCALATION_PERMISSION_NAMES: &[&str] = &[
+    "CanMintAsset",
+    "CanInvokeContractEntrypoint",
+    "CanPublishSpaceDirectoryManifest",
+    "CanPublishSpaceDirectoryManifestForUaid",
+    "CanPublishSpaceDirectoryManifestForAccountDomain",
+];
+
+fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<'_, '_>) {
+    let account_ids: Vec<_> = state_transaction
+        .world
+        .account_permissions
+        .iter()
+        .map(|(account_id, _)| account_id.clone())
+        .collect();
+    for account_id in account_ids {
+        let remove_entry = state_transaction
+            .world
+            .account_permissions
+            .get_mut(&account_id)
+            .is_some_and(|permissions| {
+                permissions.retain(|permission| {
+                    !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
+                });
+                permissions.is_empty()
+            });
+        if remove_entry {
+            state_transaction
+                .world
+                .account_permissions
+                .remove(account_id);
+        }
+    }
+
+    let role_ids: Vec<_> = state_transaction
+        .world
+        .roles
+        .iter()
+        .map(|(role_id, _)| role_id.clone())
+        .collect();
+    for role_id in role_ids {
+        if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
+            role.permissions.retain(|permission| {
+                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
+            });
+            role.permission_epochs.retain(|permission, _| {
+                !LEGACY_ESCALATION_PERMISSION_NAMES.contains(&permission.name().as_ref())
+            });
+        }
+    }
+}
+
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn apply_fixture_permission_migration(
     state_transaction: &mut StateTransaction<'_, '_>,
     add_can_control_domain_lives: bool,
@@ -7615,6 +7733,7 @@ fn apply_fixture_permission_migration(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn apply_fixture_migration(
     kind: FixtureExecutorKind,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -7682,6 +7801,7 @@ fn apply_fixture_migration(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn validate_query_with_fixture(
     kind: FixtureExecutorKind,
     _query: &QueryRequest,
@@ -7700,12 +7820,13 @@ fn run_executor_validation<T>(
     payload: &ValidatePayload<T>,
     verdict_context: &str,
     gas_limit: u64,
+    heap_limit: u64,
 ) -> Result<ExecutorValidationReport, ValidationFail>
 where
     ValidatePayload<T>: Encode,
 {
     let mut ivm = executor
-        .checkout_runtime_for_gas_limit(gas_limit)
+        .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
@@ -7761,9 +7882,10 @@ fn run_executor_migration(
     executor: &LoadedExecutor,
     context: &ExecutorContext,
     gas_limit: u64,
+    heap_limit: u64,
 ) -> Result<Option<ExecutorDataModel>, ValidationFail> {
     let mut ivm = executor
-        .checkout_runtime_for_gas_limit(gas_limit)
+        .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
 
@@ -7830,6 +7952,13 @@ fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
             );
             VMError::DecodeError
         }
+        ValidationFail::ContractRejected(rejection) => {
+            debug!(
+                ?rejection,
+                "executor migrate entrypoint returned a declared contract rejection"
+            );
+            VMError::PermissionDenied
+        }
         ValidationFail::QueryFailed(err) => {
             debug!(
                 err = ?err,
@@ -7857,6 +7986,7 @@ fn dispatch_instruction_with_ivm(
     authority: &AccountId,
     instruction: InstructionBox,
 ) -> Result<(), ValidationFail> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     if let Some(kind) = detect_fixture_executor_kind(executor) {
         return dispatch_instruction_with_fixture(kind, state_transaction, authority, instruction);
     }
@@ -7887,7 +8017,15 @@ fn dispatch_instruction_with_ivm(
     let gas_limit = state_transaction
         .executor_fuel_remaining
         .unwrap_or(base_fuel);
-    let report = run_executor_validation(executor, &payload, instruction_id, gas_limit)?;
+    let heap_limit = state_transaction
+        .world
+        .parameters
+        .get()
+        .executor()
+        .memory()
+        .get();
+    let report =
+        run_executor_validation(executor, &payload, instruction_id, gas_limit, heap_limit)?;
     if let Some(remaining) = state_transaction.executor_fuel_remaining.as_mut() {
         *remaining = remaining.saturating_sub(report.gas_used);
     }
@@ -7952,12 +8090,14 @@ fn execute_multisig_custom_instruction_if_present(
     Ok(true)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[derive(Debug, Clone, norito::derive::JsonDeserialize, norito::derive::JsonSerialize)]
 struct FixtureMintAssetForAllAccounts {
     asset_definition: AssetDefinitionId,
     quantity: Quantity,
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 #[derive(Debug, Clone)]
 enum FixtureRuntimeValue {
     Bool(bool),
@@ -7965,6 +8105,7 @@ enum FixtureRuntimeValue {
     Instruction(InstructionBox),
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn dispatch_instruction_with_fixture(
     kind: FixtureExecutorKind,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -8018,6 +8159,7 @@ fn dispatch_instruction_with_fixture(
         })
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn consume_fixture_instruction_fuel(
     state_transaction: &mut StateTransaction<'_, '_>,
     instruction: &InstructionBox,
@@ -8048,6 +8190,7 @@ fn consume_fixture_instruction_fuel(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn enforce_fixture_domain_limits(
     state_transaction: &mut StateTransaction<'_, '_>,
     instruction: &InstructionBox,
@@ -8087,6 +8230,7 @@ fn enforce_fixture_domain_limits(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn execute_fixture_simple_custom_instruction(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8125,6 +8269,7 @@ fn execute_fixture_simple_custom_instruction(
     Ok(())
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn execute_fixture_complex_custom_instruction(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8138,12 +8283,14 @@ fn execute_fixture_complex_custom_instruction(
     execute_fixture_complex_expr_value(state_transaction, authority, &root)
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn fixture_conversion_error(expected: &str) -> ValidationFail {
     ValidationFail::InstructionFailed(InstructionExecutionError::Conversion(format!(
         "expected {expected}"
     )))
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn fixture_single_field<'a>(
     value: &'a json::Value,
     context: &str,
@@ -8165,6 +8312,7 @@ fn fixture_single_field<'a>(
     Ok((key.as_str(), value))
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn fixture_object_field<'a>(
     value: &'a json::Value,
     field: &str,
@@ -8180,6 +8328,7 @@ fn fixture_object_field<'a>(
     })
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn execute_fixture_complex_expr_value(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8209,6 +8358,7 @@ fn execute_fixture_complex_expr_value(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn evaluate_fixture_bool_expression_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
@@ -8220,6 +8370,7 @@ fn evaluate_fixture_bool_expression_value(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn evaluate_fixture_quantity_expression_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
@@ -8231,6 +8382,7 @@ fn evaluate_fixture_quantity_expression_value(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn evaluate_fixture_instruction_expression_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
@@ -8242,6 +8394,7 @@ fn evaluate_fixture_instruction_expression_value(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn fixture_unwrap_evaluates_to_expression<'a>(
     value: &'a json::Value,
     _context: &str,
@@ -8252,6 +8405,7 @@ fn fixture_unwrap_evaluates_to_expression<'a>(
     Ok(map.get("expression").unwrap_or(value))
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn evaluate_fixture_expression_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
@@ -8309,6 +8463,7 @@ fn evaluate_fixture_expression_value(
     }
 }
 
+#[cfg(any(test, feature = "iroha-core-tests"))]
 fn evaluate_fixture_quantity_query_value(
     state_transaction: &StateTransaction<'_, '_>,
     value: &json::Value,
@@ -8711,7 +8866,13 @@ fn initial_trigger_authority(
 }
 
 #[allow(clippy::too_many_lines)]
-fn initial_permission_resource_authority(
+/// Return whether `authority` is a legitimate non-token root for delegating `permission`.
+///
+/// The root must already control the same effective capability at use time, or hold an
+/// explicitly wider parent capability. Merely owning an adjacent component of a compound
+/// permission scope is not a delegation root. Exact holders are handled separately by
+/// [`initial_permission_delegation_allowed`].
+fn initial_permission_capability_root_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
     permission: &Permission,
@@ -8817,8 +8978,8 @@ fn initial_permission_resource_authority(
                 &token.asset_definition,
             )?
         }
-        "CanSetAssetTransferFreeze" => {
-            let token = decode!(executor_permission::asset::CanSetAssetTransferFreeze);
+        "CanSetAssetTransferAvailability" => {
+            let token = decode!(executor_permission::asset::CanSetAssetTransferAvailability);
             authority_owns_asset_definition(
                 &state_transaction.world,
                 authority,
@@ -8833,13 +8994,30 @@ fn initial_permission_resource_authority(
                 &token.asset_definition,
             )?
         }
+        "CanSetAssetHoldingLimit" => {
+            let token = decode!(executor_permission::asset::CanSetAssetHoldingLimit);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
         "CanMintAsset" => {
             let token = decode!(executor_permission::asset::CanMintAsset);
-            token.asset.account() == authority
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                token.asset.definition(),
+            )?
         }
         "CanBurnAsset" => {
             let token = decode!(executor_permission::asset::CanBurnAsset);
             token.asset.account() == authority
+                || authority_owns_asset_definition(
+                    &state_transaction.world,
+                    authority,
+                    token.asset.definition(),
+                )?
         }
         "CanTransferAsset" => {
             let token = decode!(executor_permission::asset::CanTransferAsset);
@@ -8848,6 +9026,11 @@ fn initial_permission_resource_authority(
         "CanModifyAssetMetadata" => {
             let token = decode!(executor_permission::asset::CanModifyAssetMetadata);
             token.asset.account() == authority
+                || authority_owns_asset_definition(
+                    &state_transaction.world,
+                    authority,
+                    token.asset.definition(),
+                )?
         }
         "CanRegisterNft" => {
             let token = decode!(executor_permission::nft::CanRegisterNft);
@@ -8895,12 +9078,12 @@ fn initial_permission_resource_authority(
             }
             let registrar: Permission =
                 executor_permission::smart_contract::CanRegisterSmartContractCode.into();
-            token.contract.subject_id() == *authority
-                || contract_runtime_context.is_some_and(|context| {
-                    context.contract_subject == *authority
-                        && context.contract_address == token.contract
-                })
-                || authority_has_permission(&state_transaction.world, authority, &registrar)?
+            let _ = contract_runtime_context;
+            authority_has_permission(&state_transaction.world, authority, &registrar)?
+        }
+        "CanExecuteSettlement" => {
+            let token = decode!(executor_permission::settlement::CanExecuteSettlement);
+            token.debited_asset.account() == authority
         }
         "CanSetFxCorridorPolicy" | "CanSettleFxCorridor" => {
             if permission.name() == "CanSetFxCorridorPolicy" {
@@ -8912,41 +9095,27 @@ fn initial_permission_resource_authority(
             authority_has_permission(&state_transaction.world, authority, &manager)?
         }
         "CanPublishSpaceDirectoryManifest" => {
-            let token = decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifest);
-            let exact: Permission = token.clone().into();
-            authority_has_permission(&state_transaction.world, authority, &exact)?
-                || crate::sns::active_dataspace_owner_by_id(
-                    &state_transaction.world,
-                    state_transaction.world.dataspace_catalog(),
-                    token.dataspace,
-                    state_transaction.block_unix_timestamp_ms(),
-                )
-                .as_ref()
-                    == Some(authority)
+            let _ = decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifest);
+            false
         }
         "CanPublishSpaceDirectoryManifestForUaid" => {
             let token =
                 decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifestForUaid);
-            let exact: Permission = token.clone().into();
             let wide: Permission = executor_permission::nexus::CanPublishSpaceDirectoryManifest {
                 dataspace: token.dataspace,
             }
             .into();
-            authority_has_permission(&state_transaction.world, authority, &exact)?
-                || authority_has_permission(&state_transaction.world, authority, &wide)?
+            authority_has_permission(&state_transaction.world, authority, &wide)?
         }
         "CanPublishSpaceDirectoryManifestForAccountDomain" => {
             let token = decode!(
                 executor_permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain
             );
-            let exact: Permission = token.clone().into();
             let wide: Permission = executor_permission::nexus::CanPublishSpaceDirectoryManifest {
                 dataspace: token.dataspace,
             }
             .into();
-            authority_has_permission(&state_transaction.world, authority, &exact)?
-                || authority_has_permission(&state_transaction.world, authority, &wide)?
-                || authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+            authority_has_permission(&state_transaction.world, authority, &wide)?
         }
         "CanManageFeeSponsorProgram" => {
             let token = decode!(executor_permission::nexus::CanManageFeeSponsorProgram);
@@ -8989,15 +9158,18 @@ fn initial_permission_delegation_allowed(
     if initial_permission_is_genesis_only(permission) {
         return Ok(false);
     }
-    if let Some(allowed) = initial_permission_resource_authority(
+    // Resolve and validate known payloads before consulting stored state. Otherwise a malformed
+    // built-in token already present in state could be copied without ever decoding its scope.
+    let capability_root = initial_permission_capability_root_authority(
         state_transaction,
         authority,
         permission,
         contract_runtime_context,
-    )? {
-        return Ok(allowed);
+    )?;
+    if authority_has_permission(&state_transaction.world, authority, permission)? {
+        return Ok(true);
     }
-    authority_has_permission(&state_transaction.world, authority, permission)
+    Ok(capability_root.unwrap_or(false))
 }
 
 fn validate_initial_account_permission_destination(
@@ -9468,7 +9640,7 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     if is_any!(
         iroha_data_model::isi::SetAssetKeyValue,
         iroha_data_model::isi::RemoveAssetKeyValue,
-        iroha_data_model::isi::SetAssetTransferFreeze,
+        iroha_data_model::isi::SetAssetTransferAvailability,
         iroha_data_model::isi::SetAssetTransferControl,
         iroha_data_model::isi::SetAssetHoldingLimit,
         iroha_data_model::isi::SetAssetTransferBlacklist,
@@ -10578,8 +10750,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanTransferAsset",
     "CanModifyAssetMetadataWithDefinition",
     "CanModifyAssetMetadata",
-    "CanSetAssetTransferFreeze",
+    "CanSetAssetTransferAvailability",
     "CanSetAssetTransferDailyLimit",
+    "CanSetAssetHoldingLimit",
     "CanRegisterNft",
     "CanUnregisterNft",
     "CanTransferNft",
@@ -10599,6 +10772,7 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
     "CanInvokeContractEntrypoint",
+    "CanExecuteSettlement",
     "CanManageFxCorridors",
     "CanSetFxCorridorPolicy",
     "CanSettleFxCorridor",
@@ -10829,22 +11003,25 @@ pub struct LoadedExecutor {
     raw_executor: Arc<data_model_executor::Executor>,
 }
 
-// Stack sizing is the only gas-derived property that changes the VM allocation.
-// Keep a small bounded LRU so adversarial gas-limit variation cannot retain an
-// unbounded number of complete memory images and Merkle baselines.
+// Stack sizing and the governed heap ceiling define distinct VM memory
+// authorities. Keep a small bounded LRU so adversarial governance/gas
+// variation cannot retain an unbounded number of complete memory images and
+// Merkle baselines.
 const EXECUTOR_RUNTIME_VARIANT_CAPACITY: usize = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExecutorRuntimeKey {
     stack_limit: u64,
+    heap_limit: u64,
 }
 
 impl ExecutorRuntimeKey {
-    fn for_gas_limit(gas_limit: u64) -> Self {
+    fn for_limits(gas_limit: u64, heap_limit: u64) -> Self {
         // The exact gas limit is replenished on every checkout. Keying by it
         // would create distinct variants with identical memory layouts.
         Self {
             stack_limit: stack_limit_for_gas(gas_limit),
+            heap_limit,
         }
     }
 }
@@ -11030,12 +11207,12 @@ fn stack_limit_for_gas(gas_limit: u64) -> u64 {
 
 impl LoadedExecutor {
     pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
-        let gas_limit = iroha_data_model::parameter::SmartContractParameters::default()
-            .fuel
-            .get();
-        let key = ExecutorRuntimeKey::for_gas_limit(gas_limit);
+        let default_parameters = iroha_data_model::parameter::SmartContractParameters::default();
+        let gas_limit = default_parameters.fuel().get();
+        let heap_limit = default_parameters.memory().get();
+        let key = ExecutorRuntimeKey::for_limits(gas_limit, heap_limit);
         let raw_executor = Arc::new(raw_executor);
-        let ivm = Self::load_runtime(raw_executor.as_ref(), gas_limit)?;
+        let ivm = Self::load_runtime(raw_executor.as_ref(), gas_limit, heap_limit)?;
         let baseline = Arc::new(ivm.runtime_template());
         Ok(Self {
             runtime_pool: Arc::new(Mutex::new(ExecutorRuntimePool::new(
@@ -11051,8 +11228,10 @@ impl LoadedExecutor {
     fn load_runtime(
         raw_executor: &data_model_executor::Executor,
         gas_limit: u64,
+        heap_limit: u64,
     ) -> Result<IVM, VMError> {
         let mut vm = IVM::new(gas_limit);
+        vm.memory.set_heap_max_limit(heap_limit)?;
         vm.load_program(raw_executor.bytecode().as_ref())?;
         vm.set_gas_limit(gas_limit);
         Ok(vm)
@@ -11061,8 +11240,9 @@ impl LoadedExecutor {
     fn checkout_runtime_for_gas_limit(
         &self,
         gas_limit: u64,
+        heap_limit: u64,
     ) -> Result<ExecutorRuntimeLease, VMError> {
-        let key = ExecutorRuntimeKey::for_gas_limit(gas_limit);
+        let key = ExecutorRuntimeKey::for_limits(gas_limit, heap_limit);
         let (baseline, vm) = {
             let mut pool = self
                 .runtime_pool
@@ -11085,7 +11265,7 @@ impl LoadedExecutor {
                 (baseline, vm)
             } else {
                 pool.record(ExecutorRuntimePoolEvent::Miss);
-                let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit)?;
+                let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit, heap_limit)?;
                 let baseline = Arc::new(vm.runtime_template());
                 pool.record(ExecutorRuntimePoolEvent::ProgramLoad);
                 pool.record(ExecutorRuntimePoolEvent::TemplateBuild);
@@ -11097,7 +11277,7 @@ impl LoadedExecutor {
         let mut vm = if let Some(vm) = vm {
             vm
         } else {
-            let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit)?;
+            let vm = Self::load_runtime(self.raw_executor.as_ref(), gas_limit, heap_limit)?;
             let mut pool = self
                 .runtime_pool
                 .lock()
@@ -11226,9 +11406,9 @@ mod tests {
     use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
-        asset::AssetTransferControlWindow,
+        asset::{AssetTransferAvailability, AssetTransferControlWindow},
         executor::{self as data_model_executor, ExecutorDataModel},
-        isi::{Grant, SetAssetTransferControl, SetAssetTransferFreeze},
+        isi::{Grant, SetAssetTransferAvailability, SetAssetTransferControl},
         name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
@@ -12521,6 +12701,530 @@ mod tests {
             super::Executor::Initial
         ));
         assert!(state_transaction.world.account(&victim).is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
+        use iroha_data_model::{
+            account::rekey::AccountAliasDomain,
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            nexus::UniversalAccountId,
+            trigger::action::{Action, Repeats},
+        };
+        use iroha_executor_data_model::permission::account::AccountAliasPermissionScope;
+
+        let legitimate_root = checked_account_id();
+        let adjacent_owner = checked_account_id();
+        let governed_domain =
+            DomainId::try_new("grant_policy", "universal").expect("governed domain");
+        let adjacent_domain =
+            DomainId::try_new("adjacent_owner", "universal").expect("adjacent domain");
+        let asset_definition = AssetDefinitionId::new(
+            governed_domain.clone(),
+            "root_asset".parse().expect("asset name"),
+        );
+        let root_asset = AssetId::new(asset_definition.clone(), legitimate_root.clone());
+        // The exact mint permission deliberately names the attacker's balance bucket. Mint
+        // authority belongs to the definition owner, never to the bucket account.
+        let adjacent_asset = AssetId::new(asset_definition.clone(), adjacent_owner.clone());
+        let nft_id = NftId::new(
+            governed_domain.clone(),
+            "root_nft".parse().expect("NFT name"),
+        );
+        let trigger_id: TriggerId = "grant_policy_trigger".parse().expect("trigger id");
+        // The address deliberately embeds the attacker as its subject. Contract subjects are
+        // not registrar authorities and therefore cannot mint invocation permissions.
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &adjacent_owner,
+            77,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let dataspace = DataSpaceId::new(7);
+        let manifest_root: Permission =
+            executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into();
+        let mut world = World::with_assets(
+            [
+                Domain::new(governed_domain.clone()).build(&legitimate_root),
+                Domain::new(adjacent_domain.clone()).build(&adjacent_owner),
+            ],
+            [
+                Account::new(legitimate_root.clone()).build(&legitimate_root),
+                Account::new(adjacent_owner.clone()).build(&adjacent_owner),
+            ],
+            [AssetDefinition::numeric(asset_definition.clone())
+                .with_name("root asset".to_owned())
+                .build(&legitimate_root)],
+            [],
+            [Nft::new(nft_id.clone(), Metadata::default()).build(&legitimate_root)],
+        );
+        world.account_permissions.insert(
+            legitimate_root.clone(),
+            BTreeSet::from([
+                executor_permission::smart_contract::CanRegisterSmartContractCode.into(),
+                executor_permission::settlement::CanManageFxCorridors.into(),
+                manifest_root,
+                executor_permission::sccp::CanManageSccpGovernance.into(),
+            ]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        Register::trigger(Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Vec::<InstructionBox>::new(),
+                Repeats::Indefinitely,
+                legitimate_root.clone(),
+                ExecuteTriggerEventFilter::new()
+                    .for_trigger(trigger_id.clone())
+                    .under_authority(legitimate_root.clone()),
+            ),
+        ))
+        .execute(&legitimate_root, &mut state_transaction)
+        .expect("seed trigger authority");
+
+        let alias_scope = AccountAliasPermissionScope::Domain(governed_domain.clone());
+        let program_id = FeeSponsorProgramId::new(
+            legitimate_root.clone(),
+            "root_program".parse().expect("program name"),
+        );
+        let policy_id: Name = "root_policy".parse().expect("policy name");
+        // `false` means that the permission intentionally has no ownership-derived root and must
+        // be bootstrapped once, after which only exact holders may propagate it.
+        let cases: Vec<(&str, Permission, bool)> = vec![
+            (
+                "CanUnregisterDomain",
+                executor_permission::domain::CanUnregisterDomain {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyDomainMetadata",
+                executor_permission::domain::CanModifyDomainMetadata {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanRegisterAccount",
+                executor_permission::account::CanRegisterAccount {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanUnregisterAccount",
+                executor_permission::account::CanUnregisterAccount {
+                    account: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAccountMetadata",
+                executor_permission::account::CanModifyAccountMetadata {
+                    account: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanReplaceAccountController",
+                executor_permission::account::CanReplaceAccountController {
+                    account: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanResolveAccountAlias",
+                executor_permission::account::CanResolveAccountAlias {
+                    scope: alias_scope.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanDelegateAccountAliasResolution",
+                executor_permission::account::CanDelegateAccountAliasResolution {
+                    scope: alias_scope.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanManageAccountAlias",
+                executor_permission::account::CanManageAccountAlias { scope: alias_scope }.into(),
+                true,
+            ),
+            (
+                "CanUnregisterAssetDefinition",
+                executor_permission::asset_definition::CanUnregisterAssetDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAssetDefinitionMetadata",
+                executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanMintAssetWithDefinition",
+                executor_permission::asset::CanMintAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanBurnAssetWithDefinition",
+                executor_permission::asset::CanBurnAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanTransferAssetWithDefinition",
+                executor_permission::asset::CanTransferAssetWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAssetMetadataWithDefinition",
+                executor_permission::asset::CanModifyAssetMetadataWithDefinition {
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetAssetTransferAvailability",
+                executor_permission::asset::CanSetAssetTransferAvailability {
+                    account: adjacent_owner.clone(),
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetAssetTransferDailyLimit",
+                executor_permission::asset::CanSetAssetTransferDailyLimit {
+                    asset_definition: asset_definition.clone(),
+                    account_domain: AccountAliasDomain::new(
+                        "retail".parse().expect("account alias domain"),
+                    ),
+                    account_dataspace: dataspace,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetAssetHoldingLimit",
+                executor_permission::asset::CanSetAssetHoldingLimit {
+                    account: adjacent_owner.clone(),
+                    asset_definition: asset_definition.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanMintAsset",
+                executor_permission::asset::CanMintAsset {
+                    asset: adjacent_asset,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanBurnAsset",
+                executor_permission::asset::CanBurnAsset {
+                    asset: root_asset.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanTransferAsset",
+                executor_permission::asset::CanTransferAsset {
+                    asset: root_asset.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyAssetMetadata",
+                executor_permission::asset::CanModifyAssetMetadata {
+                    asset: root_asset.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanRegisterNft",
+                executor_permission::nft::CanRegisterNft {
+                    domain: governed_domain.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanUnregisterNft",
+                executor_permission::nft::CanUnregisterNft {
+                    nft: nft_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanTransferNft",
+                executor_permission::nft::CanTransferNft {
+                    nft: nft_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyNftMetadata",
+                executor_permission::nft::CanModifyNftMetadata {
+                    nft: nft_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanRegisterTrigger",
+                executor_permission::trigger::CanRegisterTrigger {
+                    authority: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanUnregisterTrigger",
+                executor_permission::trigger::CanUnregisterTrigger {
+                    trigger: trigger_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyTrigger",
+                executor_permission::trigger::CanModifyTrigger {
+                    trigger: trigger_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanExecuteTrigger",
+                executor_permission::trigger::CanExecuteTrigger {
+                    trigger: trigger_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanModifyTriggerMetadata",
+                executor_permission::trigger::CanModifyTriggerMetadata {
+                    trigger: trigger_id,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanInvokeContractEntrypoint",
+                executor_permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract,
+                    entrypoint: "main".to_owned(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanExecuteSettlement",
+                executor_permission::settlement::CanExecuteSettlement {
+                    debited_asset: root_asset,
+                    settlement_id: "grant_policy_settlement".parse().expect("settlement id"),
+                    intent_hash: Hash::new(b"grant-policy-settlement"),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSetFxCorridorPolicy",
+                executor_permission::settlement::CanSetFxCorridorPolicy {
+                    policy_id: policy_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanSettleFxCorridor",
+                executor_permission::settlement::CanSettleFxCorridor { policy_id }.into(),
+                true,
+            ),
+            (
+                "CanPublishSpaceDirectoryManifest",
+                executor_permission::nexus::CanPublishSpaceDirectoryManifest { dataspace }.into(),
+                false,
+            ),
+            (
+                "CanPublishSpaceDirectoryManifestForUaid",
+                executor_permission::nexus::CanPublishSpaceDirectoryManifestForUaid {
+                    dataspace,
+                    uaid: UniversalAccountId::from_hash(Hash::new(b"grant-policy-uaid")),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanPublishSpaceDirectoryManifestForAccountDomain",
+                executor_permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
+                    dataspace,
+                    // The attacker owns this domain, but only the explicit dataspace-wide parent
+                    // is a delegation root for this permission.
+                    domain: adjacent_domain,
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanManageFeeSponsorProgram",
+                executor_permission::nexus::CanManageFeeSponsorProgram {
+                    sponsor: legitimate_root.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanEnrollFeeSponsorProgram",
+                executor_permission::nexus::CanEnrollFeeSponsorProgram {
+                    program_id: program_id.clone(),
+                }
+                .into(),
+                true,
+            ),
+            (
+                "CanWithdrawFeeSponsorProgram",
+                executor_permission::nexus::CanWithdrawFeeSponsorProgram { program_id }.into(),
+                true,
+            ),
+            (
+                "CanProposeSccpRouteGovernance",
+                executor_permission::sccp::CanProposeSccpRouteGovernance.into(),
+                true,
+            ),
+        ];
+
+        assert_eq!(cases.len(), 42, "update this table for every scoped arm");
+        assert_eq!(
+            cases
+                .iter()
+                .map(|(name, _, _)| *name)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            cases.len(),
+            "permission cases must be unique",
+        );
+
+        for (name, permission, expected_root) in &cases {
+            assert_eq!(permission.name(), *name);
+            assert_eq!(
+                initial_permission_capability_root_authority(
+                    &state_transaction,
+                    &legitimate_root,
+                    permission,
+                    None,
+                )
+                .expect("legitimate root lookup"),
+                Some(*expected_root),
+                "wrong capability root decision for {name}",
+            );
+            assert!(
+                initial_permission_delegation_allowed(
+                    &state_transaction,
+                    &legitimate_root,
+                    permission,
+                    None,
+                )
+                .expect("legitimate delegation lookup"),
+                "legitimate authority must be able to grant {name}",
+            );
+            assert_eq!(
+                initial_permission_capability_root_authority(
+                    &state_transaction,
+                    &adjacent_owner,
+                    permission,
+                    None,
+                )
+                .expect("adjacent-owner root lookup"),
+                Some(false),
+                "adjacent ownership must not root {name}",
+            );
+            assert!(
+                !initial_permission_delegation_allowed(
+                    &state_transaction,
+                    &adjacent_owner,
+                    permission,
+                    None,
+                )
+                .expect("adjacent-owner delegation lookup"),
+                "unprivileged authority must not self-grant {name}",
+            );
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &adjacent_owner,
+                    Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                )
+                .expect_err("adjacent owner must not self-grant a scoped permission");
+        }
+
+        for (name, permission, _) in &cases {
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &legitimate_root,
+                    Grant::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                )
+                .unwrap_or_else(|error| panic!("legitimate root could not grant {name}: {error}"));
+            assert!(
+                initial_permission_delegation_allowed(
+                    &state_transaction,
+                    &adjacent_owner,
+                    permission,
+                    None,
+                )
+                .expect("exact-holder delegation lookup"),
+                "an exact holder must be able to propagate {name}",
+            );
+            super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &legitimate_root,
+                    Revoke::account_permission(permission.clone(), adjacent_owner.clone()).into(),
+                )
+                .unwrap_or_else(|error| panic!("legitimate root could not revoke {name}: {error}"));
+        }
     }
 
     #[test]
@@ -15714,6 +16418,102 @@ mod tests {
     }
 
     #[test]
+    fn detached_execute_trigger_forces_sequential_path() {
+        let trigger_id = "detached_trigger".parse().expect("valid trigger id");
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(trigger_id));
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+
+        let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
+            .expect_err("trigger execution needs the live executor and trigger state");
+        assert!(matches!(error, ValidationFail::InternalError(message) if
+            message.contains("live authorization") && message.contains("sequential")));
+    }
+
+    #[test]
+    fn detached_supply_changes_force_sequential_path() {
+        let definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                .expect("valid domain id"),
+            "rose".parse().expect("valid asset name"),
+        );
+        let asset_id = iroha_data_model::asset::AssetId::new(definition_id, alice());
+        let instructions = [
+            InstructionBox::from(iroha_data_model::isi::Mint::asset_quantity(
+                1_u32,
+                asset_id.clone(),
+            )),
+            InstructionBox::from(iroha_data_model::isi::Burn::asset_quantity(1_u32, asset_id)),
+        ];
+
+        for instruction in instructions {
+            let mut delta = crate::state::DetachedStateTransactionDelta::default();
+            let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
+                .expect_err("supply changes need canonical sequential execution");
+            assert!(matches!(error, ValidationFail::InternalError(message) if
+                message.contains("live authorization") && message.contains("sequential")));
+        }
+    }
+
+    #[test]
+    fn detached_transfers_keep_authorization_in_the_canonical_executor() {
+        let authority = alice();
+        let other = checked_account_id();
+        let destination = checked_account_id();
+        let domain_id =
+            DomainId::try_new("wonderland", "universal").expect("valid domain identifier");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("valid asset name"));
+
+        let delegated_asset = InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(definition_id.clone(), other.clone()),
+            1_u32,
+            destination.clone(),
+        ));
+        let domain = InstructionBox::from(Transfer::domain(
+            authority.clone(),
+            domain_id.clone(),
+            destination.clone(),
+        ));
+        let asset_definition = InstructionBox::from(Transfer::asset_definition(
+            authority.clone(),
+            definition_id,
+            destination.clone(),
+        ));
+        let nft = InstructionBox::from(Transfer::nft(
+            authority.clone(),
+            NftId::new(domain_id, "ticket".parse().expect("valid NFT name")),
+            destination,
+        ));
+
+        for instruction in [delegated_asset, domain, asset_definition, nft] {
+            let mut delta = crate::state::DetachedStateTransactionDelta::default();
+            let error = execute_instruction_detached(&authority, &instruction, &mut delta)
+                .expect_err("authorization-sensitive transfers must execute sequentially");
+            assert!(matches!(error, ValidationFail::InternalError(message) if
+                message.contains("sequential authorization")));
+        }
+
+        let owned_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
+            "owned".parse().expect("valid asset name"),
+        );
+        let owned_source = AssetId::new(owned_definition, authority.clone());
+        let owned_transfer = InstructionBox::from(Transfer::asset_quantity(
+            owned_source.clone(),
+            1_u32,
+            other.clone(),
+        ));
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        execute_instruction_detached(&authority, &owned_transfer, &mut delta)
+            .expect("source-owned transparent transfer may use canonical detached replay");
+        assert_eq!(
+            delta.single_transfer_delta(),
+            Some((owned_source, other, Quantity::from(1_u32)))
+        );
+    }
+
+    #[test]
     fn detached_contract_deployment_permission_mutation_forces_sequential_path() {
         let authority = alice();
         let instruction: InstructionBox =
@@ -17436,11 +18236,13 @@ mod tests {
                 .expect("commit bootstrap block");
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let instruction = match instruction_kind {
-                "freeze" => InstructionBox::from(SetAssetTransferFreeze::new(
+                "availability" => InstructionBox::from(SetAssetTransferAvailability::new(
                     target,
                     asset_definition_id,
-                    true,
-                    Some("branded contract freeze fixture".to_owned()),
+                    0,
+                    AssetTransferAvailability::Enabled,
+                    AssetTransferAvailability::Disabled,
+                    Some("branded contract availability fixture".to_owned()),
                 )),
                 "limit" => InstructionBox::from(SetAssetTransferControl::new(
                     target,
@@ -17477,7 +18279,7 @@ mod tests {
             execute_case(
                 "apps_freeze::sbp",
                 "apply_freeze",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             "unprivileged branded freeze",
@@ -17496,13 +18298,13 @@ mod tests {
             (
                 "apps_freeze::sbp",
                 "wrong",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             (
                 "wrong::sbp",
                 "apply_freeze",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             (
@@ -17514,7 +18316,7 @@ mod tests {
             (
                 "apps_limits_update::sbp",
                 "apply_limits",
-                "freeze",
+                "availability",
                 AssetTransferControlWindow::Day,
             ),
             (
@@ -18002,6 +18804,7 @@ mod tests {
             &validation_payload,
             "hostile-output-test",
             1_000_000,
+            Memory::HEAP_MAX_SIZE,
         );
         let validation_error = match validation_result {
             Err(error) => error,
@@ -18012,8 +18815,9 @@ mod tests {
             "unexpected validation error: {validation_error}"
         );
 
-        let migration_error = run_executor_migration(&loaded, &context, 1_000_000)
-            .expect_err("hostile migration result must be rejected");
+        let migration_error =
+            run_executor_migration(&loaded, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
+                .expect_err("hostile migration result must be rejected");
         assert!(
             migration_error.to_string().contains(expected_message),
             "unexpected migration error: {migration_error}"
@@ -18048,6 +18852,7 @@ mod tests {
             },
             "past-heap-output-test",
             100_000,
+            Memory::HEAP_MAX_SIZE,
         );
         let validation_error = match validation_result {
             Err(error) => error,
@@ -18060,13 +18865,68 @@ mod tests {
             "unexpected validation error: {validation_error}"
         );
 
-        let migration_error = run_executor_migration(&loaded, &context, 100_000)
-            .expect_err("past-heap migration result must be rejected");
+        let migration_error =
+            run_executor_migration(&loaded, &context, 100_000, Memory::HEAP_MAX_SIZE)
+                .expect_err("past-heap migration result must be rejected");
         assert!(
             migration_error
                 .to_string()
                 .contains("is not fully readable"),
             "unexpected migration error: {migration_error}"
+        );
+    }
+
+    #[test]
+    fn migration_result_requires_a_canonical_complete_payload() {
+        let discriminant_only = [0_u8; 4];
+        let mut discriminant_only_slice = discriminant_only.as_slice();
+        assert!(
+            MigrationResultPayload::decode(&mut discriminant_only_slice).is_err(),
+            "an Ok discriminant without an ExecutorDataModel must not decode"
+        );
+
+        let canonical_unit = MigrationUnitPayload::Ok(()).encode();
+        assert_eq!(
+            canonical_unit.as_slice(),
+            discriminant_only.as_slice(),
+            "the discriminant-only bytes are instead a complete unit-success payload"
+        );
+        let context = executor_result_test_context();
+        let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
+            + u64::try_from(discriminant_only.len()).expect("bounded migration result");
+        let unit_success =
+            loaded_executor_with_result_prefix(declared_len, discriminant_only.as_slice());
+        assert_eq!(
+            run_executor_migration(&unit_success, &context, 1_000_000, Memory::HEAP_MAX_SIZE,)
+                .expect("a canonical unit-success migration result must be accepted"),
+            None,
+            "the unit-success payload must not install an empty data model"
+        );
+
+        let model = initial_executor_data_model_fallback();
+        let canonical = MigrationResultPayload::Ok(model.clone()).encode();
+        let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
+            + u64::try_from(canonical.len()).expect("bounded migration result");
+        let complete = loaded_executor_with_result_prefix(declared_len, canonical.as_slice());
+        assert_eq!(
+            run_executor_migration(&complete, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
+                .expect("a canonical complete migration result must be accepted"),
+            Some(model)
+        );
+
+        let mut non_canonical = canonical;
+        non_canonical.push(0);
+        let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
+            + u64::try_from(non_canonical.len()).expect("bounded migration result");
+        let trailing = loaded_executor_with_result_prefix(declared_len, non_canonical.as_slice());
+        let trailing_error =
+            run_executor_migration(&trailing, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
+                .expect_err("a migration result with trailing bytes must be rejected");
+        assert!(
+            trailing_error
+                .to_string()
+                .contains("undecodable or non-canonical"),
+            "unexpected non-canonical migration result error: {trailing_error}"
         );
     }
 
@@ -18087,6 +18947,7 @@ mod tests {
             },
             "legitimate-output-test",
             1_000_000,
+            Memory::HEAP_MAX_SIZE,
         )
         .expect("legitimate validation result is readable");
         assert!(report.verdict.is_ok());
@@ -18098,7 +18959,7 @@ mod tests {
             &migration_verdict,
         );
         assert_eq!(
-            run_executor_migration(&migration, &context, 1_000_000)
+            run_executor_migration(&migration, &context, 1_000_000, Memory::HEAP_MAX_SIZE,)
                 .expect("legitimate migration result is readable"),
             None
         );
@@ -19457,7 +20318,7 @@ seiyaku IdentityRequired {
             "contract_manifest"
                 .parse()
                 .expect("contract-manifest metadata key"),
-            Json::from_string_unchecked("malformed-reserved-value".to_owned()),
+            Json::new("malformed-reserved-value"),
         );
         let error = super::Executor::Initial
             .execute_transaction(
@@ -19854,7 +20715,7 @@ seiyaku IdentityRequired {
 
         {
             let vm_small = loaded
-                .checkout_runtime_for_gas_limit(small_limit)
+                .checkout_runtime_for_gas_limit(small_limit, Memory::HEAP_MAX_SIZE)
                 .expect("checkout small");
             assert_eq!(
                 vm_small.memory.stack_limit(),
@@ -19865,7 +20726,7 @@ seiyaku IdentityRequired {
 
         {
             let vm_large = loaded
-                .checkout_runtime_for_gas_limit(large_limit)
+                .checkout_runtime_for_gas_limit(large_limit, Memory::HEAP_MAX_SIZE)
                 .expect("checkout large");
             assert_eq!(
                 vm_large.memory.stack_limit(),
@@ -19876,12 +20737,48 @@ seiyaku IdentityRequired {
     }
 
     #[test]
+    fn loaded_executor_runtime_tracks_governed_heap_limit() {
+        const GAS_LIMIT: u64 = 10_000;
+        const SMALL_HEAP_LIMIT: u64 = 64;
+        const LARGE_HEAP_LIMIT: u64 = 128;
+        let raw =
+            data_model_executor::Executor::new(IvmBytecode::from_compiled(generate_ok_program()));
+        let loaded = super::LoadedExecutor::load(raw).expect("load");
+
+        {
+            let mut runtime = loaded
+                .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
+                .expect("small heap runtime");
+            assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
+            assert_eq!(
+                runtime.memory.alloc(SMALL_HEAP_LIMIT + 8),
+                Err(VMError::OutOfMemory)
+            );
+        }
+        {
+            let runtime = loaded
+                .checkout_runtime_for_gas_limit(GAS_LIMIT, LARGE_HEAP_LIMIT)
+                .expect("large heap runtime");
+            assert_eq!(runtime.memory.heap_max_limit(), LARGE_HEAP_LIMIT);
+        }
+        let (after_distinct_limits, _) = loaded.runtime_pool_snapshot();
+
+        let runtime = loaded
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, SMALL_HEAP_LIMIT)
+            .expect("warm small heap runtime");
+        assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
+        drop(runtime);
+        let (after_reuse, _) = loaded.runtime_pool_snapshot();
+        assert_eq!(after_reuse.hits, after_distinct_limits.hits + 1);
+    }
+
+    #[test]
     fn loaded_executor_reuses_and_resets_runtime_after_error_return() {
         const GAS_LIMIT: u64 = 10_000;
 
         fn dirty_then_fail(loaded: &super::LoadedExecutor) -> Result<(), *const u8> {
             let mut runtime = loaded
-                .checkout_runtime_for_gas_limit(GAS_LIMIT)
+                .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
                 .expect("checkout runtime");
             let allocation = runtime
                 .memory
@@ -19906,7 +20803,7 @@ seiyaku IdentityRequired {
         assert_eq!(after_error.dirty_resets, before.dirty_resets + 1);
 
         let runtime = loaded
-            .checkout_runtime_for_gas_limit(GAS_LIMIT)
+            .checkout_runtime_for_gas_limit(GAS_LIMIT, Memory::HEAP_MAX_SIZE)
             .expect("warm checkout");
         assert_eq!(runtime.register(7), 0);
         assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
@@ -19947,13 +20844,13 @@ seiyaku IdentityRequired {
                 .saturating_mul(1024)
                 .saturating_mul(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1));
             let gas_limit = target_stack.saturating_add(multiplier.saturating_sub(1)) / multiplier;
-            let key = super::ExecutorRuntimeKey::for_gas_limit(gas_limit);
+            let key = super::ExecutorRuntimeKey::for_limits(gas_limit, Memory::HEAP_MAX_SIZE);
             assert!(
                 observed_keys.insert(key),
                 "test gas limits must resolve to distinct stack variants"
             );
             let runtime = loaded
-                .checkout_runtime_for_gas_limit(gas_limit)
+                .checkout_runtime_for_gas_limit(gas_limit, Memory::HEAP_MAX_SIZE)
                 .expect("checkout gas/stack variant");
             assert_eq!(runtime.memory.stack_limit(), key.stack_limit);
         }
@@ -19978,6 +20875,43 @@ seiyaku IdentityRequired {
 
         let err = parse_executor_additional_fuel(&metadata).expect_err("should reject");
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn execute_transaction_rejects_authority_argument_mismatch() {
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("valid fixture domain");
+        let world = World::with(
+            [Domain::new(domain_id).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+            ChainId::from("authority-binding"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let transaction = TransactionBuilder::new(
+            ChainId::from("authority-binding"),
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Instructions(Vec::new().into()))
+        .sign(ALICE_KEYPAIR.private_key());
+        let mut ivm_cache = IvmCache::new();
+
+        let error = super::Executor::Initial
+            .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
+            .expect_err("the call-site authority must match the signed transaction");
+        assert!(matches!(error, ValidationFail::InternalError(message) if
+            message.contains("authority argument")
+                && message.contains("signed transaction authority")));
+        assert_eq!(
+            state_transaction.last_tx_gas_used, 0,
+            "a mismatched authority must fail before execution or fee accounting"
+        );
     }
 
     #[test]
@@ -20136,7 +21070,8 @@ seiyaku IdentityRequired {
         use iroha_data_model::query::sorafs::prelude::{
             FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
             FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
-            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReserveEvents,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReserveEvents,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -20156,6 +21091,13 @@ seiyaku IdentityRequired {
             QueryRequest::Singular(FindSorafsReserveEvents::new(None, None, 16).into());
         let reputation_policy =
             QueryRequest::Singular(FindSorafsReputationJournalAuthorityPolicy.into());
+        let reputation_event = QueryRequest::Singular(
+            FindSorafsReputationJournalEventBySourceId::new(
+                iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1([0x43; 32]),
+                None,
+            )
+            .into(),
+        );
         let own_eligibility = QueryRequest::Singular(
             FindSorafsModerationJurorEligibility::new(
                 "case-1".to_owned(),
@@ -20216,6 +21158,14 @@ seiyaku IdentityRequired {
             reputation_policy_error,
             ValidationFail::NotPermitted(_)
         ));
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reputation_event,
+            )
+            .expect("payload-free finalized reputation events must remain public");
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,
@@ -20433,8 +21383,29 @@ seiyaku IdentityRequired {
 
     #[test]
     fn migrate_applies_data_model_from_entrypoint() {
-        let mut permissions = BTreeSet::new();
-        permissions.insert("permission.can_control_domain_lives".to_owned());
+        let retained_permission = Permission::new(
+            "permission.can_control_domain_lives".to_owned(),
+            Json::new(()),
+        );
+        let expected_legacy_names = [
+            "CanMintAsset",
+            "CanInvokeContractEntrypoint",
+            "CanPublishSpaceDirectoryManifest",
+            "CanPublishSpaceDirectoryManifestForUaid",
+            "CanPublishSpaceDirectoryManifestForAccountDomain",
+        ];
+        assert_eq!(LEGACY_ESCALATION_PERMISSION_NAMES, expected_legacy_names);
+        let legacy_permissions = expected_legacy_names
+            .into_iter()
+            .map(|name| Permission::new(name.to_owned(), Json::new(())))
+            .collect::<BTreeSet<_>>();
+        let permissions = core::iter::once(retained_permission.name().to_owned())
+            .chain(
+                legacy_permissions
+                    .iter()
+                    .map(|permission| permission.name().to_owned()),
+            )
+            .collect();
         let custom_parameters: BTreeMap<CustomParameterId, CustomParameter> = BTreeMap::new();
         let data_model = ExecutorDataModel::new(
             custom_parameters,
@@ -20448,7 +21419,35 @@ seiyaku IdentityRequired {
 
         let mut executor = super::Executor::Initial;
 
-        let world = World::new();
+        let role_id: RoleId = "legacy_escalation_role".parse().expect("role id");
+        let stored_permissions = core::iter::once(retained_permission.clone())
+            .chain(legacy_permissions.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let mut permission_epochs = BTreeMap::from([(retained_permission.clone(), 8)]);
+        permission_epochs.extend(legacy_permissions.iter().cloned().enumerate().map(
+            |(index, permission)| {
+                (
+                    permission,
+                    9 + u64::try_from(index).expect("legacy permission count fits u64"),
+                )
+            },
+        ));
+        let role = Role {
+            id: role_id.clone(),
+            permissions: stored_permissions.clone(),
+            permission_epochs,
+        };
+        let mut world = World::with_assets_and_roles(
+            [],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+            [],
+            [],
+            [role],
+        );
+        world
+            .account_permissions
+            .insert(ALICE_ID.clone(), stored_permissions);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
@@ -20461,6 +21460,25 @@ seiyaku IdentityRequired {
             .expect("migration should succeed");
 
         assert_eq!(*state_tx.world.executor_data_model.get(), data_model);
+        assert_eq!(
+            state_tx
+                .world
+                .account_permissions
+                .get(&ALICE_ID)
+                .expect("retained account permission entry"),
+            &BTreeSet::from([retained_permission.clone()]),
+        );
+        let role = state_tx.world.roles.get(&role_id).expect("retained role");
+        assert_eq!(
+            role.permissions().cloned().collect::<BTreeSet<_>>(),
+            BTreeSet::from([retained_permission.clone()]),
+        );
+        assert_eq!(role.permission_epochs().get(&retained_permission), Some(&8),);
+        assert!(
+            legacy_permissions
+                .iter()
+                .all(|permission| !role.permission_epochs().contains_key(permission)),
+        );
         match executor {
             super::Executor::UserProvided(_) => {}
             _ => panic!("expected UserProvided executor after migration"),

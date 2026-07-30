@@ -136,9 +136,20 @@ hashing, chunking, and verifying optional manifests.
 ### Validation Checklist
 
 1. Verify request Norito header matches `DaIngestRequest`.
-2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
-3. Enforce `chunk_size` alignment (power-of-two, at most 2 MiB).
-4. Ensure `data_shards + parity_shards` does not exceed the global maximum and parity is at least 2.
+2. Before decompression, reject zero or greater-than-64-MiB `total_size` claims.
+3. Enforce power-of-two `chunk_size` in the inclusive 1 KiB–2 MiB range and
+   at most 1,024 source chunks.
+4. Require 1–64 data shards, 2–64 parity shards, and at most 64 row-parity
+   stripes. Cross-stripe parity is additionally limited to 64 source stripes,
+   bounding the cubic RS16 matrix step. `rs16::validate_erasure_work_budget`
+   also caps generated parity bytes and transient RS16 workspace at 128 MiB
+   each, closing multiplicative layouts that pass the dimension caps.
+   Signature verification, normalization, chunking, RS16 generation, manifest
+   construction, and PDP construction run on blocking workers behind
+   `torii.da_ingest.max_concurrent_compute_jobs` (default `1`). The owned
+   semaphore permit remains inside the physical worker, so cancelling an HTTP
+   request cannot admit replacement work while its detached computation is
+   still running.
 5. `retention_policy.required_replica_count` must respect governance baseline.
 6. Signature verification against canonical hash (excluding signature field).
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.
@@ -148,6 +159,21 @@ hashing, chunking, and verifying optional manifests.
    `RetentionPolicy` with `torii.da_ingest.replication_policy` (see
    `replication-policy.md`) and rejects pre-built manifests whose retention
    metadata does not match the enforced profile.
+
+### Request signature
+
+`DaIngestRequest.signature` is an Ed25519 signature over a 32-byte BLAKE3
+digest, not over the raw blob alone. The digest starts with
+`iroha:da-ingest-request:v1\0` and then absorbs every admission-relevant field
+in request order: the 32-byte client blob id; little-endian lane, epoch and
+sequence; fixed enum tags and custom values; length-prefixed UTF-8 codec;
+erasure and FEC parameters; retention policy; chunk and total sizes;
+compression; optional manifest; transported payload; and ordered metadata
+entries including visibility and encryption labels. Variable-width values use
+an unsigned little-endian `u64` byte length. Torii verifies this digest against
+`submitter` before decompression or erasure work. Rust, JavaScript, and Swift
+builders share a golden digest vector so changing any routing, resource, policy,
+payload, or metadata field invalidates the signature.
 
 ### Chunking & Replication Flow
 
@@ -278,10 +304,11 @@ All previously blocked ingest TODOs have been implemented and verified:
   and chunk plans without touching the node’s spool directory. The response returns the Norito bytes
   (base64), rendered manifest JSON, a `chunk_plan` JSON blob ready for `sorafs fetch`, the relevant
   hex digests (`storage_ticket`, `client_blob_id`, `blob_hash`, `chunk_root`), and mirrors the
-  `Sora-PDP-Commitment` header from ingest responses for parity. Supplying `block_hash=<hex>` in the
-  query string returns a deterministic `sampling_plan` (assignment hash, `sample_window`, and sampled
-  `(index, role, group)` tuples spanning the full 2D layout) so validators and PoR tools draw the same
-  indices.
+  `Sora-PDP-Commitment` header from ingest responses for parity. Manifest retrieval intentionally
+  has no sampling or challenge query. Explicit local PoR sampling inputs are retrievability
+  diagnostics, not an availability guarantee and not evidence for rewards, slashing, or consensus.
+  A future enforcement path must bind challenges to a committed block and manifest through a
+  provider-independent source such as a governed VRF.
 
 ### Large Payload Streaming Flow
 

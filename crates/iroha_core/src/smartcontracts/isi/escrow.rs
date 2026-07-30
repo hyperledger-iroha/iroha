@@ -15,11 +15,8 @@ use iroha_data_model::{
         ConditionalEscrowConditionState, ConditionalEscrowPredicate, ConditionalEscrowValue,
         EscrowId,
     },
-    events::data::{
-        escrow::{
-            AssetEscrowDisputed, AssetEscrowResolved, ConditionalEscrowAttested, EscrowEvent,
-        },
-        prelude::{AssetChanged, AssetEvent},
+    events::data::escrow::{
+        AssetEscrowDisputed, AssetEscrowResolved, ConditionalEscrowAttested, EscrowEvent,
     },
     fastpq::TransferDeltaTranscript,
     isi::escrow::{
@@ -59,8 +56,9 @@ use super::{
     Error, Execute,
     asset::isi::{
         NumericAssetTransferSourcePolicy, apply_resolved_numeric_asset_transfer_delta,
-        assert_numeric_spec_with, ensure_numeric_asset_transfer_policies,
-        prepare_outbound_asset_transfer_control_update, update_control_record,
+        assert_numeric_spec_with, emit_numeric_asset_transfer_events,
+        ensure_numeric_asset_transfer_policies, prepare_outbound_asset_transfer_control_update,
+        update_control_record,
     },
 };
 use crate::{
@@ -397,16 +395,12 @@ fn transfer_numeric_asset_for_escrow(
         .telemetry
         .observe_tx_amount(amount.as_numeric().to_f64_lossy());
 
-    state_transaction.world.emit_events([
-        AssetEvent::Removed(AssetChanged {
-            asset: source_id,
-            amount: amount.clone(),
-        }),
-        AssetEvent::Added(AssetChanged {
-            asset: destination_id,
-            amount: amount.clone(),
-        }),
-    ]);
+    emit_numeric_asset_transfer_events(
+        state_transaction,
+        source_id,
+        destination_id,
+        amount.clone(),
+    );
 
     Ok(delta)
 }
@@ -1159,16 +1153,12 @@ pub(crate) fn settle_orderbook_asset_lock(
         state_transaction
             .telemetry
             .observe_tx_amount(amount.as_numeric().to_f64_lossy());
-        state_transaction.world.emit_events([
-            AssetEvent::Removed(AssetChanged {
-                asset: event_source_id,
-                amount: amount.clone(),
-            }),
-            AssetEvent::Added(AssetChanged {
-                asset: event_destination_id,
-                amount,
-            }),
-        ]);
+        emit_numeric_asset_transfer_events(
+            state_transaction,
+            event_source_id,
+            event_destination_id,
+            amount,
+        );
     }
     if let Some(control_record) = control_update {
         update_control_record(
@@ -3240,10 +3230,10 @@ mod tests {
     use iroha_data_model::{
         asset::{
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
-            AssetSubjectBindingV1, definition::AssetConfidentialPolicy,
+            AssetSubjectBindingV1, AssetTransferAvailability, definition::AssetConfidentialPolicy,
         },
         events::{EventBox, data::prelude as data_pre},
-        isi::SetAssetTransferFreeze,
+        isi::SetAssetTransferAvailability,
         permission::Permissions,
     };
     use iroha_executor_data_model::permission::{Permission as _, escrow::CanResolveEscrowDispute};
@@ -3467,13 +3457,13 @@ mod tests {
             release_authority: None,
             expires_at_ms: None,
             evidence_hashes: Vec::new(),
+            conditions: Vec::new(),
             created_at_ms: 1,
             accepted_at_ms: None,
             payment_sent_at_ms: None,
             disputed_at_ms: None,
             closed_at_ms: None,
             resolution: None,
-            conditions: Vec::new(),
         }
     }
 
@@ -3613,20 +3603,22 @@ mod tests {
             .expect("deposit closed custody dust");
     }
 
-    fn freeze_outbound_asset_transfers(
+    fn disable_outbound_asset_transfers(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         account: &AccountId,
         asset_definition: &AssetDefinitionId,
     ) {
-        SetAssetTransferFreeze::new(
+        SetAssetTransferAvailability::new(
             account.clone(),
             asset_definition.clone(),
-            true,
+            0,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Disabled,
             Some("escrow custody hold".to_owned()),
         )
         .execute(authority, state_transaction)
-        .expect("freeze outbound asset transfers");
+        .expect("disable outbound asset transfers");
     }
 
     #[test]
@@ -4192,12 +4184,12 @@ mod tests {
     }
 
     #[test]
-    fn escrow_open_rejects_frozen_outbound_asset() {
+    fn escrow_open_rejects_disabled_outbound_asset() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
-        let escrow_id = fixture_escrow_id("frozen-open");
+        let escrow_id = fixture_escrow_id("disabled-outbound-open");
         let state = state_with_parties(
             &seller,
             &buyer,
@@ -4208,14 +4200,16 @@ mod tests {
         let mut block = state.block(block_header(1_000));
         let mut tx = block.transaction();
 
-        SetAssetTransferFreeze::new(
+        SetAssetTransferAvailability::new(
             seller.clone(),
             asset_definition.clone(),
-            true,
+            0,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Disabled,
             Some("compliance hold".to_owned()),
         )
         .execute(&seller, &mut tx)
-        .expect("freeze succeeds");
+        .expect("outbound disable succeeds");
 
         let err = OpenAssetEscrow {
             escrow_id,
@@ -4227,7 +4221,8 @@ mod tests {
         .expect_err("outbound transfer controls must apply to escrow opening");
 
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
         assert!(tx.world.asset_escrows.get(&escrow_id).is_none());
@@ -4963,14 +4958,14 @@ mod tests {
     }
 
     #[test]
-    fn asset_lock_custody_freeze_blocks_drawdown_cancel_and_expire() {
-        let source = fixture_account("lock-freeze-source");
-        let destination = fixture_account("lock-freeze-destination");
-        let observer = fixture_account("lock-freeze-observer");
+    fn disabled_custody_outbound_blocks_drawdown_cancel_and_expire() {
+        let source = fixture_account("lock-disabled-source");
+        let destination = fixture_account("lock-disabled-destination");
+        let observer = fixture_account("lock-disabled-observer");
         let asset_definition = fixture_asset_definition_id();
-        let drawdown_id = fixture_escrow_id("lock-freeze-drawdown");
-        let cancel_id = fixture_escrow_id("lock-freeze-cancel");
-        let expire_id = fixture_escrow_id("lock-freeze-expire");
+        let drawdown_id = fixture_escrow_id("lock-disabled-drawdown");
+        let cancel_id = fixture_escrow_id("lock-disabled-cancel");
+        let expire_id = fixture_escrow_id("lock-disabled-expire");
         let state = state_with_parties(
             &source,
             &destination,
@@ -5011,33 +5006,36 @@ mod tests {
         .expect("open expired lock");
 
         let drawdown_custody = escrow_record(&tx, &drawdown_id).custody;
-        freeze_outbound_asset_transfers(&mut tx, &source, &drawdown_custody, &asset_definition);
+        disable_outbound_asset_transfers(&mut tx, &source, &drawdown_custody, &asset_definition);
         let err =
             DrawdownAssetLock::new(drawdown_id, Quantity::from(5_u32), Quantity::from(10_u32))
                 .execute(&destination, &mut tx)
-                .expect_err("custody freeze must block drawdown");
+                .expect_err("disabled custody outbound must block drawdown");
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
 
         let cancel_custody = escrow_record(&tx, &cancel_id).custody;
-        freeze_outbound_asset_transfers(&mut tx, &source, &cancel_custody, &asset_definition);
+        disable_outbound_asset_transfers(&mut tx, &source, &cancel_custody, &asset_definition);
         let err = CancelAssetLock::new(cancel_id, Quantity::from(20_u32))
             .execute(&source, &mut tx)
-            .expect_err("custody freeze must block cancellation refund");
+            .expect_err("disabled custody outbound must block cancellation refund");
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
 
         let expire_custody = escrow_record(&tx, &expire_id).custody;
-        freeze_outbound_asset_transfers(&mut tx, &source, &expire_custody, &asset_definition);
+        disable_outbound_asset_transfers(&mut tx, &source, &expire_custody, &asset_definition);
         let err = ExpireAssetLock::new(expire_id)
             .execute(&observer, &mut tx)
-            .expect_err("custody freeze must block expiry refund");
+            .expect_err("disabled custody outbound must block expiry refund");
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
 
@@ -5563,12 +5561,12 @@ mod tests {
     }
 
     #[test]
-    fn escrow_release_rejects_frozen_custody_outbound_asset() {
+    fn escrow_release_rejects_disabled_custody_outbound_asset() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
-        let escrow_id = fixture_escrow_id("release-custody-freeze");
+        let escrow_id = fixture_escrow_id("release-custody-disabled");
         let amount = Quantity::from(40_u32);
         let state = state_with_parties(
             &seller,
@@ -5590,7 +5588,7 @@ mod tests {
         .execute(&seller, &mut tx)
         .expect("open escrow");
         let custody = escrow_record(&tx, &escrow_id).custody;
-        freeze_outbound_asset_transfers(&mut tx, &seller, &custody, &asset_definition);
+        disable_outbound_asset_transfers(&mut tx, &seller, &custody, &asset_definition);
         AcceptAssetEscrow { escrow_id }
             .execute(&buyer, &mut tx)
             .expect("accept escrow");
@@ -5600,9 +5598,10 @@ mod tests {
 
         let err = ReleaseAssetEscrow { escrow_id }
             .execute(&seller, &mut tx)
-            .expect_err("custody outbound freeze must block release");
+            .expect_err("disabled custody outbound must block release");
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
 
@@ -5655,12 +5654,12 @@ mod tests {
     }
 
     #[test]
-    fn escrow_cancel_rejects_frozen_custody_outbound_asset() {
+    fn escrow_cancel_rejects_disabled_custody_outbound_asset() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
-        let escrow_id = fixture_escrow_id("cancel-custody-freeze");
+        let escrow_id = fixture_escrow_id("cancel-custody-disabled");
         let amount = Quantity::from(40_u32);
         let state = state_with_parties(
             &seller,
@@ -5682,13 +5681,14 @@ mod tests {
         .execute(&seller, &mut tx)
         .expect("open escrow");
         let custody = escrow_record(&tx, &escrow_id).custody;
-        freeze_outbound_asset_transfers(&mut tx, &seller, &custody, &asset_definition);
+        disable_outbound_asset_transfers(&mut tx, &seller, &custody, &asset_definition);
 
         let err = CancelAssetEscrow { escrow_id }
             .execute(&seller, &mut tx)
-            .expect_err("custody outbound freeze must block cancellation");
+            .expect_err("disabled custody outbound must block cancellation");
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
 
@@ -5866,12 +5866,12 @@ mod tests {
     }
 
     #[test]
-    fn escrow_resolution_rejects_frozen_custody_outbound_asset() {
+    fn escrow_resolution_rejects_disabled_custody_outbound_asset() {
         let seller = fixture_account("seller");
         let buyer = fixture_account("buyer");
         let court = fixture_account("court");
         let asset_definition = fixture_asset_definition_id();
-        let escrow_id = fixture_escrow_id("resolution-custody-freeze");
+        let escrow_id = fixture_escrow_id("resolution-custody-disabled");
         let amount = Quantity::from(40_u32);
         let state = state_with_parties(
             &seller,
@@ -5903,7 +5903,7 @@ mod tests {
         .execute(&buyer, &mut tx)
         .expect("open dispute");
         grant_court_permission(&mut tx, &court);
-        freeze_outbound_asset_transfers(&mut tx, &seller, &custody, &asset_definition);
+        disable_outbound_asset_transfers(&mut tx, &seller, &custody, &asset_definition);
 
         let err = ResolveEscrowDispute {
             escrow_id,
@@ -5912,9 +5912,10 @@ mod tests {
             evidence_hashes: Vec::new(),
         }
         .execute(&court, &mut tx)
-        .expect_err("custody outbound freeze must block resolution");
+        .expect_err("disabled custody outbound must block resolution");
         assert!(
-            err.to_string().contains("frozen"),
+            err.to_string()
+                .contains("Outgoing asset movement is disabled"),
             "unexpected error: {err}"
         );
 

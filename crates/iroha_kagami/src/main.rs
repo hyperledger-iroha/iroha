@@ -364,13 +364,13 @@ mod tests {
         );
         assert!(
             parse(
-                "kagami advanced client-configs --base-config ./client.toml --names alice --fresh-random-keys"
+                "kagami advanced client-configs --base-config ./client.toml --names alice --seed-hex 1111111111111111111111111111111111111111111111111111111111111111"
             )
             .is_ok()
         );
         assert!(
             parse(
-                "kagami advanced client-configs --base-config ./client.toml --names alice --fresh-random-keys --seed-prefix forbidden"
+                "kagami advanced client-configs --base-config ./client.toml --names alice --seed-prefix demo"
             )
             .is_err()
         );

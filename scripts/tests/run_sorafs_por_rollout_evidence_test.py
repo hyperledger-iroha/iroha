@@ -15,10 +15,26 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    write_topology_qualification,
+)
+
 
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
     return path
+
+
+def topology_args(tmp_path: Path) -> list[str]:
+    return [
+        "--topology-qualification-summary",
+        str(
+            write_topology_qualification(
+                tmp_path / "topology-qualification.json",
+                deployment_id="por-production-a",
+            )
+        ),
+    ]
 
 
 def complete_args(tmp_path: Path) -> list[str]:
@@ -29,6 +45,7 @@ def complete_args(tmp_path: Path) -> list[str]:
         str(tmp_path / "evidence"),
         "--now-unix",
         "1800500000",
+        *topology_args(tmp_path),
         "--max-evidence-age-secs",
         "86400",
         "--max-route-latency-ms",
@@ -363,6 +380,7 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800500000",
+            *topology_args(tmp_path),
             "--require-kind",
             "randomness",
             "--randomness-evidence",
@@ -480,6 +498,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800500000",
+            *topology_args(tmp_path),
             "--require-kind",
             "randomness",
             "--randomness-evidence",
@@ -503,6 +522,7 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
             [
                 "--out-dir",
                 str(tmp_path / "evidence"),
+                *topology_args(tmp_path),
                 "--require-kind",
                 "unknown",
                 "--dry-run",

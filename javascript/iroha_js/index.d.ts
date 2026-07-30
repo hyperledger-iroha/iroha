@@ -1655,12 +1655,16 @@ export interface ToriiRepoAgreement {
   counterparty: string;
   custodian: string | null;
   cashLeg: RepoLegDto;
+  cashSource: string;
   collateralLeg: RepoLegDto;
+  collateralCustodyAsset: string;
   rateBps: number;
   maturityTimestampMs: number;
   initiatedTimestampMs: number;
   lastMarginCheckTimestampMs: number;
   governance: RepoGovernanceDto;
+  settlementTimestampMs: number | null;
+  status: "active" | "settled";
 }
 
 export interface RepoAgreementListResponse {
@@ -3367,6 +3371,12 @@ export interface SorafsOrderbookValidationOptions {
   generated_at?: number | bigint;
 }
 
+export interface SorafsAppealFinanceValidationOptions {
+  label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
 export interface SorafsPdpPayloadValidationOptions {
   label?: string;
   generatedAtUnix?: number | bigint;
@@ -3451,6 +3461,11 @@ export function validateOrderbookPayload(
   kind: SorafsOrderbookPayloadKind,
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: SorafsOrderbookValidationOptions,
+): SorafsValidationOutcome;
+
+export function validateAppealFinanceCancelAssetLock(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+  options?: SorafsAppealFinanceValidationOptions,
 ): SorafsValidationOutcome;
 
 export function signOrderbookPayload(
@@ -3607,18 +3622,12 @@ export interface SorafsGatewayFetchOptions {
   cacheVersion?: string;
   clientId?: string;
   telemetryRegion?: string;
-  rolloutPhase?:
-    | "canary"
-    | "ramp"
-    | "default"
-    | "stage-a"
-    | "stage-b"
-    | "stage-c";
+  rolloutPhase?: "canary" | "ramp" | "default";
   maxPeers?: number;
   retryBudget?: number;
   transportPolicy?: "soranet-first" | "soranet-strict" | "direct-only";
   anonymityPolicy?: "anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq";
-  writeMode?: "read-only" | "upload-pq-only" | string;
+  writeMode?: "read-only" | "upload-pq-only";
   policyOverride?: SorafsGatewayPolicyOverride;
   localProxy?: SorafsLocalProxyOptions;
   taikaiCache?: SorafsTaikaiCacheOptions;
@@ -3939,8 +3948,10 @@ type ToriiRuntimeNamespaceExport =
   | "verifyIdentifierResolutionReceipt";
 
 type NoritoRuntimeNamespaceExport =
-    "encodeAccountIdNoritoValue"
+    "decodeCancelAssetLockV1"
+  | "encodeAccountIdNoritoValue"
   | "encodeAssetDefinitionIdNoritoValue"
+  | "encodeCancelAssetLockV1"
   | "encodeQuantityNoritoValue"
   | "inspectSubscriptionTriggerAction"
   | "noritoDecodeBlockProofs"
@@ -3952,8 +3963,11 @@ type NoritoRuntimeNamespaceExport =
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
+  | "noritoEncodeSorafsBillingAcknowledgementProofV1"
   | "noritoEncodeOpenVerifyEnvelope"
   | "noritoEncodeTransactionPayloadBatch"
+  | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1"
+  | "SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1"
   | "validateNoritoFrame"
   | "validateSorafsReplicationOrderPayloadV1"
   | "verifyBlockMerkleProof"
@@ -3970,7 +3984,6 @@ type CryptoRuntimeNamespaceExport =
   | "SM2_SIGNATURE_LENGTH"
   | "SUPPORTED_CRYPTO_ALGORITHMS"
   | "buildKaigiRosterJoinProof"
-  | "buildZkAceTransferAuthorizationV1"
   | "deriveConfidentialDiversifierV2"
   | "deriveConfidentialKeyset"
   | "deriveConfidentialKeysetFromHex"
@@ -5011,8 +5024,6 @@ export interface ToriiGovernanceUnlockStats {
   last_sweep_height: number;
 }
 
-export type ToriiGovernanceCouncilVariant = "Normal" | "Small" | string;
-
 export interface ToriiGovernanceCouncilMember {
   account_id: string;
 }
@@ -5022,77 +5033,7 @@ export interface ToriiGovernanceCouncilCurrentResponse {
   members: ReadonlyArray<ToriiGovernanceCouncilMember>;
   alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
   candidate_count: number;
-  verified: number;
-  derived_by: string;
-}
-
-export interface ToriiGovernanceCouncilCandidateInput {
-  accountId: string;
-  variant: ToriiGovernanceCouncilVariant;
-  pk?: BinaryLike | string;
-  pkB64?: string;
-  publicKey?: BinaryLike | string;
-  publicKeyB64?: string;
-  proof?: BinaryLike | string;
-  proofB64?: string;
-  signature?: BinaryLike | string;
-  signatureB64?: string;
-}
-
-export interface ToriiGovernanceCouncilDeriveRequest {
-  committeeSize?: number | string | bigint;
-  alternateSize?: number | string | bigint;
-  epoch?: number | string | bigint | null;
-  candidates: ReadonlyArray<ToriiGovernanceCouncilCandidateInput>;
-}
-
-export interface ToriiGovernanceCouncilDeriveResponse {
-  epoch: number;
-  members: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  total_candidates: number;
-  verified: number;
-  derived_by: string;
-}
-
-export interface ToriiGovernanceCouncilPersistRequest
-  extends ToriiGovernanceCouncilDeriveRequest {
-  authority?: string | null;
-  privateKey?: string | null;
-}
-
-export type ToriiGovernanceCouncilPersistResponse =
-  ToriiGovernanceCouncilDeriveResponse;
-
-export interface ToriiGovernanceCouncilReplaceRequest {
-  missing: string;
-  epoch?: number | string | bigint | null;
-  authority?: string | null;
-  privateKey?: string | null;
-}
-
-export interface ToriiGovernanceCouncilReplaceResponse {
-  epoch: number;
-  members: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  alternates: ReadonlyArray<ToriiGovernanceCouncilMember>;
-  replaced: boolean;
-}
-
-export interface ToriiGovernanceCouncilAuditOptions {
-  epoch?: number | string | bigint | null;
-  signal?: AbortSignal;
-}
-
-export interface ToriiGovernanceCouncilAuditResponse {
-  epoch: number;
-  seed_hex: string;
-  beacon_hex: string;
-  members_count: number;
-  candidate_count: number;
-  alternates_count: number;
-  verified: number;
-  derived_by: string;
-  chain_id: string;
+  derived_by: "Sortition" | "Manual";
 }
 
 export interface ToriiProtectedNamespacesApplyResponse {
@@ -6776,42 +6717,6 @@ export interface KaigiRosterJoinProofOptions {
   roster_root_hex?: string | null;
 }
 
-export interface ZkAceTransferAuthorizationV1Options {
-  fromAccountId: string;
-  toAccountId: string;
-  assetDefinitionId: string;
-  amount: NumericLike;
-  chainId: string;
-  identityRoot: BinaryLike;
-  identityBlinding: BinaryLike;
-  replaySecret: BinaryLike;
-  policyHash: BinaryLike;
-  verifierKeyId?: string | null;
-  verifyingKeyCommitment?: BinaryLike | null;
-}
-
-export interface ZkAceTransferAuthorizationV1 {
-  publicInputs: object;
-  public_inputs: object;
-  proof: ProofAttachmentInput;
-  identityCommitment: string;
-  identity_commitment: string;
-  txDigest: string;
-  tx_digest: string;
-  replayNullifier: string;
-  replay_nullifier: string;
-  policyHash: string;
-  policy_hash: string;
-  verifierKeyId: string;
-  verifier_key_id: string;
-  authorizationProofBytes: number;
-  authorization_proof_bytes: number;
-  authorizationPublicInputBytes: number;
-  authorization_public_input_bytes: number;
-  replayNullifierBytes: number;
-  replay_nullifier_bytes: number;
-}
-
 export interface RegisterDomainInput {
   chainId: string;
   authority: string;
@@ -7727,9 +7632,6 @@ export interface PersistCouncilForEpochInstructionInput {
   epoch: NumericLike;
   members: ReadonlyArray<string>;
   alternates?: ReadonlyArray<string>;
-  verified?: NumericLike;
-  candidatesCount: NumericLike;
-  derivedBy?: "Vrf" | string;
 }
 
 export interface RegisterZkAssetInstructionInput {
@@ -7784,88 +7686,6 @@ export interface RegisterAssetHiddenZkPoolInstructionInput {
   storageAssetDefinitionId: string;
   assetSetRoot: BinaryLike;
   transferVerifyingKey: VerifyingKeyIdLike;
-}
-
-export interface RegisterZkAceIdentityCommitmentInstructionInput {
-  assetDefinitionId: string;
-  identityCommitment: BinaryLike;
-  policyHash: BinaryLike;
-  allowedAccounts: string[];
-  actionClass?: string;
-  domainTag?: string;
-  verifierKey: VerifyingKeyIdLike;
-}
-
-export interface RotateZkAceIdentityCommitmentInstructionInput {
-  assetDefinitionId: string;
-  oldIdentityCommitment: BinaryLike;
-  newIdentityCommitment: BinaryLike;
-  policyHash: BinaryLike;
-  allowedAccounts: string[];
-  actionClass?: string;
-  domainTag?: string;
-  verifierKey: VerifyingKeyIdLike;
-}
-
-export interface RevokeZkAceIdentityCommitmentInstructionInput {
-  assetDefinitionId: string;
-  identityCommitment: BinaryLike;
-  reasonHash?: BinaryLike | null;
-}
-
-export interface ZkAcePublicInputsV1Input {
-  version?: NumericLike;
-  identityCommitment: BinaryLike;
-  txDigest: BinaryLike;
-  chainId: string;
-  domainTag?: string;
-  actionClass?: string;
-  replayNullifier: BinaryLike;
-  policyHash: BinaryLike;
-  fromAccountId: string;
-  toAccountId: string;
-  assetDefinitionId: string;
-  amount: NumericLike;
-  verifierKeyId: VerifyingKeyIdLike;
-}
-
-export interface ZkAceAuthorizationProofV1Input {
-  publicInputs: ZkAcePublicInputsV1Input;
-  witness?: ZkAceWitnessV1Input;
-  proof?: ProofAttachmentInput | BinaryLike;
-  proofBytes?: BinaryLike;
-  proofAttachment?: ProofAttachmentInput;
-  verifyingKeyRef?: VerifyingKeyIdLike;
-  verifyingKeyCommitment?: BinaryLike | null;
-  envelopeHash?: BinaryLike | null;
-}
-
-export interface ZkAceAuthorizationProofV1 {
-  public_inputs: object;
-  proof: ProofAttachmentInput;
-}
-
-export interface ZkAceWitnessV1Input {
-  identityRoot: BinaryLike;
-  identityBlinding: BinaryLike;
-  replaySecret: BinaryLike;
-}
-
-export interface ZkAceAuthorizedTransferInstructionInput {
-  fromAccountId: string;
-  toAccountId: string;
-  assetDefinitionId: string;
-  /** Positive scale-0 quantity that fits the versioned u128 proof scalar. */
-  amount: QuantityInput;
-  identityCommitment: BinaryLike;
-  txDigest: BinaryLike;
-  chainId: string;
-  domainTag?: string;
-  actionClass?: string;
-  replayNullifier: BinaryLike;
-  policyHash: BinaryLike;
-  proof?: ProofAttachmentInput;
-  authorizationProof?: ZkAceAuthorizationProofV1Input;
 }
 
 export interface UnshieldInstructionInput {
@@ -8590,11 +8410,6 @@ export interface DaManifestFetchResponse {
   manifest_bytes: Buffer;
   manifest_json: unknown;
   chunk_plan: SorafsChunkFetchPlanV1;
-  sampling_plan: {
-    assignment_hash_hex: string;
-    sample_window: number;
-    samples: ReadonlyArray<{ index: number; role: string; group: number }>;
-  } | null;
 }
 
 export interface DaProofSummaryOptions {
@@ -8754,7 +8569,6 @@ export interface DaManifestPersistedPaths {
   manifestPath: string;
   manifestJsonPath: string;
   chunkPlanPath: string;
-  samplingPlanPath?: string | null;
   label: string;
 }
 
@@ -8797,6 +8611,7 @@ export interface DaIngestRequestInput {
   erasureProfile?: {
     dataShards?: number;
     parityShards?: number;
+    rowParityStripes?: number;
     chunkAlignment?: number;
     fecScheme?:
       | "Rs12_10"
@@ -8864,6 +8679,7 @@ export interface DaIngestArtifacts {
   clientBlobIdHex: string;
   submitterPublicKey: string;
   signatureHex: string;
+  signingDigestHex: string;
   payloadLength: number;
 }
 
@@ -8890,6 +8706,10 @@ export interface DaIngestBuildRequestResult {
 export function buildDaIngestRequest(
   options?: DaIngestRequestInput,
 ): DaIngestBuildRequestResult;
+
+export function computeDaIngestSigningDigest(
+  request: Record<string, unknown>,
+): Buffer;
 
 export interface SorafsPorStatusOptions {
   manifestHex?: string | null;
@@ -9368,28 +9188,79 @@ export interface SorafsOrderbookEventsResponse {
   events: SorafsOrderbookFinalizedEventPage;
 }
 
-export interface SorafsReputationCacheOptions {
+export interface SorafsReputationWitnessHeaders
+  extends Record<string, string> {
+  /**
+   * Exact canonical Norito witness. Reputation requests carrying a static
+   * witness are single-attempt and are never transparently retried.
+   */
+  "X-Iroha-Witness": string;
+  "X-Iroha-Account"?: string;
+}
+
+export type SorafsReputationAuthenticationOptions =
+  | {
+      canonicalAuth: CanonicalRequestAuth;
+      headers?: Record<string, string>;
+    }
+  | {
+      canonicalAuth?: never;
+      headers: SorafsReputationWitnessHeaders;
+    };
+
+export type SorafsReputationCacheOptions =
+  SorafsReputationAuthenticationOptions & {
   ifNoneMatch?: string;
-  etag?: string;
-  headers?: Record<string, string>;
+  signal?: AbortSignal;
+};
+
+export type SorafsReputationEventsOptions =
+  SorafsReputationCacheOptions & {
+  since?: NumericLike;
+  limit?: NumericLike;
+};
+
+export type SorafsReputationEventStreamOptions =
+  SorafsReputationAuthenticationOptions & {
+  since?: NumericLike;
+  limit?: NumericLike;
+  signal?: AbortSignal;
+};
+
+export interface SorafsHedgingBillingAuthOptions {
+  canonicalAuth: CanonicalRequestAuth;
   signal?: AbortSignal;
 }
 
-export interface SorafsReputationEventsOptions
-  extends SorafsReputationCacheOptions {
-  since?: NumericLike;
-  limit?: NumericLike;
+export interface SorafsBillingStatementListOptions
+  extends SorafsHedgingBillingAuthOptions {
+  expectedCheckpointFingerprintHex: string;
+  afterStatementIdHex?: string;
+  limit: number;
 }
 
-export interface SorafsReputationEventStreamOptions {
-  since?: NumericLike;
-  limit?: NumericLike;
-  lastEventId?: string;
-  signal?: AbortSignal;
+export interface SorafsHedgingProjectionOptions
+  extends SorafsHedgingBillingAuthOptions {
+  expectedCheckpointFingerprintHex: string;
+  afterHex?: string;
+  limit: number;
+}
+
+export type SorafsReputationU64 = number | bigint;
+
+export interface SorafsReputationWeights {
+  version: 1;
+  por_success_bps: number;
+  pdp_success_bps: number;
+  potr_success_bps: number;
+  latency_bps: number;
+  dispute_bps: number;
+  token_violation_bps: number;
+  repair_breach_bps: number;
 }
 
 export interface SorafsReputationProviderMetrics {
-  version: number;
+  version: 1;
   por_success_bps: number;
   pdp_success_bps: number;
   potr_success_bps: number;
@@ -9399,35 +9270,55 @@ export interface SorafsReputationProviderMetrics {
   repair_breach_rate_bps: number;
 }
 
+export type SorafsReputationDegradationFlagName =
+  | "reserve_warning"
+  | "reserve_grace"
+  | "reserve_delinquent"
+  | "reserve_default"
+  | "proof_success_below90"
+  | "proof_success_below80"
+  | "active_dispute"
+  | "slashing_event"
+  | "low_score";
+
+export interface SorafsReputationDegradationFlag {
+  flag: SorafsReputationDegradationFlagName;
+  value: null;
+}
+
 export interface SorafsReputationProvider {
   provider_id: string;
   score_bps: number;
-  degradation_flags: ReadonlyArray<string>;
-  raw_metrics: SorafsReputationProviderMetrics | Record<string, unknown>;
+  degradation_flags: ReadonlyArray<SorafsReputationDegradationFlag>;
+  raw_metrics: SorafsReputationProviderMetrics;
   raw_metrics_hash_hex: string;
 }
 
 export interface SorafsReputationSnapshotSummary {
   snapshot_id_hex: string;
-  generated_at_unix: number;
+  generated_at_unix: SorafsReputationU64;
+  previous_snapshot_id_hex: string | null;
   merkle_root_hex: string;
   provider_count: number;
-  alpha_bps: number;
-  current_score_weight_bps: number;
-  weights: Record<string, unknown>;
+  returned_provider_count: number;
+  limit: number;
+  truncated_providers: boolean;
+  alpha_bps: 8500;
+  current_score_weight_bps: 7000;
+  weights: SorafsReputationWeights;
   providers: ReadonlyArray<SorafsReputationProvider>;
-  previous_snapshot_id_hex: string | null;
 }
 
 export interface SorafsReputationProviderProof {
   provider_id: string;
   leaf_index: number;
+  leaf_count: number;
   siblings_hex: ReadonlyArray<string>;
 }
 
 export interface SorafsReputationProviderResponse {
   snapshot_id_hex: string;
-  generated_at_unix: number;
+  generated_at_unix: SorafsReputationU64;
   merkle_root_hex: string;
   provider: SorafsReputationProvider;
   proof: SorafsReputationProviderProof;
@@ -9435,29 +9326,49 @@ export interface SorafsReputationProviderResponse {
 
 export interface SorafsReputationWeightsResponse {
   snapshot_id_hex: string;
-  generated_at_unix: number;
-  alpha_bps: number;
-  current_score_weight_bps: number;
-  weights: Record<string, unknown>;
+  generated_at_unix: SorafsReputationU64;
+  alpha_bps: 8500;
+  current_score_weight_bps: 7000;
+  weights: SorafsReputationWeights;
 }
 
 export interface SorafsReputationSnapshotEvent {
-  version: number;
-  sequence: number;
+  version: 1;
+  sequence: SorafsReputationU64;
   snapshot_id_hex: string;
-  generated_at_unix: number;
+  generated_at_unix: SorafsReputationU64;
   merkle_root_hex: string;
   provider_count: number;
   previous_snapshot_id_hex: string | null;
 }
 
 export interface SorafsReputationEventsResponse {
-  since: number | null;
+  since: SorafsReputationU64 | null;
   limit: number;
   count: number;
-  next_since: number | null;
+  next_since: SorafsReputationU64 | null;
   events: ReadonlyArray<SorafsReputationSnapshotEvent>;
 }
+
+export interface SorafsReputationSnapshotSseEvent {
+  event: "reputation_snapshot";
+  data: SorafsReputationSnapshotEvent;
+  id: string;
+  retry: null;
+  raw: string;
+}
+
+export interface SorafsReputationLaggedSseEvent {
+  event: "lagged";
+  data: SorafsReputationU64;
+  id: null;
+  retry: null;
+  raw: string;
+}
+
+export type SorafsReputationSseEvent =
+  | SorafsReputationSnapshotSseEvent
+  | SorafsReputationLaggedSseEvent;
 
 export interface UaidPortfolioTotals {
   accounts: number;
@@ -11094,29 +11005,51 @@ export declare class ToriiClient {
     options?: SorafsOrderbookEventsWebSocketStreamOptions<T>,
   ): AsyncGenerator<ToriiWebSocketEvent<SorafsOrderbookFinalizedEvent>, void, unknown>;
   getSorafsReputationLatest(
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationSnapshotSummary | null>;
   getSorafsReputationProvider(
     providerId: string,
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationProviderResponse | null>;
   getSorafsReputationSnapshot(
     snapshotIdHex: string,
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationSnapshotSummary | null>;
   getSorafsReputationWeights(
-    options?: SorafsReputationCacheOptions,
+    options: SorafsReputationCacheOptions,
   ): Promise<SorafsReputationWeightsResponse | null>;
   listSorafsReputationEvents(
-    options?: SorafsReputationEventsOptions,
+    options: SorafsReputationEventsOptions,
   ): Promise<SorafsReputationEventsResponse | null>;
   streamSorafsReputationEvents(
-    options?: SorafsReputationEventStreamOptions,
-  ): AsyncGenerator<
-    ToriiSseEvent<SorafsReputationSnapshotEvent>,
-    void,
-    unknown
-  >;
+    options: SorafsReputationEventStreamOptions,
+  ): AsyncGenerator<SorafsReputationSseEvent, void, unknown>;
+  getSorafsBillingStatus(
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Record<string, unknown>>;
+  listSorafsBillingStatements(
+    options: SorafsBillingStatementListOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsBillingStatement(
+    statementIdHex: string,
+    expectedCheckpointFingerprintHex: string,
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Buffer>;
+  acknowledgeSorafsBillingStatement(
+    statementIdHex: string,
+    expectedCheckpointFingerprintHex: string,
+    proof: Readonly<SorafsBillingAcknowledgementProofV1>,
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsBillingReconciliation(
+    options: SorafsHedgingBillingAuthOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsHedgingExposure(
+    options: SorafsHedgingProjectionOptions,
+  ): Promise<Record<string, unknown>>;
+  getSorafsHedgingIntents(
+    options: SorafsHedgingProjectionOptions,
+  ): Promise<Record<string, unknown>>;
   getSorafsPinManifest(
     digestHex: string,
     options?: { headers?: Record<string, string>; signal?: AbortSignal },
@@ -11149,7 +11082,7 @@ export declare class ToriiClient {
   ): Promise<SorafsManifestResponse>;
   getDaManifest(
     storageTicketHex: string,
-    options?: { signal?: AbortSignal; blockHashHex?: string },
+    options?: { signal?: AbortSignal },
   ): Promise<DaManifestFetchResponse>;
   getDaManifestToDir(
     storageTicketHex: string,
@@ -11157,7 +11090,6 @@ export declare class ToriiClient {
       outputDir?: string;
       signal?: AbortSignal;
       label?: string;
-      blockHashHex?: string;
     },
   ): Promise<{
     manifest: DaManifestFetchResponse;
@@ -11511,21 +11443,6 @@ export declare class ToriiClient {
   getGovernanceCouncilCurrent(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiGovernanceCouncilCurrentResponse>;
-  governanceDeriveCouncilVrf(
-    payload: ToriiGovernanceCouncilDeriveRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilDeriveResponse>;
-  governancePersistCouncil(
-    payload: ToriiGovernanceCouncilPersistRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilPersistResponse>;
-  governanceReplaceCouncil(
-    payload: ToriiGovernanceCouncilReplaceRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiGovernanceCouncilReplaceResponse>;
-  getGovernanceCouncilAudit(
-    options?: ToriiGovernanceCouncilAuditOptions,
-  ): Promise<ToriiGovernanceCouncilAuditResponse>;
   draftMinistryAgendaProposal(
     payload: MinistryAgendaProposalDraftRequest,
     options?: { signal?: AbortSignal },
@@ -12068,10 +11985,6 @@ export function buildKaigiRosterJoinProof(
   options: KaigiRosterJoinProofOptions,
 ): KaigiRosterJoinProof;
 
-export function buildZkAceTransferAuthorizationV1(
-  options: ZkAceTransferAuthorizationV1Options,
-): ZkAceTransferAuthorizationV1;
-
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -12199,6 +12112,14 @@ export function encodeQuantityNoritoValue(
   value: QuantityInput,
   context?: string,
 ): Uint8Array;
+/** Encode the exact schema-bound bare `CancelAssetLock` V1 archive. */
+export function encodeCancelAssetLockV1(
+  value: Readonly<CancelAssetLockV1>,
+): Buffer;
+/** Decode an exact schema-bound bare `CancelAssetLock` V1 archive. */
+export function decodeCancelAssetLockV1(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer,
+): CancelAssetLockV1;
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -12221,6 +12142,16 @@ export function noritoEncodeContractManifestSignaturePayload(
 ): Buffer;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+): Buffer;
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1:
+  "iroha.torii.v1.sorafs.billing.acknowledgement_proof";
+export const SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: 65536;
+export interface SorafsBillingAcknowledgementProofV1 {
+  requestNonceHex: string;
+  authenticationProof: ArrayBufferView | ArrayBuffer | Buffer;
+}
+export function noritoEncodeSorafsBillingAcknowledgementProofV1(
+  proof: Readonly<SorafsBillingAcknowledgementProofV1>,
 ): Buffer;
 export function noritoEncodeOpenVerifyEnvelope(envelope: OpenVerifyEnvelope): Buffer;
 export function noritoDecodeOpenVerifyEnvelope(
@@ -12906,7 +12837,27 @@ export interface CompleteReplicationOrderInstruction {
     order_id: string;
     provider_id: string;
     completion_epoch: number;
+    expected_authority: ProviderIngestCompletionAuthorityV1;
+    expected_assignment_revision: number;
+    finalized_anchor: ProviderIngestFinalizedAnchorV1;
   };
+}
+
+export interface ProviderIngestCompletionSignerPolicyV1 {
+  policy_id: string;
+  revision: number;
+  predecessor_digest: string | null;
+  policy_digest: string;
+}
+
+export interface ProviderIngestCompletionAuthorityV1 {
+  provider_owner: string;
+  signer_policy: ProviderIngestCompletionSignerPolicyV1;
+}
+
+export interface ProviderIngestFinalizedAnchorV1 {
+  height: number;
+  block_hash: string;
 }
 
 export interface ExpireReplicationOrderInstruction {
@@ -12944,12 +12895,28 @@ export function buildIssueReplicationOrderInstruction(options: {
 }): IssueReplicationOrderInstruction;
 
 /**
- * Build the provider-specific three-field completion instruction.
+ * Build the provider-specific six-field completion instruction. The authority,
+ * assignment revision, and finalized anchor are mandatory commit-time
+ * compare-and-set inputs.
  */
 export function buildCompleteReplicationOrderInstruction(options: {
   orderId: string;
   providerId: string;
   completionEpoch: NumericLike;
+  expectedAuthority: {
+    providerOwner: string;
+    signerPolicy: {
+      policyId: string;
+      revision: NumericLike;
+      predecessorDigest: string | null;
+      policyDigest: string;
+    };
+  };
+  expectedAssignmentRevision: NumericLike;
+  finalizedAnchor: {
+    height: NumericLike;
+    blockHash: string;
+  };
 }): CompleteReplicationOrderInstruction;
 
 export function buildExpireReplicationOrderInstruction(options: {
@@ -12962,6 +12929,12 @@ export interface CancelAssetLockInstruction {
     escrow_id: string;
     expected_remaining_amount: string;
   };
+}
+
+/** Exact two-field value carried by a bare `CancelAssetLock` V1 archive. */
+export interface CancelAssetLockV1 {
+  readonly escrow_id: string;
+  readonly expected_remaining_amount: string;
 }
 
 /** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
@@ -12978,6 +12951,37 @@ export function buildCancelAssetLockInstruction(options: {
   lockId: string;
   expectedRemainingAmount: QuantityInput;
 }): CancelAssetLockInstruction;
+
+export type AssetTransferAvailability = "Enabled" | "Disabled";
+
+/** Maximum UTF-8 bytes accepted for an asset-transfer availability reason. */
+export declare const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1: 512;
+
+export interface SetAssetTransferAvailabilityInstruction {
+  SetAssetTransferAvailability: {
+    account_id: string;
+    asset_definition_id: string;
+    expected_revision: string;
+    incoming: AssetTransferAvailability;
+    outgoing: AssetTransferAvailability;
+    reason: string | null;
+  };
+}
+
+/**
+ * Atomically update both transfer directions for one account and asset
+ * definition. `expectedRevision` is a compare-and-set precondition, and
+ * `reason` is bounded by
+ * {@link ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1}.
+ */
+export function buildSetAssetTransferAvailabilityInstruction(options: {
+  accountId: string;
+  assetDefinitionId: string;
+  expectedRevision: NumericLike;
+  incoming: AssetTransferAvailability;
+  outgoing: AssetTransferAvailability;
+  reason?: string | null;
+}): SetAssetTransferAvailabilityInstruction;
 
 /**
  * Build a `Mint::Asset` instruction payload with deterministic quantity
@@ -13448,26 +13452,6 @@ export function buildCancelTwitterEscrowInstruction(
 
 export function buildRegisterZkAssetInstruction(
   input: RegisterZkAssetInstructionInput,
-): object;
-
-export function buildRegisterZkAceIdentityCommitmentInstruction(
-  input: RegisterZkAceIdentityCommitmentInstructionInput,
-): object;
-
-export function buildRotateZkAceIdentityCommitmentInstruction(
-  input: RotateZkAceIdentityCommitmentInstructionInput,
-): object;
-
-export function buildRevokeZkAceIdentityCommitmentInstruction(
-  input: RevokeZkAceIdentityCommitmentInstructionInput,
-): object;
-
-export function buildZkAceAuthorizationProofV1(
-  input: ZkAceAuthorizationProofV1Input,
-): ZkAceAuthorizationProofV1;
-
-export function buildZkAceAuthorizedTransferInstruction(
-  input: ZkAceAuthorizedTransferInstructionInput,
 ): object;
 
 export function buildScheduleConfidentialPolicyTransitionInstruction(

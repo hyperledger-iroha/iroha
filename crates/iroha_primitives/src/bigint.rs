@@ -294,6 +294,10 @@ impl NoritoSerialize for BigInt {
             .write_all(&bytes)
             .map_err(|e| NoritoError::Message(e.to_string()))
     }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        core::mem::size_of::<u32>().checked_add(self.twos_byte_len())
+    }
 }
 
 impl<'a> NoritoDeserialize<'a> for BigInt {
@@ -517,6 +521,41 @@ mod tests {
         assert_eq!(minimum.twos_byte_len(), MAX_ENCODED_BYTES);
         assert_eq!(maximum.twos_byte_len(), maximum.to_twos_bytes().len());
         assert_eq!(minimum.twos_byte_len(), minimum.to_twos_bytes().len());
+    }
+
+    #[test]
+    fn exact_norito_length_matches_canonical_payload() {
+        let assert_exact_length = |value: &BigInt| {
+            assert_eq!(
+                value.encoded_len_exact(),
+                Some(norito::core::encoded_payload_len(value).expect("encode bigint payload"))
+            );
+        };
+
+        for value in [
+            -65_537_i128,
+            -32_768,
+            -129,
+            -128,
+            -1,
+            0,
+            1,
+            127,
+            128,
+            32_767,
+        ] {
+            let value = BigInt::from_i128(value);
+            assert_exact_length(&value);
+        }
+
+        let signed_limit = InnerBigInt::one() << (MAX_BITS - 1);
+        for value in [
+            BigInt::from_inner(-signed_limit.clone()).expect("minimum"),
+            BigInt::from_inner(signed_limit - 1_u8).expect("maximum"),
+        ] {
+            assert_eq!(value.twos_byte_len(), MAX_ENCODED_BYTES);
+            assert_exact_length(&value);
+        }
     }
 
     #[test]

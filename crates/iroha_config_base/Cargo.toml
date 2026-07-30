@@ -14,7 +14,7 @@ workspace = true
 iroha_derive = { workspace = true, features = ["config_base"] }
 
 drop_bomb = { workspace = true }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 thiserror = { workspace = true }
 num-traits = "0.2.19"
 toml = { workspace = true }

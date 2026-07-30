@@ -83,7 +83,12 @@ public final class CancelAssetLockInstruction implements InstructionTemplate {
     return CancelAssetLockWirePayloadEncoder.encode(this);
   }
 
-  /** Start a strict compare-and-cancel builder. */
+  /**
+   * Start a strict compare-and-cancel builder.
+   *
+   * <p>The lock identifier must be well-formed UTF-16 so its UTF-8 hash preimage cannot depend on
+   * replacement-character behavior.
+   */
   public static Builder builder() {
     return new Builder();
   }
@@ -197,6 +202,7 @@ public final class CancelAssetLockInstruction implements InstructionTemplate {
         || isAssetLockWhitespace(value.charAt(value.length() - 1))) {
       throw new IllegalArgumentException("lockId must not contain surrounding whitespace");
     }
+    requireWellFormedUtf16(value);
     if (value.getBytes(StandardCharsets.UTF_8).length > MAX_LOCK_ID_UTF8_BYTES_V1) {
       throw new IllegalArgumentException(
           "lockId must be at most " + MAX_LOCK_ID_UTF8_BYTES_V1 + " UTF-8 bytes");
@@ -258,5 +264,22 @@ public final class CancelAssetLockInstruction implements InstructionTemplate {
     return Character.isWhitespace(value)
         || Character.isSpaceChar(value)
         || value == '\uFEFF';
+  }
+
+  private static void requireWellFormedUtf16(final String value) {
+    for (int index = 0; index < value.length(); index++) {
+      final char current = value.charAt(index);
+      if (Character.isHighSurrogate(current)) {
+        if (index + 1 >= value.length()
+            || !Character.isLowSurrogate(value.charAt(index + 1))) {
+          throw new IllegalArgumentException(
+              "lockId must not contain unpaired UTF-16 surrogates");
+        }
+        index++;
+      } else if (Character.isLowSurrogate(current)) {
+        throw new IllegalArgumentException(
+            "lockId must not contain unpaired UTF-16 surrogates");
+      }
+    }
   }
 }

@@ -11,10 +11,82 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.TransactionPayload
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
+import org.hyperledger.iroha.sdk.core.model.instructions.ProofVerifierKeyRef
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.sccp.SccpV1
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 
 class SignedTransactionHasherTest {
+    private val adapter = NoritoJavaCodecAdapter(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+
+    @Test
+    fun `authorization proof changes do not change transaction identity`() {
+        val encodedPayload = adapter.encodeTransaction(samplePayload())
+        val first = signed(encodedPayload, 0x11)
+        val second = signed(encodedPayload, 0x22)
+
+        assertNotEquals(
+            hex(SignedTransactionEncoder.encode(first)),
+            hex(SignedTransactionEncoder.encode(second)),
+        )
+        assertEquals(SignedTransactionHasher.hashHex(first), SignedTransactionHasher.hashHex(second))
+        assertContentEquals(
+            SignedTransactionHasher.canonicalBytes(first),
+            SignedTransactionHasher.canonicalBytes(second),
+        )
+    }
+
+    @Test
+    fun `payload and proof attachment changes alter transaction identity`() {
+        val base = signed(adapter.encodeTransaction(samplePayload()), 0x33)
+        val changedMetadata = signed(
+            adapter.encodeTransaction(
+                samplePayload(metadata = mapOf("purpose" to JsonValue.string("changed"))),
+            ),
+            0x33,
+        )
+        val attachment = ProofAttachment(
+            "halo2",
+            byteArrayOf(0x01, 0x02, 0x03),
+            ProofVerifierKeyRef("halo2", "vk1"),
+        )
+        val withAttachment = signed(
+            adapter.encodeTransaction(samplePayload(attachments = listOf(attachment))),
+            0x33,
+        )
+
+        assertNotEquals(
+            SignedTransactionHasher.hashHex(base),
+            SignedTransactionHasher.hashHex(changedMetadata),
+        )
+        assertNotEquals(
+            SignedTransactionHasher.hashHex(base),
+            SignedTransactionHasher.hashHex(withAttachment),
+        )
+        assertEquals(
+            listOf(attachment),
+            adapter.decodeTransaction(withAttachment.encodedPayload()).attachments,
+        )
+    }
+
+    @Test
+    fun `transaction wire field counts match rust first release layout`() {
+        val transaction = signed(adapter.encodeTransaction(samplePayload()), 0x44)
+
+        assertEquals(9, countSizedFields(transaction.encodedPayload()))
+        assertEquals(3, countSizedFields(SignedTransactionEncoder.encode(transaction)))
+    }
+
     @Test
     fun `compact length boundaries use minimal unsigned leb128`() {
         assertCompactLength(0, 0x00)
@@ -149,6 +221,41 @@ class SignedTransactionHasherTest {
             SignedTransactionHasher.encodeCompactLength(value),
             "Unexpected COMPACT_LEN encoding for $value",
         )
+    }
+
+    private fun samplePayload(
+        metadata: Map<String, JsonValue> = emptyMap(),
+        attachments: List<ProofAttachment>? = null,
+    ): TransactionPayload = TransactionPayload(
+        chainId = "00000001",
+        authority = AccountAddress
+            .fromAccount(TestEd25519Keys.publicKey(0x2C), "ed25519")
+            .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1),
+        creationTimeMs = 1_735_369_000_000L,
+        executable = Executable.ivm(byteArrayOf(0x01, 0x02)),
+        feePayment = FeePaymentIntent.authority(emptyList(), 1L),
+        metadata = metadata,
+        attachments = attachments,
+    )
+
+    private fun signed(encodedPayload: ByteArray, signatureSeed: Int): SignedTransaction =
+        SignedTransaction(
+            encodedPayload,
+            ByteArray(64) { signatureSeed.toByte() },
+            TestEd25519Keys.publicKey(0x2C),
+            adapter.schemaName(),
+        )
+
+    private fun countSizedFields(bytes: ByteArray): Int {
+        val decoder = NoritoDecoder(bytes, NoritoCodec.DEFAULT_FLAGS)
+        var count = 0
+        while (decoder.remaining() != 0) {
+            val length = decoder.readLength(decoder.compactLenActive())
+            require(length <= Int.MAX_VALUE) { "field is too large" }
+            decoder.readBytes(length.toInt())
+            count++
+        }
+        return count
     }
 
     private fun loadCompactHashFixture(): Properties {

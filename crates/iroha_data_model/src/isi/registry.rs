@@ -1,5 +1,8 @@
 #[cfg(feature = "governance")]
 use crate::isi::governance;
+
+mod wire_ids;
+
 use crate::{
     isi::{
         InstructionRegistry, account_alias_lease, account_recovery, alias_setup, asset_alias,
@@ -27,7 +30,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<BurnBox>,
     InstructionRegistry::register_slice::<TransferAssetBatch>,
     InstructionRegistry::register_slice::<TransferBox>,
-    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferFreeze>,
+    InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferAvailability>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferBlacklist>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetTransferControl>,
     InstructionRegistry::register_slice::<asset_transfer_control::SetAssetHoldingLimit>,
@@ -225,9 +228,12 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<sorafs::ResolveSorafsCapacityDispute>,
     InstructionRegistry::register_slice::<sorafs::IssueReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::CompleteReplicationOrder>,
+    InstructionRegistry::register_slice::<sorafs::ReviseReplicationOrderAssignments>,
     InstructionRegistry::register_slice::<sorafs::ExpireReplicationOrder>,
     InstructionRegistry::register_slice::<sorafs::RegisterProviderOwner>,
     InstructionRegistry::register_slice::<sorafs::UnregisterProviderOwner>,
+    InstructionRegistry::register_slice::<sorafs::SetProviderIngestCompletionAuthority>,
+    InstructionRegistry::register_slice::<sorafs::RevokeProviderIngestCompletionAuthority>,
     InstructionRegistry::register_slice::<sorafs::SetPricingSchedule>,
     InstructionRegistry::register_slice::<sorafs::UpsertProviderCredit>,
     InstructionRegistry::register_slice::<sorafs::SetSorafsPopIssuerPolicy>,
@@ -415,7 +421,8 @@ fn with_stable_ids(registry: InstructionRegistry) -> InstructionRegistry {
     let registry = with_soracloud_stable_ids(registry);
     let registry = with_consensus_stable_ids(registry);
     let registry = with_identity_stable_ids(registry);
-    with_runtime_upgrade_stable_ids(registry)
+    let registry = with_runtime_upgrade_stable_ids(registry);
+    wire_ids::apply(registry)
 }
 
 fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
@@ -443,6 +450,42 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<zk::CancelConfidentialPolicyTransition>(
         "zk::CancelConfidentialPolicyTransition",
     );
+    registry = with_privacy_stable_ids(registry);
+    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
+        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
+        musubi::PublishMusubiRelease::WIRE_ID,
+    );
+    registry = registry
+        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
+    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
+        musubi::SetMusubiShortAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
+        musubi::AssertMusubiReleaseExists::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
+        "iroha.staking.activate_public_lane_validator",
+    );
+    registry = registry
+        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
+            "iroha.staking.rebind_public_lane_validator_peer",
+        );
+    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
+        "iroha.staking.exit_public_lane_validator",
+    );
+    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
+    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
+    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
+    registry
+}
+
+fn with_privacy_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
         privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
     );
@@ -533,37 +576,6 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
         privacy::SubmitPrivacyProofV1::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
-    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
-        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
-        musubi::PublishMusubiRelease::WIRE_ID,
-    );
-    registry = registry
-        .register_with_id_slice::<musubi::YankMusubiRelease>(musubi::YankMusubiRelease::WIRE_ID);
-    registry = registry.register_with_id_slice::<musubi::SetMusubiShortAlias>(
-        musubi::SetMusubiShortAlias::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<musubi::AssertMusubiReleaseExists>(
-        musubi::AssertMusubiReleaseExists::WIRE_ID,
-    );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ActivatePublicLaneValidator>(
-        "iroha.staking.activate_public_lane_validator",
-    );
-    registry = registry
-        .register_with_id_slice::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
-            "iroha.staking.rebind_public_lane_validator_peer",
-        );
-    registry = registry.register_with_id_slice::<crate::isi::staking::ExitPublicLaneValidator>(
-        "iroha.staking.exit_public_lane_validator",
-    );
-    registry = registry.register_with_id_slice::<Upgrade>(Upgrade::WIRE_ID);
-    registry = registry.register_with_id_slice::<CustomInstruction>(CustomInstruction::WIRE_ID);
-    registry = registry.register_with_id_slice::<InvalidInstruction>(InvalidInstruction::WIRE_ID);
     registry
 }
 
@@ -785,9 +797,10 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id_slice::<asset_alias::SetAssetDefinitionBalancePolicy>(
         asset_alias::SetAssetDefinitionBalancePolicy::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<asset_transfer_control::SetAssetTransferFreeze>(
-        asset_transfer_control::SetAssetTransferFreeze::WIRE_ID,
-    );
+    registry = registry
+        .register_with_id_slice::<asset_transfer_control::SetAssetTransferAvailability>(
+            asset_transfer_control::SetAssetTransferAvailability::WIRE_ID,
+        );
     registry = registry
         .register_with_id_slice::<asset_transfer_control::SetAssetTransferBlacklist>(
             asset_transfer_control::SetAssetTransferBlacklist::WIRE_ID,
@@ -1035,20 +1048,67 @@ mod tests {
     }
 
     #[test]
-    fn instruction_registry_wire_ids_are_unique_and_registered_as_lookup_keys() {
+    fn instruction_registry_inventory_is_complete_unique_and_registered() {
         let registry = default();
-        let mut seen = std::collections::BTreeMap::new();
+        let registered_type_names = registry.names().collect::<std::collections::BTreeSet<_>>();
+        let mut inventoried_type_names = std::collections::BTreeSet::new();
+        let mut seen_wire_ids = std::collections::BTreeMap::new();
 
-        for name in registry.names() {
-            let wire_id = registry.wire_id(name).expect("registered type has wire id");
+        for entry in wire_ids::ALL {
+            let type_name = (entry.type_name)();
+            let wire_id = entry.wire_id;
+            assert!(
+                inventoried_type_names.insert(type_name),
+                "duplicate built-in instruction type in wire-ID inventory: {type_name}"
+            );
+            assert_eq!(
+                registry.wire_id(type_name),
+                Some(wire_id),
+                "explicit wire id must be applied for {type_name}"
+            );
+            assert!(
+                registry.contains(type_name),
+                "Rust type name must remain a lookup key for {type_name}"
+            );
             assert!(
                 registry.contains(wire_id),
-                "{wire_id} must be a lookup key for {name}"
+                "{wire_id} must be a lookup key for {type_name}"
             );
-            if let Some(previous) = seen.insert(wire_id, name) {
-                panic!("wire id collision: {wire_id} registered for {previous} and {name}");
+            if let Some(previous) = seen_wire_ids.insert(wire_id, type_name) {
+                panic!("wire id collision: {wire_id} registered for {previous} and {type_name}");
             }
         }
+
+        assert_eq!(
+            registered_type_names, inventoried_type_names,
+            "every default-registry type must have one explicit wire-ID inventory entry"
+        );
+        assert_eq!(registry.len(), wire_ids::ALL.len());
+    }
+
+    #[test]
+    fn instruction_wire_ids_match_v1_golden_inventory_hash() {
+        use sha2::{Digest, Sha256};
+
+        #[cfg(feature = "governance")]
+        const EXPECTED_SHA256: &str =
+            "50e4ce8cce8a62e0a54d738abe03a48354de9e399ee9402ada49cacaf61a41c0";
+        #[cfg(not(feature = "governance"))]
+        const EXPECTED_SHA256: &str =
+            "377305e0ace3812406b05a9369147a8fe06996e87009dffb6f0683c54cd06240";
+
+        let mut wire_ids = wire_ids::ALL
+            .iter()
+            .map(|entry| entry.wire_id)
+            .collect::<Vec<_>>();
+        wire_ids.sort_unstable();
+        let canonical = wire_ids
+            .into_iter()
+            .map(|wire_id| format!("{wire_id}\n"))
+            .collect::<String>();
+        let actual = hex::encode(Sha256::digest(canonical.as_bytes()));
+
+        assert_eq!(actual, EXPECTED_SHA256);
     }
 
     #[test]

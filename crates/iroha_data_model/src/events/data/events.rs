@@ -385,6 +385,9 @@ mod asset {
             #[has_origin(asset_changed => &asset_changed.asset)]
             /// Asset quantity decreased.
             Removed(AssetChanged),
+            #[has_origin(transfer => &transfer.source)]
+            /// Asset quantity moved between two accounts.
+            Transferred(AssetTransferred),
             #[has_origin(metadata_changed => &metadata_changed.target)]
             /// Metadata entry was inserted or updated.
             MetadataInserted(AssetMetadataChanged),
@@ -444,6 +447,27 @@ mod asset {
             pub amount: Quantity,
         }
 
+        /// One successful transparent asset movement between two account balances.
+        ///
+        /// Unlike [`AssetChanged`], this payload binds both sides of the movement,
+        /// so consumers can distinguish transfers from minting and burning without
+        /// inferring intent from separate balance-delta events.
+        #[derive(
+            Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema,
+        )]
+        #[getset(get = "pub")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct AssetTransferred {
+            /// Debited asset balance.
+            pub source: AssetId,
+            /// Credited asset balance.
+            pub destination: AssetId,
+            /// Exact quantity moved.
+            pub amount: Quantity,
+        }
+
         /// Stable rejection classification for one independently settled batch leg.
         #[derive(
             Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
@@ -460,8 +484,10 @@ mod asset {
             InsufficientFunds,
             /// The destination balance would exceed its configured holding limit.
             HoldingLimitExceeded,
-            /// Outgoing transfers are frozen for the source account.
-            Frozen,
+            /// Incoming asset movement is disabled for the destination account.
+            IncomingDisabled,
+            /// Outgoing asset movement is disabled for the source account.
+            OutgoingDisabled,
             /// The source account is blacklisted for the asset.
             Blacklisted,
             /// Another deterministic business policy rejected the leg.
@@ -2695,7 +2721,7 @@ pub mod prelude {
             AssetBatchTransferRejectionCode, AssetChanged, AssetDefinitionEvent,
             AssetDefinitionEventSet, AssetDefinitionMintabilityChanged,
             AssetDefinitionOwnerChanged, AssetDefinitionTotalQuantityChanged, AssetEvent,
-            AssetEventSet, AssetMetadataChanged,
+            AssetEventSet, AssetMetadataChanged, AssetTransferred,
         },
         bridge::{BridgeEvent, BridgeEventSet},
         confidential::{

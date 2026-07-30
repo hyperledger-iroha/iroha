@@ -9,7 +9,11 @@ use std::collections::BTreeSet;
 use iroha_torii_shared::{
     route_catalog::{
         ApiSurface, CATALOGED_ROUTES, CatalogProjection, HttpMethod as CatalogHttpMethod,
-        RouteCatalog,
+        RouteCatalog, sorafs as sorafs_routes,
+    },
+    sorafs_hedging_billing_api::{
+        BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1,
+        BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
     },
     uri,
 };
@@ -2100,6 +2104,25 @@ fn string_query_param_with_required(name: &str, description: &str, required: boo
     Value::Object(param)
 }
 
+fn enum_string_query_param(name: &str, description: &str, values: &[&str]) -> Value {
+    let Value::Object(mut param) = string_query_param(name, description) else {
+        unreachable!("string query parameter helper always returns an object");
+    };
+    let Some(Value::Object(schema)) = param.get_mut("schema") else {
+        unreachable!("string query parameter helper always contains a schema object");
+    };
+    schema.insert(
+        "enum".into(),
+        Value::Array(
+            values
+                .iter()
+                .map(|value| Value::String((*value).to_owned()))
+                .collect(),
+        ),
+    );
+    Value::Object(param)
+}
+
 fn integer_query_param(name: &str, description: &str, format: Option<&str>) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -2504,7 +2527,7 @@ fn transaction_paths() -> Map {
         Value::Object(binary_post_operation(
             "Transactions",
             "Submit a batch of versioned signed transactions.",
-            "Submit a Norito-encoded batch of SignedTransaction payloads.",
+            "Submit a non-empty Norito-encoded batch of SignedTransaction payloads. The encoded and declared-decoded byte size is bounded by `torii.max_content_len`, the exact top-level count is bounded by `torii.transaction_ingress.max_batch_transactions`, and queue admission is atomic for the whole batch.",
             "#/components/schemas/JsonValue",
         )),
     );
@@ -3977,53 +4000,6 @@ fn governance_paths() -> Map {
             "Return whether an account is registered in the governance citizenship registry.",
             "#/components/schemas/JsonValue",
             vec![path_param("account_id", "Account id.")],
-        )),
-    );
-    #[cfg(feature = "gov_vrf")]
-    {
-        paths.insert(
-            "/v1/gov/council/persist".to_owned(),
-            Value::Object(json_post_operation(
-                "Governance",
-                "Persist a council roster.",
-                "Persist a governance council roster for an epoch.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-        paths.insert(
-            "/v1/gov/council/replace".to_owned(),
-            Value::Object(json_post_operation(
-                "Governance",
-                "Replace a council member.",
-                "Replace a council member using the next alternate.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-    }
-    paths.insert(
-        "/v1/gov/council/audit".to_owned(),
-        Value::Object(json_get_operation(
-            "Governance",
-            "Audit council derivation.",
-            "Return governance council derivation audit data.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    #[cfg(feature = "gov_vrf")]
-    paths.insert(
-        "/v1/gov/council/derive-vrf".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Derive council VRF inputs.",
-            "Derive VRF inputs for council selection.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -5689,7 +5665,7 @@ fn hedging_billing_acknowledgement_operation() -> Map {
 
     let request_body = norito::json!({
         "required": true,
-        "description": "Exact canonical Norito `BillingAcknowledgementProofBodyV1`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
+        "description": "Exact canonical Norito `BillingAcknowledgementProofV1` under schema `iroha.torii.v1.sorafs.billing.acknowledgement_proof`. It contains a non-zero 32-byte client idempotency nonce and one non-empty authentication_proof byte vector bounded to 65,536 bytes; JSON, alternate media types, trailing bytes, and noncanonical encodings are rejected. The proof authenticates a digest that excludes the proof bytes.",
         "content": {
             "application/x-norito": {
                 "schema": {
@@ -5697,7 +5673,8 @@ fn hedging_billing_acknowledgement_operation() -> Map {
                     "format": "binary",
                     "minLength": 1,
                     "maxLength": 69_632_u64,
-                    "x-iroha-norito-schema": "BillingAcknowledgementProofBodyV1"
+                    "x-iroha-norito-schema": BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
+                    "x-iroha-norito-schema-hash": BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1
                 }
             }
         }
@@ -7432,152 +7409,79 @@ fn sorafs_paths() -> Map {
     paths.insert(
         "/v1/sorafs/reputation/latest".to_owned(),
         Value::Object(reputation_get_operation(
+            sorafs_routes::REPUTATION_LATEST_GET.stable_route_id(),
             "Fetch reputation snapshot.",
             "Fetch the latest committed-derived SoraFS reputation snapshot summary. Provider records are bounded by `limit` and capped at 500 rows while total provider count remains visible. Supports `If-None-Match` with `ETag` validators.",
-            vec![integer_query_param(
-                "limit",
+            "#/components/schemas/SorafsReputationSnapshotSummaryV1",
+            vec![reputation_limit_query_param(
                 "Maximum number of provider records to return (default 50, max 500).",
-                Some("uint64"),
             )],
+            &["limit"],
         )),
     );
     paths.insert(
         "/v1/sorafs/reputation/providers/{provider_id}".to_owned(),
         Value::Object(reputation_get_operation(
+            sorafs_routes::REPUTATION_PROVIDER.stable_route_id(),
             "Fetch provider reputation proof.",
             "Fetch a provider reputation record and Merkle proof from the latest SoraFS reputation snapshot. Supports `If-None-Match` with `ETag` validators.",
-            vec![string_path_param("provider_id", "SoraFS provider identifier.")],
+            "#/components/schemas/SorafsReputationProviderResponseV1",
+            vec![reputation_provider_id_path_param()],
+            &[],
         )),
     );
     paths.insert(
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}".to_owned(),
         Value::Object(reputation_get_operation(
+            sorafs_routes::REPUTATION_SNAPSHOT.stable_route_id(),
             "Fetch historical reputation snapshot.",
             "Fetch an exact retained SoraFS reputation snapshot summary by snapshot id. The immutable committed suffix retains at most 1,024 snapshots; unknown or evicted ids return 404 rather than substituting latest. Provider records are bounded by `limit` and capped at 500 rows while total provider count remains visible. Supports `If-None-Match` with `ETag` validators.",
+            "#/components/schemas/SorafsReputationSnapshotSummaryV1",
             vec![
-                string_path_param(
-                    "snapshot_id_hex",
-                    "Hex-encoded 16-byte reputation snapshot identifier.",
-                ),
-                integer_query_param(
-                    "limit",
+                reputation_snapshot_id_path_param(),
+                reputation_limit_query_param(
                     "Maximum number of provider records to return (default 50, max 500).",
-                    Some("uint64"),
                 ),
             ],
+            &["limit"],
         )),
     );
     paths.insert(
         "/v1/sorafs/reputation/weights".to_owned(),
         Value::Object(reputation_get_operation(
+            sorafs_routes::REPUTATION_WEIGHTS.stable_route_id(),
             "Fetch reputation weights.",
             "Fetch the weights used by the latest SoraFS reputation snapshot. Supports `If-None-Match` with `ETag` validators.",
+            "#/components/schemas/SorafsReputationWeightsResponseV1",
             Vec::new(),
+            &[],
         )),
     );
     paths.insert(
         "/v1/sorafs/reputation/events".to_owned(),
         Value::Object(reputation_get_operation(
+            sorafs_routes::REPUTATION_EVENTS.stable_route_id(),
             "List reputation events.",
-            "List SoraFS reputation snapshot publication events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+            "List SoraFS reputation snapshot publication events after an optional sequence cursor. If the first returned sequence is greater than `since + 1`, the requested cursor fell behind the retained committed suffix and the client must resynchronize from a snapshot before continuing. Supports `If-None-Match` with `ETag` validators.",
+            "#/components/schemas/SorafsReputationEventsResponseV1",
             vec![
-                integer_query_param(
-                    "since",
+                reputation_since_query_param(
                     "Return events with sequence greater than this cursor.",
-                    Some("uint64"),
                 ),
-                integer_query_param("limit", "Optional page size limit.", Some("uint64")),
+                reputation_limit_query_param(
+                    "Maximum number of events to return (default 50, max 500).",
+                ),
             ],
+            &["since", "limit"],
         )),
     );
     paths.insert(
         "/v1/sorafs/reputation/events/stream".to_owned(),
-        Value::Object({
-            let mut operation = Map::new();
-            operation.insert(
-                "tags".into(),
-                Value::Array(vec![Value::String("SoraFS".to_owned())]),
-            );
-            operation.insert(
-                "summary".into(),
-                Value::String("Stream reputation events.".to_owned()),
-            );
-            operation.insert(
-                "description".into(),
-                Value::String(
-                    "Stream SoraFS reputation snapshot events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live events as snapshots are accepted."
-                        .to_owned(),
-                ),
-            );
-            operation.insert(
-                "parameters".into(),
-                Value::Array(vec![
-                    integer_query_param(
-                        "since",
-                        "Emit backlog events with sequence greater than this cursor.",
-                        Some("uint64"),
-                    ),
-                    integer_query_param("limit", "Optional backlog page size limit.", Some("uint64")),
-                ]),
-            );
-            let mut responses = Map::new();
-            responses.insert(
-                "200".into(),
-                event_stream_response("Server-sent reputation snapshot event stream."),
-            );
-            operation.insert("responses".into(), Value::Object(responses));
-            let mut methods = Map::new();
-            methods.insert("get".into(), Value::Object(operation));
-            methods
-        }),
+        Value::Object(reputation_sse_operation()),
     );
     paths.insert(
         "/v1/sorafs/reputation/events/ws".to_owned(),
-        Value::Object({
-            let mut operation = Map::new();
-            operation.insert(
-                "tags".into(),
-                Value::Array(vec![Value::String("SoraFS".to_owned())]),
-            );
-            operation.insert(
-                "summary".into(),
-                Value::String("Connect to the reputation WebSocket.".to_owned()),
-            );
-            operation.insert(
-                "description".into(),
-                Value::String(
-                    "Upgrade to a SoraFS reputation WebSocket. The stream emits JSON text frames with `event = reputation_snapshot` for the optional `since`/`limit` backlog and for live snapshot publications; lag frames use `event = lagged`."
-                        .to_owned(),
-                ),
-            );
-            operation.insert(
-                "parameters".into(),
-                Value::Array(vec![
-                    integer_query_param(
-                        "since",
-                        "Emit backlog events with sequence greater than this cursor.",
-                        Some("uint64"),
-                    ),
-                    integer_query_param("limit", "Optional backlog page size limit.", Some("uint64")),
-                ]),
-            );
-            let mut responses = Map::new();
-            responses.insert(
-                "101".into(),
-                Value::Object({
-                    let mut response = Map::new();
-                    response.insert(
-                        "description".into(),
-                        Value::String("WebSocket upgrade accepted.".to_owned()),
-                    );
-                    response
-                }),
-            );
-            operation.insert("responses".into(), Value::Object(responses));
-            let mut methods = Map::new();
-            methods.insert("get".into(), Value::Object(operation));
-            methods
-        }),
+        Value::Object(reputation_websocket_operation()),
     );
     paths.insert(
         "/v1/sorafs/pin".to_owned(),
@@ -7631,9 +7535,33 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "List replication orders.",
-            "List SoraFS replication orders.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Return a fresh committed registry projection with exact canonical order bytes, the decoded V1 order, assignment revision, provider-owner signer-policy identity/revision/digest chain, and the finalized block anchor carried by every completion. Filters are canonical and case-sensitive; unknown, duplicate, empty, aliased, or out-of-range selectors are rejected.",
+            "#/components/schemas/SorafsReplicationListResponseV1",
+            vec![
+                bounded_integer_query_param(
+                    "limit",
+                    "Optional page size (default 50).",
+                    Some("uint32"),
+                    1,
+                    Some(500),
+                ),
+                bounded_integer_query_param(
+                    "offset",
+                    "Optional zero-based row offset.",
+                    Some("uint32"),
+                    0,
+                    Some(u64::from(u32::MAX)),
+                ),
+                enum_string_query_param(
+                    "status",
+                    "Optional exact lowercase lifecycle filter.",
+                    &["pending", "completed", "expired"],
+                ),
+                canonical_nonzero_digest_query_param(
+                    "manifest_digest",
+                    "Optional exact non-zero lowercase manifest digest.",
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -7710,10 +7638,26 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Request storage token.",
-            "Request a storage access token.",
+            "Request a storage access token. Exactly one configured Torii API token is required even when listener-wide API-token enforcement is disabled; the client label is diagnostic and does not define the issuance quota.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            Vec::new(),
+            vec![
+                string_header_param(
+                    "X-API-Token",
+                    "Required Torii API credential used as the stream-token issuance quota subject.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Client",
+                    "Required visible-ASCII diagnostic client label; not an authentication or quota identity.",
+                    true,
+                ),
+                string_header_param(
+                    "X-SoraFS-Nonce",
+                    "Required visible-ASCII correlation nonce echoed in the response.",
+                    true,
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -9512,11 +9456,11 @@ fn repo_agreements_get_operation() -> Map {
     );
     operation.insert(
         "summary".into(),
-        Value::String("List active repo agreements".to_owned()),
+        Value::String("List repo agreements and settled tombstones".to_owned()),
     );
     operation.insert(
         "description".into(),
-        Value::String("Returns the active repo agreements recorded on-chain with optional pagination and filtering.".to_owned()),
+        Value::String("Returns active repo agreements and immutable settled tombstones recorded on-chain, with optional pagination and filtering.".to_owned()),
     );
     operation.insert(
         "parameters".into(),
@@ -9817,20 +9761,22 @@ fn json_get_operation(
     methods
 }
 
-fn reputation_get_operation(summary: &str, description: &str, mut params: Vec<Value>) -> Map {
-    params.push(string_header_param(
-        "If-None-Match",
-        "Optional ETag validator from a previous reputation response.",
-        false,
-    ));
-    let mut methods = json_get_operation(
-        "SoraFS",
-        summary,
-        description,
-        "#/components/schemas/JsonValue",
-        params,
-    );
+fn reputation_get_operation(
+    operation_id: &str,
+    summary: &str,
+    description: &str,
+    response_schema_ref: &str,
+    mut params: Vec<Value>,
+    allowed_query_parameters: &[&str],
+) -> Map {
+    params.push(reputation_if_none_match_header_param());
+    params.extend(canonical_request_auth_header_parameters());
+    let mut methods =
+        json_get_operation("SoraFS", summary, description, response_schema_ref, params);
     if let Some(Value::Object(operation)) = methods.get_mut("get") {
+        operation.insert("operationId".into(), Value::String(operation_id.to_owned()));
+        insert_reputation_auth_contract(operation);
+        insert_reputation_query_contract(operation, allowed_query_parameters);
         if let Some(Value::Object(responses)) = operation.get_mut("responses") {
             if let Some(Value::Object(ok)) = responses.get_mut("200") {
                 ok.insert(
@@ -9840,22 +9786,61 @@ fn reputation_get_operation(summary: &str, description: &str, mut params: Vec<Va
             }
             responses.insert(
                 "304".into(),
-                Value::Object({
-                    let mut response = Map::new();
-                    response.insert(
-                        "description".into(),
-                        Value::String("Cached reputation representation is current.".to_owned()),
-                    );
-                    response.insert(
-                        "headers".into(),
-                        Value::Object(reputation_cache_response_headers()),
-                    );
-                    response
+                norito::json!({
+                    "description": "The exact authenticated reputation representation is unchanged.",
+                    "headers": (reputation_cache_response_headers())
                 }),
             );
+            insert_reputation_error_responses(responses);
         }
     }
     methods
+}
+
+fn insert_reputation_auth_contract(operation: &mut Map) {
+    operation.insert(
+        "security".into(),
+        norito::json!([
+            {
+                "IrohaCanonicalAccount": [],
+                "IrohaCanonicalSignature": [],
+                "IrohaCanonicalTimestampMs": [],
+                "IrohaCanonicalNonce": []
+            },
+            {
+                "IrohaCanonicalWitness": []
+            }
+        ]),
+    );
+    operation.insert(
+        "x-iroha-canonical-auth-v1".into(),
+        norito::json!({
+            "exact_request_target": true,
+            "body_hash_bound": true,
+            "modes": [
+                {
+                    "kind": "single_signature",
+                    "required_headers": [
+                        "X-Iroha-Account",
+                        "X-Iroha-Signature",
+                        "X-Iroha-Timestamp-Ms",
+                        "X-Iroha-Nonce"
+                    ],
+                    "forbidden_headers": ["X-Iroha-Witness"]
+                },
+                {
+                    "kind": "multisig_witness",
+                    "required_headers": ["X-Iroha-Witness"],
+                    "optional_headers": ["X-Iroha-Account"],
+                    "forbidden_headers": [
+                        "X-Iroha-Signature",
+                        "X-Iroha-Timestamp-Ms",
+                        "X-Iroha-Nonce"
+                    ]
+                }
+            ]
+        }),
+    );
 }
 
 fn reputation_cache_response_headers() -> Map {
@@ -9864,17 +9849,346 @@ fn reputation_cache_response_headers() -> Map {
         "ETag".into(),
         norito::json!({
             "description": "Deterministic reputation representation validator.",
-            "schema": { "type": "string" }
+            "required": true,
+            "schema": {
+                "type": "string",
+                "minLength": 66,
+                "maxLength": 66,
+                "pattern": "^\"[0-9a-f]{64}\"$"
+            }
         }),
     );
     headers.insert(
         "Cache-Control".into(),
         norito::json!({
-            "description": "Reputation response cache policy.",
-            "schema": { "type": "string" }
+            "description": "Authenticated representation cache policy.",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "const": "private, max-age=30, must-revalidate"
+            }
+        }),
+    );
+    headers.insert(
+        "Vary".into(),
+        norito::json!({
+            "description": "Canonical authentication headers selecting the private representation.",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
+            }
         }),
     );
     headers
+}
+
+fn reputation_private_no_store_response_headers() -> Map {
+    let mut headers = Map::new();
+    headers.insert(
+        "Cache-Control".into(),
+        norito::json!({
+            "description": "Authenticated reputation responses which must never be retained.",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "const": "private, no-store"
+            }
+        }),
+    );
+    headers.insert(
+        "Vary".into(),
+        norito::json!({
+            "description": "Canonical authentication headers selecting the private response.",
+            "required": true,
+            "schema": {
+                "type": "string",
+                "const": "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
+            }
+        }),
+    );
+    headers
+}
+
+fn reputation_if_none_match_header_param() -> Value {
+    norito::json!({
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "description": "Exactly one strong quoted 64-character lowercase-hex ETag returned by the same authenticated route and query. Wildcards, weak validators, lists, whitespace aliases, and duplicate headers are rejected.",
+        "schema": {
+            "type": "string",
+            "minLength": 66,
+            "maxLength": 66,
+            "pattern": "^\"[0-9a-f]{64}\"$"
+        }
+    })
+}
+
+fn reputation_limit_query_param(description: &str) -> Value {
+    let mut parameter =
+        bounded_integer_query_param("limit", description, Some("uint16"), 1, Some(500));
+    if let Value::Object(parameter) = &mut parameter {
+        parameter.insert(
+            "x-iroha-canonical-unsigned-decimal-v1".into(),
+            norito::json!({
+                "allow_zero": false,
+                "allow_sign": false,
+                "allow_leading_zero": false,
+                "allow_percent_encoding": false
+            }),
+        );
+    }
+    parameter
+}
+
+fn reputation_since_query_param(description: &str) -> Value {
+    let mut parameter =
+        bounded_integer_query_param("since", description, Some("uint64"), 0, Some(u64::MAX));
+    if let Value::Object(parameter) = &mut parameter {
+        parameter.insert(
+            "x-iroha-canonical-unsigned-decimal-v1".into(),
+            norito::json!({
+                "allow_zero": true,
+                "allow_sign": false,
+                "allow_leading_zero": false,
+                "allow_percent_encoding": false
+            }),
+        );
+    }
+    parameter
+}
+
+fn reputation_snapshot_id_path_param() -> Value {
+    norito::json!({
+        "name": "snapshot_id_hex",
+        "in": "path",
+        "required": true,
+        "description": "Exact non-zero 16-byte snapshot identifier as 32 lowercase hexadecimal characters; prefixes, uppercase, whitespace, percent aliases, and alternate lengths are rejected.",
+        "schema": { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" }
+    })
+}
+
+fn reputation_provider_id_path_param() -> Value {
+    norito::json!({
+        "name": "provider_id",
+        "in": "path",
+        "required": true,
+        "description": "Exact raw provider identifier: 1 through 256 ASCII bytes from [A-Za-z0-9_.:-], excluding the whole URL dot-segment values '.' and '..'. Percent-encoded aliases and every other character are rejected.",
+        "schema": { "$ref": "#/components/schemas/SorafsReputationProviderIdV1" }
+    })
+}
+
+fn reputation_error_response(description: &str) -> Value {
+    json_response_with_headers(
+        description,
+        schema_ref("SorafsReputationApiErrorV1"),
+        reputation_private_no_store_response_headers(),
+    )
+}
+
+fn reputation_auth_required_response() -> Value {
+    let mut response = Map::new();
+    response.insert(
+        "description".into(),
+        Value::String(
+            "Canonical single-signature or multisig-witness authentication is missing or invalid. The body is deliberately empty."
+                .to_owned(),
+        ),
+    );
+    response.insert(
+        "headers".into(),
+        Value::Object(reputation_private_no_store_response_headers()),
+    );
+    Value::Object(response)
+}
+
+fn insert_reputation_error_responses(responses: &mut Map) {
+    for (status, description) in [
+        (
+            "400",
+            "The body, exact path, raw query, conditional ETag, or canonical V1 selector is malformed.",
+        ),
+        (
+            "404",
+            "The exact snapshot or provider is absent, was evicted, or the reputation surface is disabled.",
+        ),
+        (
+            "405",
+            "The reputation route accepts only an exact GET request.",
+        ),
+        (
+            "413",
+            "The request body exceeds the configured bounded extraction limit.",
+        ),
+        (
+            "500",
+            "A committed record, Merkle proof, JSON projection, or response header could not be constructed safely.",
+        ),
+        (
+            "503",
+            "The committed reputation runtime is unavailable or has not produced a ready projection.",
+        ),
+    ] {
+        responses.insert(status.into(), reputation_error_response(description));
+    }
+    responses.insert("401".into(), reputation_auth_required_response());
+}
+
+fn insert_reputation_websocket_upgrade_error_response(responses: &mut Map) {
+    responses.insert(
+        "426".into(),
+        reputation_error_response(
+            "The authenticated WebSocket request cannot be upgraded on this connection.",
+        ),
+    );
+}
+
+fn reputation_stream_parameters() -> Vec<Value> {
+    let mut params = vec![
+        reputation_since_query_param(
+            "Emit backlog events with sequence greater than this cursor (default 0).",
+        ),
+        reputation_limit_query_param(
+            "Maximum backlog events to emit before the live stream (default 50, max 500).",
+        ),
+    ];
+    params.extend(canonical_request_auth_header_parameters());
+    params
+}
+
+fn insert_reputation_query_contract(operation: &mut Map, allowed_parameters: &[&str]) {
+    let allowed_parameters = Value::Array(
+        allowed_parameters
+            .iter()
+            .map(|parameter| Value::String((*parameter).to_owned()))
+            .collect(),
+    );
+    operation.insert(
+        "x-iroha-query-contract-v1".into(),
+        norito::json!({
+            "maximum_raw_query_bytes": 1024,
+            "allowed_parameters": (allowed_parameters),
+            "require_key_value_form": true,
+            "allow_empty_query": false,
+            "allow_empty_segments": false,
+            "allow_unknown_parameters": false,
+            "allow_duplicate_parameters": false,
+            "allow_percent_encoded_aliases": false
+        }),
+    );
+}
+
+fn reputation_sse_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Stream reputation events.".to_owned()),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String(
+            sorafs_routes::REPUTATION_EVENTS_STREAM
+                .stable_route_id()
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Authenticate the exact GET target and validate and serialize the entire bounded committed backlog selected by `since` and `limit` before returning HTTP 200. `Last-Event-ID` is not a cursor alias and is rejected; resume uses only a freshly authenticated `since` request. Then poll only the committed projection. `reputation_snapshot` frames carry the closed V1 event schema; `lagged` frames identify a retention gap and require snapshot resynchronization. A committed-reader or frame-serialization failure after streaming begins terminates the SSE connection without emitting a schema-invalid fallback frame."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(reputation_stream_parameters()),
+    );
+    insert_reputation_auth_contract(&mut operation);
+    insert_reputation_query_contract(&mut operation, &["since", "limit"]);
+    operation.insert(
+        "x-iroha-forbidden-request-headers-v1".into(),
+        norito::json!(["Last-Event-ID"]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        norito::json!({
+            "description": "Authenticated server-sent committed reputation event stream.",
+            "headers": (reputation_private_no_store_response_headers()),
+            "content": {
+                "text/event-stream": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Canonical SSE framing. Snapshot data is one compact JSON SorafsReputationSnapshotEventV1 object; lag data is one canonical positive decimal count."
+                    },
+                    "x-iroha-sse-frame-schema": {
+                        "$ref": "#/components/schemas/SorafsReputationSseFrameV1"
+                    }
+                }
+            }
+        }),
+    );
+    insert_reputation_error_responses(&mut responses);
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".into(), Value::Object(operation));
+    methods
+}
+
+fn reputation_websocket_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Connect to the reputation WebSocket.".to_owned()),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String(
+            sorafs_routes::REPUTATION_EVENTS_WEBSOCKET
+                .stable_route_id()
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Authenticate the exact WebSocket GET handshake and validate and serialize the entire bounded committed backlog before accepting the upgrade, then stream only closed-schema JSON text frames from the committed projection. A committed-reader or frame-serialization failure after upgrade closes the connection with WebSocket status 1011 and never emits a schema-invalid fallback frame. Browser WebSocket APIs which cannot set the canonical X-Iroha headers are not an alternate authentication surface."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(reputation_stream_parameters()),
+    );
+    insert_reputation_auth_contract(&mut operation);
+    insert_reputation_query_contract(&mut operation, &["since", "limit"]);
+    operation.insert(
+        "x-iroha-websocket-text-frame-schema".into(),
+        schema_ref("SorafsReputationWebSocketFrameV1"),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "101".into(),
+        norito::json!({
+            "description": "Authenticated WebSocket upgrade accepted.",
+            "headers": (reputation_private_no_store_response_headers())
+        }),
+    );
+    insert_reputation_error_responses(&mut responses);
+    insert_reputation_websocket_upgrade_error_response(&mut responses);
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".into(), Value::Object(operation));
+    methods
 }
 
 fn json_post_operation(
@@ -11162,7 +11476,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/prove"
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
-                    | "/v1/gov/council/derive-vrf"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
@@ -18807,6 +19120,1036 @@ fn insert_sorafs_pin_manifest_readback_schemas(schemas: &mut Map) {
     );
 }
 
+fn insert_sorafs_replication_schemas(schemas: &mut Map) {
+    const CANONICAL_BASE64_PATTERN: &str =
+        "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$";
+
+    schemas.insert(
+        "SorafsReplicationHex32V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Canonical lowercase hexadecimal encoding of one 32-byte value."
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationNonzeroHex32V1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+            "description": "Canonical non-zero lowercase hexadecimal encoding of one 32-byte identity or digest."
+        }),
+    );
+    schemas.insert(
+        "SorafsRegistryAttestationV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["block_height", "block_hash_hex", "chain_id"],
+            "additionalProperties": false,
+            "properties": {
+                "block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "block_hash_hex": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsReplicationHex32V1" },
+                        { "type": "null" }
+                    ]
+                },
+                "chain_id": { "type": "string", "minLength": 1 }
+            },
+            "description": "Committed-chain cursor accompanying the fresh registry projection. The block hash is null only before the first committed block."
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationOrderStatusV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["state"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "state": { "type": "string", "const": "pending" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["state", "epoch"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "state": { "type": "string", "const": "completed" },
+                        "epoch": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 0,
+                            "maximum": (u64::MAX)
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["state", "epoch"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "state": { "type": "string", "const": "expired" },
+                        "epoch": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 0,
+                            "maximum": (u64::MAX)
+                        }
+                    }
+                }
+            ],
+            "description": "Exact projected replication-order lifecycle. Pending carries no compatibility epoch field."
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationAssignmentV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["provider_id_hex", "slice_gib", "lane"],
+            "additionalProperties": false,
+            "properties": {
+                "provider_id_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                },
+                "slice_gib": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "lane": {
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z0-9._-]+$"
+                        },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationSlaV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "ingest_deadline_secs",
+                "min_availability_percent_milli",
+                "min_por_success_percent_milli"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "ingest_deadline_secs": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": (u32::MAX)
+                },
+                "min_availability_percent_milli": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 100000
+                },
+                "min_por_success_percent_milli": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 100000
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationMetadataEntryV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["key", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-z0-9._-]+$"
+                },
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationCanonicalOrderV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version",
+                "order_id_hex",
+                "manifest_cid_b64",
+                "manifest_digest_hex",
+                "chunking_profile",
+                "target_replicas",
+                "assignments",
+                "issued_at",
+                "deadline_at",
+                "sla",
+                "metadata"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "const": 1
+                },
+                "order_id_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                },
+                "manifest_cid_b64": {
+                    "type": "string",
+                    "minLength": 48,
+                    "maxLength": 48,
+                    "pattern": CANONICAL_BASE64_PATTERN,
+                    "contentEncoding": "base64",
+                    "description": "Canonical standard-base64 encoding of the exact 36-byte V1 manifest root CID."
+                },
+                "manifest_digest_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                },
+                "chunking_profile": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                },
+                "target_replicas": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 1,
+                    "maximum": 1024
+                },
+                "assignments": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1024,
+                    "uniqueItems": true,
+                    "items": {
+                        "$ref": "#/components/schemas/SorafsReplicationAssignmentV1"
+                    }
+                },
+                "issued_at": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "deadline_at": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "sla": { "$ref": "#/components/schemas/SorafsReplicationSlaV1" },
+                "metadata": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "items": {
+                        "$ref": "#/components/schemas/SorafsReplicationMetadataEntryV1"
+                    }
+                }
+            },
+            "description": "Decoded fields from the exact canonical `ReplicationOrderV1` bytes. Cross-field ordering and deadline invariants are enforced by the server before projection."
+        }),
+    );
+    schemas.insert(
+        "SorafsProviderIngestSignerPolicyV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": [
+                        "policy_id_hex",
+                        "revision",
+                        "predecessor_digest_hex",
+                        "policy_digest_hex"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                        "policy_id_hex": {
+                            "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                        },
+                        "revision": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "const": 1
+                        },
+                        "predecessor_digest_hex": { "type": "null" },
+                        "policy_digest_hex": {
+                            "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": [
+                        "policy_id_hex",
+                        "revision",
+                        "predecessor_digest_hex",
+                        "policy_digest_hex"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                        "policy_id_hex": {
+                            "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                        },
+                        "revision": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 2,
+                            "maximum": (u64::MAX)
+                        },
+                        "predecessor_digest_hex": {
+                            "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                        },
+                        "policy_digest_hex": {
+                            "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                        }
+                    }
+                }
+            ],
+            "description": "Exact governed signer-policy chain identity. Revision one has no predecessor; every later revision carries one non-zero predecessor digest."
+        }),
+    );
+    schemas.insert(
+        "SorafsProviderIngestCompletionAuthorityV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["provider_owner", "signer_policy"],
+            "additionalProperties": false,
+            "properties": {
+                "provider_owner": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 provider-owner account identifier."
+                },
+                "signer_policy": {
+                    "$ref": "#/components/schemas/SorafsProviderIngestSignerPolicyV1"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsProviderIngestFinalizedAnchorV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["height", "block_hash_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "block_hash_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationCompletionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "provider_hex",
+                "completed_by",
+                "completion_epoch",
+                "assignment_revision",
+                "completion_authority",
+                "finalized_anchor"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "provider_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                },
+                "completed_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier; exactly equal to completion_authority.provider_owner."
+                },
+                "completion_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "assignment_revision": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "completion_authority": {
+                    "$ref": "#/components/schemas/SorafsProviderIngestCompletionAuthorityV1"
+                },
+                "finalized_anchor": {
+                    "$ref": "#/components/schemas/SorafsProviderIngestFinalizedAnchorV1"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationOrderProjectionV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "order_id_hex",
+                "manifest_digest_hex",
+                "issued_by",
+                "issued_epoch",
+                "deadline_epoch",
+                "status",
+                "canonical_order_b64",
+                "assignment_revision",
+                "order",
+                "provider_completions",
+                "providers"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "order_id_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                },
+                "manifest_digest_hex": {
+                    "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                },
+                "issued_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 issuing account identifier."
+                },
+                "issued_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "deadline_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "status": {
+                    "$ref": "#/components/schemas/SorafsReplicationOrderStatusV1"
+                },
+                "canonical_order_b64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 349528,
+                    "pattern": CANONICAL_BASE64_PATTERN,
+                    "contentEncoding": "base64",
+                    "description": "Exact canonical Norito `ReplicationOrderV1` payload, limited to 256 KiB before base64 encoding."
+                },
+                "assignment_revision": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "order": {
+                    "$ref": "#/components/schemas/SorafsReplicationCanonicalOrderV1"
+                },
+                "provider_completions": {
+                    "type": "array",
+                    "maxItems": 1024,
+                    "uniqueItems": true,
+                    "items": {
+                        "$ref": "#/components/schemas/SorafsReplicationCompletionV1"
+                    }
+                },
+                "providers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1024,
+                    "uniqueItems": true,
+                    "items": {
+                        "$ref": "#/components/schemas/SorafsReplicationNonzeroHex32V1"
+                    }
+                }
+            },
+            "description": "Chain-authoritative replication-order projection. The server rejects substituted canonical bytes, assignment revisions, completion owners, signer-policy chains, and finalized anchors."
+        }),
+    );
+    schemas.insert(
+        "SorafsReplicationListResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "attestation",
+                "total_count",
+                "returned_count",
+                "offset",
+                "limit",
+                "replication_orders"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "attestation": {
+                    "$ref": "#/components/schemas/SorafsRegistryAttestationV1"
+                },
+                "total_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "returned_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": 500
+                },
+                "offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 500
+                },
+                "replication_orders": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": {
+                        "$ref": "#/components/schemas/SorafsReplicationOrderProjectionV1"
+                    }
+                }
+            }
+        }),
+    );
+}
+
+fn insert_sorafs_reputation_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "SorafsReputationApiErrorV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["error"],
+            "properties": {
+                "error": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "description": "Bounded diagnostic text. Clients must branch on the HTTP status rather than matching this text."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationSnapshotIdHexV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 32,
+            "pattern": "^[0-9a-f]{32}$",
+            "not": { "pattern": "^0{32}$" },
+            "description": "Exact non-zero 16-byte reputation snapshot identifier as lowercase hexadecimal without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationDigestHexV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Exact 32-byte reputation digest as lowercase hexadecimal without a prefix."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationProviderIdV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9_.:-]+$",
+            "not": { "enum": [".", ".."] },
+            "description": "Exact governance-controlled provider identifier; the whole URL dot-segment values '.' and '..' are excluded."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationBasisPointsV1".to_owned(),
+        norito::json!({
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 10000
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationAlphaBpsV1".to_owned(),
+        norito::json!({
+            "type": "integer",
+            "format": "uint16",
+            "const": 8500,
+            "description": "The exact V1 EigenTrust alpha."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationCurrentScoreWeightBpsV1".to_owned(),
+        norito::json!({
+            "type": "integer",
+            "format": "uint16",
+            "const": 7000,
+            "description": "The exact V1 current-score smoothing weight."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationWeightsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "version",
+                "por_success_bps",
+                "pdp_success_bps",
+                "potr_success_bps",
+                "latency_bps",
+                "dispute_bps",
+                "token_violation_bps",
+                "repair_breach_bps"
+            ],
+            "properties": {
+                "version": { "type": "integer", "format": "uint8", "const": 1 },
+                "por_success_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "pdp_success_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "potr_success_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "latency_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "dispute_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "token_violation_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "repair_breach_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" }
+            },
+            "description": "Canonical V1 weights. The seven basis-point fields sum to exactly 10,000."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationProviderMetricsV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "version",
+                "por_success_bps",
+                "pdp_success_bps",
+                "potr_success_bps",
+                "latency_health_bps",
+                "dispute_rate_bps",
+                "token_violation_rate_bps",
+                "repair_breach_rate_bps"
+            ],
+            "properties": {
+                "version": { "type": "integer", "format": "uint8", "const": 1 },
+                "por_success_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "pdp_success_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "potr_success_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "latency_health_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "dispute_rate_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "token_violation_rate_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" },
+                "repair_breach_rate_bps": { "$ref": "#/components/schemas/SorafsReputationBasisPointsV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationDegradationFlagV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["flag", "value"],
+            "properties": {
+                "flag": {
+                    "type": "string",
+                    "enum": [
+                        "reserve_warning",
+                        "reserve_grace",
+                        "reserve_delinquent",
+                        "reserve_default",
+                        "proof_success_below90",
+                        "proof_success_below80",
+                        "active_dispute",
+                        "slashing_event",
+                        "low_score"
+                    ]
+                },
+                "value": { "type": "null" }
+            },
+            "description": "Closed native Norito JSON representation of a unit ReputationDegradationFlagV1 variant."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationProviderV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "provider_id",
+                "score_bps",
+                "degradation_flags",
+                "raw_metrics",
+                "raw_metrics_hash_hex"
+            ],
+            "properties": {
+                "provider_id": { "$ref": "#/components/schemas/SorafsReputationProviderIdV1" },
+                "score_bps": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 500,
+                    "maximum": 9900
+                },
+                "degradation_flags": {
+                    "type": "array",
+                    "maxItems": (sorafs_manifest::MAX_REPUTATION_DEGRADATION_FLAGS as u64),
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/SorafsReputationDegradationFlagV1" },
+                    "description": "Canonical sorted unique degradation flags."
+                },
+                "raw_metrics": { "$ref": "#/components/schemas/SorafsReputationProviderMetricsV1" },
+                "raw_metrics_hash_hex": { "$ref": "#/components/schemas/SorafsReputationDigestHexV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationSnapshotSummaryV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "snapshot_id_hex",
+                "generated_at_unix",
+                "previous_snapshot_id_hex",
+                "merkle_root_hex",
+                "provider_count",
+                "returned_provider_count",
+                "limit",
+                "truncated_providers",
+                "alpha_bps",
+                "current_score_weight_bps",
+                "weights",
+                "providers"
+            ],
+            "properties": {
+                "snapshot_id_hex": { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" },
+                "generated_at_unix": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "previous_snapshot_id_hex": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "merkle_root_hex": { "$ref": "#/components/schemas/SorafsReputationDigestHexV1" },
+                "provider_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 65536
+                },
+                "returned_provider_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 500
+                },
+                "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 500
+                },
+                "truncated_providers": { "type": "boolean" },
+                "alpha_bps": { "$ref": "#/components/schemas/SorafsReputationAlphaBpsV1" },
+                "current_score_weight_bps": { "$ref": "#/components/schemas/SorafsReputationCurrentScoreWeightBpsV1" },
+                "weights": { "$ref": "#/components/schemas/SorafsReputationWeightsV1" },
+                "providers": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 500,
+                    "items": { "$ref": "#/components/schemas/SorafsReputationProviderV1" }
+                }
+            },
+            "description": "A bounded view of one exact immutable committed reputation snapshot. Counts and truncation describe the returned provider prefix."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationMerkleProofV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["provider_id", "leaf_index", "leaf_count", "siblings_hex"],
+            "properties": {
+                "provider_id": { "$ref": "#/components/schemas/SorafsReputationProviderIdV1" },
+                "leaf_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": 65535
+                },
+                "leaf_count": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 65536
+                },
+                "siblings_hex": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "items": { "$ref": "#/components/schemas/SorafsReputationDigestHexV1" }
+                }
+            },
+            "description": "Complete V1 inclusion proof. leaf_index is strictly less than leaf_count and the sibling path must reconstruct merkle_root_hex."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationProviderResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "snapshot_id_hex",
+                "generated_at_unix",
+                "merkle_root_hex",
+                "provider",
+                "proof"
+            ],
+            "properties": {
+                "snapshot_id_hex": { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" },
+                "generated_at_unix": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "merkle_root_hex": { "$ref": "#/components/schemas/SorafsReputationDigestHexV1" },
+                "provider": { "$ref": "#/components/schemas/SorafsReputationProviderV1" },
+                "proof": { "$ref": "#/components/schemas/SorafsReputationMerkleProofV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationWeightsResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "snapshot_id_hex",
+                "generated_at_unix",
+                "alpha_bps",
+                "current_score_weight_bps",
+                "weights"
+            ],
+            "properties": {
+                "snapshot_id_hex": { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" },
+                "generated_at_unix": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "alpha_bps": { "$ref": "#/components/schemas/SorafsReputationAlphaBpsV1" },
+                "current_score_weight_bps": { "$ref": "#/components/schemas/SorafsReputationCurrentScoreWeightBpsV1" },
+                "weights": { "$ref": "#/components/schemas/SorafsReputationWeightsV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationSnapshotEventV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "version",
+                "sequence",
+                "snapshot_id_hex",
+                "generated_at_unix",
+                "merkle_root_hex",
+                "provider_count",
+                "previous_snapshot_id_hex"
+            ],
+            "properties": {
+                "version": { "type": "integer", "format": "uint8", "const": 1 },
+                "sequence": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "snapshot_id_hex": { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" },
+                "generated_at_unix": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                },
+                "merkle_root_hex": { "$ref": "#/components/schemas/SorafsReputationDigestHexV1" },
+                "provider_count": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 65536
+                },
+                "previous_snapshot_id_hex": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsReputationSnapshotIdHexV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationEventsResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["since", "limit", "count", "next_since", "events"],
+            "properties": {
+                "since": {
+                    "oneOf": [
+                        { "type": "integer", "format": "uint64", "minimum": 0 },
+                        { "type": "null" }
+                    ]
+                },
+                "limit": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 500
+                },
+                "count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": 500
+                },
+                "next_since": {
+                    "oneOf": [
+                        { "type": "integer", "format": "uint64", "minimum": 1 },
+                        { "type": "null" }
+                    ]
+                },
+                "events": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": { "$ref": "#/components/schemas/SorafsReputationSnapshotEventV1" }
+                }
+            },
+            "description": "Bounded committed event page. count equals events.length; next_since is the last returned sequence or null."
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationSseSnapshotFrameV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event", "id", "data"],
+            "properties": {
+                "event": { "type": "string", "const": "reputation_snapshot" },
+                "id": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "maxLength": 20
+                },
+                "data": { "$ref": "#/components/schemas/SorafsReputationSnapshotEventV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationSseLaggedFrameV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event", "data"],
+            "properties": {
+                "event": { "type": "string", "const": "lagged" },
+                "data": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$",
+                    "maxLength": 20,
+                    "description": "Canonical positive decimal count of events no longer retained."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationSseFrameV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/SorafsReputationSseSnapshotFrameV1" },
+                { "$ref": "#/components/schemas/SorafsReputationSseLaggedFrameV1" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationWebSocketSnapshotFrameV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event", "data"],
+            "properties": {
+                "event": { "type": "string", "const": "reputation_snapshot" },
+                "data": { "$ref": "#/components/schemas/SorafsReputationSnapshotEventV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationWebSocketLaggedFrameV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event", "skipped"],
+            "properties": {
+                "event": { "type": "string", "const": "lagged" },
+                "skipped": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsReputationWebSocketFrameV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/SorafsReputationWebSocketSnapshotFrameV1" },
+                { "$ref": "#/components/schemas/SorafsReputationWebSocketLaggedFrameV1" }
+            ]
+        }),
+    );
+}
+
 fn insert_sorafs_hedging_billing_schemas(schemas: &mut Map) {
     schemas.insert(
         "HedgingBillingBytes32V1".to_owned(),
@@ -19415,6 +20758,8 @@ fn openapi_schemas() -> Map {
     insert_sorafs_evidence_schemas(&mut schemas);
     insert_sorafs_pin_register_schemas(&mut schemas);
     insert_sorafs_pin_manifest_readback_schemas(&mut schemas);
+    insert_sorafs_replication_schemas(&mut schemas);
+    insert_sorafs_reputation_schemas(&mut schemas);
     insert_sorafs_hedging_billing_schemas(&mut schemas);
     schemas.insert(
         "PositiveXorQuantity".to_owned(),
@@ -25489,12 +26834,16 @@ fn openapi_schemas() -> Map {
                 "initiator",
                 "counterparty",
                 "cash_leg",
+                "cash_source",
                 "collateral_leg",
+                "collateral_custody_asset",
                 "rate_bps",
                 "maturity_timestamp_ms",
                 "initiated_timestamp_ms",
                 "last_margin_check_timestamp_ms",
-                "governance"
+                "governance",
+                "settlement_timestamp_ms",
+                "status"
             ],
             "additionalProperties": false,
             "properties": {
@@ -25506,7 +26855,15 @@ fn openapi_schemas() -> Map {
                     "nullable": true
                 },
                 "cash_leg": { "$ref": "#/components/schemas/RepoLeg" },
+                "cash_source": {
+                    "type": "string",
+                    "description": "Exact counterparty cash balance, including scope, selected by owner-issued consent."
+                },
                 "collateral_leg": { "$ref": "#/components/schemas/RepoLeg" },
+                "collateral_custody_asset": {
+                    "type": "string",
+                    "description": "Exact collateral-holder balance, including scope, committed for maturity release."
+                },
                 "rate_bps": {
                     "type": "integer",
                     "format": "uint16"
@@ -25523,7 +26880,17 @@ fn openapi_schemas() -> Map {
                     "type": "integer",
                     "format": "uint64"
                 },
-                "governance": { "$ref": "#/components/schemas/RepoGovernance" }
+                "governance": { "$ref": "#/components/schemas/RepoGovernance" },
+                "settlement_timestamp_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Recorded fixed maturity once settled; null while active."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "settled"]
+                }
             }
         }),
     );
@@ -27725,6 +29092,48 @@ fn privacy_capability_schemas(schemas: &mut Map) {
     );
 }
 
+fn canonical_request_security_schemes() -> Map {
+    let mut schemes = Map::new();
+    for (name, header, description) in [
+        (
+            "IrohaCanonicalAccount",
+            "X-Iroha-Account",
+            "Canonical account header required by the single-signature mode.",
+        ),
+        (
+            "IrohaCanonicalSignature",
+            "X-Iroha-Signature",
+            "Canonical request signature required by the single-signature mode.",
+        ),
+        (
+            "IrohaCanonicalTimestampMs",
+            "X-Iroha-Timestamp-Ms",
+            "Fresh signed Unix timestamp required by the single-signature mode.",
+        ),
+        (
+            "IrohaCanonicalNonce",
+            "X-Iroha-Nonce",
+            "Fresh replay nonce required by the single-signature mode.",
+        ),
+        (
+            "IrohaCanonicalWitness",
+            "X-Iroha-Witness",
+            "Canonical Norito multisig witness used instead of the single-signature quartet.",
+        ),
+    ] {
+        schemes.insert(
+            name.to_owned(),
+            norito::json!({
+                "type": "apiKey",
+                "in": "header",
+                "name": (header),
+                "description": (description)
+            }),
+        );
+    }
+    schemes
+}
+
 fn components_section() -> Value {
     let mut components = Map::new();
     let mut schemas = openapi_schemas();
@@ -27738,6 +29147,10 @@ fn components_section() -> Value {
     schemas.insert("ErrorDetails".to_owned(), error_details_schema());
     schemas.insert("ErrorEnvelope".to_owned(), shared_error_schema());
     components.insert("schemas".into(), Value::Object(schemas));
+    components.insert(
+        "securitySchemes".into(),
+        Value::Object(canonical_request_security_schemes()),
+    );
     Value::Object(components)
 }
 
@@ -28987,6 +30400,37 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_storage_token_openapi_requires_the_credential_and_diagnostic_headers() {
+        use iroha_torii_shared::route_catalog::AuthenticationPolicy;
+
+        assert_eq!(
+            iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::RequiredApiToken
+        );
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/sorafs/storage/token", "post");
+        assert_eq!(
+            operation_header_requirements(operation)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                ("X-API-Token".to_owned(), true),
+                ("X-SoraFS-Client".to_owned(), true),
+                ("X-SoraFS-Nonce".to_owned(), true),
+            ])
+        );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("listener-wide API-token enforcement is disabled")
+                        && description.contains("client label is diagnostic")
+                })
+        );
+    }
+
+    #[test]
     fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
         const PATH: &str = "/v1/sorafs/pin/{digest_hex}";
         const RETIRED_TOP_LEVEL_FIELDS: [&str; 10] = [
@@ -29199,6 +30643,324 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
+        const PATH: &str = "/v1/sorafs/replication";
+
+        let document = generate_spec();
+        let operation = openapi_operation(&document, PATH, "get");
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", PATH),
+            "#/components/schemas/SorafsReplicationListResponseV1"
+        );
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("replication operation description");
+        assert!(
+            description.contains("fresh committed registry projection")
+                && description.contains("assignment revision")
+                && description.contains("provider-owner signer-policy")
+                && description.contains("finalized block anchor")
+                && description.contains("unknown, duplicate, empty, aliased, or out-of-range"),
+            "replication operation must document the V1 hard-cut projection and selectors"
+        );
+
+        let parameters = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("replication query parameters");
+        assert_eq!(
+            parameters
+                .iter()
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["limit", "offset", "status", "manifest_digest"])
+        );
+        let status_parameter = parameters
+            .iter()
+            .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some("status"))
+            .and_then(Value::as_object)
+            .and_then(|parameter| parameter.get("schema"))
+            .and_then(Value::as_object)
+            .expect("replication status parameter schema");
+        assert_eq!(
+            status_parameter
+                .get("enum")
+                .and_then(Value::as_array)
+                .expect("replication status values")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["pending", "completed", "expired"])
+        );
+        let digest_parameter = parameters
+            .iter()
+            .find(|parameter| {
+                parameter.get("name").and_then(Value::as_str) == Some("manifest_digest")
+            })
+            .and_then(Value::as_object)
+            .and_then(|parameter| parameter.get("schema"))
+            .and_then(Value::as_object)
+            .expect("replication digest parameter schema");
+        assert_eq!(
+            digest_parameter.get("pattern").and_then(Value::as_str),
+            Some("^(?!0{64}$)[0-9a-f]{64}$")
+        );
+
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "SorafsRegistryAttestationV1",
+            &["block_height", "block_hash_hex", "chain_id"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationAssignmentV1",
+            &["provider_id_hex", "slice_gib", "lane"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationSlaV1",
+            &[
+                "ingest_deadline_secs",
+                "min_availability_percent_milli",
+                "min_por_success_percent_milli",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationMetadataEntryV1",
+            &["key", "value"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationCanonicalOrderV1",
+            &[
+                "version",
+                "order_id_hex",
+                "manifest_cid_b64",
+                "manifest_digest_hex",
+                "chunking_profile",
+                "target_replicas",
+                "assignments",
+                "issued_at",
+                "deadline_at",
+                "sla",
+                "metadata",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsProviderIngestCompletionAuthorityV1",
+            &["provider_owner", "signer_policy"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsProviderIngestFinalizedAnchorV1",
+            &["height", "block_hash_hex"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationCompletionV1",
+            &[
+                "provider_hex",
+                "completed_by",
+                "completion_epoch",
+                "assignment_revision",
+                "completion_authority",
+                "finalized_anchor",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationOrderProjectionV1",
+            &[
+                "order_id_hex",
+                "manifest_digest_hex",
+                "issued_by",
+                "issued_epoch",
+                "deadline_epoch",
+                "status",
+                "canonical_order_b64",
+                "assignment_revision",
+                "order",
+                "provider_completions",
+                "providers",
+            ],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsReplicationListResponseV1",
+            &[
+                "attestation",
+                "total_count",
+                "returned_count",
+                "offset",
+                "limit",
+                "replication_orders",
+            ],
+            &[],
+        );
+
+        assert_eq!(
+            property_ref(
+                schemas,
+                "SorafsReplicationCompletionV1",
+                "completion_authority"
+            ),
+            "#/components/schemas/SorafsProviderIngestCompletionAuthorityV1"
+        );
+        assert_eq!(
+            property_ref(schemas, "SorafsReplicationCompletionV1", "finalized_anchor"),
+            "#/components/schemas/SorafsProviderIngestFinalizedAnchorV1"
+        );
+        assert_eq!(
+            property_ref(
+                schemas,
+                "SorafsProviderIngestCompletionAuthorityV1",
+                "signer_policy"
+            ),
+            "#/components/schemas/SorafsProviderIngestSignerPolicyV1"
+        );
+        assert_eq!(
+            property_ref(schemas, "SorafsReplicationOrderProjectionV1", "order"),
+            "#/components/schemas/SorafsReplicationCanonicalOrderV1"
+        );
+        assert_eq!(
+            property_ref(schemas, "SorafsReplicationOrderProjectionV1", "status"),
+            "#/components/schemas/SorafsReplicationOrderStatusV1"
+        );
+
+        let status_variants = schemas
+            .get("SorafsReplicationOrderStatusV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("replication lifecycle variants");
+        assert_eq!(status_variants.len(), 3);
+        for variant in status_variants {
+            assert_eq!(
+                variant.get("additionalProperties").and_then(Value::as_bool),
+                Some(false)
+            );
+        }
+        assert_eq!(
+            status_variants
+                .iter()
+                .filter_map(|variant| {
+                    variant
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .and_then(|properties| properties.get("state"))
+                        .and_then(Value::as_object)
+                        .and_then(|state| state.get("const"))
+                        .and_then(Value::as_str)
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["pending", "completed", "expired"])
+        );
+        assert_eq!(
+            status_variants[0]
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("pending status properties")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["state"]),
+            "pending must not carry a compatibility epoch"
+        );
+
+        let policy_variants = schemas
+            .get("SorafsProviderIngestSignerPolicyV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("signer-policy chain variants");
+        assert_eq!(policy_variants.len(), 2);
+        assert_eq!(
+            policy_variants[0]
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("revision"))
+                .and_then(Value::as_object)
+                .and_then(|revision| revision.get("const"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            policy_variants[0]
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("predecessor_digest_hex"))
+                .and_then(Value::as_object)
+                .and_then(|predecessor| predecessor.get("type"))
+                .and_then(Value::as_str),
+            Some("null")
+        );
+        assert_eq!(
+            policy_variants[1]
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("revision"))
+                .and_then(Value::as_object)
+                .and_then(|revision| revision.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            policy_variants[1]
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("predecessor_digest_hex"))
+                .and_then(Value::as_object)
+                .and_then(|predecessor| predecessor.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsReplicationNonzeroHex32V1")
+        );
+
+        let projection_properties =
+            component_properties(schemas, "SorafsReplicationOrderProjectionV1");
+        assert_eq!(
+            projection_properties
+                .get("provider_completions")
+                .and_then(Value::as_object)
+                .and_then(|array| array.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsReplicationCompletionV1")
+        );
+        assert_eq!(
+            component_properties(schemas, "SorafsReplicationListResponseV1")
+                .get("replication_orders")
+                .and_then(Value::as_object)
+                .and_then(|array| array.get("items"))
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsReplicationOrderProjectionV1")
+        );
+        let canonical_order = projection_properties
+            .get("canonical_order_b64")
+            .and_then(Value::as_object)
+            .expect("canonical order payload schema");
+        assert_eq!(
+            canonical_order.get("maxLength").and_then(Value::as_u64),
+            Some(349_528)
+        );
+    }
+
+    #[test]
     fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
         let document = generate_spec();
         let expected_auth_headers = BTreeSet::from([
@@ -29382,7 +31144,13 @@ mod tests {
             acknowledgement_schema
                 .get("x-iroha-norito-schema")
                 .and_then(Value::as_str),
-            Some("BillingAcknowledgementProofBodyV1")
+            Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1)
+        );
+        assert_eq!(
+            acknowledgement_schema
+                .get("x-iroha-norito-schema-hash")
+                .and_then(Value::as_str),
+            Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1)
         );
         assert_eq!(
             acknowledgement_schema
@@ -30002,14 +31770,13 @@ mod tests {
             feature = "schema",
             feature = "p2p_ws",
             feature = "connect",
-            feature = "gov_vrf",
             feature = "zk-verify-batch",
             feature = "push"
         ))]
         assert_eq!(
             expected.len(),
-            444,
-            "the supported full Torii documentation profile must remain exactly 444 cataloged operations"
+            440,
+            "the supported full Torii documentation profile must remain exactly 440 cataloged operations"
         );
 
         let spec = generate_spec();
@@ -30301,9 +32068,6 @@ mod tests {
         );
         #[cfg(feature = "connect")]
         descriptors.extend_from_slice(route_catalog::connect::ROUTES);
-        #[cfg(feature = "gov_vrf")]
-        descriptors.extend_from_slice(route_catalog::governance_vrf::ROUTES);
-
         for descriptor in descriptors {
             assert!(descriptor.projections().openapi());
             let method = match descriptor.method() {
@@ -32330,18 +34094,10 @@ mod tests {
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
-        #[cfg(feature = "gov_vrf")]
-        {
-            assert!(paths.contains_key("/v1/gov/council/persist"));
-            assert!(paths.contains_key("/v1/gov/council/replace"));
-            assert!(paths.contains_key("/v1/gov/council/derive-vrf"));
-        }
-        #[cfg(not(feature = "gov_vrf"))]
-        {
-            assert!(!paths.contains_key("/v1/gov/council/persist"));
-            assert!(!paths.contains_key("/v1/gov/council/replace"));
-            assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
-        }
+        assert!(!paths.contains_key("/v1/gov/council/audit"));
+        assert!(!paths.contains_key("/v1/gov/council/persist"));
+        assert!(!paths.contains_key("/v1/gov/council/replace"));
+        assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));
@@ -32674,6 +34430,616 @@ mod tests {
             .expect("offline top-up accepted headers");
         assert!(accepted_headers.contains_key("Location"));
         assert!(accepted_headers.contains_key("Retry-After"));
+    }
+
+    #[test]
+    fn sorafs_reputation_openapi_is_typed_authenticated_and_schema_closed() {
+        let document = generate_spec();
+        assert_sorafs_reputation_schema_contracts(&document);
+        assert_sorafs_reputation_route_contracts(&document);
+        assert_sorafs_reputation_cache_contracts(&document);
+        assert_sorafs_reputation_selector_and_stream_contracts(&document);
+    }
+
+    fn assert_sorafs_reputation_schema_contracts(document: &Value) {
+        let schemas = component_schemas(document);
+
+        for schema_name in [
+            "SorafsReputationApiErrorV1",
+            "SorafsReputationWeightsV1",
+            "SorafsReputationProviderMetricsV1",
+            "SorafsReputationDegradationFlagV1",
+            "SorafsReputationProviderV1",
+            "SorafsReputationSnapshotSummaryV1",
+            "SorafsReputationMerkleProofV1",
+            "SorafsReputationProviderResponseV1",
+            "SorafsReputationWeightsResponseV1",
+            "SorafsReputationSnapshotEventV1",
+            "SorafsReputationEventsResponseV1",
+            "SorafsReputationSseSnapshotFrameV1",
+            "SorafsReputationSseLaggedFrameV1",
+            "SorafsReputationWebSocketSnapshotFrameV1",
+            "SorafsReputationWebSocketLaggedFrameV1",
+        ] {
+            let schema = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing reputation schema `{schema_name}`"));
+            assert_eq!(
+                schema.get("additionalProperties").and_then(Value::as_bool),
+                Some(false),
+                "{schema_name} must reject unknown fields"
+            );
+        }
+        for (schema_name, expected) in [
+            ("SorafsReputationAlphaBpsV1", 8_500_u64),
+            ("SorafsReputationCurrentScoreWeightBpsV1", 7_000_u64),
+        ] {
+            let schema = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing reputation constant schema `{schema_name}`"));
+            assert_eq!(
+                schema.get("const").and_then(Value::as_u64),
+                Some(expected),
+                "{schema_name} must freeze the exact V1 constant"
+            );
+        }
+        let provider_id = schemas
+            .get("SorafsReputationProviderIdV1")
+            .and_then(Value::as_object)
+            .expect("reputation provider identifier schema");
+        assert_eq!(
+            provider_id.get("not"),
+            Some(&norito::json!({ "enum": [".", ".."] })),
+            "provider identifiers must exclude whole URL dot segments"
+        );
+        let security_schemes = document
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("securitySchemes"))
+            .and_then(Value::as_object)
+            .expect("canonical request security schemes");
+        for (scheme, header) in [
+            ("IrohaCanonicalAccount", "X-Iroha-Account"),
+            ("IrohaCanonicalSignature", "X-Iroha-Signature"),
+            ("IrohaCanonicalTimestampMs", "X-Iroha-Timestamp-Ms"),
+            ("IrohaCanonicalNonce", "X-Iroha-Nonce"),
+            ("IrohaCanonicalWitness", "X-Iroha-Witness"),
+        ] {
+            let definition = security_schemes
+                .get(scheme)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing `{scheme}` security scheme"));
+            assert_eq!(
+                definition.get("type").and_then(Value::as_str),
+                Some("apiKey")
+            );
+            assert_eq!(definition.get("in").and_then(Value::as_str), Some("header"));
+            assert_eq!(definition.get("name").and_then(Value::as_str), Some(header));
+        }
+    }
+
+    fn assert_sorafs_reputation_route_contracts(document: &Value) {
+        let canonical_auth_headers = [
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+            "X-Iroha-Witness",
+        ];
+        let route_contracts = [
+            (
+                "/v1/sorafs/reputation/latest",
+                sorafs_routes::REPUTATION_LATEST_GET.stable_route_id(),
+                &["limit"][..],
+            ),
+            (
+                "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
+                sorafs_routes::REPUTATION_SNAPSHOT.stable_route_id(),
+                &["limit"][..],
+            ),
+            (
+                "/v1/sorafs/reputation/providers/{provider_id}",
+                sorafs_routes::REPUTATION_PROVIDER.stable_route_id(),
+                &[][..],
+            ),
+            (
+                "/v1/sorafs/reputation/weights",
+                sorafs_routes::REPUTATION_WEIGHTS.stable_route_id(),
+                &[][..],
+            ),
+            (
+                "/v1/sorafs/reputation/events",
+                sorafs_routes::REPUTATION_EVENTS.stable_route_id(),
+                &["since", "limit"][..],
+            ),
+            (
+                "/v1/sorafs/reputation/events/stream",
+                sorafs_routes::REPUTATION_EVENTS_STREAM.stable_route_id(),
+                &["since", "limit"][..],
+            ),
+            (
+                "/v1/sorafs/reputation/events/ws",
+                sorafs_routes::REPUTATION_EVENTS_WEBSOCKET.stable_route_id(),
+                &["since", "limit"][..],
+            ),
+        ];
+        let mut operation_ids = BTreeSet::new();
+
+        for (path, expected_operation_id, allowed_query_parameters) in route_contracts {
+            let operation = openapi_operation(document, path, "get");
+            let operation_id = operation
+                .get("operationId")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("GET {path} operationId"));
+            assert_eq!(
+                operation_id, expected_operation_id,
+                "GET {path} must bind the route-catalog stable id"
+            );
+            assert!(
+                operation_ids.insert(operation_id),
+                "reputation operationId `{operation_id}` must be unique"
+            );
+            assert_eq!(
+                operation.get("security"),
+                Some(&norito::json!([
+                    {
+                        "IrohaCanonicalAccount": [],
+                        "IrohaCanonicalSignature": [],
+                        "IrohaCanonicalTimestampMs": [],
+                        "IrohaCanonicalNonce": []
+                    },
+                    {
+                        "IrohaCanonicalWitness": []
+                    }
+                ])),
+                "GET {path} must document exactly the signature quartet or witness"
+            );
+            assert_eq!(
+                operation.get("x-iroha-canonical-auth-v1"),
+                Some(&norito::json!({
+                    "exact_request_target": true,
+                    "body_hash_bound": true,
+                    "modes": [
+                        {
+                            "kind": "single_signature",
+                            "required_headers": [
+                                "X-Iroha-Account",
+                                "X-Iroha-Signature",
+                                "X-Iroha-Timestamp-Ms",
+                                "X-Iroha-Nonce"
+                            ],
+                            "forbidden_headers": ["X-Iroha-Witness"]
+                        },
+                        {
+                            "kind": "multisig_witness",
+                            "required_headers": ["X-Iroha-Witness"],
+                            "optional_headers": ["X-Iroha-Account"],
+                            "forbidden_headers": [
+                                "X-Iroha-Signature",
+                                "X-Iroha-Timestamp-Ms",
+                                "X-Iroha-Nonce"
+                            ]
+                        }
+                    ]
+                })),
+                "GET {path} canonical authentication contract"
+            );
+            let query_contract = operation
+                .get("x-iroha-query-contract-v1")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("GET {path} strict query contract"));
+            assert_eq!(
+                query_contract
+                    .get("maximum_raw_query_bytes")
+                    .and_then(Value::as_u64),
+                Some(1_024),
+                "GET {path} raw query bound"
+            );
+            let actual_allowed_query_parameters = query_contract
+                .get("allowed_parameters")
+                .and_then(Value::as_array)
+                .expect("allowed query parameters")
+                .iter()
+                .map(|name| name.as_str().expect("query parameter name"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual_allowed_query_parameters.as_slice(),
+                allowed_query_parameters,
+                "GET {path} exact query allowlist"
+            );
+            for key in [
+                "require_key_value_form",
+                "allow_empty_query",
+                "allow_empty_segments",
+                "allow_unknown_parameters",
+                "allow_duplicate_parameters",
+                "allow_percent_encoded_aliases",
+            ] {
+                let expected = key == "require_key_value_form";
+                assert_eq!(
+                    query_contract.get(key).and_then(Value::as_bool),
+                    Some(expected),
+                    "GET {path} query rule `{key}`"
+                );
+            }
+            let headers = operation_header_requirements(operation);
+            for expected in canonical_auth_headers {
+                assert!(
+                    headers
+                        .iter()
+                        .any(|(name, required)| name == expected && !required),
+                    "GET {path} must document canonical auth header `{expected}`"
+                );
+            }
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("GET {path} responses"));
+            for status in ["400", "401", "404", "405", "413", "500", "503"] {
+                assert!(
+                    responses.contains_key(status),
+                    "GET {path} must document HTTP {status}"
+                );
+            }
+            for status in ["400", "404", "405", "413", "500", "503"] {
+                assert_eq!(
+                    operation_response_schema_ref(operation, status, path),
+                    "#/components/schemas/SorafsReputationApiErrorV1",
+                    "GET {path} HTTP {status} error schema"
+                );
+                let response_headers = responses
+                    .get(status)
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("GET {path} HTTP {status} headers"));
+                for (header, expected_value) in [
+                    ("Cache-Control", "private, no-store"),
+                    (
+                        "Vary",
+                        "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness",
+                    ),
+                ] {
+                    assert_eq!(
+                        response_headers
+                            .get(header)
+                            .and_then(Value::as_object)
+                            .and_then(|header| header.get("schema"))
+                            .and_then(Value::as_object)
+                            .and_then(|schema| schema.get("const"))
+                            .and_then(Value::as_str),
+                        Some(expected_value),
+                        "GET {path} HTTP {status} {header}"
+                    );
+                }
+            }
+            let unauthorized = responses
+                .get("401")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("GET {path} 401"));
+            assert!(
+                !unauthorized.contains_key("content"),
+                "GET {path} 401 must document its deliberately empty body"
+            );
+            assert_eq!(
+                unauthorized
+                    .get("headers")
+                    .and_then(Value::as_object)
+                    .and_then(|headers| headers.get("Cache-Control"))
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("private, no-store"),
+                "GET {path} 401 cache policy"
+            );
+            assert_eq!(
+                responses.contains_key("426"),
+                path.ends_with("/ws"),
+                "only the WebSocket route documents upgrade-required"
+            );
+            if path.ends_with("/ws") {
+                let upgrade_required = responses
+                    .get("426")
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .expect("WebSocket 426 headers");
+                assert_eq!(
+                    upgrade_required
+                        .get("Cache-Control")
+                        .and_then(Value::as_object)
+                        .and_then(|header| header.get("schema"))
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("const"))
+                        .and_then(Value::as_str),
+                    Some("private, no-store")
+                );
+            }
+        }
+        assert_eq!(operation_ids.len(), route_contracts.len());
+    }
+
+    fn assert_sorafs_reputation_cache_contracts(document: &Value) {
+        let typed_gets = [
+            (
+                "/v1/sorafs/reputation/latest",
+                "#/components/schemas/SorafsReputationSnapshotSummaryV1",
+            ),
+            (
+                "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
+                "#/components/schemas/SorafsReputationSnapshotSummaryV1",
+            ),
+            (
+                "/v1/sorafs/reputation/providers/{provider_id}",
+                "#/components/schemas/SorafsReputationProviderResponseV1",
+            ),
+            (
+                "/v1/sorafs/reputation/weights",
+                "#/components/schemas/SorafsReputationWeightsResponseV1",
+            ),
+            (
+                "/v1/sorafs/reputation/events",
+                "#/components/schemas/SorafsReputationEventsResponseV1",
+            ),
+        ];
+        for (path, expected_schema) in typed_gets {
+            let operation = openapi_operation(document, path, "get");
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                expected_schema
+            );
+            let headers = operation_header_requirements(operation);
+            assert!(
+                headers
+                    .iter()
+                    .any(|(name, required)| name == "If-None-Match" && !required),
+                "GET {path} must document the exact optional ETag validator"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("typed reputation responses");
+            assert!(responses.contains_key("304"), "GET {path} conditional read");
+            assert_eq!(
+                responses
+                    .get("200")
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("headers"))
+                    .and_then(Value::as_object)
+                    .and_then(|headers| headers.get("Cache-Control"))
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("private, max-age=30, must-revalidate")
+            );
+            for status in ["200", "304"] {
+                assert_eq!(
+                    responses
+                        .get(status)
+                        .and_then(Value::as_object)
+                        .and_then(|response| response.get("headers"))
+                        .and_then(Value::as_object)
+                        .and_then(|headers| headers.get("Vary"))
+                        .and_then(Value::as_object)
+                        .and_then(|header| header.get("schema"))
+                        .and_then(Value::as_object)
+                        .and_then(|schema| schema.get("const"))
+                        .and_then(Value::as_str),
+                    Some(
+                        "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
+                    ),
+                    "GET {path} HTTP {status} private representation variance"
+                );
+            }
+        }
+    }
+
+    fn assert_sorafs_reputation_selector_and_stream_contracts(document: &Value) {
+        let schemas = component_schemas(document);
+        for path in [
+            "/v1/sorafs/reputation/latest",
+            "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
+            "/v1/sorafs/reputation/events",
+            "/v1/sorafs/reputation/events/stream",
+            "/v1/sorafs/reputation/events/ws",
+        ] {
+            let operation = openapi_operation(document, path, "get");
+            let limit_parameter = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .and_then(|parameters| {
+                    parameters.iter().find(|parameter| {
+                        parameter.get("name").and_then(Value::as_str) == Some("limit")
+                    })
+                })
+                .unwrap_or_else(|| panic!("GET {path} bounded limit parameter"));
+            let limit = limit_parameter
+                .get("schema")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("GET {path} bounded limit parameter"));
+            assert_eq!(limit.get("minimum").and_then(Value::as_u64), Some(1));
+            assert_eq!(limit.get("maximum").and_then(Value::as_u64), Some(500));
+            assert_eq!(
+                limit_parameter.get("x-iroha-canonical-unsigned-decimal-v1"),
+                Some(&norito::json!({
+                    "allow_zero": false,
+                    "allow_sign": false,
+                    "allow_leading_zero": false,
+                    "allow_percent_encoding": false
+                })),
+                "GET {path} canonical limit encoding"
+            );
+        }
+        for path in [
+            "/v1/sorafs/reputation/events",
+            "/v1/sorafs/reputation/events/stream",
+            "/v1/sorafs/reputation/events/ws",
+        ] {
+            let operation = openapi_operation(document, path, "get");
+            let since_parameter = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .and_then(|parameters| {
+                    parameters.iter().find(|parameter| {
+                        parameter.get("name").and_then(Value::as_str) == Some("since")
+                    })
+                })
+                .unwrap_or_else(|| panic!("GET {path} bounded since parameter"));
+            let since = since_parameter
+                .get("schema")
+                .and_then(Value::as_object)
+                .expect("since schema");
+            assert_eq!(since.get("minimum").and_then(Value::as_u64), Some(0));
+            assert_eq!(since.get("maximum").and_then(Value::as_u64), Some(u64::MAX));
+            assert_eq!(
+                since_parameter.get("x-iroha-canonical-unsigned-decimal-v1"),
+                Some(&norito::json!({
+                    "allow_zero": true,
+                    "allow_sign": false,
+                    "allow_leading_zero": false,
+                    "allow_percent_encoding": false
+                })),
+                "GET {path} canonical since encoding"
+            );
+        }
+
+        let proof = schemas
+            .get("SorafsReputationMerkleProofV1")
+            .and_then(Value::as_object)
+            .expect("reputation proof schema");
+        assert!(
+            proof
+                .get("required")
+                .and_then(Value::as_array)
+                .is_some_and(|required| required
+                    .iter()
+                    .any(|name| name.as_str() == Some("leaf_count")))
+        );
+        assert_eq!(
+            proof
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("siblings_hex"))
+                .and_then(Value::as_object)
+                .and_then(|siblings| siblings.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(16)
+        );
+        let provider_degradation_flags = schemas
+            .get("SorafsReputationProviderV1")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("degradation_flags"))
+            .and_then(Value::as_object)
+            .expect("provider degradation flag array");
+        assert_eq!(
+            provider_degradation_flags
+                .get("maxItems")
+                .and_then(Value::as_u64),
+            Some(sorafs_manifest::MAX_REPUTATION_DEGRADATION_FLAGS as u64)
+        );
+        assert_eq!(
+            provider_degradation_flags
+                .get("uniqueItems")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        for schema_name in [
+            "SorafsReputationSnapshotSummaryV1",
+            "SorafsReputationWeightsResponseV1",
+        ] {
+            let properties = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{schema_name} properties"));
+            assert_eq!(
+                properties
+                    .get("alpha_bps")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SorafsReputationAlphaBpsV1")
+            );
+            assert_eq!(
+                properties
+                    .get("current_score_weight_bps")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/SorafsReputationCurrentScoreWeightBpsV1")
+            );
+        }
+
+        let sse = openapi_operation(document, "/v1/sorafs/reputation/events/stream", "get");
+        assert!(
+            openapi_operation(document, "/v1/sorafs/reputation/events", "get")
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| description.contains("must resynchronize")),
+            "event-page retention gaps must require snapshot resynchronization"
+        );
+        assert!(
+            sse.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("before returning HTTP 200")
+                        && description.contains("`Last-Event-ID`")
+                        && description.contains("terminates the SSE connection")
+                }),
+            "SSE must document initial prevalidation and live failure termination"
+        );
+        assert_eq!(
+            sse.get("x-iroha-forbidden-request-headers-v1"),
+            Some(&norito::json!(["Last-Event-ID"])),
+            "SSE resume aliases must remain rejected by the public contract"
+        );
+        assert_eq!(
+            sse.get("responses")
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("text/event-stream"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("x-iroha-sse-frame-schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsReputationSseFrameV1")
+        );
+        let websocket = openapi_operation(document, "/v1/sorafs/reputation/events/ws", "get");
+        assert!(
+            websocket
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|description| {
+                    description.contains("before accepting the upgrade")
+                        && description.contains("status 1011")
+                }),
+            "WebSocket must document initial prevalidation and live failure closure"
+        );
+        assert_eq!(
+            websocket
+                .get("x-iroha-websocket-text-frame-schema")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsReputationWebSocketFrameV1")
+        );
+        assert_eq!(
+            operation_response_schema_ref(websocket, "426", "reputation WebSocket"),
+            "#/components/schemas/SorafsReputationApiErrorV1"
+        );
     }
 
     #[test]
@@ -37449,9 +39815,12 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
+        let diagnostics_enabled =
+            catalog_openapi_route_enabled(CatalogHttpMethod::Get, "/v1/sumeragi/diagnostics");
         assert_eq!(
             diagnostics_schema_ref,
-            Some("#/components/schemas/SumeragiDiagnosticsResponse")
+            diagnostics_enabled.then_some("#/components/schemas/SumeragiDiagnosticsResponse"),
+            "operator diagnostics presence and schema must follow the enabled catalog OpenAPI projection"
         );
         let diagnostics_schema = schemas
             .get("SumeragiDiagnosticsResponse")
@@ -38364,6 +40733,36 @@ mod tests {
             assert!(
                 properties.contains_key(field),
                 "metadata properties should include {field}"
+            );
+        }
+
+        let repo_agreement = schemas
+            .get("RepoAgreement")
+            .and_then(Value::as_object)
+            .expect("repo agreement schema");
+        let repo_required = repo_agreement
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("repo agreement required fields");
+        let repo_properties = repo_agreement
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("repo agreement properties");
+        for field in [
+            "cash_source",
+            "collateral_custody_asset",
+            "settlement_timestamp_ms",
+            "status",
+        ] {
+            assert!(
+                repo_required
+                    .iter()
+                    .any(|value| value.as_str() == Some(field)),
+                "repo agreement should require {field}"
+            );
+            assert!(
+                repo_properties.contains_key(field),
+                "repo agreement should document {field}"
             );
         }
 

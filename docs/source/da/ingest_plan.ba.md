@@ -371,22 +371,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ҡаплау Руст, Python `ToriiClient`
   хәҙер экспорт `decode_pdp_commitment_header`, һәм `IrohaSwift` суднолар тап килгән ярҙамсылары шулай мобиль
   Клиенттар тиҙ арала кодланған үлсәүҙәр графигын йәшерә ала.【крат/ироха/срк/да.р. 1】【путон/ироха_клиент/клиент.п:1】【ИрохаСвифт/ИрохаСвифт/ТориКлиент.свифт:1】
-- Torii шулай уҡ `GET /v1/da/manifests/{storage_ticket}` X шулай SDKs һәм операторҙар манифесттар ала ала
-  һәм өлөшләтә пландар теймәйенсә, төйөн’s катушка каталогы. Яуап Norito байт ҡайтара.
-  (база64), рендерланған манифест JSON, `chunk_plan` JSON блоб әҙер `sorafs fetch`, плюс тейешле
-  18NI00000270X, `client_blob_id`, `blob_hash`, `chunk_root`) шулай аҫҡы инструменталь инструменттар
-  оркестраторҙы һеңдермәйенсә ашатырға, ә шул уҡ `Sora-PDP-Commitment` башын сығара.
-  көҙгө ингест яуаптар. `block_hash=<hex>` аша үткән параметр булараҡ детерминистик ҡайтара
-  `sampling_plan` тамырланған `block_hash || client_blob_id` (валитасылар араһында уртаҡлашҡан) составында.
-  `assignment_hash`, һораған `sample_window`, һәм `(index, role, group)` кортеждары үткән.
-  бөтә 2D һыҙат макеты шулай PoR asdys һәм валидаторҙар шул уҡ индекстарҙы ҡабатлай ала. Өлгөлө кеше
-  `client_blob_id`, `chunk_root`, һәм `ipa_commitment` ҡатнашмалары задание хеш; `ироха ҡушымтаһы да ала
-  --блок-хэш ` now writes `sampling_plan_.json` янында манифест + өлөшө планы менән .
-  хеш һаҡланған, һәм JS/Swift Torii клиенттары шул уҡ `assignment_hash_hex` шулай валитаторҙар фашлай
-  һәм проверстары бер детерминистик зонд йыйылмаһы менән бүлешә. Ҡасан Torii ҡайтарып алыу планы, `ироха ҡушымта да .
-  иҫбатлау-доступностьИ18NI0000000286Xsample_seed`) урынына
-  ad-hoc өлгөләре шулай PoR шаһиттар рәткә валитатор заданиелары менән теҙелеп, хатта оператор of of of of of .
-  `--block-hash` өҫтөнлөклө.【краттар/ироха_тории_шере/срк/да/үлемдә:1】【крат/ироха_кли/срк/командалар/да.р.:523】 【javascript/iroha_js/src/toriClienClient.js:15903】【ИрохаСвифт/ИрохаСвифт/ToriiClient.swift:170】
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### Ҙур түләү стручка ағымыКлиенттар, улар кәрәк, активтарҙы күберәк ашау өсөн конфигурацияланған бер запрос сиге башлана а .
 потоковый сессияһы шылтыратып `POST /v1/da/ingest/chunk/start`. ToriiX менән яуап бирә

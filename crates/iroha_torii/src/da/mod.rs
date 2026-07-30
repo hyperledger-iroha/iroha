@@ -11,9 +11,7 @@ mod spool;
 mod taikai;
 
 #[cfg(feature = "app_api")]
-pub use ingest::{
-    DaManifestQuery, handler_get_da_manifest, handler_post_da_ingest, ipa_commitment_from_chunks,
-};
+pub use ingest::{handler_get_da_manifest, handler_post_da_ingest, ipa_commitment_from_chunks};
 use iroha_data_model::sorafs::pin_registry::StorageClass;
 pub use persistence::{DaReceiptLog, DaReceiptLogEntry, ReceiptInsertOutcome, ReplayCursorStore};
 pub(crate) use spool::{

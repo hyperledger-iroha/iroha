@@ -20,9 +20,9 @@ blake2 = { version = "0.10.6", default-features = false }
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
 sha2 = { version = "0.10.9", default-features = false }
 bs58 = { version = "0.5.1", default-features = false, features = ["alloc"] }
-norito = { path = "../norito" }
+norito = { path = "../norito", default-features = false, features = ["base-codec"] }
 halo2curves = { workspace = true }
-iroha_crypto = { path = "../iroha_crypto", features = ["bls"] }
+iroha_crypto = { path = "../iroha_crypto", features = ["node-crypto"], default-features = false }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["json"] }
 
 [dev-dependencies]

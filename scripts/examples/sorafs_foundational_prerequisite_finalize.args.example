@@ -1,6 +1,9 @@
 # Copy to a runtime evidence directory and replace every angle-bracket value.
 # The signature input is exactly 64 raw Ed25519 bytes exported by the HSM.
 finalize
+--topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--resilience-qualification-summary artifacts/sorafs/production-readiness/l1-resilience-qualification.json
+--resilience-qualification-signer-public-key-hex <TRUSTED-RESILIENCE-ED25519-PUBLIC-KEY-HEX>
 --signing-payload artifacts/sorafs/production-readiness/foundational-signing-payload.bin
 --signature-file artifacts/sorafs/production-readiness/foundational-signature.bin
 --trusted-public-key-hex <TRUSTED-ED25519-PUBLIC-KEY-HEX>

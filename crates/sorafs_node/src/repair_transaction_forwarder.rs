@@ -1849,10 +1849,14 @@ impl From<CheckpointStoreError> for RepairTransactionForwarderError {
 mod tests {
     use std::{
         fs,
+        io::Write as _,
         sync::{Arc, Barrier},
         thread,
         time::Duration,
     };
+
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt as _;
 
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
@@ -1871,6 +1875,18 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn write_private_checkpoint(path: &Path, bytes: &[u8]) {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut file = options
+            .open(path)
+            .expect("create private checkpoint fixture");
+        file.write_all(bytes)
+            .expect("write private checkpoint fixture");
+    }
 
     fn policy() -> RepairTransactionForwarderPolicyV1 {
         RepairTransactionForwarderPolicyV1 {
@@ -3002,12 +3018,11 @@ mod tests {
         ));
 
         let dir = TempDir::new().unwrap();
-        fs::write(
-            dir.path()
+        write_private_checkpoint(
+            &dir.path()
                 .join(REPAIR_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1),
             b"truncated checkpoint",
-        )
-        .unwrap();
+        );
         assert!(matches!(
             RepairTransactionForwarder::open(dir.path(), policy()),
             Err(RepairTransactionForwarderError::InvalidCheckpoint)

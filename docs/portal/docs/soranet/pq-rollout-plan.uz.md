@@ -99,11 +99,11 @@ Ikkita `cargo xtask` yordamchisi jadval yaratish va artefaktni suratga olishni a
 
 | Yuzaki | Kanareyka (A bosqich) | Rampa (B bosqich) | Standart (S bosqich) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` olish | `--anonymity-policy stage-a` yoki fazaga tayaning | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` olish | `--anonymity-policy anon-guard-pq` yoki fazaga tayaning | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | JSON orkestr konfiguratsiyasi (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust mijoz konfiguratsiyasi (`iroha.toml`) | `rollout_phase = "canary"` (standart) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` imzolangan buyruqlar | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, ixtiyoriy ravishda `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, ixtiyoriy ravishda `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, ixtiyoriy ravishda `.ANON_STRICT_PQ` |
+| `iroha_cli` imzolangan buyruqlar | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, ixtiyoriy ravishda `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, ixtiyoriy ravishda `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, ixtiyoriy ravishda `.ANON_STRICT_PQ` |
 | JavaScript orkestr yordamchilari | `rolloutPhase: "canary"` yoki `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -126,7 +126,7 @@ Barcha SDK xaritani orkestr tomonidan foydalaniladigan bir xil bosqich tahlilchi
 
 3. **Mijoz/SDK kanareykasi (T plus 1 hafta)**
 
-   - Mijoz konfiguratsiyasida `rollout_phase = "ramp"` ni aylantiring yoki belgilangan SDK kogortalari uchun `stage-b` bekor qilishni o'tkazing.
+   - Mijoz konfiguratsiyasida `rollout_phase = "ramp"` ni aylantiring yoki belgilangan SDK kogortalari uchun `anon-majority-pq` bekor qilishni o'tkazing.
    - Telemetriya farqlarini yozib oling (`sorafs_orchestrator_policy_events_total` `client_id` va `region` tomonidan guruhlangan) va ularni tarqatish hodisalari jurnaliga biriktiring.
 
 4. **Birlamchi reklama (T plus 3 hafta)**
@@ -162,7 +162,7 @@ Ogohlantirish uchun mavjud qoidalar `stage` yorlig'idan foydalanishiga ishonch h
 ### Rampa → Kanareyka (B bosqich → A bosqich)
 
 1. `sorafs_cli guard-directory import --guard-directory guards.json` bilan ko'tarilishdan oldin olingan qo'riqchi katalogining snapshotini import qiling va `sorafs_cli guard-directory verify` ni qayta ishga tushiring, shunda pasaytirish paketi xeshlarni o'z ichiga oladi.
-2. Orkestr va mijoz konfiguratsiyalarida `rollout_phase = "canary"` (yoki `anonymity_policy stage-a` bilan bekor qilish) ni o‘rnating, so‘ng pasaytirilgan quvur liniyasini isbotlash uchun [PQ ratchet runbook](./pq-ratchet-runbook.md) dan PQ ratchet matkapini qayta o‘ynang.
+2. Orkestr va mijoz konfiguratsiyalarida `rollout_phase = "canary"` (yoki `anonymity_policy anon-guard-pq` bilan bekor qilish) ni o‘rnating, so‘ng pasaytirilgan quvur liniyasini isbotlash uchun [PQ ratchet runbook](./pq-ratchet-runbook.md) dan PQ ratchet matkapini qayta o‘ynang.
 3. Boshqaruvni xabardor qilishdan oldin yangilangan PQ Ratchet va SN16 telemetriya skrinshotlarini hamda ogohlantirish natijalarini voqea jurnaliga ilova qiling.
 
 ### Guardrail eslatmalari- Har safar pasaytirish sodir bo'lganda `docs/source/ops/soranet_transport_rollback.md` ma'lumotnomasiga murojaat qiling va keyingi ish uchun har qanday vaqtinchalik yumshatishni `TODO:` elementi sifatida ro'yxatga olish trekeriga yozib oling.

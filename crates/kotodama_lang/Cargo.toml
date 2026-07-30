@@ -17,5 +17,5 @@ iroha_data_model = { path = "../iroha_data_model", default-features = false, fea
 iroha_i18n = { path = "../iroha_i18n" }
 iroha_primitives = { path = "../iroha_primitives", default-features = false }
 ivm_abi = { path = "../ivm_abi" }
-norito = { path = "../norito" }
+norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 strum = { workspace = true, features = ["derive"] }

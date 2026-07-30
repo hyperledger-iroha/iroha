@@ -381,8 +381,10 @@ gaps.
 
 Configuration surfaces now follow the same pattern: `get_configuration_typed()`
 returns a `ConfigurationSnapshot` (logger, gossip windows, queue capacity, and
-confidential gas schedule), while `set_confidential_gas_schedule()` reuses the
-current logger section and posts the new limits through `/v1/configuration`.
+the confidential gas schedule). The gas schedule is read-only at runtime because
+it is consensus-relevant and committed into the ZK policy hash. Operators change
+it through a coordinated startup configuration rollout, not through
+`/v1/configuration`.
 
 ```python
 config = client.get_configuration_typed()

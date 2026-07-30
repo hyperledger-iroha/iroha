@@ -85,7 +85,6 @@ pub(crate) use refinement::{
     check_production_body_ownership_effective_lock_transition,
     check_production_body_service_effective_lock_transition,
     check_production_decision_recovery_transition,
-    check_production_enter_view_effective_lock_transition,
     check_production_historical_body_pipeline_transition,
     check_production_historical_certificate_transition, check_production_ingress_transition,
     check_production_leader_wire_admission_transition,
@@ -97,19 +96,18 @@ pub(crate) use refinement::{
     check_production_terminal_application_transition, classify_exact_body_completion_ownership,
     exact_body_stage_is_owned, plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting, prepend_causal_continuation,
-    production_body_capacity_retirement_preserves_effective_lock_kernel,
-    production_body_ownership_preserves_effective_lock_kernel,
-    production_body_service_refines_async_fairness_kernel,
     production_durable_predecessor_identity_kernel,
-    production_leader_wire_admission_refines_lifecycle_ownership_kernel,
-    production_reliable_flush_trace_refines_outbound_ownership_kernel,
-    production_reliable_flush_two_phase_link_kernel,
     production_successor_predecessor_binding_kernel, select_bounded_service_class,
 };
 pub use refinement::{
     CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,
     check_production_two_stage_relay_retry_transition,
     production_two_stage_relay_retry_trace_refines_source_fairness_kernel,
+};
+#[cfg(test)]
+pub(crate) use refinement::{
+    production_reliable_flush_trace_refines_outbound_ownership_kernel,
+    production_reliable_flush_two_phase_link_kernel,
 };
 pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 pub(crate) use types::{

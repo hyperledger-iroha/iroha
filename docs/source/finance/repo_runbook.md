@@ -1,220 +1,139 @@
 # Repo Settlement Runbook
 
-This guide documents the deterministic flow for repo and reverse-repo agreements in Iroha.
-It covers CLI orchestration, SDK helpers, and the expected governance knobs so operators can
-initiate, margin, and unwind agreements without writing raw Norito payloads. For governance
-checklists, evidence capture, and fraud/rollback procedures see
-[`repo_ops.md`](./repo_ops.md), which satisfies roadmap item F1.
+This runbook is the operator sequence for Iroha's immutable, fixed-maturity
+repo protocol. See [`repo_ops.md`](./repo_ops.md) for the security model and
+evidence requirements.
 
-## CLI commands
+## 1. Prepare one canonical proposal
 
-The `iroha app repo` command groups repo-specific helpers:
+Construct one `RepoIsi` with the final agreement identifier, parties, optional
+custodian, cash and collateral terms, rate, maturity, haircut, and margin
+cadence. Do not create permissions from a draft that may still change.
+
+Verify:
+
+- initiator, counterparty, and custodian roles;
+- exact cash balance `AssetId` owned by the counterparty;
+- exact collateral custody `AssetId` owned by the counterparty or custodian;
+- both asset balance scopes, especially for dataspace-restricted definitions;
+- maturity expressed in Unix milliseconds and later than expected admission;
+- positive quantities and valid asset precision; and
+- haircut at or below 10,000 basis points.
+
+Archive the canonical Norito proposal bytes and its decoded term sheet.
+
+## 2. Collect on-chain consent
+
+Derive from that exact proposal:
+
+- `settlement_id = RepoIsi::settlement_id()`;
+- cash `intent_hash = RepoIsi::initiation_intent_hash()`; and
+- collateral `intent_hash = RepoIsi::maturity_intent_hash()`.
+
+The counterparty signs a Grant of:
+
+```text
+CanExecuteSettlement {
+    debited_asset: <exact counterparty cash AssetId>,
+    settlement_id: <agreement id>,
+    intent_hash: <cash initiation hash>,
+}
+```
+
+The collateral holder signs a separate Grant:
+
+```text
+CanExecuteSettlement {
+    debited_asset: <exact collateral custody AssetId>,
+    settlement_id: <agreement id>,
+    intent_hash: <maturity release hash>,
+}
+```
+
+In a bilateral repo the counterparty signs both. In a tri-party repo the
+counterparty signs the cash Grant and the custodian signs the maturity Grant.
+The destination of both Grants is the initiator.
+
+Wait for both Grant transactions to finalize. A Grant signed by any account
+other than `debited_asset.account()` is invalid.
+
+## 3. Open atomically
+
+Submit the byte-identical `RepoIsi` as the initiator. A changed term requires
+new hashes and new Grants.
+
+After finality, verify:
+
+- the counterparty cash balance decreased by the principal;
+- the initiator received cash in the same exact balance scope;
+- the initiator collateral balance decreased by the pledged quantity;
+- the counterparty or custodian received collateral in the same exact scope;
+- `RepoAgreement.cash_source` matches the cash Grant;
+- `RepoAgreement.collateral_custody_asset` matches the maturity Grant;
+- `RepoAgreement::is_active()` is true (Torii reports `status = active`); and
+- initiation events exist for all roles.
+
+Any failure must leave both balances and the agreement map unchanged.
+
+## 4. Monitor margining
+
+Inspect the recorded schedule:
 
 ```bash
-# Stage an initiation instruction without submitting
-iroha --config client.toml --output \
-  repo initiate \
-  --agreement-id daily_repo \
-  --initiator <i105-account-id> \
-  --counterparty <i105-account-id> \
-  --custodian <i105-account-id> \
-  --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
-  --cash-quantity 1000 \
-  --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
-  --collateral-quantity 1050 \
-  --rate-bps 250 \
-  --maturity-timestamp-ms 1704000000000 \
-  --haircut-bps 1500 \
-  --margin-frequency-secs 86400
-
-# Generate the unwind leg
-iroha --config client.toml --output \
-  repo unwind \
-  --agreement-id daily_repo \
-  --initiator <i105-account-id> \
-  --counterparty <i105-account-id> \
-  --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
-  --cash-quantity 1005 \
-  --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
-  --collateral-quantity 1055 \
-  --settlement-timestamp-ms 1704086400000
-
-# Inspect the next margin checkpoint for an active agreement
-iroha --config client.toml repo margin --agreement-id daily_repo
-
-# Trigger a margin call when cadence elapses
-iroha --config client.toml repo margin-call --agreement-id daily_repo
+iroha --config client.toml app repo margin --agreement-id daily_repo
 ```
 
-* `repo initiate` and `repo unwind` respect `--input/--output` so the generated `InstructionBox`
-  payloads can be piped into other CLI flows or submitted immediately.
-* Pass `--custodian <account>` to route collateral to a tri-party custodian. When omitted, the
-  counterparty receives the pledge directly (bilateral repo).
-* `repo margin` queries the ledger via `FindRepoAgreements` and reports the next expected margin
-  timestamp (in milliseconds) alongside whether a margin callback is currently due.
-* `repo margin-call` appends a `RepoMarginCallIsi` instruction, recording the margin checkpoint and
-  emitting events for all participants. Calls are rejected if the cadence has not elapsed or if the
-  instruction is submitted by a non-participant.
-
-## Python SDK helpers
-
-```python
-from iroha_python import (
-    create_torii_client,
-    RepoAgreementRecord,
-    RepoCashLeg,
-    RepoCollateralLeg,
-    RepoGovernance,
-    TransactionConfig,
-    TransactionDraft,
-)
-
-client = create_torii_client("client.toml")
-
-cash = RepoCashLeg(asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1", quantity="1000")
-collateral = RepoCollateralLeg(
-    asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
-    quantity="1050",
-    metadata={"isin": "ABC123"},
-)
-governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
-
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<i105-account-id>"))
-draft.repo_initiate(
-    agreement_id="daily_repo",
-    initiator="<i105-account-id>",
-    counterparty="<i105-account-id>",
-    cash_leg=cash,
-    collateral_leg=collateral,
-    rate_bps=250,
-    maturity_timestamp_ms=1_704_000_000_000,
-    governance=governance,
-)
-# ... additional instructions ...
-envelope = draft.sign_with_keypair(my_keypair)
-client.submit_transaction_envelope(envelope)
-
-# Margin schedule
-agreements = client.list_repo_agreements()
-record = RepoAgreementRecord.from_payload(agreements[0])
-next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
-```
-
-* Both helpers normalise numeric quantities and metadata fields before invoking the PyO3 bindings.
-* `RepoAgreementRecord` mirrors the runtime schedule calculation so off-ledger automation can
-  determine when callbacks are due without recomputing the cadence manually.
-
-## DvP / PvP settlements
-
-The `iroha app settlement` command stages delivery-versus-payment and payment-versus-payment instructions:
+When due, a participant may submit:
 
 ```bash
-# Delivery leg first, then payment
-iroha --config client.toml --output \
-  settlement dvp \
-  --settlement-id trade_dvp \
-  --delivery-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
-  --delivery-quantity 10 \
-  --delivery-from <i105-account-id> \
-  --delivery-to <i105-account-id> \
-  --delivery-instrument-id US0378331005 \
-  --payment-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
-  --payment-quantity 1000 \
-  --payment-from <i105-account-id> \
-  --payment-to <i105-account-id> \
-  --order payment-then-delivery \
-  --atomicity all-or-nothing \
-  --iso-reference-crosswalk /opt/iso/isin_crosswalk.json \
-  --iso-xml-out trade_dvp.xml
-
-# Cross-currency swap (payment-versus-payment)
-iroha --config client.toml --output \
-  settlement pvp \
-  --settlement-id trade_pvp \
-  --primary-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
-  --primary-quantity 500 \
-  --primary-from <i105-account-id> \
-  --primary-to <i105-account-id> \
-  --counter-asset 5tPkFK6s2zUcd1qUHyTmY7fDVa2n \
-  --counter-quantity 460 \
-  --counter-from <i105-account-id> \
-  --counter-to <i105-account-id> \
-  --iso-xml-out trade_pvp.xml
+iroha --config client.toml app repo margin-call --agreement-id daily_repo
 ```
 
-* Leg quantities accept integral or decimal values and are validated against the asset precision.
-* `--atomicity` accepts `all-or-nothing`, `commit-first-leg`, or `commit-second-leg`. Use these modes
-  with `--order` to express which leg remains committed if subsequent processing fails (`commit-first-leg`
-  keeps the first leg applied; `commit-second-leg` retains the second).
-* CLI invocations emit empty instruction metadata today; use the Python helpers when settlement-level
-  metadata needs to be attached.
-* See [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) for the ISO 20022 field mapping that
-  backs these instructions (`sese.023`, `sese.025`, `colr.012`, `pacs.009`, `camt.054`).
-* Pass `--iso-xml-out <path>` to have the CLI emit a canonical XML preview alongside the Norito
-  instruction; the file follows the mapping above (`sese.023` for DvP, `sese.025` for PvP`). Pair the
-  flag with `--iso-reference-crosswalk <path>` so the CLI verifies `--delivery-instrument-id` against the
-  same snapshot Torii uses during runtime admission.
+Calls before the cadence boundary or at/after maturity are rejected. Margin
+events are evidence only; no term or custody asset can be changed.
 
-Python helpers mirror the CLI surface:
+## 5. Settle at recorded maturity
 
-```python
-from iroha_python import (
-    SettlementLeg,
-    SettlementPlan,
-    SettlementExecutionOrder,
-    TransactionConfig,
-    TransactionDraft,
-)
+Ensure the initiator has principal plus deterministic ACT/360 interest in the
+same cash scope recorded by the agreement. Confirm current transfer controls
+permit the initiator's outgoing cash and the holder's outgoing collateral.
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<i105-account-id>"))
-delivery = SettlementLeg(
-    asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
-    quantity="10",
-    from_account="<i105-account-id>",
-    to_account="<i105-account-id>",
-    metadata={"isin": "ABC123"},
-)
-payment = SettlementLeg(
-    asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-    quantity="1000",
-    from_account="<i105-account-id>",
-    to_account="<i105-account-id>",
-)
-plan = SettlementPlan(order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY)
+Any recorded participant—the initiator, counterparty, or custodian—may submit
+the fixed settlement. Non-participants cannot trigger it.
 
-draft.settlement_dvp("trade_dvp", delivery, payment, plan=plan, metadata={"desk": "rates"})
-draft.settlement_pvp(
-    "trade_pvp",
-    SettlementLeg(
-        asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-        quantity="500",
-        from_account="<i105-account-id>",
-        to_account="<i105-account-id>",
-    ),
-    SettlementLeg(
-        asset_definition_id="5tPkFK6s2zUcd1qUHyTmY7fDVa2n",
-        quantity="460",
-        from_account="<i105-account-id>",
-        to_account="<i105-account-id>",
-    ),
-)
+Submit:
+
+```bash
+iroha --config client.toml app repo unwind --agreement-id daily_repo
 ```
 
-## Determinism & Governance Expectations
+The instruction carries no parties, assets, quantities, substitute collateral,
+or timestamp. Submitting it before maturity fails. Submitting after maturity
+still settles at the recorded maturity amount.
 
-Repo instructions rely exclusively on Norito-encoded numeric types and the shared
-`RepoGovernance::with_defaults` logic. Keep the following invariants in mind:
+After finality, verify:
 
-* Quantities are serialised with deterministic `NumericSpec` values: cash legs use
-  `fractional(2)` (two decimal places), collateral legs use `integer()`. Do not submit
-  values with greater precision—runtime guards will reject them and peers would diverge.
-* Tri-party repos persist the custodian account id in `RepoAgreement`. Lifecycle and margin events
-  emit a `RepoAccountRole::Custodian` payload so custodians can subscribe and reconcile inventory.
-* Haircuts are clamped to 10 000 bps (100 %) and margin frequencies are whole seconds. Provide
-  governance parameters in those canonical units to stay aligned with runtime expectations.
-* Timestamps are always unix milliseconds. All helpers forward them unchanged to the Norito
-  payload so peers derive identical schedules.
-* Initiation and unwind instructions reuse the same agreement identifier. The runtime rejects
-  duplicate IDs and unwinds for unknown agreements; CLI/SDK helpers surface those errors early.
-* `repo margin`/`RepoAgreementRecord::next_margin_check_after` return the canonical cadence. Always
-  consult this snapshot before triggering callbacks to avoid replaying stale schedules.
+- cash returned to `RepoAgreement.cash_source`;
+- collateral returned from
+  `RepoAgreement.collateral_custody_asset` to the initiator in the same scope;
+- `settlement_timestamp_ms` equals the recorded maturity;
+- `RepoAgreement::is_active()` is false (Torii reports `status = settled`);
+- settlement events exist for all roles; and
+- a replay or an attempt to reuse the agreement identifier is rejected.
+
+## 6. Failure and incident procedure
+
+Before open, a balance owner can revoke its exact permission. After open, the
+agreement is immutable and permission revocation does not cancel it.
+
+If a transfer policy or freeze blocks maturity settlement:
+
+1. retain the rejected transaction and current agreement snapshot;
+2. inspect controls for both exact source balances;
+3. use the ordinary governed control-change process where justified;
+4. resubmit the same ID-only settlement; and
+5. archive both rejection and final settlement evidence.
+
+Do not attempt an early unwind, caller-selected substitution, agreement state
+edit, or reuse of the identifier. Those operations are intentionally absent
+from the protocol.

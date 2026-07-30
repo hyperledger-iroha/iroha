@@ -13,12 +13,13 @@ pqc = ["iroha_crypto/pqc", "soranet_pq/pqc"]
 blake3 = "1.8.2"
 hex = "0.4.3"
 base64 = { workspace = true, features = ["std"] }
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 norito_derive = { workspace = true }
 thiserror = "2.0.17"
 sorafs_chunker = { path = "../sorafs_chunker" }
 ed25519-dalek = "2.2.0"
-iroha_crypto = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
+iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
 soranet_pq = { path = "../soranet_pq", default-features = false }
 sha3 = "0.10.8"

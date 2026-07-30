@@ -24,8 +24,9 @@ translator: machine-google-reviewed
   尺寸上限 (`genesis.bootstrap_max_bytes`)。允许列表之外的请求收到 `NotAllowed`，并且
   由错误密钥签名的有效负载收到 `MismatchedPubkey`。
 - **请求者流程：** 当存储为空并且 `genesis.file` 未设置时（并且
-  `genesis.bootstrap_enabled=true`)，节点使用可选的选项预检受信任的对等点
-  `genesis.expected_hash`，然后获取有效负载，通过`validate_genesis_block`验证签名，
+  `genesis.bootstrap_enabled=true`)，`genesis.expected_hash` 必须精确固定已签名的创世区块。
+  若文件和哈希均未配置，节点会在发送任何请求之前报告启动配置错误。随后节点获取有效负载，
+  并通过 `validate_genesis_block` 验证签名，
   并在应用该块之前将 `genesis.bootstrap.nrt` 与 Kura 一起保留。引导重试
   荣誉 `genesis.bootstrap_request_timeout`、`genesis.bootstrap_retry_interval` 和
   `genesis.bootstrap_max_attempts`。
@@ -34,5 +35,6 @@ translator: machine-google-reviewed
   跨对等方中止获取；没有响应者/超时回退到本地配置。
 - **操作员步骤：** 确保至少有一个受信任的对等点可以通过有效的创世到达，配置
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` 和重试旋钮，以及
-  可选择引脚 `expected_hash` 以避免接受不匹配的有效负载。持久有效负载可以是
+  启用远程引导前，必须在 `expected_hash` 中固定准确区块。本地已签名的 `genesis.file`
+  本身就是明确的制品，无需额外固定哈希。持久有效负载可以是
   通过将 `genesis.file` 指向 `genesis.bootstrap.nrt` 在后续引导中重用。

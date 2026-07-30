@@ -186,6 +186,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_find_sorafs_repair_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairStatus)",
         "fn visit_find_sorafs_repair_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairEvents)",
         "fn visit_find_sorafs_reputation_journal_authority_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy)",
+        "fn visit_find_sorafs_reputation_journal_event_by_source_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReputationJournalEventBySourceId)",
         "fn visit_find_sorafs_reputation_journal_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReputationJournalEvents)",
         "fn visit_find_sorafs_orderbook_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookPolicy)",
         "fn visit_find_sorafs_orderbook_order_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrderById)",
@@ -410,5 +411,27 @@ mod tests {
             emitter.handle(darling_result(Err(darling::Error::custom("oops"))));
         assert!(result.is_none());
         assert!(!emitter.finish_token_stream().is_empty());
+    }
+
+    #[test]
+    fn derive_visit_routes_reputation_source_query_through_default_reexport() {
+        let input: syn::DeriveInput = syn::parse_quote! {
+            struct TestExecutor {
+                host: (),
+                context: (),
+                verdict: (),
+            }
+        };
+        let mut emitter = Emitter::new();
+        let generated = impl_derive_visit(&mut emitter, &input);
+        assert!(emitter.finish_token_stream().is_empty());
+        let rendered = generated.to_string().split_whitespace().collect::<String>();
+
+        assert!(
+            rendered.contains(
+                "::iroha_executor::default::visit_find_sorafs_reputation_journal_event_by_source_id"
+            ),
+            "generated Visit implementation must call the default source-query visitor"
+        );
     }
 }

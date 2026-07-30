@@ -3,9 +3,11 @@ import XCTest
 
 final class ConnectEnvelopeCodecTests: XCTestCase {
     private func requireConnectBridge() throws {
-        try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCodecAvailable ||
-                      !NoritoNativeBridge.shared.isConnectCryptoAvailable,
-                      "NoritoBridge connect codec/crypto unavailable")
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isConnectCodecAvailable &&
+                NoritoNativeBridge.shared.isConnectCryptoAvailable,
+            "NoritoBridge connect codec/crypto unavailable"
+        )
     }
 
     func testEncryptSignResultOkRoundTrip() throws {

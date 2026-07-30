@@ -100,11 +100,11 @@ rollout_phase = "default"
 
 |表面 |カナリア (ステージ A) |ランプ(ステージB) |デフォルト (ステージ C) |
 |-------|-------|----------------|---------------------|
-| `sorafs_cli` フェッチ | `--anonymity-policy stage-a` は、フェーズ | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` フェッチ | `--anonymity-policy anon-guard-pq` は、フェーズ | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 |オーケストレーター構成 JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust クライアント構成 (`iroha.toml`) | `rollout_phase = "canary"` (デフォルト) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` 署名付きコマンド | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`、オプションの `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`、オプションの `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`、オプションの `.ANON_STRICT_PQ` |
+| `iroha_cli` 署名付きコマンド | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`、オプションの `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`、オプションの `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`、オプションの `.ANON_STRICT_PQ` |
 | JavaScript オーケストレーター ヘルパー | `rolloutPhase: "canary"` または `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 |スイフト `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -125,7 +125,7 @@ SDK は、ステージ パーサー、オーケストレーター (`crates/soraf
 
 3. **クライアント/SDK カナリア (T プラス 1 週間)**
 
-   - クライアント構成の `rollout_phase = "ramp"` と `stage-b` は、SDK コホートをオーバーライドします。
+   - クライアント構成の `rollout_phase = "ramp"` と `anon-majority-pq` は、SDK コホートをオーバーライドします。
    - テレメトリの差分 (`sorafs_orchestrator_policy_events_total`、`client_id` および `region`) およびロールアウト インシデント ログを表示します。
 
 4. **デフォルトのプロモーション (T プラス 3 週間)**
@@ -159,7 +159,7 @@ SDK は、ステージ パーサー、オーケストレーター (`crates/soraf
 3. `cargo xtask soranet-rollout-capture --label rollback-default` では、ガード ディレクトリの差分、promtool の出力、およびダッシュボードのスクリーンショットが `artifacts/soranet_pq_rollout/` に表示されます。
 
 ### ランプ -> カナリア (ステージ B -> ステージ A)1. ガード ディレクトリ スナップショット、昇格プロモーション、`sorafs_cli guard-directory import --guard-directory guards.json` および `sorafs_cli guard-directory verify`、降格パケットハッシュ。
-2. `rollout_phase = "canary"` (オーバーライド `anonymity_policy stage-a`)、オーケストレーターとクライアント構成、PQ ラチェット ドリルと [PQ ラチェット Runbook](./pq-ratchet-runbook.md)、パイプラインをダウングレードします。
+2. `rollout_phase = "canary"` (オーバーライド `anonymity_policy anon-guard-pq`)、オーケストレーターとクライアント構成、PQ ラチェット ドリルと [PQ ラチェット Runbook](./pq-ratchet-runbook.md)、パイプラインをダウングレードします。
 3. PQ ラチェットと SN16 テレメトリのスクリーンショット、アラート結果、インシデント ログ、ガバナンスを確認します。
 
 ### ガードレールのリマインダー

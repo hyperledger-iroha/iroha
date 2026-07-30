@@ -227,12 +227,18 @@ public abstract record class TransactionInstruction
     public static CompleteReplicationOrderInstruction CompleteReplicationOrder(
         string orderId,
         string providerId,
-        ulong completionEpoch)
+        ulong completionEpoch,
+        ProviderIngestCompletionAuthorityV1 expectedAuthority,
+        ulong expectedAssignmentRevision,
+        ProviderIngestFinalizedAnchorV1 finalizedAnchor)
     {
         return new CompleteReplicationOrderInstruction(
             orderId,
             providerId,
-            completionEpoch);
+            completionEpoch,
+            expectedAuthority,
+            expectedAssignmentRevision,
+            finalizedAnchor);
     }
 
     public static ExpireReplicationOrderInstruction ExpireReplicationOrder(

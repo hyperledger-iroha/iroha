@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## قبولیت کا ورک فلو
 
 1. **پروپوزل تیار کرنا**
-   -CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   -CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      شامل کریں جو `ProviderAdmissionProposalV1` + توثیقی pacote بنائے۔
    - ویلیڈیشن: ضروری فیلڈز, aposta> 0, اور `profile_id` میں canonical chunker handle کو یقینی بنائیں۔
 2. **گورننس کی منظوری**
@@ -57,7 +57,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
 
 ### CLI
 
-ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔-`proposal`
+ہر کمانڈ کو `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔-`proposal`
   - Nome de usuário: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -96,7 +96,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
    `--retention-epoch` بڑھائیں اور ضرورت کے مطابق stake/endpoints اپڈیٹ کریں۔
 2. Carreira
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -116,7 +116,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
 #### ہنگامی منسوخی
 1. Envelope متاثرہ کی شناخت کریں اور منسوخی جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

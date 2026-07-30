@@ -2,6 +2,7 @@ import Foundation
 import CryptoKit
 
 private let ToriiDaEd25519FunctionCode: UInt8 = 0xED
+private let ToriiDaIngestSigningDomainV1 = Data("iroha:da-ingest-request:v1\0".utf8)
 
 public enum ToriiDaBlobClass: Sendable, Equatable {
     case taikaiSegment
@@ -20,15 +21,18 @@ public enum ToriiDaFecScheme: Sendable, Equatable {
 public struct ToriiDaErasureProfile: Sendable, Equatable {
     public var dataShards: UInt16
     public var parityShards: UInt16
+    public var rowParityStripes: UInt16
     public var chunkAlignment: UInt16
     public var fecScheme: ToriiDaFecScheme
 
     public init(dataShards: UInt16 = 10,
                 parityShards: UInt16 = 4,
+                rowParityStripes: UInt16 = 0,
                 chunkAlignment: UInt16 = 10,
                 fecScheme: ToriiDaFecScheme = .rs12_10) {
         self.dataShards = dataShards
         self.parityShards = parityShards
+        self.rowParityStripes = rowParityStripes
         self.chunkAlignment = chunkAlignment
         self.fecScheme = fecScheme
     }
@@ -158,6 +162,7 @@ public struct ToriiDaIngestArtifacts: Sendable, Equatable {
     public let clientBlobIdHex: String
     public let submitterPublicKeyHex: String
     public let signatureHex: String
+    public let signingDigestHex: String
     public let payloadLength: Int
 }
 
@@ -395,8 +400,15 @@ struct ToriiDaIngestRequestBuilder {
                                              field: "chunkSize",
                                              allowZero: false,
                                              upperBound: Int(UInt32.max))
+        guard UInt32(exactly: submission.laneId) != nil else {
+            throw ToriiClientError.invalidPayload("laneId exceeds UInt32 range")
+        }
         let digestResult = try resolveClientBlobId()
-        let signatureResult = try resolveSignatureDigest()
+        let signingDigest = try makeSigningDigest(
+            clientBlobId: digestResult.digest,
+            chunkSize: UInt32(chunkSize)
+        )
+        let signatureResult = try resolveSignatureDigest(signingDigest: signingDigest)
 
         var payload: [String: Any] = [:]
         payload["client_blob_id"] = digestResult.encodedTuple
@@ -425,6 +437,7 @@ struct ToriiDaIngestRequestBuilder {
             clientBlobIdHex: digestResult.digest.upperHexString(),
             submitterPublicKeyHex: signatureResult.submitter,
             signatureHex: signatureResult.signatureHex,
+            signingDigestHex: signingDigest.upperHexString(),
             payloadLength: submission.payload.count
         )
         return (body, artifacts)
@@ -453,7 +466,142 @@ struct ToriiDaIngestRequestBuilder {
         return (digest, encoded)
     }
 
-    private func resolveSignatureDigest() throws -> (submitter: String, signatureHex: String) {
+    private func makeSigningDigest(clientBlobId: Data, chunkSize: UInt32) throws -> Data {
+        guard clientBlobId.count == 32 else {
+            throw ToriiClientError.invalidPayload("clientBlobId must contain exactly 32 bytes")
+        }
+        guard let laneId = UInt32(exactly: submission.laneId),
+              let totalSize = UInt64(exactly: submission.payload.count),
+              let metadataCount = UInt64(exactly: submission.metadata.count) else {
+            throw ToriiClientError.invalidPayload("DA signing intent exceeds supported integer range")
+        }
+
+        var preimage = ToriiDaIngestSigningDomainV1
+        preimage.append(clientBlobId)
+        appendLittleEndian(laneId, to: &preimage)
+        appendLittleEndian(submission.epoch, to: &preimage)
+        appendLittleEndian(submission.sequence, to: &preimage)
+
+        let blobClass: (UInt8, UInt16)
+        switch submission.blobClass {
+        case .taikaiSegment:
+            blobClass = (0, 0)
+        case .nexusLaneSidecar:
+            blobClass = (1, 0)
+        case .governanceArtifact:
+            blobClass = (2, 0)
+        case .custom(let value):
+            blobClass = (3, value)
+        }
+        preimage.append(blobClass.0)
+        appendLittleEndian(blobClass.1, to: &preimage)
+        try appendLengthPrefixed(submission.codec, to: &preimage)
+
+        appendLittleEndian(submission.erasureProfile.dataShards, to: &preimage)
+        appendLittleEndian(submission.erasureProfile.parityShards, to: &preimage)
+        appendLittleEndian(submission.erasureProfile.rowParityStripes, to: &preimage)
+        appendLittleEndian(submission.erasureProfile.chunkAlignment, to: &preimage)
+        let fecScheme: (UInt8, UInt16)
+        switch submission.erasureProfile.fecScheme {
+        case .rs12_10:
+            fecScheme = (0, 0)
+        case .rsWin14_10:
+            fecScheme = (1, 0)
+        case .rs18_14:
+            fecScheme = (2, 0)
+        case .custom(let value):
+            fecScheme = (3, value)
+        }
+        preimage.append(fecScheme.0)
+        appendLittleEndian(fecScheme.1, to: &preimage)
+
+        let retention = submission.retentionPolicy
+        appendLittleEndian(retention.hotRetentionSecs, to: &preimage)
+        appendLittleEndian(retention.coldRetentionSecs, to: &preimage)
+        appendLittleEndian(retention.requiredReplicas, to: &preimage)
+        switch retention.storageClass {
+        case .hot:
+            preimage.append(0)
+        case .warm:
+            preimage.append(1)
+        case .cold:
+            preimage.append(2)
+        }
+        try appendLengthPrefixed(retention.governanceTag, to: &preimage)
+
+        appendLittleEndian(chunkSize, to: &preimage)
+        appendLittleEndian(totalSize, to: &preimage)
+        switch submission.compression {
+        case .identity:
+            preimage.append(0)
+        case .gzip:
+            preimage.append(1)
+        case .deflate:
+            preimage.append(2)
+        case .zstd:
+            preimage.append(3)
+        }
+
+        if let manifest = submission.noritoManifest {
+            preimage.append(1)
+            try appendLengthPrefixed(manifest, to: &preimage)
+        } else {
+            preimage.append(0)
+        }
+        try appendLengthPrefixed(submission.payload, to: &preimage)
+
+        appendLittleEndian(metadataCount, to: &preimage)
+        for entry in submission.metadata {
+            try appendLengthPrefixed(entry.key, to: &preimage)
+            try appendLengthPrefixed(entry.value, to: &preimage)
+            preimage.append(entry.visibility == .public ? 0 : 1)
+            switch entry.encryption {
+            case .none:
+                preimage.append(0)
+            case .chacha20Poly1305(let keyLabel):
+                preimage.append(1)
+                if let keyLabel {
+                    preimage.append(1)
+                    try appendLengthPrefixed(keyLabel, to: &preimage)
+                } else {
+                    preimage.append(0)
+                }
+            }
+        }
+
+        guard let digest = NoritoNativeBridge.shared.blake3Hash(data: preimage),
+              digest.count == 32 else {
+            throw ToriiClientError.invalidPayload(
+                NoritoNativeBridge.bridgeUnavailableMessage(
+                    "NoritoBridge must be linked to hash the canonical DA signing intent."
+                )
+            )
+        }
+        return digest
+    }
+
+    private func appendLittleEndian<T: FixedWidthInteger>(_ value: T,
+                                                          to output: inout Data) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { output.append(contentsOf: $0) }
+    }
+
+    private func appendLengthPrefixed(_ value: String,
+                                      to output: inout Data) throws {
+        try appendLengthPrefixed(Data(value.utf8), to: &output)
+    }
+
+    private func appendLengthPrefixed(_ value: Data,
+                                      to output: inout Data) throws {
+        guard let length = UInt64(exactly: value.count) else {
+            throw ToriiClientError.invalidPayload("DA signing field exceeds UInt64 length")
+        }
+        appendLittleEndian(length, to: &output)
+        output.append(value)
+    }
+
+    private func resolveSignatureDigest(signingDigest: Data) throws
+        -> (submitter: String, signatureHex: String) {
         if let signatureHex = submission.signatureHex {
             let canonicalSignature = try canonicalizeHex(signatureHex, field: "signatureHex")
             if let explicitSubmitter = submission.submitterPublicKeyHex {
@@ -469,7 +617,7 @@ struct ToriiDaIngestRequestBuilder {
         }
         guard let privateKey = try loadSigningKey() else {
             if allowUnsigned {
-                let digest = SHA256.hash(data: submission.payload)
+                let digest = SHA256.hash(data: signingDigest)
                 let signature = Data(digest).upperHexString()
                 let submitter = submission.submitterPublicKeyHex
                     ?? String(repeating: "00", count: 64)
@@ -479,7 +627,7 @@ struct ToriiDaIngestRequestBuilder {
                 "privateKey or privateKeyHex is required to sign the payload"
             )
         }
-        let signature = try privateKey.signature(for: submission.payload)
+        let signature = try privateKey.signature(for: signingDigest)
         let signatureHex = signature.upperHexString()
         let submitter = try submission.submitterPublicKeyHex.map { try canonicalizePublicKey($0) }
             ?? encodeEd25519Multihash(privateKey.publicKey.rawRepresentation)
@@ -523,6 +671,7 @@ struct ToriiDaIngestRequestBuilder {
         return [
             "data_shards": NSNumber(value: profile.dataShards),
             "parity_shards": NSNumber(value: profile.parityShards),
+            "row_parity_stripes": NSNumber(value: profile.rowParityStripes),
             "chunk_alignment": NSNumber(value: profile.chunkAlignment),
             "fec_scheme": encodeFecScheme(profile.fecScheme)
         ]

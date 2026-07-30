@@ -69,6 +69,7 @@ import {
   getCurveEntryByPublicKeyMulticodec,
 } from "./curveRegistry.js";
 import {
+  noritoEncodeSorafsBillingAcknowledgementProofV1,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeTransactionPayloadBatch,
   validateNoritoFrame,
@@ -145,6 +146,10 @@ const PIPELINE_RECEIPT_MAX_BYTES = 1024 * 1024;
 const PIPELINE_STATUS_JSON_MAX_BYTES = 1024 * 1024;
 const SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES = 1024 * 1024;
 const SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const SORAFS_REPUTATION_JSON_MAX_BYTES = 4 * 1024 * 1024;
+const SORAFS_REPUTATION_EVENT_DEFAULT_LIMIT_V1 = 50;
+const SORAFS_HEDGING_BILLING_JSON_MAX_BYTES = 1024 * 1024;
+const SORAFS_BILLING_STATEMENT_MAX_BYTES = 22 * 1024 * 1024;
 const BOUNDED_JSON_MAX_STREAM_CHUNKS = 64 * 1024;
 const JSON_CLONE_MAX_DEPTH = 128;
 const JSON_CLONE_MAX_NODES = 100_000;
@@ -667,7 +672,7 @@ function isExactJsonMediaType(value) {
 }
 
 /**
- * Parse the integer-only JSON profile emitted by typed Sumeragi endpoints.
+ * Parse the integer-only JSON profile emitted by typed Torii endpoints.
  *
  * Native `JSON.parse` rounds integer tokens beyond `Number.MAX_SAFE_INTEGER`.
  * This parser preserves those tokens as `bigint`, rejects duplicate object
@@ -786,7 +791,7 @@ function parseLosslessIntegerJson(text, context) {
       fail("invalid integer token");
     }
     if (index < text.length && /[.eE]/u.test(text[index])) {
-      fail("Sumeragi numeric tokens must be canonical integers");
+      fail("numeric tokens must be canonical integers");
     }
     const token = text.slice(start, index);
     let integer;
@@ -1239,20 +1244,34 @@ const SORAFS_REPLICATION_ITERATOR_OPTION_KEYS = new Set([
 ]);
 const SORAFS_REPUTATION_CACHE_OPTION_KEYS = new Set([
   "ifNoneMatch",
-  "etag",
   "headers",
+  "canonicalAuth",
 ]);
 const SORAFS_REPUTATION_EVENT_OPTION_KEYS = new Set([
   "since",
   "limit",
   "ifNoneMatch",
-  "etag",
   "headers",
+  "canonicalAuth",
 ]);
 const SORAFS_REPUTATION_STREAM_OPTION_KEYS = new Set([
   "since",
   "limit",
-  "lastEventId",
+  "headers",
+  "canonicalAuth",
+]);
+const SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS = new Set(["canonicalAuth"]);
+const SORAFS_BILLING_STATEMENT_LIST_OPTION_KEYS = new Set([
+  "expectedCheckpointFingerprintHex",
+  "afterStatementIdHex",
+  "limit",
+  "canonicalAuth",
+]);
+const SORAFS_HEDGING_PROJECTION_OPTION_KEYS = new Set([
+  "expectedCheckpointFingerprintHex",
+  "afterHex",
+  "limit",
+  "canonicalAuth",
 ]);
 const SORAFS_ORDERBOOK_READ_OPTION_KEYS = new Set([
   "limit",
@@ -4261,7 +4280,7 @@ export class ToriiClient {
   /**
    * Fetch the latest SoraFS reputation snapshot summary (`GET /v1/sorafs/reputation/latest`).
    * Returns `null` when Torii has no snapshot yet or when `If-None-Match` returns 304.
-   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @param {{ifNoneMatch?: string, headers?: Record<string, string>, canonicalAuth?: CanonicalRequestAuth, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsReputationLatest(options = {}) {
@@ -4274,25 +4293,36 @@ export class ToriiClient {
       SORAFS_REPUTATION_CACHE_OPTION_KEYS,
       "getSorafsReputationLatest options",
     );
+    const auth = buildSorafsReputationRequestAuth(
+      rest,
+      this._config.defaultHeaders,
+      "getSorafsReputationLatest",
+    );
     const response = await this._request("GET", "/v1/sorafs/reputation/latest", {
-      headers: buildSorafsReputationHeaders(rest, "getSorafsReputationLatest"),
+      headers: auth.headers,
+      canonicalAuth: auth.canonicalAuth,
+      disableRetries: true,
+      redirect: "error",
       signal,
     });
     await this._expectStatus(response, [200, 304, 404]);
     if (response.status === 304 || response.status === 404) {
       return null;
     }
-    return requireSorafsReputationJson(
-      await this._maybeJson(response),
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation latest endpoint",
+      { signal },
     );
+    return parseSorafsReputationSnapshot(payload, "sorafs reputation latest endpoint");
   }
 
   /**
    * Fetch a provider reputation record and Merkle proof from the latest snapshot.
    * Returns `null` for 404 or 304 responses.
    * @param {string} providerId
-   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @param {{ifNoneMatch?: string, headers?: Record<string, string>, canonicalAuth?: CanonicalRequestAuth, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsReputationProvider(providerId, options = {}) {
@@ -4309,11 +4339,19 @@ export class ToriiClient {
       SORAFS_REPUTATION_CACHE_OPTION_KEYS,
       "getSorafsReputationProvider options",
     );
+    const auth = buildSorafsReputationRequestAuth(
+      rest,
+      this._config.defaultHeaders,
+      "getSorafsReputationProvider",
+    );
     const response = await this._request(
       "GET",
-      `/v1/sorafs/reputation/providers/${encodeURIComponent(normalizedProvider)}`,
+      `/v1/sorafs/reputation/providers/${normalizedProvider}`,
       {
-        headers: buildSorafsReputationHeaders(rest, "getSorafsReputationProvider"),
+        headers: auth.headers,
+        canonicalAuth: auth.canonicalAuth,
+        disableRetries: true,
+        redirect: "error",
         signal,
       },
     );
@@ -4321,9 +4359,16 @@ export class ToriiClient {
     if (response.status === 304 || response.status === 404) {
       return null;
     }
-    return requireSorafsReputationJson(
-      await this._maybeJson(response),
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation provider endpoint",
+      { signal },
+    );
+    return parseSorafsReputationProviderResponse(
+      payload,
+      "sorafs reputation provider endpoint",
+      normalizedProvider,
     );
   }
 
@@ -4331,7 +4376,7 @@ export class ToriiClient {
    * Fetch a historical SoraFS reputation snapshot by its 16-byte id.
    * Returns `null` for 404 or 304 responses.
    * @param {string} snapshotIdHex
-   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @param {{ifNoneMatch?: string, headers?: Record<string, string>, canonicalAuth?: CanonicalRequestAuth, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsReputationSnapshot(snapshotIdHex, options = {}) {
@@ -4348,11 +4393,19 @@ export class ToriiClient {
       SORAFS_REPUTATION_CACHE_OPTION_KEYS,
       "getSorafsReputationSnapshot options",
     );
+    const auth = buildSorafsReputationRequestAuth(
+      rest,
+      this._config.defaultHeaders,
+      "getSorafsReputationSnapshot",
+    );
     const response = await this._request(
       "GET",
       `/v1/sorafs/reputation/snapshots/${normalizedSnapshotId}`,
       {
-        headers: buildSorafsReputationHeaders(rest, "getSorafsReputationSnapshot"),
+        headers: auth.headers,
+        canonicalAuth: auth.canonicalAuth,
+        disableRetries: true,
+        redirect: "error",
         signal,
       },
     );
@@ -4360,16 +4413,23 @@ export class ToriiClient {
     if (response.status === 304 || response.status === 404) {
       return null;
     }
-    return requireSorafsReputationJson(
-      await this._maybeJson(response),
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation snapshot endpoint",
+      { signal },
+    );
+    return parseSorafsReputationSnapshot(
+      payload,
+      "sorafs reputation snapshot endpoint",
+      { expectedSnapshotId: normalizedSnapshotId },
     );
   }
 
   /**
    * Fetch active SoraFS reputation scoring weights.
    * Returns `null` when Torii has no snapshot yet or when `If-None-Match` returns 304.
-   * @param {{ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @param {{ifNoneMatch?: string, headers?: Record<string, string>, canonicalAuth?: CanonicalRequestAuth, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async getSorafsReputationWeights(options = {}) {
@@ -4382,16 +4442,30 @@ export class ToriiClient {
       SORAFS_REPUTATION_CACHE_OPTION_KEYS,
       "getSorafsReputationWeights options",
     );
+    const auth = buildSorafsReputationRequestAuth(
+      rest,
+      this._config.defaultHeaders,
+      "getSorafsReputationWeights",
+    );
     const response = await this._request("GET", "/v1/sorafs/reputation/weights", {
-      headers: buildSorafsReputationHeaders(rest, "getSorafsReputationWeights"),
+      headers: auth.headers,
+      canonicalAuth: auth.canonicalAuth,
+      disableRetries: true,
+      redirect: "error",
       signal,
     });
     await this._expectStatus(response, [200, 304, 404]);
     if (response.status === 304 || response.status === 404) {
       return null;
     }
-    return requireSorafsReputationJson(
-      await this._maybeJson(response),
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_REPUTATION_JSON_MAX_BYTES,
+      "sorafs reputation weights endpoint",
+      { signal },
+    );
+    return parseSorafsReputationWeightsResponse(
+      payload,
       "sorafs reputation weights endpoint",
     );
   }
@@ -4399,7 +4473,7 @@ export class ToriiClient {
   /**
    * List SoraFS reputation snapshot events.
    * Returns `null` when `If-None-Match` returns 304.
-   * @param {{since?: number | string | bigint, limit?: number | string | bigint, ifNoneMatch?: string, etag?: string, headers?: Record<string, string>, signal?: AbortSignal}} [options]
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, ifNoneMatch?: string, headers?: Record<string, string>, canonicalAuth?: CanonicalRequestAuth, signal?: AbortSignal}} options
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async listSorafsReputationEvents(options = {}) {
@@ -4412,30 +4486,53 @@ export class ToriiClient {
       SORAFS_REPUTATION_EVENT_OPTION_KEYS,
       "listSorafsReputationEvents options",
     );
+    const params = buildSorafsReputationEventsParams(
+      {
+        since: rest.since,
+        limit: rest.limit,
+      },
+      "listSorafsReputationEvents",
+    );
+    const auth = buildSorafsReputationRequestAuth(
+      rest,
+      this._config.defaultHeaders,
+      "listSorafsReputationEvents",
+    );
     const response = await this._request("GET", "/v1/sorafs/reputation/events", {
-      headers: buildSorafsReputationHeaders(rest, "listSorafsReputationEvents"),
-      params: buildSorafsReputationEventsParams(
-        {
-          since: rest.since,
-          limit: rest.limit,
-        },
-        "listSorafsReputationEvents",
-      ),
+      headers: auth.headers,
+      canonicalAuth: auth.canonicalAuth,
+      disableRetries: true,
+      params,
+      redirect: "error",
       signal,
     });
     await this._expectStatus(response, [200, 304]);
     if (response.status === 304) {
       return null;
     }
-    return requireSorafsReputationJson(
-      await this._maybeJson(response),
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_REPUTATION_JSON_MAX_BYTES,
       "sorafs reputation events endpoint",
+      { signal },
+    );
+    return parseSorafsReputationEventPage(
+      payload,
+      "sorafs reputation events endpoint",
+      {
+        expectedSince: params?.since ?? null,
+        expectedLimit: Number(
+          params?.limit ?? SORAFS_REPUTATION_EVENT_DEFAULT_LIMIT_V1,
+        ),
+      },
     );
   }
 
   /**
    * Stream SoraFS reputation snapshot events via SSE.
-   * @param {{since?: number | string | bigint, limit?: number | string | bigint, lastEventId?: string, signal?: AbortSignal}} [options]
+   * The hard-cut endpoint rejects `Last-Event-ID`; use the finalized `since`
+   * cursor and establish a newly authenticated request instead.
+   * @param {{since?: number | string | bigint, limit?: number | string | bigint, headers?: Record<string, string>, canonicalAuth?: CanonicalRequestAuth, signal?: AbortSignal}} options
    * @returns {AsyncGenerator<SseEvent<Record<string, unknown>>, void, unknown>}
    */
   streamSorafsReputationEvents(options = {}) {
@@ -4455,14 +4552,362 @@ export class ToriiClient {
       },
       "streamSorafsReputationEvents",
     );
-    const streamOptions = { params, signal };
-    if (rest.lastEventId !== undefined && rest.lastEventId !== null) {
-      streamOptions.lastEventId = requireNonEmptyString(
-        rest.lastEventId,
-        "streamSorafsReputationEvents.lastEventId",
+    const auth = buildSorafsReputationRequestAuth(
+      rest,
+      this._config.defaultHeaders,
+      "streamSorafsReputationEvents",
+      { accept: "text/event-stream" },
+    );
+    rejectSorafsReputationResumeHeader(
+      auth.headers,
+      this._config.defaultHeaders,
+      "streamSorafsReputationEvents",
+    );
+    const streamOptions = {
+      params,
+      headers: auth.headers,
+      canonicalAuth: auth.canonicalAuth,
+      disableRetries: true,
+      redirect: "error",
+      signal,
+      strictUtf8: true,
+    };
+    return validateSorafsReputationSseStream(
+      this._streamSse("/v1/sorafs/reputation/events/stream", streamOptions),
+      params?.since ?? "0",
+    );
+  }
+
+  _requireSorafsHedgingBillingIdentityEncoding(response, context) {
+    let contentEncoding;
+    try {
+      contentEncoding = this._getHeader(response, "content-encoding");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Encoding header`,
+      );
+      throw error;
+    }
+    if (
+      contentEncoding !== null &&
+      contentEncoding.toLowerCase() !== "identity"
+    ) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a transformed response body`,
+      );
+      throw new TypeError(`${context} Content-Encoding must be identity`);
+    }
+  }
+
+  async _getSorafsHedgingBillingJson(
+    path,
+    { params, canonicalAuth, signal, context },
+  ) {
+    const auth = buildSorafsReputationRequestAuth(
+      { canonicalAuth },
+      this._config.defaultHeaders,
+      context,
+    );
+    setHeader(auth.headers, "Accept-Encoding", "identity");
+    const response = await this._request("GET", path, {
+      headers: auth.headers,
+      canonicalAuth: auth.canonicalAuth,
+      disableRetries: true,
+      params,
+      redirect: "error",
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_HEDGING_BILLING_JSON_MAX_BYTES,
+      context,
+      { signal },
+    );
+    return ensureRecord(payload, `${context} response`);
+  }
+
+  /**
+   * Fetch the authenticated supervised SoraFS billing-projector status.
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsBillingStatus(options) {
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "getSorafsBillingStatus",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    return this._getSorafsHedgingBillingJson("/v1/sorafs/billing/status", {
+      canonicalAuth,
+      context: "SoraFS billing status endpoint",
+      signal,
+    });
+  }
+
+  /**
+   * List one exact-checkpoint page of statements owned by the authenticated account.
+   * @param {{expectedCheckpointFingerprintHex: string, afterStatementIdHex?: string, limit: number, canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async listSorafsBillingStatements(options) {
+    const { signal, rest, canonicalAuth } =
+      normalizeSorafsHedgingBillingOptions(
+        options,
+        "listSorafsBillingStatements",
+        SORAFS_BILLING_STATEMENT_LIST_OPTION_KEYS,
+      );
+    const params = {
+      expected_checkpoint_fingerprint: normalizeSorafsHedgingBillingDigest(
+        rest.expectedCheckpointFingerprintHex,
+        "listSorafsBillingStatements.expectedCheckpointFingerprintHex",
+      ),
+    };
+    if (
+      rest.afterStatementIdHex !== undefined &&
+      rest.afterStatementIdHex !== null
+    ) {
+      params.after_statement_id = normalizeSorafsHedgingBillingDigest(
+        rest.afterStatementIdHex,
+        "listSorafsBillingStatements.afterStatementIdHex",
       );
     }
-    return this._streamSse("/v1/sorafs/reputation/events/stream", streamOptions);
+    params.limit = normalizeSorafsHedgingBillingLimit(
+      rest.limit,
+      "listSorafsBillingStatements.limit",
+    );
+    return this._getSorafsHedgingBillingJson(
+      "/v1/sorafs/billing/statements",
+      {
+        canonicalAuth,
+        context: "SoraFS billing statements endpoint",
+        params,
+        signal,
+      },
+    );
+  }
+
+  /**
+   * Fetch one exact owned published billing statement as canonical Norito bytes.
+   * @param {string} statementIdHex
+   * @param {string} expectedCheckpointFingerprintHex
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Buffer>}
+   */
+  async getSorafsBillingStatement(
+    statementIdHex,
+    expectedCheckpointFingerprintHex,
+    options,
+  ) {
+    const normalizedStatementId = normalizeSorafsHedgingBillingDigest(
+      statementIdHex,
+      "getSorafsBillingStatement.statementIdHex",
+    );
+    const normalizedCheckpoint = normalizeSorafsHedgingBillingDigest(
+      expectedCheckpointFingerprintHex,
+      "getSorafsBillingStatement.expectedCheckpointFingerprintHex",
+    );
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "getSorafsBillingStatement",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    const context = "SoraFS billing statement endpoint";
+    const auth = buildSorafsReputationRequestAuth(
+      { canonicalAuth },
+      this._config.defaultHeaders,
+      "getSorafsBillingStatement",
+      { accept: APPLICATION_NORITO },
+    );
+    setHeader(auth.headers, "Accept-Encoding", "identity");
+    const response = await this._request(
+      "GET",
+      `/v1/sorafs/billing/statements/${normalizedStatementId}`,
+      {
+        headers: auth.headers,
+        canonicalAuth: auth.canonicalAuth,
+        disableRetries: true,
+        params: {
+          expected_checkpoint_fingerprint: normalizedCheckpoint,
+        },
+        redirect: "error",
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    let contentType;
+    try {
+      contentType = this._getHeader(response, "content-type");
+    } catch (error) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected an unreadable Content-Type header`,
+      );
+      throw error;
+    }
+    if (contentType !== APPLICATION_NORITO) {
+      cancelResponseBodyBestEffort(
+        response,
+        `${context} rejected a non-Norito response body`,
+      );
+      throw new TypeError(
+        `${context} must use the application/x-norito media type`,
+      );
+    }
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      SORAFS_BILLING_STATEMENT_MAX_BYTES,
+      context,
+      { signal },
+    );
+    return Buffer.from(bytes);
+  }
+
+  /**
+   * Submit one canonical owner acknowledgement for a published statement.
+   * @param {string} statementIdHex
+   * @param {string} expectedCheckpointFingerprintHex
+   * @param {{requestNonceHex: string, authenticationProof: ArrayBufferView | ArrayBuffer | Buffer}} proof
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async acknowledgeSorafsBillingStatement(
+    statementIdHex,
+    expectedCheckpointFingerprintHex,
+    proof,
+    options,
+  ) {
+    const normalizedStatementId = normalizeSorafsHedgingBillingDigest(
+      statementIdHex,
+      "acknowledgeSorafsBillingStatement.statementIdHex",
+    );
+    const normalizedCheckpoint = normalizeSorafsHedgingBillingDigest(
+      expectedCheckpointFingerprintHex,
+      "acknowledgeSorafsBillingStatement.expectedCheckpointFingerprintHex",
+    );
+    const body = noritoEncodeSorafsBillingAcknowledgementProofV1(proof);
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "acknowledgeSorafsBillingStatement",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    const context = "SoraFS billing acknowledgement endpoint";
+    const auth = buildSorafsReputationRequestAuth(
+      { canonicalAuth },
+      this._config.defaultHeaders,
+      "acknowledgeSorafsBillingStatement",
+    );
+    setHeader(auth.headers, "Content-Type", APPLICATION_NORITO);
+    setHeader(auth.headers, "Accept-Encoding", "identity");
+    const response = await this._request(
+      "POST",
+      `/v1/sorafs/billing/statements/${normalizedStatementId}/acknowledgements`,
+      {
+        body,
+        canonicalAuth: auth.canonicalAuth,
+        disableRetries: true,
+        headers: auth.headers,
+        params: {
+          expected_checkpoint_fingerprint: normalizedCheckpoint,
+        },
+        redirect: "error",
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    this._requireSorafsHedgingBillingIdentityEncoding(response, context);
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response,
+      SORAFS_HEDGING_BILLING_JSON_MAX_BYTES,
+      context,
+      { signal },
+    );
+    return ensureRecord(payload, `${context} response`);
+  }
+
+  /**
+   * Fetch payload-free billing delivery reconciliation status.
+   * @param {{canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsBillingReconciliation(options) {
+    const { signal, canonicalAuth } = normalizeSorafsHedgingBillingOptions(
+      options,
+      "getSorafsBillingReconciliation",
+      SORAFS_HEDGING_BILLING_AUTH_OPTION_KEYS,
+    );
+    return this._getSorafsHedgingBillingJson(
+      "/v1/sorafs/billing/reconciliation",
+      {
+        canonicalAuth,
+        context: "SoraFS billing reconciliation endpoint",
+        signal,
+      },
+    );
+  }
+
+  /**
+   * Fetch one exact-checkpoint page of finalized SoraFS hedging exposure.
+   * @param {{expectedCheckpointFingerprintHex: string, afterHex?: string, limit: number, canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsHedgingExposure(options) {
+    return this._getSorafsHedgingProjection(
+      "/v1/sorafs/hedging/exposure",
+      options,
+      "getSorafsHedgingExposure",
+      "SoraFS hedging exposure endpoint",
+    );
+  }
+
+  /**
+   * Fetch one exact-checkpoint page of governed SoraFS hedge intents.
+   * This read-only method cannot submit automatic hedge execution.
+   * @param {{expectedCheckpointFingerprintHex: string, afterHex?: string, limit: number, canonicalAuth: CanonicalRequestAuth, signal?: AbortSignal}} options
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getSorafsHedgingIntents(options) {
+    return this._getSorafsHedgingProjection(
+      "/v1/sorafs/hedging/intents",
+      options,
+      "getSorafsHedgingIntents",
+      "SoraFS hedging intents endpoint",
+    );
+  }
+
+  async _getSorafsHedgingProjection(path, options, methodContext, responseContext) {
+    const { signal, rest, canonicalAuth } =
+      normalizeSorafsHedgingBillingOptions(
+        options,
+        methodContext,
+        SORAFS_HEDGING_PROJECTION_OPTION_KEYS,
+      );
+    const params = {
+      expected_checkpoint_fingerprint: normalizeSorafsHedgingBillingDigest(
+        rest.expectedCheckpointFingerprintHex,
+        `${methodContext}.expectedCheckpointFingerprintHex`,
+      ),
+    };
+    if (rest.afterHex !== undefined && rest.afterHex !== null) {
+      params.after = normalizeSorafsHedgingBillingDigest(
+        rest.afterHex,
+        `${methodContext}.afterHex`,
+      );
+    }
+    params.limit = normalizeSorafsHedgingBillingLimit(
+      rest.limit,
+      `${methodContext}.limit`,
+    );
+    return this._getSorafsHedgingBillingJson(path, {
+      canonicalAuth,
+      context: responseContext,
+      params,
+      signal,
+    });
   }
 
   /**
@@ -4678,7 +5123,7 @@ export class ToriiClient {
   /**
    * Fetch the canonical DA manifest + chunk plan for a storage ticket (`GET /v1/da/manifests/{ticket}`).
    * @param {string} storageTicketHex
-   * @param {{signal?: AbortSignal, blockHashHex?: string}} [options]
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<DaManifestFetchResponse>}
    */
   async getDaManifest(storageTicketHex, options = {}) {
@@ -4686,19 +5131,8 @@ export class ToriiClient {
       storageTicketHex,
       "storageTicketHex",
     );
-    const opts = ensureRecord(options ?? {}, "getDaManifest options");
-    const blockHashHex = opts.blockHashHex ?? opts.block_hash_hex ?? null;
-    const { blockHashHex: _ignoredBlockHash, block_hash_hex: _ignoredBlockHashSnake, ...rest } =
-      opts;
-    const { signal } = normalizeSignalOnlyOption(rest, "getDaManifest");
-    let path = `/v1/da/manifests/${normalizedTicket}`;
-    if (blockHashHex !== null && blockHashHex !== undefined) {
-      const normalizedHash = normalizeHex32String(
-        blockHashHex,
-        "getDaManifest.blockHashHex",
-      );
-      path = `${path}?block_hash=${normalizedHash}`;
-    }
+    const { signal } = normalizeSignalOnlyOption(options, "getDaManifest");
+    const path = `/v1/da/manifests/${normalizedTicket}`;
     const response = await this._request(
       "GET",
       path,
@@ -4725,13 +5159,17 @@ export class ToriiClient {
    */
   async getDaManifestToDir(storageTicketHex, options = {}) {
     const opts = ensureRecord(options ?? {}, "getDaManifestToDir options");
+    assertSupportedOptionKeys(
+      opts,
+      new Set(["outputDir", "output_dir", "signal", "label", "ticketLabel", "ticket_label"]),
+      "getDaManifestToDir options",
+    );
     const outputDir = await resolveDaOutputDir(
       opts.outputDir ?? opts.output_dir,
       DA_FETCH_ARTIFACT_PREFIX,
     );
     const manifest = await this.getDaManifest(storageTicketHex, {
       signal: opts.signal,
-      blockHashHex: opts.blockHashHex ?? opts.block_hash_hex,
     });
     const label =
       opts.label ??
@@ -7199,86 +7637,6 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     return normalizeGovernanceCouncilCurrentResponse(payload);
-  }
-
-  /**
-   * Derive a council roster from VRF candidates (`POST /v1/gov/council/derive-vrf`).
-   * @param {ToriiGovernanceCouncilDeriveRequest} payload
-   * @returns {Promise<ToriiGovernanceCouncilDeriveResponse>}
-   */
-  async governanceDeriveCouncilVrf(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceCouncilDeriveRequest(payload));
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "governanceDeriveCouncilVrf",
-    );
-    const response = await this._request("POST", "/v1/gov/council/derive-vrf", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const draft = await this._maybeJson(response);
-    return normalizeGovernanceCouncilDeriveResponse(draft);
-  }
-
-  /**
-   * Persist a council roster for an epoch (`POST /v1/gov/council/persist`).
-   * @param {ToriiGovernanceCouncilPersistRequest} payload
-   * @returns {Promise<ToriiGovernanceCouncilPersistResponse>}
-   */
-  async governancePersistCouncil(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceCouncilPersistRequest(payload));
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "governancePersistCouncil",
-    );
-    const response = await this._request("POST", "/v1/gov/council/persist", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const draft = await this._maybeJson(response);
-    return normalizeGovernanceCouncilPersistResponse(draft);
-  }
-
-  /**
-   * Replace a council member using the next available alternate (`POST /v1/gov/council/replace`).
-   * @param {ToriiGovernanceCouncilReplaceRequest} payload
-   * @returns {Promise<ToriiGovernanceCouncilReplaceResponse>}
-   */
-  async governanceReplaceCouncil(payload, options = {}) {
-    const body = JSON.stringify(normalizeGovernanceCouncilReplaceRequest(payload));
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "governanceReplaceCouncil",
-    );
-    const response = await this._request("POST", "/v1/gov/council/replace", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const draft = await this._maybeJson(response);
-    return normalizeGovernanceCouncilReplaceResponse(draft);
-  }
-
-  /**
-   * Inspect council derivation metadata (`GET /v1/gov/council/audit`).
-   * @param {ToriiGovernanceCouncilAuditOptions} [options]
-   * @returns {Promise<ToriiGovernanceCouncilAuditResponse>}
-   */
-  async getGovernanceCouncilAudit(options = {}) {
-    const { signal, params } = buildGovernanceCouncilAuditQuery(options);
-    const response = await this._request("GET", "/v1/gov/council/audit", {
-      headers: JSON_ACCEPT_HEADERS,
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeGovernanceCouncilAuditResponse(payload);
   }
 
   /**
@@ -10239,6 +10597,9 @@ export class ToriiClient {
       headers: initHeaders,
       body: options.body,
     };
+    if (options.redirect !== undefined) {
+      init.redirect = options.redirect;
+    }
     if (canonicalAuth) {
       const bodyForSigning =
         init.body === undefined || init.body === null
@@ -11027,7 +11388,10 @@ export class ToriiClient {
   _streamSse(path, options = {}) {
     const { signal } = normalizeSignalOption(options, "_streamSse");
     const params = options.params;
-    const headers = this._createHeaders({ Accept: "text/event-stream" });
+    const headers = this._createHeaders({
+      ...(options.headers ?? {}),
+      Accept: "text/event-stream",
+    });
     if (options.lastEventId) {
       headers["Last-Event-ID"] = options.lastEventId;
     }
@@ -11036,12 +11400,17 @@ export class ToriiClient {
       headers,
       signal,
       retryProfile: "streaming",
+      canonicalAuth: options.canonicalAuth,
+      disableRetries: options.disableRetries === true,
+      redirect: options.redirect,
     };
     const self = this;
     return (async function* iterator() {
       const response = await self._request("GET", path, requestOptions);
       await self._expectStatus(response, [200]);
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder("utf-8", {
+        fatal: options.strictUtf8 === true,
+      });
       let buffer = "";
       for await (const chunk of readBodyChunks(response.body)) {
         buffer += decoder.decode(chunk, { stream: true });
@@ -11051,6 +11420,7 @@ export class ToriiClient {
           yield event;
         }
       }
+      buffer += decoder.decode();
       if (buffer.length > 0) {
         const { events } = flushSseBuffer(`${buffer}\n\n`);
         for (const event of events) {
@@ -18964,7 +19334,7 @@ function parseGovernanceUnlockStats(payload) {
 function normalizeGovernanceCouncilCurrentResponse(payload) {
   const record = ensureRecord(payload, "governance council current response");
   const derivedBy = normalizeCouncilDerivedBy(
-    record.derived_by ?? "Vrf",
+    record.derived_by ?? "Manual",
     "governance council current response.derived_by",
   );
   return {
@@ -18984,11 +19354,6 @@ function normalizeGovernanceCouncilCurrentResponse(payload) {
     candidate_count: ToriiClient._normalizeUnsignedInteger(
       record.candidate_count ?? 0,
       "governance council current response.candidate_count",
-      { allowZero: true },
-    ),
-    verified: ToriiClient._normalizeUnsignedInteger(
-      record.verified ?? 0,
-      "governance council current response.verified",
       { allowZero: true },
     ),
     derived_by: derivedBy,
@@ -19018,319 +19383,12 @@ function normalizeGovernanceCouncilMembers(value, context) {
   });
 }
 
-function normalizeGovernanceCouncilDeriveRequest(input, context = "governanceDeriveCouncilVrf payload") {
-  const record = ensureRecord(input, context);
-  const payload = {
-    candidates: normalizeGovernanceCouncilCandidateList(
-      record.candidates,
-      `${context}.candidates`,
-    ),
-  };
-  if (record.committee_size !== undefined || record.committeeSize !== undefined) {
-    const committeeValue = record.committee_size ?? record.committeeSize;
-    payload.committee_size = ToriiClient._normalizeUnsignedInteger(
-      committeeValue,
-      `${context}.committee_size`,
-      { allowZero: false },
-    );
-  }
-  if (record.alternate_size !== undefined || record.alternateSize !== undefined) {
-    const alternateValue = record.alternate_size ?? record.alternateSize;
-    payload.alternate_size = ToriiClient._normalizeUnsignedInteger(
-      alternateValue,
-      `${context}.alternate_size`,
-      { allowZero: false },
-    );
-  }
-  const epochValue = record.epoch;
-  if (epochValue !== undefined && epochValue !== null) {
-    payload.epoch = ToriiClient._normalizeUnsignedInteger(
-      epochValue,
-      `${context}.epoch`,
-      { allowZero: true },
-    );
-  }
-  return payload;
-}
-
-function normalizeGovernanceCouncilCandidateList(value, context) {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context} must be a non-empty array`,
-      normalizeErrorPath(context),
-    );
-  }
-  return value.map((entry, index) =>
-    normalizeGovernanceCouncilCandidate(entry, `${context}[${index}]`),
-  );
-}
-
-function normalizeGovernanceCouncilCandidate(input, context) {
-  const record = ensureRecord(input, context);
-  const candidate = {
-    account_id: ToriiClient._normalizeAccountId(
-      record.account_id ?? record.accountId,
-      `${context}.account_id`,
-    ),
-    variant: normalizeGovernanceCouncilVariant(record.variant, `${context}.variant`),
-  };
-  const pkValue =
-    record.pk ??
-    record.pk_b64 ??
-    record.pkB64 ??
-    record.publicKey ??
-    record.public_key ??
-    record.publicKeyB64 ??
-    record.public_key_b64;
-  if (pkValue === undefined || pkValue === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.pk is required`,
-      `${normalizeErrorPath(context)}.pk`,
-    );
-  }
-  candidate.pk_b64 = normalizeRequiredBase64Payload(pkValue, `${context}.pk`);
-  const proofValue =
-    record.proof ??
-    record.proof_b64 ??
-    record.proofB64 ??
-    record.signature ??
-    record.signature_b64 ??
-    record.signatureB64;
-  if (proofValue === undefined || proofValue === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context}.proof is required`,
-      `${normalizeErrorPath(context)}.proof`,
-    );
-  }
-  candidate.proof_b64 = normalizeRequiredBase64Payload(proofValue, `${context}.proof`);
-  return candidate;
-}
-
-function normalizeGovernanceCouncilVariant(value, name) {
-  const normalized = requireNonEmptyString(value, name);
-  const lowered = normalized.toLowerCase();
-  if (lowered === "normal") {
-    return "Normal";
-  }
-  if (lowered === "small") {
-    return "Small";
-  }
-  throw createValidationError(
-    ValidationErrorCode.INVALID_STRING,
-    `${name} must be "Normal" or "Small"`,
-    normalizeErrorPath(name),
-  );
-}
-
-function normalizeGovernanceCouncilDeriveResponse(
-  payload,
-  context = "governance council derive response",
-) {
-  const record = ensureRecord(payload, context);
-  const derivedBy = normalizeCouncilDerivedBy(
-    record.derived_by ?? "Vrf",
-    `${context}.derived_by`,
-  );
-  return {
-    epoch: ToriiClient._normalizeUnsignedInteger(record.epoch, `${context}.epoch`, {
-      allowZero: true,
-    }),
-    members: normalizeGovernanceCouncilMembers(record.members, `${context}.members`),
-    alternates: normalizeGovernanceCouncilMembers(
-      record.alternates ?? [],
-      `${context}.alternates`,
-    ),
-    total_candidates: ToriiClient._normalizeUnsignedInteger(
-      record.total_candidates,
-      `${context}.total_candidates`,
-      { allowZero: true },
-    ),
-    verified: ToriiClient._normalizeUnsignedInteger(
-      record.verified,
-      `${context}.verified`,
-      { allowZero: true },
-    ),
-    derived_by: derivedBy,
-  };
-}
-
-function normalizeGovernanceCouncilPersistRequest(input) {
-  const base = normalizeGovernanceCouncilDeriveRequest(
-    input,
-    "governancePersistCouncil payload",
-  );
-  const record = ensureRecord(input, "governancePersistCouncil payload");
-  const authorityValue = record.authority;
-  const hasPrivateKey =
-    pickOverride(record, "private_key", "privateKey") !== undefined ||
-    pickOverride(record, "private_key_hex", "privateKeyHex") !== undefined ||
-    pickOverride(record, "private_key_bytes", "privateKeyBytes") !== undefined ||
-    pickOverride(record, "private_key_multihash", "privateKeyMultihash") !== undefined;
-  if (authorityValue === undefined && !hasPrivateKey) {
-    return base;
-  }
-  if (!authorityValue || !hasPrivateKey) {
-    throw new TypeError(
-      "governancePersistCouncil payload requires both authority and privateKey when credentials are provided",
-    );
-  }
-  return {
-    ...base,
-    authority: ToriiClient._normalizeAccountId(
-      authorityValue,
-      "governancePersistCouncil.authority",
-    ),
-    private_key: resolveAuthorityPrivateKey(
-      record,
-      "governancePersistCouncil",
-    ),
-  };
-}
-
-function normalizeGovernanceCouncilPersistResponse(payload) {
-  return normalizeGovernanceCouncilDeriveResponse(
-    payload,
-    "governance council persist response",
-  );
-}
-
-function normalizeGovernanceCouncilReplaceRequest(input) {
-  const record = ensureRecord(input ?? {}, "governanceReplaceCouncil payload");
-  const body = {
-    missing: ToriiClient._normalizeAccountId(
-      record.missing,
-      "governanceReplaceCouncil.missing",
-    ),
-  };
-  if (record.epoch !== undefined && record.epoch !== null) {
-    body.epoch = ToriiClient._normalizeUnsignedInteger(
-      record.epoch,
-      "governanceReplaceCouncil.epoch",
-      { allowZero: true },
-    );
-  }
-  if (record.authority !== undefined && record.authority !== null) {
-    body.authority = ToriiClient._normalizeAccountId(
-      record.authority,
-      "governanceReplaceCouncil.authority",
-    );
-  }
-  if (record.private_key !== undefined || record.privateKey !== undefined) {
-    body.private_key = requireNonEmptyString(
-      record.private_key ?? record.privateKey,
-      "governanceReplaceCouncil.privateKey",
-    );
-  }
-  return body;
-}
-
-function normalizeGovernanceCouncilReplaceResponse(payload) {
-  const record = ensureRecord(payload, "governance council replace response");
-  return {
-    epoch: ToriiClient._normalizeUnsignedInteger(
-      record.epoch,
-      "governance council replace response.epoch",
-      { allowZero: true },
-    ),
-    members: normalizeGovernanceCouncilMembers(
-      record.members ?? [],
-      "governance council replace response.members",
-    ),
-    alternates: normalizeGovernanceCouncilMembers(
-      record.alternates ?? [],
-      "governance council replace response.alternates",
-    ),
-    replaced: coerceBoolean(
-      record.replaced ?? false,
-      "governance council replace response.replaced",
-    ),
-  };
-}
-
-const GOVERNANCE_COUNCIL_AUDIT_OPTION_KEYS = new Set(["epoch", "signal"]);
-
-function buildGovernanceCouncilAuditQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined
-      ? {}
-      : ensureRecord(options, "getGovernanceCouncilAudit options");
-  const { signal } = normalizeSignalOption(
-    normalizedOptions,
-    "getGovernanceCouncilAudit",
-  );
-  assertSupportedOptionKeys(
-    normalizedOptions,
-    GOVERNANCE_COUNCIL_AUDIT_OPTION_KEYS,
-    "getGovernanceCouncilAudit options",
-  );
-  const params = {};
-  if (normalizedOptions.epoch !== undefined && normalizedOptions.epoch !== null) {
-    params.epoch = ToriiClient._normalizeUnsignedInteger(
-      normalizedOptions.epoch,
-      "governanceCouncilAudit.epoch",
-      { allowZero: true },
-    );
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
-function normalizeGovernanceCouncilAuditResponse(payload) {
-  const record = ensureRecord(payload, "governance council audit response");
-  const derivedBy = normalizeCouncilDerivedBy(
-    record.derived_by ?? "Vrf",
-    "governance council audit response.derived_by",
-  );
-  return {
-    epoch: ToriiClient._normalizeUnsignedInteger(
-      record.epoch,
-      "governance council audit response.epoch",
-      { allowZero: true },
-    ),
-    seed_hex: normalizeArbitraryHex(
-      record.seed_hex,
-      "governance council audit response.seed_hex",
-    ),
-    beacon_hex: normalizeHex32String(
-      record.beacon_hex,
-      "governance council audit response.beacon_hex",
-    ),
-    members_count: ToriiClient._normalizeUnsignedInteger(
-      record.members_count ?? 0,
-      "governance council audit response.members_count",
-      { allowZero: true },
-    ),
-    candidate_count: ToriiClient._normalizeUnsignedInteger(
-      record.candidate_count ?? 0,
-      "governance council audit response.candidate_count",
-      { allowZero: true },
-    ),
-    alternates_count: ToriiClient._normalizeUnsignedInteger(
-      record.alternates_count ?? 0,
-      "governance council audit response.alternates_count",
-      { allowZero: true },
-    ),
-    verified: ToriiClient._normalizeUnsignedInteger(
-      record.verified ?? 0,
-      "governance council audit response.verified",
-      { allowZero: true },
-    ),
-    derived_by: derivedBy,
-    chain_id: requireNonEmptyString(
-      record.chain_id,
-      "governance council audit response.chain_id",
-    ),
-  };
-}
-
 function normalizeCouncilDerivedBy(value, context) {
   const normalized = requireNonEmptyString(value, context);
-  if (normalized.toLowerCase() !== "vrf") {
-    throw new TypeError(`${context} must be Vrf`);
+  if (normalized !== "Sortition" && normalized !== "Manual") {
+    throw new TypeError(`${context} must be Sortition or Manual`);
   }
-  return "Vrf";
+  return normalized;
 }
 
 function normalizeProtectedNamespaceList(input) {
@@ -22095,10 +22153,15 @@ function headersContainCredentials(headers) {
   if (!headers || typeof headers !== "object") {
     return false;
   }
-  return (
-    hasHeader(headers, "authorization") ||
-    hasHeader(headers, "x-api-token")
-  );
+  return [
+    "authorization",
+    "x-api-token",
+    "x-iroha-account",
+    "x-iroha-signature",
+    "x-iroha-timestamp-ms",
+    "x-iroha-nonce",
+    "x-iroha-witness",
+  ].some((name) => hasHeader(headers, name));
 }
 
 function bodyContainsSensitiveKeyMaterial(body, headers) {
@@ -29326,7 +29389,7 @@ function buildSorafsReplicationListParams(options = {}) {
 }
 
 function normalizeSorafsReputationProviderId(value, context) {
-  const providerId = requireNonEmptyString(value, context);
+  const providerId = requireExactNonEmptyString(value, context);
   if (providerId.length > 256) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
@@ -29341,26 +29404,221 @@ function normalizeSorafsReputationProviderId(value, context) {
       context,
     );
   }
+  if (providerId === "." || providerId === "..") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not be a URL dot segment`,
+      context,
+    );
+  }
   return providerId;
 }
 
 function normalizeReputationSnapshotIdHex(value, context) {
-  let normalized = requireNonEmptyString(value, context);
-  if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
-    normalized = normalized.slice(2);
-  }
-  if (!/^[0-9a-fA-F]{32}$/u.test(normalized)) {
+  if (typeof value !== "string" || !/^[0-9a-f]{32}$/u.test(value)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_HEX,
-      `${context} must be a 16-byte hex string`,
+      `${context} must be exactly 32 lowercase hexadecimal characters`,
       context,
     );
   }
-  return normalized.toLowerCase();
+  if (/^0{32}$/u.test(value)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must be nonzero`,
+      context,
+    );
+  }
+  return value;
 }
 
-function buildSorafsReputationHeaders(options = {}, context) {
-  const headers = { Accept: APPLICATION_JSON };
+function normalizeSorafsHedgingBillingDigest(value, context) {
+  const digest = requireExactLowerHex32String(value, context);
+  if (/^0{64}$/u.test(digest)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context} must be nonzero`,
+      context,
+    );
+  }
+  return digest;
+}
+
+function normalizeSorafsHedgingBillingLimit(value, context) {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > 100
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must be an integer from 1 through 100`,
+      context,
+    );
+  }
+  return value;
+}
+
+function normalizeSorafsHedgingBillingOptions(
+  options,
+  context,
+  allowedKeys,
+) {
+  const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+    options,
+    context,
+  );
+  assertSupportedOptionKeys(rest, allowedKeys, `${context} options`);
+  const canonicalAuth = ToriiClient._normalizeCanonicalAuth(
+    rest.canonicalAuth,
+    `${context}.canonicalAuth`,
+  );
+  if (!canonicalAuth) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} options.canonicalAuth is required`,
+      `${context}.canonicalAuth`,
+    );
+  }
+  return { signal, rest, canonicalAuth };
+}
+
+const SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS = new Set([
+  "x-iroha-account",
+  "x-iroha-signature",
+  "x-iroha-timestamp-ms",
+  "x-iroha-nonce",
+  "x-iroha-witness",
+]);
+
+function sorafsReputationCanonicalAuthEntries(headers, context) {
+  if (headers === undefined || headers === null) {
+    return new Map();
+  }
+  const entries = new Map();
+  for (const [rawName, rawValue] of Object.entries(headers)) {
+    const normalizedName = String(rawName).toLowerCase();
+    if (!SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS.has(normalizedName)) {
+      continue;
+    }
+    if (entries.has(normalizedName)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} contains duplicate canonical authentication header ${rawName}`,
+        context,
+      );
+    }
+    entries.set(normalizedName, { name: rawName, value: rawValue });
+  }
+  return entries;
+}
+
+function buildSorafsReputationRequestAuth(
+  options,
+  defaultHeaders,
+  context,
+  { accept = APPLICATION_JSON } = {},
+) {
+  const defaultAuth = sorafsReputationCanonicalAuthEntries(
+    defaultHeaders,
+    "ToriiClient.options.defaultHeaders",
+  );
+  if (defaultAuth.size !== 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires per-request canonical authentication; canonical auth headers are not accepted through defaultHeaders`,
+      `${context}.headers`,
+    );
+  }
+
+  const headers = buildSorafsReputationHeaders(options, context, { accept });
+  const authHeaders = sorafsReputationCanonicalAuthEntries(
+    headers,
+    `${context}.headers`,
+  );
+  if (options.canonicalAuth !== undefined && options.canonicalAuth !== null) {
+    if (authHeaders.size !== 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} accepts exactly one canonical authentication mode`,
+        `${context}.canonicalAuth`,
+      );
+    }
+    return {
+      headers,
+      canonicalAuth: ToriiClient._normalizeCanonicalAuth(
+        options.canonicalAuth,
+        `${context}.canonicalAuth`,
+      ),
+    };
+  }
+
+  const witness = authHeaders.get("x-iroha-witness");
+  const signatureProofHeaders = [
+    "x-iroha-signature",
+    "x-iroha-timestamp-ms",
+    "x-iroha-nonce",
+  ].filter((name) => authHeaders.has(name));
+  if (signatureProofHeaders.length !== 0) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.headers cannot supply signature proof fields directly; use canonicalAuth`,
+      `${context}.headers`,
+    );
+  }
+  if (!witness) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires canonicalAuth or an exact X-Iroha-Witness header`,
+      `${context}.canonicalAuth`,
+    );
+  }
+  if (typeof witness.value !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.headers.X-Iroha-Witness must be exact standard-base64`,
+      `${context}.headers.X-Iroha-Witness`,
+    );
+  }
+  setHeader(
+    headers,
+    "X-Iroha-Witness",
+    normalizeRequiredExactBase64Payload(
+      witness.value,
+      `${context}.headers.X-Iroha-Witness`,
+    ),
+  );
+  const account = authHeaders.get("x-iroha-account");
+  if (account) {
+    const canonicalAccount = requireCanonicalAuthAccount(
+      account.value,
+      `${context}.headers.X-Iroha-Account`,
+    );
+    setHeader(headers, "X-Iroha-Account", canonicalAccount);
+  }
+  return { headers, canonicalAuth: null };
+}
+
+function rejectSorafsReputationResumeHeader(headers, defaultHeaders, context) {
+  if (
+    hasHeader(headers, "last-event-id") ||
+    hasHeader(defaultHeaders, "last-event-id")
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} does not accept Last-Event-ID; use the finalized since cursor`,
+      `${context}.headers`,
+    );
+  }
+}
+
+function buildSorafsReputationHeaders(
+  options = {},
+  context,
+  { accept = APPLICATION_JSON } = {},
+) {
+  const headers = {};
   if (options.headers !== undefined && options.headers !== null) {
     if (!isPlainObject(options.headers)) {
       throw createValidationError(
@@ -29371,25 +29629,29 @@ function buildSorafsReputationHeaders(options = {}, context) {
     }
     for (const [key, value] of Object.entries(options.headers)) {
       if (value !== undefined && value !== null) {
-        headers[key] = String(value);
+        headers[key] = SORAFS_REPUTATION_CANONICAL_AUTH_HEADERS.has(
+          key.toLowerCase(),
+        )
+          ? value
+          : String(value);
       }
     }
   }
+  setHeader(headers, "Accept", accept);
   if (
     options.ifNoneMatch !== undefined &&
     options.ifNoneMatch !== null &&
-    options.etag !== undefined &&
-    options.etag !== null
+    hasHeader(headers, "if-none-match")
   ) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
-      `${context} accepts only one of ifNoneMatch or etag`,
+      `${context} accepts If-None-Match only through ifNoneMatch`,
       `${context}.ifNoneMatch`,
     );
   }
-  const ifNoneMatch = options.ifNoneMatch ?? options.etag;
+  const ifNoneMatch = options.ifNoneMatch;
   if (ifNoneMatch !== undefined && ifNoneMatch !== null) {
-    headers["If-None-Match"] = requireNonEmptyString(
+    headers["If-None-Match"] = requireExactNonEmptyString(
       ifNoneMatch,
       `${context}.ifNoneMatch`,
     );
@@ -29397,20 +29659,66 @@ function buildSorafsReputationHeaders(options = {}, context) {
   return headers;
 }
 
+function normalizeSorafsReputationDecimal(
+  value,
+  context,
+  { allowZero, max = MAX_UINT64_BIGINT },
+) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${context} must be a safe integer, bigint, or canonical decimal string`,
+        context,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (
+    typeof value === "string" &&
+    /^(?:0|[1-9][0-9]*)$/u.test(value)
+  ) {
+    integer = BigInt(value);
+  } else {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${context} must be a canonical unsigned decimal integer`,
+      context,
+    );
+  }
+  if (integer < 0n || (!allowZero && integer === 0n)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${context} must be ${allowZero ? "non-negative" : "positive"}`,
+      context,
+    );
+  }
+  if (integer > max) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context} must be at most ${max.toString(10)}`,
+      context,
+    );
+  }
+  return integer.toString(10);
+}
+
 function buildSorafsReputationEventsParams(options = {}, context) {
   const params = {};
   if (options.since !== undefined && options.since !== null) {
-    params.since = ToriiClient._normalizeUnsignedInteger(
+    params.since = normalizeSorafsReputationDecimal(
       options.since,
       `${context}.since`,
-      { allowZero: true },
+      { allowZero: true, max: MAX_UINT64_BIGINT },
     );
   }
   if (options.limit !== undefined && options.limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
+    params.limit = normalizeSorafsReputationDecimal(
       options.limit,
       `${context}.limit`,
-      { allowZero: false },
+      { allowZero: false, max: 500n },
     );
   }
   return Object.keys(params).length === 0 ? undefined : params;
@@ -29853,11 +30161,843 @@ function rejectRetiredSorafsMonetaryFields(record, retiredNames, context) {
   }
 }
 
-function requireSorafsReputationJson(payload, context) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error(`${context} returned no payload`);
+const SORAFS_REPUTATION_SNAPSHOT_FIELDS = new Set([
+  "snapshot_id_hex",
+  "generated_at_unix",
+  "previous_snapshot_id_hex",
+  "merkle_root_hex",
+  "provider_count",
+  "returned_provider_count",
+  "limit",
+  "truncated_providers",
+  "alpha_bps",
+  "current_score_weight_bps",
+  "weights",
+  "providers",
+]);
+const SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS = new Set([
+  "snapshot_id_hex",
+  "generated_at_unix",
+  "merkle_root_hex",
+  "provider",
+  "proof",
+]);
+const SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS = new Set([
+  "snapshot_id_hex",
+  "generated_at_unix",
+  "alpha_bps",
+  "current_score_weight_bps",
+  "weights",
+]);
+const SORAFS_REPUTATION_WEIGHTS_FIELDS = new Set([
+  "version",
+  "por_success_bps",
+  "pdp_success_bps",
+  "potr_success_bps",
+  "latency_bps",
+  "dispute_bps",
+  "token_violation_bps",
+  "repair_breach_bps",
+]);
+const SORAFS_REPUTATION_PROVIDER_FIELDS = new Set([
+  "provider_id",
+  "score_bps",
+  "degradation_flags",
+  "raw_metrics",
+  "raw_metrics_hash_hex",
+]);
+const SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS = new Set([
+  "version",
+  "por_success_bps",
+  "pdp_success_bps",
+  "potr_success_bps",
+  "latency_health_bps",
+  "dispute_rate_bps",
+  "token_violation_rate_bps",
+  "repair_breach_rate_bps",
+]);
+const SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS = new Set(["flag", "value"]);
+const SORAFS_REPUTATION_PROOF_FIELDS = new Set([
+  "provider_id",
+  "leaf_index",
+  "leaf_count",
+  "siblings_hex",
+]);
+const SORAFS_REPUTATION_EVENT_FIELDS = new Set([
+  "version",
+  "sequence",
+  "snapshot_id_hex",
+  "generated_at_unix",
+  "merkle_root_hex",
+  "provider_count",
+  "previous_snapshot_id_hex",
+]);
+const SORAFS_REPUTATION_EVENT_PAGE_FIELDS = new Set([
+  "since",
+  "limit",
+  "count",
+  "next_since",
+  "events",
+]);
+const SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER = Object.freeze([
+  "reserve_warning",
+  "reserve_grace",
+  "reserve_delinquent",
+  "reserve_default",
+  "proof_success_below90",
+  "proof_success_below80",
+  "active_dispute",
+  "slashing_event",
+  "low_score",
+]);
+const SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX = new Map(
+  SORAFS_REPUTATION_DEGRADATION_FLAG_ORDER.map((flag, index) => [flag, index]),
+);
+
+function requireSorafsReputationExactObject(value, expectedFields, context) {
+  const record = ensureRecord(value, context);
+  const actualFields = Object.keys(record);
+  const missing = [...expectedFields].filter(
+    (field) => !Object.prototype.hasOwnProperty.call(record, field),
+  );
+  const extra = actualFields.filter((field) => !expectedFields.has(field));
+  if (missing.length !== 0 || extra.length !== 0) {
+    throw new TypeError(
+      `${context} fields are not canonical; missing=[${missing.join(
+        ", ",
+      )}] extra=[${extra.join(", ")}]`,
+    );
   }
-  return payload;
+  return record;
+}
+
+function requireSorafsReputationArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value;
+}
+
+function parseSorafsReputationU64(
+  value,
+  context,
+  { minimum = 0n, maximum = MAX_UINT64_BIGINT } = {},
+) {
+  let integer;
+  if (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    !Object.is(value, -0)
+  ) {
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else {
+    throw new TypeError(`${context} must be a canonical unsigned integer`);
+  }
+  if (integer < minimum || integer > maximum) {
+    throw new RangeError(
+      `${context} must be between ${minimum.toString(10)} and ${maximum.toString(
+        10,
+      )}`,
+    );
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
+function parseSorafsReputationBoundedInteger(value, context, minimum, maximum) {
+  return Number(
+    parseSorafsReputationU64(value, context, {
+      minimum: BigInt(minimum),
+      maximum: BigInt(maximum),
+    }),
+  );
+}
+
+function parseSorafsReputationExactInteger(value, context, expected) {
+  const parsed = parseSorafsReputationBoundedInteger(
+    value,
+    context,
+    expected,
+    expected,
+  );
+  if (parsed !== expected) {
+    throw new RangeError(`${context} must equal ${expected}`);
+  }
+  return parsed;
+}
+
+function parseSorafsReputationSnapshotId(value, context) {
+  return normalizeReputationSnapshotIdHex(value, context);
+}
+
+function parseSorafsReputationOptionalSnapshotId(value, context) {
+  return value === null ? null : parseSorafsReputationSnapshotId(value, context);
+}
+
+function parseSorafsReputationDigest(value, context) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new TypeError(
+      `${context} must be exactly 64 lowercase hexadecimal characters`,
+    );
+  }
+  return value;
+}
+
+function parseSorafsReputationWeights(value, context) {
+  const weights = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_WEIGHTS_FIELDS,
+    context,
+  );
+  const parsed = {
+    version: parseSorafsReputationExactInteger(
+      weights.version,
+      `${context}.version`,
+      1,
+    ),
+    por_success_bps: parseSorafsReputationBoundedInteger(
+      weights.por_success_bps,
+      `${context}.por_success_bps`,
+      0,
+      10_000,
+    ),
+    pdp_success_bps: parseSorafsReputationBoundedInteger(
+      weights.pdp_success_bps,
+      `${context}.pdp_success_bps`,
+      0,
+      10_000,
+    ),
+    potr_success_bps: parseSorafsReputationBoundedInteger(
+      weights.potr_success_bps,
+      `${context}.potr_success_bps`,
+      0,
+      10_000,
+    ),
+    latency_bps: parseSorafsReputationBoundedInteger(
+      weights.latency_bps,
+      `${context}.latency_bps`,
+      0,
+      10_000,
+    ),
+    dispute_bps: parseSorafsReputationBoundedInteger(
+      weights.dispute_bps,
+      `${context}.dispute_bps`,
+      0,
+      10_000,
+    ),
+    token_violation_bps: parseSorafsReputationBoundedInteger(
+      weights.token_violation_bps,
+      `${context}.token_violation_bps`,
+      0,
+      10_000,
+    ),
+    repair_breach_bps: parseSorafsReputationBoundedInteger(
+      weights.repair_breach_bps,
+      `${context}.repair_breach_bps`,
+      0,
+      10_000,
+    ),
+  };
+  const total =
+    parsed.por_success_bps +
+    parsed.pdp_success_bps +
+    parsed.potr_success_bps +
+    parsed.latency_bps +
+    parsed.dispute_bps +
+    parsed.token_violation_bps +
+    parsed.repair_breach_bps;
+  if (total !== 10_000) {
+    throw new RangeError(
+      `${context} basis-point fields must sum to exactly 10000`,
+    );
+  }
+  return parsed;
+}
+
+function parseSorafsReputationProviderMetrics(value, context) {
+  const metrics = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_PROVIDER_METRICS_FIELDS,
+    context,
+  );
+  return {
+    version: parseSorafsReputationExactInteger(
+      metrics.version,
+      `${context}.version`,
+      1,
+    ),
+    por_success_bps: parseSorafsReputationBoundedInteger(
+      metrics.por_success_bps,
+      `${context}.por_success_bps`,
+      0,
+      10_000,
+    ),
+    pdp_success_bps: parseSorafsReputationBoundedInteger(
+      metrics.pdp_success_bps,
+      `${context}.pdp_success_bps`,
+      0,
+      10_000,
+    ),
+    potr_success_bps: parseSorafsReputationBoundedInteger(
+      metrics.potr_success_bps,
+      `${context}.potr_success_bps`,
+      0,
+      10_000,
+    ),
+    latency_health_bps: parseSorafsReputationBoundedInteger(
+      metrics.latency_health_bps,
+      `${context}.latency_health_bps`,
+      0,
+      10_000,
+    ),
+    dispute_rate_bps: parseSorafsReputationBoundedInteger(
+      metrics.dispute_rate_bps,
+      `${context}.dispute_rate_bps`,
+      0,
+      10_000,
+    ),
+    token_violation_rate_bps: parseSorafsReputationBoundedInteger(
+      metrics.token_violation_rate_bps,
+      `${context}.token_violation_rate_bps`,
+      0,
+      10_000,
+    ),
+    repair_breach_rate_bps: parseSorafsReputationBoundedInteger(
+      metrics.repair_breach_rate_bps,
+      `${context}.repair_breach_rate_bps`,
+      0,
+      10_000,
+    ),
+  };
+}
+
+function parseSorafsReputationProvider(value, context) {
+  const provider = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_PROVIDER_FIELDS,
+    context,
+  );
+  const flags = requireSorafsReputationArray(
+    provider.degradation_flags,
+    `${context}.degradation_flags`,
+  );
+  if (flags.length > 5) {
+    throw new RangeError(
+      `${context}.degradation_flags must contain at most five entries`,
+    );
+  }
+  let previousFlagIndex = -1;
+  const parsedFlags = flags.map((value, index) => {
+    const flagContext = `${context}.degradation_flags[${index}]`;
+    const flag = requireSorafsReputationExactObject(
+      value,
+      SORAFS_REPUTATION_DEGRADATION_FLAG_FIELDS,
+      flagContext,
+    );
+    if (flag.value !== null) {
+      throw new TypeError(`${flagContext}.value must be null`);
+    }
+    if (typeof flag.flag !== "string") {
+      throw new TypeError(`${flagContext}.flag must be a string`);
+    }
+    const flagIndex = SORAFS_REPUTATION_DEGRADATION_FLAG_INDEX.get(flag.flag);
+    if (flagIndex === undefined) {
+      throw new TypeError(`${flagContext}.flag is unsupported`);
+    }
+    if (flagIndex <= previousFlagIndex) {
+      throw new TypeError(
+        `${context}.degradation_flags must use canonical enum order without duplicates`,
+      );
+    }
+    previousFlagIndex = flagIndex;
+    return { flag: flag.flag, value: null };
+  });
+  return {
+    provider_id: normalizeSorafsReputationProviderId(
+      provider.provider_id,
+      `${context}.provider_id`,
+    ),
+    score_bps: parseSorafsReputationBoundedInteger(
+      provider.score_bps,
+      `${context}.score_bps`,
+      500,
+      9_900,
+    ),
+    degradation_flags: parsedFlags,
+    raw_metrics: parseSorafsReputationProviderMetrics(
+      provider.raw_metrics,
+      `${context}.raw_metrics`,
+    ),
+    raw_metrics_hash_hex: parseSorafsReputationDigest(
+      provider.raw_metrics_hash_hex,
+      `${context}.raw_metrics_hash_hex`,
+    ),
+  };
+}
+
+function sorafsReputationMerkleDepth(leafCount) {
+  let width = leafCount;
+  let depth = 0;
+  while (width > 1) {
+    width = Math.ceil(width / 2);
+    depth += 1;
+  }
+  return depth;
+}
+
+function parseSorafsReputationProof(value, context) {
+  const proof = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_PROOF_FIELDS,
+    context,
+  );
+  const leafIndex = parseSorafsReputationBoundedInteger(
+    proof.leaf_index,
+    `${context}.leaf_index`,
+    0,
+    65_535,
+  );
+  const leafCount = parseSorafsReputationBoundedInteger(
+    proof.leaf_count,
+    `${context}.leaf_count`,
+    1,
+    65_536,
+  );
+  if (leafIndex >= leafCount) {
+    throw new RangeError(`${context}.leaf_index must be less than leaf_count`);
+  }
+  const siblings = requireSorafsReputationArray(
+    proof.siblings_hex,
+    `${context}.siblings_hex`,
+  ).map((sibling, index) =>
+    parseSorafsReputationDigest(
+      sibling,
+      `${context}.siblings_hex[${index}]`,
+    ),
+  );
+  if (siblings.length !== sorafsReputationMerkleDepth(leafCount)) {
+    throw new RangeError(
+      `${context}.siblings_hex must have the exact Merkle depth for leaf_count`,
+    );
+  }
+  return {
+    provider_id: normalizeSorafsReputationProviderId(
+      proof.provider_id,
+      `${context}.provider_id`,
+    ),
+    leaf_index: leafIndex,
+    leaf_count: leafCount,
+    siblings_hex: siblings,
+  };
+}
+
+function parseSorafsReputationEvent(value, context) {
+  const event = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_EVENT_FIELDS,
+    context,
+  );
+  const snapshotId = parseSorafsReputationSnapshotId(
+    event.snapshot_id_hex,
+    `${context}.snapshot_id_hex`,
+  );
+  const previousSnapshotId = parseSorafsReputationOptionalSnapshotId(
+    event.previous_snapshot_id_hex,
+    `${context}.previous_snapshot_id_hex`,
+  );
+  if (previousSnapshotId === snapshotId) {
+    throw new TypeError(
+      `${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`,
+    );
+  }
+  return {
+    version: parseSorafsReputationExactInteger(
+      event.version,
+      `${context}.version`,
+      1,
+    ),
+    sequence: parseSorafsReputationU64(event.sequence, `${context}.sequence`, {
+      minimum: 1n,
+    }),
+    snapshot_id_hex: snapshotId,
+    generated_at_unix: parseSorafsReputationU64(
+      event.generated_at_unix,
+      `${context}.generated_at_unix`,
+      { minimum: 1n },
+    ),
+    merkle_root_hex: parseSorafsReputationDigest(
+      event.merkle_root_hex,
+      `${context}.merkle_root_hex`,
+    ),
+    provider_count: parseSorafsReputationBoundedInteger(
+      event.provider_count,
+      `${context}.provider_count`,
+      1,
+      65_536,
+    ),
+    previous_snapshot_id_hex: previousSnapshotId,
+  };
+}
+
+function parseSorafsReputationSnapshot(value, context, options = {}) {
+  const snapshot = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_SNAPSHOT_FIELDS,
+    context,
+  );
+  const snapshotId = parseSorafsReputationSnapshotId(
+    snapshot.snapshot_id_hex,
+    `${context}.snapshot_id_hex`,
+  );
+  if (
+    options.expectedSnapshotId !== undefined &&
+    snapshotId !== options.expectedSnapshotId
+  ) {
+    throw new TypeError(`${context} does not match the requested snapshot`);
+  }
+  const previousSnapshotId = parseSorafsReputationOptionalSnapshotId(
+    snapshot.previous_snapshot_id_hex,
+    `${context}.previous_snapshot_id_hex`,
+  );
+  if (previousSnapshotId === snapshotId) {
+    throw new TypeError(
+      `${context}.previous_snapshot_id_hex must differ from snapshot_id_hex`,
+    );
+  }
+  const providerCount = parseSorafsReputationBoundedInteger(
+    snapshot.provider_count,
+    `${context}.provider_count`,
+    1,
+    65_536,
+  );
+  const returnedProviderCount = parseSorafsReputationBoundedInteger(
+    snapshot.returned_provider_count,
+    `${context}.returned_provider_count`,
+    1,
+    500,
+  );
+  const limit = parseSorafsReputationBoundedInteger(
+    snapshot.limit,
+    `${context}.limit`,
+    1,
+    500,
+  );
+  const providers = requireSorafsReputationArray(
+    snapshot.providers,
+    `${context}.providers`,
+  ).map((provider, index) =>
+    parseSorafsReputationProvider(
+      provider,
+      `${context}.providers[${index}]`,
+    ),
+  );
+  if (providers.length !== returnedProviderCount) {
+    throw new RangeError(
+      `${context}.returned_provider_count must equal providers.length`,
+    );
+  }
+  if (returnedProviderCount !== Math.min(providerCount, limit)) {
+    throw new RangeError(
+      `${context}.returned_provider_count must equal min(provider_count, limit)`,
+    );
+  }
+  for (let index = 1; index < providers.length; index += 1) {
+    if (providers[index - 1].provider_id >= providers[index].provider_id) {
+      throw new TypeError(
+        `${context}.providers must be strictly ordered by provider_id`,
+      );
+    }
+  }
+  if (typeof snapshot.truncated_providers !== "boolean") {
+    throw new TypeError(`${context}.truncated_providers must be a boolean`);
+  }
+  if (
+    snapshot.truncated_providers !==
+    (providerCount > returnedProviderCount)
+  ) {
+    throw new TypeError(
+      `${context}.truncated_providers is inconsistent with provider counts`,
+    );
+  }
+  return {
+    snapshot_id_hex: snapshotId,
+    generated_at_unix: parseSorafsReputationU64(
+      snapshot.generated_at_unix,
+      `${context}.generated_at_unix`,
+      { minimum: 1n },
+    ),
+    previous_snapshot_id_hex: previousSnapshotId,
+    merkle_root_hex: parseSorafsReputationDigest(
+      snapshot.merkle_root_hex,
+      `${context}.merkle_root_hex`,
+    ),
+    provider_count: providerCount,
+    returned_provider_count: returnedProviderCount,
+    limit,
+    truncated_providers: snapshot.truncated_providers,
+    alpha_bps: parseSorafsReputationExactInteger(
+      snapshot.alpha_bps,
+      `${context}.alpha_bps`,
+      8_500,
+    ),
+    current_score_weight_bps: parseSorafsReputationExactInteger(
+      snapshot.current_score_weight_bps,
+      `${context}.current_score_weight_bps`,
+      7_000,
+    ),
+    weights: parseSorafsReputationWeights(
+      snapshot.weights,
+      `${context}.weights`,
+    ),
+    providers,
+  };
+}
+
+function parseSorafsReputationProviderResponse(
+  value,
+  context,
+  expectedProviderId,
+) {
+  const response = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_PROVIDER_RESPONSE_FIELDS,
+    context,
+  );
+  const provider = parseSorafsReputationProvider(
+    response.provider,
+    `${context}.provider`,
+  );
+  const proof = parseSorafsReputationProof(
+    response.proof,
+    `${context}.proof`,
+  );
+  if (provider.provider_id !== proof.provider_id) {
+    throw new TypeError(`${context}.proof must reference the returned provider`);
+  }
+  if (provider.provider_id !== expectedProviderId) {
+    throw new TypeError(`${context} does not match the requested provider`);
+  }
+  return {
+    snapshot_id_hex: parseSorafsReputationSnapshotId(
+      response.snapshot_id_hex,
+      `${context}.snapshot_id_hex`,
+    ),
+    generated_at_unix: parseSorafsReputationU64(
+      response.generated_at_unix,
+      `${context}.generated_at_unix`,
+      { minimum: 1n },
+    ),
+    merkle_root_hex: parseSorafsReputationDigest(
+      response.merkle_root_hex,
+      `${context}.merkle_root_hex`,
+    ),
+    provider,
+    proof,
+  };
+}
+
+function parseSorafsReputationWeightsResponse(value, context) {
+  const response = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_WEIGHTS_RESPONSE_FIELDS,
+    context,
+  );
+  return {
+    snapshot_id_hex: parseSorafsReputationSnapshotId(
+      response.snapshot_id_hex,
+      `${context}.snapshot_id_hex`,
+    ),
+    generated_at_unix: parseSorafsReputationU64(
+      response.generated_at_unix,
+      `${context}.generated_at_unix`,
+      { minimum: 1n },
+    ),
+    alpha_bps: parseSorafsReputationExactInteger(
+      response.alpha_bps,
+      `${context}.alpha_bps`,
+      8_500,
+    ),
+    current_score_weight_bps: parseSorafsReputationExactInteger(
+      response.current_score_weight_bps,
+      `${context}.current_score_weight_bps`,
+      7_000,
+    ),
+    weights: parseSorafsReputationWeights(
+      response.weights,
+      `${context}.weights`,
+    ),
+  };
+}
+
+function parseSorafsReputationOptionalU64(value, context, options = {}) {
+  return value === null
+    ? null
+    : parseSorafsReputationU64(value, context, options);
+}
+
+function sorafsReputationU64BigInt(value) {
+  return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function parseSorafsReputationEventPage(value, context, options = {}) {
+  const page = requireSorafsReputationExactObject(
+    value,
+    SORAFS_REPUTATION_EVENT_PAGE_FIELDS,
+    context,
+  );
+  const since = parseSorafsReputationOptionalU64(
+    page.since,
+    `${context}.since`,
+  );
+  const expectedSince =
+    options.expectedSince === null || options.expectedSince === undefined
+      ? null
+      : BigInt(options.expectedSince);
+  if (
+    (since === null) !== (expectedSince === null) ||
+    (since !== null && sorafsReputationU64BigInt(since) !== expectedSince)
+  ) {
+    throw new TypeError(`${context}.since does not match the requested cursor`);
+  }
+  const limit = parseSorafsReputationBoundedInteger(
+    page.limit,
+    `${context}.limit`,
+    1,
+    500,
+  );
+  if (
+    options.expectedLimit !== undefined &&
+    limit !== options.expectedLimit
+  ) {
+    throw new TypeError(`${context}.limit does not match the requested limit`);
+  }
+  const count = parseSorafsReputationBoundedInteger(
+    page.count,
+    `${context}.count`,
+    0,
+    500,
+  );
+  const events = requireSorafsReputationArray(
+    page.events,
+    `${context}.events`,
+  ).map((event, index) =>
+    parseSorafsReputationEvent(event, `${context}.events[${index}]`),
+  );
+  if (count !== events.length) {
+    throw new RangeError(`${context}.count must equal events.length`);
+  }
+  if (count > limit) {
+    throw new RangeError(`${context}.count must not exceed limit`);
+  }
+  const nextSince = parseSorafsReputationOptionalU64(
+    page.next_since,
+    `${context}.next_since`,
+    { minimum: 1n },
+  );
+  if (
+    (events.length === 0 && nextSince !== null) ||
+    (events.length !== 0 &&
+      (nextSince === null ||
+        sorafsReputationU64BigInt(nextSince) !==
+          sorafsReputationU64BigInt(events.at(-1).sequence)))
+  ) {
+    throw new TypeError(
+      `${context}.next_since must equal the last event sequence`,
+    );
+  }
+  let previousSequence = since === null ? 0n : sorafsReputationU64BigInt(since);
+  for (let index = 0; index < events.length; index += 1) {
+    const sequence = sorafsReputationU64BigInt(events[index].sequence);
+    if (
+      (index === 0 && sequence <= previousSequence) ||
+      (index > 0 && sequence !== previousSequence + 1n)
+    ) {
+      throw new RangeError(
+        `${context} sequences must increase after since and be contiguous within the page`,
+      );
+    }
+    previousSequence = sequence;
+  }
+  for (let index = 1; index < events.length; index += 1) {
+    const previous = events[index - 1];
+    const current = events[index];
+    if (current.previous_snapshot_id_hex !== previous.snapshot_id_hex) {
+      throw new TypeError(
+        `${context} previous_snapshot_id_hex must link adjacent events`,
+      );
+    }
+    if (
+      sorafsReputationU64BigInt(current.generated_at_unix) <=
+      sorafsReputationU64BigInt(previous.generated_at_unix)
+    ) {
+      throw new RangeError(
+        `${context} generated_at_unix must strictly increase`,
+      );
+    }
+  }
+  return { since, limit, count, next_since: nextSince, events };
+}
+
+function parseSorafsReputationSseU64(raw, context) {
+  if (
+    typeof raw !== "string" ||
+    !/^[1-9][0-9]{0,19}$/u.test(raw)
+  ) {
+    throw new TypeError(`${context} must be a positive canonical u64`);
+  }
+  const parsed = parseLosslessIntegerJson(raw, context);
+  return parseSorafsReputationU64(parsed, context, { minimum: 1n });
+}
+
+async function* validateSorafsReputationSseStream(events, requestedSince) {
+  const since = BigInt(requestedSince);
+  for await (const event of events) {
+    const context = "sorafs reputation SSE event";
+    if (event.retry !== null) {
+      throw new TypeError(`${context} must not carry a retry field`);
+    }
+    if (event.event === "reputation_snapshot") {
+      if (
+        typeof event.raw !== "string" ||
+        event.raw.length === 0 ||
+        /\s/u.test(event.raw)
+      ) {
+        throw new TypeError(`${context}.data must be exact compact JSON`);
+      }
+      const data = parseSorafsReputationEvent(
+        parseLosslessIntegerJson(event.raw, `${context}.data`),
+        `${context}.data`,
+      );
+      const eventId = parseSorafsReputationSseU64(
+        event.id,
+        `${context}.id`,
+      );
+      const sequence = sorafsReputationU64BigInt(data.sequence);
+      if (sorafsReputationU64BigInt(eventId) !== sequence) {
+        throw new TypeError(`${context}.id must equal data.sequence`);
+      }
+      if (sequence <= since) {
+        throw new RangeError(
+          `${context}.data.sequence must be greater than the requested since cursor`,
+        );
+      }
+      yield { ...event, data };
+      continue;
+    }
+    if (event.event === "lagged") {
+      if (event.id !== null) {
+        throw new TypeError(`${context} lagged frames must not carry an id`);
+      }
+      const data = parseSorafsReputationSseU64(
+        event.raw,
+        `${context}.lagged_count`,
+      );
+      yield { ...event, data };
+      continue;
+    }
+    throw new TypeError(`${context} type ${String(event.event)} is unsupported`);
+  }
 }
 
 function buildSorafsPorStatusParams(options = {}) {
@@ -30957,51 +32097,6 @@ function pickSorafsRegisterField(record, aliases, context) {
   return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
 }
 
-function normalizeDaSamplingPlan(payload, context = "da manifest response.sampling_plan") {
-  if (payload === null || payload === undefined) {
-    return null;
-  }
-  const record = ensureRecord(payload, context);
-  const assignmentHash = normalizeHex32String(
-    record.assignment_hash ?? "",
-    `${context}.assignment_hash`,
-  );
-  const sampleWindow = ToriiClient._normalizeUnsignedInteger(
-    record.sample_window,
-    `${context}.sample_window`,
-    { allowZero: true },
-  );
-  const samples = [];
-  const sampleArray = record.samples ?? [];
-  if (!Array.isArray(sampleArray)) {
-    throw new TypeError(`${context}.samples must be an array`);
-  }
-  for (let idx = 0; idx < sampleArray.length; idx += 1) {
-    const entry = ensureRecord(sampleArray[idx], `${context}.samples[${idx}]`);
-    samples.push({
-      index: ToriiClient._normalizeUnsignedInteger(
-        entry.index,
-        `${context}.samples[${idx}].index`,
-        { allowZero: true },
-      ),
-      role: requireNonEmptyString(
-        entry.role ?? "",
-        `${context}.samples[${idx}].role`,
-      ),
-      group: ToriiClient._normalizeUnsignedInteger(
-        entry.group ?? 0,
-        `${context}.samples[${idx}].group`,
-        { allowZero: true },
-      ),
-    });
-  }
-  return {
-    assignment_hash_hex: assignmentHash,
-    sample_window: sampleWindow,
-    samples,
-  };
-}
-
 function normalizeDaManifestFetchResponse(payload, context = "da manifest response") {
   const record = ensureRecord(payload ?? {}, context);
   const storageTicketHex = normalizeHex32String(
@@ -31056,10 +32151,6 @@ function normalizeDaManifestFetchResponse(payload, context = "da manifest respon
     manifest_json:
       record.manifest ?? null,
     chunk_plan: chunkPlan,
-    sampling_plan: normalizeDaSamplingPlan(
-      record.sampling_plan ?? null,
-      `${context}.sampling_plan`,
-    ),
   };
 }
 
@@ -31084,9 +32175,6 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
   const manifestPath = pathModule.join(outputDir, `manifest_${label}.norito`);
   const manifestJsonPath = pathModule.join(outputDir, `manifest_${label}.json`);
   const chunkPlanPath = pathModule.join(outputDir, `chunk_plan_${label}.json`);
-  const samplingPlanPath = manifestBundle.sampling_plan
-    ? pathModule.join(outputDir, `sampling_plan_${label}.json`)
-    : null;
 
   await fs.mkdir(outputDir, { recursive: true });
   await writeBufferFile(manifestPath, manifestBundle.manifest_bytes);
@@ -31096,15 +32184,11 @@ async function persistDaManifestBundle(manifestBundle, outputDir, labelInput) {
     manifestBundle.blob_hash_hex,
   );
   await writeJsonFile(chunkPlanPath, chunkPlan);
-  if (samplingPlanPath) {
-    await writeJsonFile(samplingPlanPath, manifestBundle.sampling_plan);
-  }
 
   return {
     manifestPath,
     manifestJsonPath,
     chunkPlanPath,
-    samplingPlanPath,
     label,
   };
 }
@@ -33330,18 +34414,40 @@ function normalizeRepoAgreement(entry, context) {
     `${context}.last_margin_check_timestamp_ms`,
     { allowZero: true },
   );
+  const settlementTimestampMs =
+    record.settlement_timestamp_ms === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          record.settlement_timestamp_ms,
+          `${context}.settlement_timestamp_ms`,
+          { allowZero: true },
+        );
+  const status = requireNonEmptyString(record.status, `${context}.status`);
+  const expectedStatus = settlementTimestampMs === null ? "active" : "settled";
+  if (status !== expectedStatus) {
+    throw new TypeError(
+      `${context}.status must agree with settlement_timestamp_ms (expected ${expectedStatus})`,
+    );
+  }
   return {
     id,
     initiator,
     counterparty,
     custodian,
     cashLeg: normalizeRepoLeg(record.cash_leg, `${context}.cash_leg`),
+    cashSource: requireNonEmptyString(record.cash_source, `${context}.cash_source`),
     collateralLeg: normalizeRepoLeg(record.collateral_leg, `${context}.collateral_leg`),
+    collateralCustodyAsset: requireNonEmptyString(
+      record.collateral_custody_asset,
+      `${context}.collateral_custody_asset`,
+    ),
     rateBps,
     maturityTimestampMs,
     initiatedTimestampMs,
     lastMarginCheckTimestampMs,
     governance: normalizeRepoGovernance(record.governance, `${context}.governance`),
+    settlementTimestampMs,
+    status,
   };
 }
 

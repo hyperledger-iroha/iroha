@@ -981,12 +981,11 @@ fn parse_quality(value: &str) -> Result<u16, RoutingError> {
 }
 
 fn parse_content_cid(value: &str) -> Result<ManifestRootCid, RoutingError> {
-    if value.is_empty() || value.len() > MAX_PATH_IDENTIFIER_BYTES {
-        return Err(if value.len() > MAX_PATH_IDENTIFIER_BYTES {
-            RoutingError::IdentifierTooLarge
-        } else {
-            RoutingError::InvalidContentCid
-        });
+    if value.len() > MAX_PATH_IDENTIFIER_BYTES {
+        return Err(RoutingError::IdentifierTooLarge);
+    }
+    if value.is_empty() || !value.is_ascii() {
+        return Err(RoutingError::InvalidContentCid);
     }
     let (prefix, payload) = value.split_at(1);
     let bytes = match prefix {
@@ -1500,6 +1499,17 @@ mod tests {
             parse_content_cid("not-a-cid"),
             Err(RoutingError::InvalidContentCid)
         );
+    }
+
+    #[test]
+    fn non_ascii_content_cid_returns_client_error_and_follow_up_still_parses() {
+        let error = parse_content_cid("é").expect_err("non-ASCII CID must be rejected");
+        let response = routing_error_response(error);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let cid = sample_cid(0xA6);
+        let encoded = format!("b{}", encode_base32_lower(cid.as_bytes()));
+        assert_eq!(parse_content_cid(&encoded), Ok(cid));
     }
 
     #[test]

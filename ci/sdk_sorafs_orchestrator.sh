@@ -123,10 +123,9 @@ def sync_output_parent(path: pathlib.Path) -> None:
     finally:
         os.close(fd)
 
-def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
+def require_source(path: pathlib.Path, label: str) -> pathlib.Path:
     if not path.exists():
-        print(f"[sorafs-sdk] warning: fixture file missing ({path})", file=sys.stderr)
-        return None
+        sys.exit(f"[sorafs-sdk] {label} missing: {path}")
     validate_sdk_path(path, label)
     path_stat = path.lstat()
     if not stat.S_ISREG(path_stat.st_mode):
@@ -136,8 +135,6 @@ def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
     return path
 
 source = require_source(source, "fixture source")
-if source is None:
-    raise SystemExit(0)
 validate_sdk_path(target, "fixture snapshot")
 target.parent.mkdir(parents=True, exist_ok=True)
 validate_sdk_path(target, "fixture snapshot")
@@ -477,6 +474,55 @@ PY
   return "${exit_code}"
 }
 
+run_javascript_parity() {
+  local sdk_root="${REPO_ROOT}/javascript/iroha_js"
+  local native_artifact="${sdk_root}/native/iroha_js_host.node"
+  local native_manifest="${RUN_DIR}/node-native-abi21.json"
+  local node_binary native_target
+
+  node_binary="$(command -v node)"
+  native_target="$(
+    "${node_binary}" --eval \
+      'process.stdout.write(`${process.platform}-${process.arch}-node${process.versions.node.split(".")[0]}`)'
+  )"
+
+  (
+    cd "${sdk_root}"
+    npm ci
+    npm run build:native
+  )
+  python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi21_artifact.py" \
+    record \
+    --artifact "${native_artifact}" \
+    --manifest "${native_manifest}" \
+    --source-root "${REPO_ROOT}" \
+    --node "${node_binary}" \
+    --sdk node \
+    --target "${native_target}"
+  python3 -I "${REPO_ROOT}/scripts/check_native_sdk_abi21_artifact.py" \
+    verify \
+    --artifact "${native_artifact}" \
+    --manifest "${native_manifest}" \
+    --source-root "${REPO_ROOT}" \
+    --node "${node_binary}"
+  (
+    cd "${sdk_root}"
+    node --test \
+      test/cancelAssetLockV1.test.js \
+      test/sorafsAppealFinanceValidation.test.js \
+      test/sorafsOrchestrator.parity.test.js
+  )
+}
+
+run_swift_parity() {
+  (
+    cd "${REPO_ROOT}/IrohaSwift"
+    swift test --filter SorafsOrchestratorParityTests
+    swift test --filter CancelAssetLockV1Tests
+    swift test --filter SorafsReferenceValidatorsTests
+  )
+}
+
 run_sdk_test rust "orchestrator parity" \
   cargo test -p sorafs_orchestrator rust_orchestrator_fetch_suite_is_deterministic -- --nocapture
 
@@ -484,9 +530,9 @@ run_sdk_test python "bindings parity (iroha_python_rs)" \
   cargo test -p iroha_python_rs sorafs_multi_fetch_local -- --nocapture
 
 run_sdk_test javascript "orchestrator parity" \
-  bash -c 'cd '"${REPO_ROOT}/javascript/iroha_js"' && npm ci && npm run build:native && node --test test/sorafsOrchestrator.parity.test.js'
+  run_javascript_parity
 
-run_sdk_test swift "orchestrator parity" \
-  bash -c 'cd '"${REPO_ROOT}/IrohaSwift"' && swift test --filter SorafsOrchestratorParityTests'
+run_sdk_test swift "orchestrator and appeal-finance parity" \
+  run_swift_parity
 
 echo "[sorafs-sdk] all orchestrator parity suites passed"

@@ -318,6 +318,14 @@ fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     ))
 }
 
+fn single_signatory_authority(
+    authority: &AccountId,
+) -> Result<&PublicKey, InstructionExecutionError> {
+    authority.try_signatory().ok_or_else(|| {
+        invalid_parameter("Soracloud provenance requires a single-signatory transaction authority")
+    })
+}
+
 fn invalid_quantity_arithmetic(
     context: &str,
     error: iroha_primitives::numeric::NumericOperationError,
@@ -639,7 +647,7 @@ fn verify_bundle_provenance(
     initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "bundle provenance signer must match the transaction authority",
         ));
@@ -660,7 +668,7 @@ fn verify_app_infra_provenance(
     manifest: &SoraAppInfraManifestV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "app infra provenance signer must match the transaction authority",
         ));
@@ -679,7 +687,7 @@ fn verify_rollback_provenance(
     target_version: Option<&str>,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "rollback provenance signer must match the transaction authority",
         ));
@@ -704,7 +712,7 @@ fn verify_service_config_set_provenance(
     value_json: &Json,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service config provenance signer must match the transaction authority",
         ));
@@ -729,7 +737,7 @@ fn verify_service_config_delete_provenance(
     config_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service config delete provenance signer must match the transaction authority",
         ));
@@ -754,7 +762,7 @@ fn verify_service_secret_set_provenance(
     secret: &SecretEnvelopeV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service secret provenance signer must match the transaction authority",
         ));
@@ -776,7 +784,7 @@ fn verify_service_secret_delete_provenance(
     secret_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "service secret delete provenance signer must match the transaction authority",
         ));
@@ -803,7 +811,7 @@ fn verify_rollout_provenance(
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "rollout provenance signer must match the transaction authority",
         ));
@@ -834,7 +842,7 @@ fn verify_state_mutation_provenance(
     fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "state mutation provenance signer must match the transaction authority",
         ));
@@ -4201,6 +4209,7 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
     // A governed artifact may carry either the normalized Core STARK key or
     // the richer audited BFV-native descriptor. These are distinct typed
     // artifact formats; each must use its one canonical V1 representation.
+    #[cfg(feature = "zk-stark")]
     if let Err(core_err) = norito::decode_canonical::<crate::zk_stark::StarkFriVerifyingKeyV1>(
         &native_material.native_payload,
     ) {
@@ -4213,6 +4222,15 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
             ))
         })?;
     }
+    #[cfg(not(feature = "zk-stark"))]
+    norito::decode_canonical::<
+        iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
+    >(&native_material.native_payload)
+    .map_err(|native_err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap execution native verifier-key payload must use the canonical BFV-native governed V1 format when Core STARK support is disabled: {native_err}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -5341,7 +5359,7 @@ fn verify_fhe_job_run_provenance(
     governance_tx_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "fhe job provenance signer must match the transaction authority",
         ));
@@ -5374,7 +5392,7 @@ fn verify_decryption_request_provenance(
     request: DecryptionRequestV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "decryption request provenance signer must match the transaction authority",
         ));
@@ -5404,7 +5422,7 @@ fn verify_training_job_start_provenance(
     storage_budget_bytes: u64,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "training job start provenance signer must match the transaction authority",
         ));
@@ -5439,7 +5457,7 @@ fn verify_training_job_checkpoint_provenance(
     metrics_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "training checkpoint provenance signer must match the transaction authority",
         ));
@@ -5469,7 +5487,7 @@ fn verify_training_job_retry_provenance(
     reason: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "training retry provenance signer must match the transaction authority",
         ));
@@ -5498,7 +5516,7 @@ fn verify_model_artifact_register_provenance(
     provenance_attestation_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model artifact provenance signer must match the transaction authority",
         ));
@@ -5537,7 +5555,7 @@ fn verify_model_weight_register_provenance(
     provenance_attestation_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model weight provenance signer must match the transaction authority",
         ));
@@ -5570,7 +5588,7 @@ fn verify_model_weight_promote_provenance(
     gate_report_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model weight promotion provenance signer must match the transaction authority",
         ));
@@ -5601,7 +5619,7 @@ fn verify_model_weight_rollback_provenance(
     reason: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "model weight rollback provenance signer must match the transaction authority",
         ));
@@ -5628,7 +5646,7 @@ fn verify_uploaded_model_bundle_register_provenance(
     bundle: &SoraUploadedModelBundleV1,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "uploaded model bundle provenance signer must match the transaction authority",
         ));
@@ -5661,7 +5679,7 @@ fn verify_uploaded_model_finalize_provenance(
     provenance_attestation_hash: Hash,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(
             "uploaded model finalize provenance signer must match the transaction authority",
         ));
@@ -6025,7 +6043,7 @@ fn verify_provenance_payload(
     signer_mismatch: &'static str,
     verification_failed: &'static str,
 ) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
+    if single_signatory_authority(authority)? != &provenance.signer {
         return Err(invalid_parameter(signer_mismatch));
     }
     verify_signature_for_signer(&provenance.signature, &provenance.signer, &payload)
@@ -15164,7 +15182,7 @@ impl Execute for isi::RecordSoracloudAgentAutonomyExecution {
                 lease_expires_sequence: record.lease_expires_sequence,
                 manifest_hash: record.manifest_hash,
                 restart_count: record.restart_count,
-                signer: authority.signatory().clone(),
+                signer: single_signatory_authority(authority)?.clone(),
                 request_id: Some(normalized_run_id.to_owned()),
                 asset_definition: None,
                 amount: None,
@@ -18342,6 +18360,7 @@ mod tests {
             SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
             SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
             SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoracloudRuntimeProvenancePurposeV1, encode_soracloud_runtime_provenance_preimage_v1,
         },
         sorafs::pin_registry::ManifestDigest,
     };
@@ -18472,6 +18491,29 @@ mod tests {
         assert_ne!(first.public_key(), other_call_site.public_key());
     }
 
+    #[test]
+    fn soracloud_provenance_rejects_multisig_authority_without_panicking() {
+        let member_key = checked_keypair();
+        let member =
+            iroha_data_model::account::MultisigMember::new(member_key.public_key().clone(), 1)
+                .expect("multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("multisig policy");
+        let authority = AccountId::new_multisig(policy);
+
+        let error = single_signatory_authority(&authority)
+            .expect_err("multisig authority must fail provenance admission");
+        assert!(
+            matches!(
+                &error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("single-signatory transaction authority")
+            ),
+            "unexpected multisig provenance rejection: {error:?}"
+        );
+    }
+
     fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
         state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
     }
@@ -18541,7 +18583,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(ALICE_ID.signatory().clone()),
+                peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()),
                 stake_account: ALICE_ID.clone(),
                 total_stake: Quantity::from(1_000_u64),
                 self_stake: Quantity::from(1_000_u64),
@@ -18630,7 +18672,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(8),
                 validator: BOB_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(9_000_u64),
                 self_stake: Quantity::from(9_000_u64),
@@ -18651,7 +18693,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(8_000_u64),
                 self_stake: Quantity::from(8_000_u64),
@@ -18680,7 +18722,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: bonded.clone(),
                 self_stake: bonded.clone(),
@@ -18750,7 +18792,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: bonded.clone(),
                 self_stake: bonded.clone(),
@@ -18835,7 +18877,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(3),
                 validator: BOB_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(9_000_u64),
                 self_stake: Quantity::from(9_000_u64),
@@ -18851,7 +18893,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(4),
                 validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(8_000_u64),
                 self_stake: Quantity::from(8_000_u64),
@@ -32816,8 +32858,7 @@ mod tests {
         );
         let mut weak_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
             norito::decode_from_bytes(&weak_vk.bytes).expect("decode sample STARK VK");
-        weak_payload.n_log2 =
-            crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
+        weak_payload.n_log2 = crate::zk_stark::STARK_FRI_CONSENSUS_MIN_N_LOG2.saturating_sub(1);
         let canonical_native_payload: iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1 =
             norito::decode_from_bytes(
                 &iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
@@ -43723,6 +43764,44 @@ mod tests {
             signer: ALICE_KEYPAIR.public_key().clone(),
             signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
         }
+    }
+
+    #[test]
+    fn model_host_heartbeat_verifier_rejects_cross_purpose_replay() {
+        let heartbeat_expires_at_ms = 160_000;
+        let valid = model_host_heartbeat_provenance(&ALICE_ID, heartbeat_expires_at_ms);
+        verify_model_host_heartbeat_provenance(
+            &ALICE_ID,
+            &ALICE_ID,
+            heartbeat_expires_at_ms,
+            &valid,
+        )
+        .expect("correctly purpose-bound heartbeat provenance must verify");
+
+        let semantic_payload =
+            norito::encode_canonical(&(ALICE_ID.clone(), heartbeat_expires_at_ms))
+                .expect("encode heartbeat semantic payload");
+        let wrong_purpose_preimage = encode_soracloud_runtime_provenance_preimage_v1(
+            SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert,
+            &semantic_payload,
+        )
+        .expect("encode cross-purpose replay preimage");
+        let replay = ManifestProvenance {
+            signer: ALICE_KEYPAIR.public_key().clone(),
+            signature: checked_signature(ALICE_KEYPAIR.private_key(), &wrong_purpose_preimage),
+        };
+
+        let error = verify_model_host_heartbeat_provenance(
+            &ALICE_ID,
+            &ALICE_ID,
+            heartbeat_expires_at_ms,
+            &replay,
+        )
+        .expect_err("an Inrou-purpose signature must not verify as a heartbeat");
+        assert_invalid_parameter_contains(
+            error,
+            "model host heartbeat provenance signature verification failed",
+        );
     }
 
     fn model_host_withdraw_provenance(validator_account_id: &AccountId) -> ManifestProvenance {

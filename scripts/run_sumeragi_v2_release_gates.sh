@@ -1133,6 +1133,8 @@ required_production_liveness_tests=(
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes
+  sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier
+  sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
@@ -1459,7 +1461,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::body_available_rebind_coalesces_exact_busy_deferred_destination_owner
   sumeragi::v2_runtime::tests::body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation
   sumeragi::v2_runtime::tests::duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation
-  sumeragi::v2_runtime::tests::unbound_direct_vote_authentication_is_recoverable_and_becomes_admissible_after_validation
+  sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation
   sumeragi::v2_runtime::tests::conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
   sumeragi::v2_runtime::tests::conflicting_local_and_validated_receipts_do_not_coalesce
   sumeragi::v2_runtime::tests::production_busy_transfer_retains_exact_validation_evidence_for_retry_and_cleanup
@@ -1556,6 +1558,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission
   sumeragi::v2_worker::tests::fair_ingress_classifies_current_historical_future_and_unauthenticated_requests
   sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown
+  sumeragi::v2_worker::tests::selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle
   sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission
   sumeragi::v2_worker::tests::fair_ingress_full_prefix_materializes_exact_serve_before_later_churn
   sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack
@@ -1814,7 +1817,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=782
+readonly expected_production_liveness_test_count=785
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1914,7 +1917,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 782-test liveness inventory above. The later
+# not belong to the canonical 785-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -1929,6 +1932,9 @@ required_multilane_core_focus_tests=(
   kura::tests::native_amx_latest_index_startup_truncates_unindexed_append_tail
   kura::tests::native_amx_latest_index_startup_leaves_missing_evidence_repair_pending
   kura::tests::native_amx_latest_index_startup_rejects_present_invalid_manifest_proof
+  kura::tests::native_amx_latest_index_startup_rejects_legacy_v1_filename
+  kura::tests::native_amx_latest_index_startup_rejects_fully_unbacked_pointer
+  kura::tests::native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt
   kura::tests::native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index
   kura::tests::native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation
   kura::tests::autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage
@@ -2213,7 +2219,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=277
+readonly expected_multilane_focus_test_count=280
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2384,7 +2390,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-# unambiguous one-test Cargo transcript per entry. The canonical 277-row TSV is
+# unambiguous one-test Cargo transcript per entry. The canonical 280-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2492,8 +2498,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 278 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 277 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 281 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 280 focused tests" >&2
     exit 1
   fi
 fi
@@ -3681,4 +3687,4 @@ verify_release_identity "before aggregate release receipt publication"
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-  echo "Sumeragi v2 production release gates passed, including exact 277/277 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+  echo "Sumeragi v2 production release gates passed, including exact 280/280 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

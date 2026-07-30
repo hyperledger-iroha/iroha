@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_observability_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: dac46483635a9dd9f9da471e78f3b567b2e7e5d28af10a7173cc363b5131631a
+source_hash: d01dad8de5a0f5c28c14be0c227326423e0757068022fe2f0b1d772157ae9692
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
 ---

@@ -762,12 +762,18 @@ fn minimal_config_snapshot() {
                         cache_dir: None,
                     },
                 },
+                transaction_ingress: TransactionIngress {
+                    max_concurrent_compute_jobs: 4,
+                    max_batch_transactions: 512,
+                },
                 da_ingest: DaIngest {
                     replay_cache_capacity: 4096,
+                    replay_cache_max_lane_epochs: 1024,
                     replay_cache_ttl: 900s,
                     replay_cache_max_sequence_lag: 4096,
                     replay_cache_store_dir: "./storage/da_replay",
                     manifest_store_dir: "./storage/da_manifests",
+                    max_concurrent_compute_jobs: 1,
                     spool_queue_capacity: 1024,
                     spool_batch_max: 32,
                     governance_metadata_key: None,
@@ -910,10 +916,12 @@ fn minimal_config_snapshot() {
                     moderation_screening_enabled: false,
                     moderation_screening_authority_bundle_path: None,
                     moderation_screening_authority_bundle_digest: None,
+                    moderation_quarantine_key_provider: None,
                     pop_credentials: None,
                     moderation_orchestrator: None,
                     evidence_viewer: None,
                     reputation_runtime: None,
+                    por_replay_archive: None,
                     hedging_billing_runtime: None,
                     provider_ingest_runtime: None,
                     pdp_provider: SorafsPdpProviderPolicy {
@@ -965,6 +973,12 @@ fn minimal_config_snapshot() {
                         default_rate_limit_bytes: 8388608,
                         default_requests_per_minute: 120,
                     },
+                    native_transaction_signers: SorafsNativeTransactionSignerBindings {
+                        proof_outcome: None,
+                        repair: None,
+                        reserve: None,
+                        orderbook: None,
+                    },
                     orderbook_worker: SorafsOrderbookWorker {
                         enabled: false,
                         scan_interval: 1s,
@@ -1007,6 +1021,10 @@ fn minimal_config_snapshot() {
                         per_subject_metric_cap: 1,
                         suppression_threshold: 25,
                         policy_digest: None,
+                        cycle_prf_provider: None,
+                        release_anchor_provider: None,
+                        leader_lease_provider: None,
+                        fenced_privacy_publisher: None,
                         composition_budget_epsilon_numerator: 12,
                         composition_budget_epsilon_denominator: 1,
                         composition_budget_max_publications: 52,
@@ -1019,6 +1037,8 @@ fn minimal_config_snapshot() {
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,
                     governance_dag_signer_handle: None,
+                    governance_dag_signer_revision: None,
+                    governance_dag_signer_policy_digest: None,
                     governance_dag_publisher_public_key_hex: None,
                     governance_dag_service: SorafsGovernanceDagService {
                         enabled: false,
@@ -1029,8 +1049,18 @@ fn minimal_config_snapshot() {
                         ipns_name: None,
                         ipns_key_name: None,
                         ipfs_authenticator_handle: None,
+                        ipfs_authenticator_revision: None,
+                        ipfs_authenticator_policy_digest: None,
+                        ipfs_request_auth_public_key: None,
                         head_authenticator_handle: None,
+                        head_authenticator_revision: None,
+                        head_authenticator_policy_digest: None,
+                        head_request_auth_public_key: None,
+                        request_auth_max_envelope_lifetime_secs: 30,
+                        request_auth_max_future_skew_secs: 5,
                         checkpoint_store_handle: None,
+                        checkpoint_store_revision: None,
+                        checkpoint_store_policy_digest: None,
                         publisher_public_key_hex: None,
                         poll_interval: 5s,
                         connect_timeout: 3s,
@@ -1040,7 +1070,7 @@ fn minimal_config_snapshot() {
                             4194304,
                         ),
                         max_request_bytes: Bytes(
-                            67108864,
+                            134283264,
                         ),
                         mirror_max_entries: 65536,
                         mirror_max_bytes: Bytes(
@@ -1142,6 +1172,7 @@ fn minimal_config_snapshot() {
                     },
                     acme: SorafsGatewayAcme {
                         enabled: false,
+                        provider: None,
                         account_email: None,
                         directory_url: "https://acme-v02.api.letsencrypt.org/directory",
                         hostnames: [],
@@ -1160,6 +1191,7 @@ fn minimal_config_snapshot() {
                 },
                 sorafs_por: SorafsPor {
                     enabled: false,
+                    potr_runtime: None,
                     epoch_interval_secs: 3600,
                     response_window_secs: 900,
                     state_dir: "./storage/sorafs/por",
@@ -1336,7 +1368,21 @@ fn minimal_config_snapshot() {
                             29,
                             55,
                         ],
-                        projection: None,
+                        projection: Some(
+                            AssetDefinitionProjection {
+                                domain: DomainId {
+                                    name: Name(
+                                        "sora",
+                                    ),
+                                    dataspace: Name(
+                                        "universal",
+                                    ),
+                                },
+                                name: Name(
+                                    "xor",
+                                ),
+                            },
+                        ),
                     },
                     asset_scale: 9,
                     pricing: SorafsAppealPricingPolicy {
@@ -1625,6 +1671,7 @@ fn minimal_config_snapshot() {
                         },
                     },
                     submitter_signers: [],
+                    checkpoint_provider: None,
                     worker_scan_interval: 30s,
                     worker_max_retry_attempts: 3,
                     worker_max_pending: 4096,
@@ -1768,11 +1815,17 @@ fn minimal_config_snapshot() {
                     max_concurrent_vms: 8,
                     enabled: false,
                     proxy_only: false,
+                    bundle_archive_max_compressed_bytes: 536870912,
+                    bundle_archive_max_decoded_bytes: 3221225472,
+                    bundle_archive_max_entries: 4096,
+                    bundle_archive_max_file_bytes: 536870912,
+                    bundle_archive_max_total_file_bytes: 2147483648,
                     start_grace: 30s,
                     stop_grace: 10s,
                 },
                 submission: SoracloudRuntimeSubmission {
                     fee_payer: Authority,
+                    signer: None,
                 },
                 egress: SoracloudRuntimeEgress {
                     default_allow: false,
@@ -1793,6 +1846,8 @@ fn minimal_config_snapshot() {
                     import_max_files: 32,
                     import_max_file_bytes: 268435456,
                     import_max_total_bytes: 2147483648,
+                    model_info_max_response_bytes: 8388608,
+                    inference_max_response_bytes: 67108864,
                     import_file_allowlist: [
                         "*.gguf",
                         "*.safetensors",
@@ -2251,11 +2306,6 @@ fn minimal_config_snapshot() {
                 panic_on_duplicate_metrics: false,
             },
             pipeline: Pipeline {
-                ivm_proved: IvmProvedExecution {
-                    enabled: false,
-                    skip_replay: false,
-                    allowed_circuits: [],
-                },
                 dynamic_prepass: true,
                 access_set_cache_enabled: true,
                 parallel_overlay: true,
@@ -2989,6 +3039,7 @@ fn minimal_config_snapshot() {
                 scheduler_min_threads: 0,
                 scheduler_max_threads: 0,
                 rayon_global_threads: 0,
+                tokio_stack_bytes: 8388608,
                 scheduler_stack_bytes: 33554432,
                 prover_stack_bytes: 33554432,
                 sumeragi_stack_bytes: 67108864,
@@ -3040,18 +3091,13 @@ fn minimal_config_snapshot() {
                 ],
             },
             settlement: Settlement {
-                repo: Repo {
-                    default_haircut_bps: 1500,
-                    margin_frequency_secs: 86400,
-                    eligible_collateral: [],
-                    collateral_substitution_matrix: {},
-                },
                 offline: Offline {
                     enabled: true,
                     escrow_required: true,
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,
+                    kagemusha_catalog_qualification_seal_path: None,
                     kagemusha_max_decoded_bytes: 268435456,
                 },
                 router: Router {

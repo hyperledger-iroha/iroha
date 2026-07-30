@@ -492,14 +492,16 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testBridgeCodecMatchesFixtures() throws {
-        guard NoritoNativeBridge.shared.isAccountAddressCodecAvailable else {
-            throw XCTSkip("NoritoBridge not available")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAccountAddressCodecAvailable,
+            "NoritoBridge not available"
+        )
         let fixture = try loadAddressFixture()
         let defaultPrefix = fixture.defaultNetworkPrefix
-        guard try bridgeSupportsSelectorFreeFixtureVectors(fixture) else {
-            throw XCTSkip("NoritoBridge account-address codec does not support selector-free canonical payloads yet")
-        }
+        try requireNativeTestCapability(
+            try bridgeSupportsSelectorFreeFixtureVectors(fixture),
+            "NoritoBridge account-address codec does not support selector-free canonical payloads yet"
+        )
         try NoritoNativeBridge.shared.withChainDiscriminant(defaultPrefix) {
             for vector in fixture.cases.positive {
                 let parseResult = try XCTUnwrap(

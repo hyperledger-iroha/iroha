@@ -105,11 +105,11 @@ rollout_phase = "default"
 
 | السطح | Canary (Stage A) | Ramp (Stage B) | Default (Stage C) |
 |---------|------------------|----------------|-------------------|
-| `sorafs_cli` fetch | `--anonymity-policy stage-a` او الاعتماد على المرحلة | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` fetch | `--anonymity-policy anon-guard-pq` او الاعتماد على المرحلة | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Orchestrator config JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust client config (`iroha.toml`) | `rollout_phase = "canary"` (default) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` signed commands | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optional `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`, optional `.ANON_STRICT_PQ` |
+| `iroha_cli` signed commands | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`, optional `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`, optional `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`, optional `.ANON_STRICT_PQ` |
 | JavaScript orchestrator helpers | `rolloutPhase: "canary"` او `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | Swift `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -132,7 +132,7 @@ rollout_phase = "default"
 
 3. **Client/SDK canary (T plus 1 week)**
 
-   - قلب `rollout_phase = "ramp"` في اعدادات client او تمرير overrides `stage-b` لدفعات SDK المحددة.
+   - قلب `rollout_phase = "ramp"` في اعدادات client او تمرير overrides `anon-majority-pq` لدفعات SDK المحددة.
    - التقاط فروقات telemetry (`sorafs_orchestrator_policy_events_total` مجمعة حسب `client_id` و`region`) وارفاقها بسجل حوادث rollout.
 
 4. **Default promotion (T plus 3 weeks)**
@@ -168,7 +168,7 @@ rollout_phase = "default"
 ### Ramp -> Canary (Stage B -> Stage A)
 
 1. استورد snapshot الخاص بـ guard-directory الذي تم التقاطه قبل الترقية عبر `sorafs_cli guard-directory import --guard-directory guards.json` ثم اعِد تشغيل `sorafs_cli guard-directory verify` كي يتضمن packet الخفض hashes.
-2. اضبط `rollout_phase = "canary"` (او override بـ `anonymity_policy stage-a`) على orchestrator وconfigs للـ client، ثم اعد تشغيل PQ ratchet drill من [PQ ratchet runbook](./pq-ratchet-runbook.md) لاثبات مسار downgrade.
+2. اضبط `rollout_phase = "canary"` (او override بـ `anonymity_policy anon-guard-pq`) على orchestrator وconfigs للـ client، ثم اعد تشغيل PQ ratchet drill من [PQ ratchet runbook](./pq-ratchet-runbook.md) لاثبات مسار downgrade.
 3. ارفق لقطات PQ Ratchet وtelemetry SN16 المحدثة مع نتائج التنبيهات في سجل الحوادث قبل اخطار governance.
 
 ### تذكيرات guardrail

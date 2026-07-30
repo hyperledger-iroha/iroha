@@ -304,6 +304,29 @@ test("SoraFS gateway denial declarations expose only governed catalog evidence",
   const optionNames = options.members.map(propertyName);
   assert.ok(optionNames.includes("cacheVersion"));
   assert.equal(optionNames.includes("moderationTokenKey"), false);
+  const exactOptionTypes = new Map([
+    ["rolloutPhase", '"canary" | "ramp" | "default"'],
+    [
+      "transportPolicy",
+      '"soranet-first" | "soranet-strict" | "direct-only"',
+    ],
+    [
+      "anonymityPolicy",
+      '"anon-guard-pq" | "anon-majority-pq" | "anon-strict-pq"',
+    ],
+    ["writeMode", '"read-only" | "upload-pq-only"'],
+  ]);
+  for (const [name, expectedType] of exactOptionTypes) {
+    const property = options.members.find(
+      (member) => propertyName(member) === name,
+    );
+    assert.ok(property && ts.isPropertySignature(property), `missing ${name}`);
+    assert.equal(
+      property.type?.getText(source),
+      expectedType,
+      `${name} must expose only exact V1 labels`,
+    );
+  }
 
   const failure = findInterface("SorafsGatewayFetchAttemptFailure");
   const policyBlock = failure.members.find(
@@ -364,13 +387,23 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       [
         ...imports,
         `import * as RootSdk from ${JSON.stringify(PACKAGE_NAME)};`,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, type CancelAssetLockInstruction, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiBrowserClient, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, buildSetAssetTransferAvailabilityInstruction, decodeCancelAssetLockV1, encodeCancelAssetLockV1, validateAppealFinanceCancelAssetLock, type AssetTransferAvailability, type CancelAssetLockInstruction, type CancelAssetLockV1, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening, type SetAssetTransferAvailabilityInstruction, type SorafsValidationOutcome, type ToriiVerifierBackendLabelV1 } from ${JSON.stringify(PACKAGE_NAME)};`,
         `import { getPrivacyCapabilitiesV1, parsePrivacyCapabilitySnapshotV1, type PrivacyCapabilitySnapshotV1 } from ${JSON.stringify(`${PACKAGE_NAME}/privacy-capabilities`)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
         "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
         'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
+        'const bareCancelAssetLock: CancelAssetLockV1 = { escrow_id: "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B", expected_remaining_amount: "20" };',
+        "const bareCancelAssetLockArchive: Buffer = encodeCancelAssetLockV1(bareCancelAssetLock);",
+        "const decodedBareCancelAssetLock: CancelAssetLockV1 = decodeCancelAssetLockV1(bareCancelAssetLockArchive);",
+        "const appealFinanceOutcome: SorafsValidationOutcome = validateAppealFinanceCancelAssetLock(bareCancelAssetLockArchive, { label: 'cancel_asset_lock_v1.to', generatedAtUnix: 41n });",
+        "// @ts-expect-error bare V1 quantities must be canonical strings.",
+        'encodeCancelAssetLockV1({ escrow_id: bareCancelAssetLock.escrow_id, expected_remaining_amount: 20 });',
         "// @ts-expect-error quantity-bearing APIs reject lossy JavaScript numbers.",
         'buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: 15 });',
+        'const availability: AssetTransferAvailability = "Disabled";',
+        'const setAvailability: SetAssetTransferAvailabilityInstruction = buildSetAssetTransferAvailabilityInstruction({ accountId: "i105...", assetDefinitionId: "asset...", expectedRevision: 0, incoming: availability, outgoing: "Enabled" });',
+        '// @ts-expect-error availability spellings are exact.',
+        'buildSetAssetTransferAvailabilityInstruction({ accountId: "i105...", assetDefinitionId: "asset...", expectedRevision: 0, incoming: "disabled", outgoing: "Enabled" });',
         "const toriiConstructor: typeof ToriiClient = Torii.ToriiClient;",
         `const encodeInstruction: typeof export${noritoIndex}.noritoEncodeInstruction = Norito.noritoEncodeInstruction;`,
         `const validateFrame: typeof export${noritoIndex}.validateNoritoFrame = Norito.validateNoritoFrame;`,

@@ -13,16 +13,16 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_executor_data_model.workspace = true
-iroha_data_model.workspace = true
-iroha_crypto.workspace = true
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_schema_gen.workspace = true
 iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_test_samples.workspace = true
 iroha_schema.workspace = true
-iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], default-features = false }
 iroha_config.workspace = true
 iroha_version.workspace = true
 

@@ -430,6 +430,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_ENTRIES,
             zk_ivm_prove_job_max_retained_bytes:
                 iroha_config::parameters::defaults::torii::ZK_IVM_PROVE_JOB_MAX_RETAINED_BYTES,
+            transaction_ingress: A::TransactionIngress::default(),
             da_ingest: A::DaIngest::default(),
             connect,
             iso_bridge: iroha_config::parameters::actual::IsoBridge {
@@ -527,11 +528,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             panic_on_duplicate_metrics: iroha_config::parameters::defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
         },
         pipeline: iroha_config::parameters::actual::Pipeline {
-            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: false,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -988,6 +984,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             scheduler_min_threads: iroha_config::parameters::defaults::concurrency::SCHEDULER_MIN,
             scheduler_max_threads: iroha_config::parameters::defaults::concurrency::SCHEDULER_MAX,
             rayon_global_threads: iroha_config::parameters::defaults::concurrency::RAYON_GLOBAL,
+            tokio_stack_bytes:
+                iroha_config::parameters::defaults::concurrency::TOKIO_STACK_BYTES,
             scheduler_stack_bytes:
                 iroha_config::parameters::defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: iroha_config::parameters::defaults::concurrency::PROVER_STACK_BYTES,

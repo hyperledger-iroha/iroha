@@ -344,7 +344,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'cron: "17 2 * * *"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-        'python-version: "3.11"',
+        'python-version: "3.12"',
         "bash ci/check_sorafs_fixtures.sh",
         "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
         'go-version: "1.26.x"',
@@ -356,10 +356,13 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'cron: "41 3 * * *"',
         "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10",
         "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1",
-        'python-version: "3.11"',
+        'python-version: "3.12"',
+        "name: Bind the canonical mobile Python",
+        'echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"',
         "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e",
         'node-version: "24"',
         "runs-on: macos-14",
+        "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
@@ -411,21 +414,25 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
         *JAVA_GOVERNANCE_WORKFLOW_STEP_MARKERS,
     ),
     SWIFT_GOVERNANCE_VALIDATOR_TEST: (
-        NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
         "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
         "guard try requireGovernanceDagNativeBridge() else",
-        "throw XCTSkip(\"SoraFS governance DAG reference bridge unavailable\")",
+        "XCTFail(\"\\(Self.nativeValidationRequiredMessage) \\(unavailableMessage)\")",
     ),
     KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
-        NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
         "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
         "        requireGovernanceDagNativeBridge()\n",
-        'assumeTrue(false, "connect_norito_bridge not available")',
+        "throw AssertionError(requiredMessage)",
     ),
     JAVA_GOVERNANCE_VALIDATOR_TEST: (
-        NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
-        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
-        "      requireGovernanceDagNativeBridge();\n",
+        "ABI-21 connect_norito_bridge with all SoraFS reference symbols is required.",
+        "  private static void requireNativeBridge() {\n",
+        (
+            "  private static void "
+            "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()\n"
+            "      throws IOException {\n"
+            "    requireNativeBridge();\n"
+        ),
+        "throw new AssertionError(",
     ),
 }
 
@@ -708,6 +715,12 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
             f"{SWIFT_GOVERNANCE_VALIDATOR_TEST}: Governance DAG golden test "
             "must not unconditionally skip when the native bridge is unavailable"
         )
+    for marker in ("XCTSkip(", NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV):
+        if marker in swift:
+            errors.append(
+                f"{SWIFT_GOVERNANCE_VALIDATOR_TEST}: native validation must fail "
+                f"without the capability-skip marker `{marker}`"
+            )
 
     kotlin = sources[KOTLIN_GOVERNANCE_VALIDATOR_TEST]
     kotlin_section = _contract_section(
@@ -730,6 +743,12 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
             f"{KOTLIN_GOVERNANCE_VALIDATOR_TEST}: Governance DAG golden test "
             "must not unconditionally skip when the native bridge is unavailable"
         )
+    for marker in ("assumeTrue(", NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV):
+        if marker in kotlin:
+            errors.append(
+                f"{KOTLIN_GOVERNANCE_VALIDATOR_TEST}: native validation must fail "
+                f"without the capability-skip marker `{marker}`"
+            )
 
     java = sources[JAVA_GOVERNANCE_VALIDATOR_TEST]
     java_section = _contract_section(
@@ -752,6 +771,11 @@ def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
         errors.append(
             f"{JAVA_GOVERNANCE_VALIDATOR_TEST}: Governance DAG golden test "
             "must not unconditionally return when the native bridge is unavailable"
+        )
+    if NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV in java:
+        errors.append(
+            f"{JAVA_GOVERNANCE_VALIDATOR_TEST}: native validation must fail "
+            "without an environment-controlled capability return"
         )
     return errors
 

@@ -756,7 +756,7 @@ mod tests {
         ) -> Result<NexusApprovedAccount, NexusAppError> {
             Ok(NexusApprovedAccount {
                 account_id: self.account.clone(),
-                signing_public_key: self.account.signatory().clone(),
+                signing_public_key: self.account.expect_single_signatory().clone(),
             })
         }
 

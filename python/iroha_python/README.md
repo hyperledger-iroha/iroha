@@ -663,6 +663,40 @@ ingestion = client.get_sorafs_por_ingestion_status(manifest_hex="ab" * 32)
 for provider in ingestion.providers:
     print(provider.provider_id_hex, provider.pending_challenges, provider.failures_total)
 
+# Read exact-checkpoint SoraFS billing and hedging projections. These helpers
+# require per-request canonical account authentication, never retry or follow
+# redirects, and enforce the Torii 1 MiB JSON / 22 MiB statement response caps.
+billing_auth = ToriiCanonicalRequestAuth(
+    account_id=os.environ["IROHA_ACCOUNT_ID"],
+    signer=external_request_signer,
+)
+checkpoint = os.environ["SORAFS_BILLING_CHECKPOINT_HEX"]
+statements = client.list_sorafs_billing_statements(
+    expected_checkpoint_fingerprint_hex=checkpoint,
+    limit=25,
+    canonical_auth=billing_auth,
+)
+statement_id = statements["items"][0]["statement_id_hex"]
+statement_norito = client.get_sorafs_billing_statement(
+    statement_id,
+    checkpoint,
+    canonical_auth=billing_auth,
+)
+client.acknowledge_sorafs_billing_statement(
+    statement_id,
+    checkpoint,
+    request_nonce_hex=secrets.token_hex(32),
+    authentication_proof=external_owner_proof,
+    canonical_auth=billing_auth,
+)
+exposure = client.get_sorafs_hedging_exposure(
+    expected_checkpoint_fingerprint_hex=checkpoint,
+    limit=100,
+    canonical_auth=billing_auth,
+)
+# Reconciliation is billing-manager-only; exposure/intents require a treasury
+# or hedging observer role. No automatic hedge-execution mutation is exposed.
+
 # `status_bytes`, `weekly_report`, and the export helper all return Norito payloads.
 # Decode them with the `norito` crate or via `norito.decode(...)` when the matching schema is available.
 
@@ -1002,6 +1036,28 @@ drawdown;
 Zero, negative, NaN, and infinite amounts and expected-remaining preconditions
 are rejected by the SDK before transaction construction.
 
+The appeal-finance fixture boundary also exposes a strict bare archive codec:
+
+```python
+from iroha_python import (
+    decode_cancel_asset_lock_v1,
+    encode_cancel_asset_lock_v1,
+    validate_appeal_finance_cancel_asset_lock,
+)
+
+archive = encode_cancel_asset_lock_v1(
+    "hash:73CCD4E0DD69AD434DB75056B600AA4F74C8FC5556B11BDC799DFDB7EA29851F#434B",
+    "20",
+)
+fields = decode_cancel_asset_lock_v1(archive)
+diagnostic = validate_appeal_finance_cancel_asset_lock(archive)
+```
+
+Only the canonical checksummed hash string, positive canonical quantity string,
+and exact archive bytes are accepted. Hex/base64 aliases, nested identifiers,
+padding, substituted schemas or flags, and trailing bytes fail closed. The
+validation result is diagnostic and does not authorize settlement.
+
 ### Repo settlement helpers
 
 Create repo instructions without hand-crafting Norito payloads:
@@ -1027,15 +1083,17 @@ draft.repo_initiate(
     maturity_timestamp_ms=1_704_000_000_000,
     governance=governance,
 )
-draft.repo_unwind(
-    agreement_id="daily_repo",
-    initiator="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    counterparty="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-    cash_leg=cash,
-    collateral_leg=collateral,
-    settlement_timestamp_ms=1_704_086_400_000,
-)
+draft.repo_unwind(agreement_id="daily_repo")
 ```
+
+Before the initiation transaction is submitted, the counterparty must grant the
+initiator an exact `CanExecuteSettlement` permission for its cash balance and
+the collateral holder must grant the phase-separated maturity permission for
+its collateral balance. Both permissions bind the complete initiation terms,
+including the agreement identifier, parties, asset definitions, quantities,
+rate, maturity, governance, and custodian. The unwind is accepted only at the
+recorded maturity; every economic term and exact balance scope is loaded from
+the immutable on-chain agreement.
 
 Load repo agreements from a Torii response and compute the next margin checkpoint:
 
@@ -1347,11 +1405,6 @@ print("Lock owners:", list(locks.locks))
 print("Expired locks:", unlock_stats_typed.expired_locks_now)
 print("Governed contract:", governed_contract.contract_address, governed_contract.code_hash_hex)
 print("Protected namespaces:", protected)
-
-# VRF helpers (Torii must be built with `gov_vrf`)
-client.derive_governance_council_vrf(
-    {"committee_size": 21, "candidates": [{"account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF", "variant": "Normal"}]}
-)
 ```
 
 ## Runtime upgrades and ABI helpers
@@ -1659,6 +1712,19 @@ Connect frame encoding and crypto helpers require the compiled
 `iroha_python._crypto` extension. Run `maturin develop --release` from this
 directory before running tests that exercise Connect payloads.
 
+From the repository root, the SoraFS V1 native parity lane uses exact Python
+3.12 and rebuilds the ABI-21 extension from the current clean source revision:
+
+```bash
+SORAFS_PYTHON_SDK_PYTHON_BIN=/path/to/python3.12 \
+  bash ci/check_sorafs_python_native_sdk.sh
+```
+
+Native extension files are build outputs and must remain untracked. The lane
+rejects prebuilt `.so`, `.dylib`, `.pyd`, or `.dll` files in the package source
+tree, authenticates the freshly built artifact, and fails if any required
+native SDK test is skipped.
+
 ## Integration tests
 
 The SDK ships an opt-in integration harness that exercises runtime and metadata
@@ -1886,6 +1952,9 @@ from iroha_python import (
     CompleteReplicationOrderInstruction,
     ExpireReplicationOrderInstruction,
     IssueReplicationOrderInstruction,
+    ProviderIngestCompletionAuthorityV1,
+    ProviderIngestCompletionSignerPolicyV1,
+    ProviderIngestFinalizedAnchorV1,
 )
 
 issue = IssueReplicationOrderInstruction(
@@ -1898,17 +1967,33 @@ complete = CompleteReplicationOrderInstruction(
     order_id,
     provider_id,
     completion_epoch=27,
+    expected_authority=ProviderIngestCompletionAuthorityV1(
+        provider_owner=provider_owner,
+        signer_policy=ProviderIngestCompletionSignerPolicyV1(
+            policy_id=policy_id,
+            revision=2,
+            predecessor_digest=predecessor_digest,
+            policy_digest=policy_digest,
+        ),
+    ),
+    expected_assignment_revision=3,
+    finalized_anchor=ProviderIngestFinalizedAnchorV1(
+        height=41,
+        block_hash=block_hash,
+    ),
 )
 expire = ExpireReplicationOrderInstruction(order_id, expiration_epoch=29)
 ```
 
 IDs are exact non-zero lowercase 64-hex strings. Issue validates bounded,
 canonical base64/Norito framing plus the embedded order ID, target, provider
-ordering, and deadline. Completion always requires
-`order_id + provider_id + completion_epoch`; the retired two-field shape and
-unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON or
-`.to_instruction()` after rebuilding the native extension from the same source
-revision.
+ordering, and deadline. Completion always requires the exact six-field hard cut:
+`order_id`, `provider_id`, `completion_epoch`, `expected_authority`,
+`expected_assignment_revision`, and `finalized_anchor`. The authority retains
+the provider owner and four-part signer-policy chain; legacy, missing, and
+unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON
+or `.to_instruction()` after rebuilding the native extension from the same
+source revision.
 
 ## Configuration & overrides
 
@@ -1973,9 +2058,9 @@ no environment variables need to be exported.
 - Extend the Torii client with governance helpers (proposal deployment, ballot
   submission, referendum status) so clients can orchestrate governance flows
   without hand-crafted HTTP requests.
-- Include configuration helpers (`get_confidential_gas_schedule`,
-  `set_confidential_gas_schedule`) so operators can inspect or update the
-  confidential verification gas schedule without manually building DTO payloads.
+- Include `get_confidential_gas_schedule` so operators can inspect the
+  confidential verification gas schedule. The schedule is startup configuration
+  committed into the ZK policy hash and is not mutable through the runtime API.
 - Expose administrative helpers for configuration updates, peer discovery
   (typed `PeerInfo` via `list_peers_typed`), network time introspection
   (`NetworkTimeSnapshot`/`NetworkTimeStatus`), and runtime metadata

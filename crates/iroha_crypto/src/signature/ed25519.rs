@@ -26,7 +26,9 @@ use std::{
 };
 
 const VERIFY_OK_CACHE_LIMIT: usize = 8192;
-const VERIFY_OK_EXACT_CACHE_SIZE: usize = 65536;
+// Two exact entries fit in each bucket, so this admits the same bounded
+// working set as the generic cache without an unbounded per-thread footprint.
+const VERIFY_OK_EXACT_CACHE_SIZE: usize = VERIFY_OK_CACHE_LIMIT / 2;
 const VERIFY_OK_MAP_INITIAL_CAPACITY: usize = VERIFY_OK_CACHE_LIMIT;
 const PUBLIC_KEY_PARSE_CACHE_LIMIT: usize = 32768;
 const PUBLIC_KEY_PARSE_FAST_CACHE_SIZE: usize = 16384;
@@ -234,15 +236,14 @@ impl VerifyOkExactBucket {
 }
 
 struct VerifyOkCache {
-    exact: Box<[VerifyOkExactBucket]>,
+    exact: Option<Box<[VerifyOkExactBucket]>>,
     map: Option<HashSet<[u8; 32]>>,
 }
 
 impl VerifyOkCache {
     fn new() -> Self {
         Self {
-            exact: vec![VerifyOkExactBucket::default(); VERIFY_OK_EXACT_CACHE_SIZE]
-                .into_boxed_slice(),
+            exact: None,
             map: None,
         }
     }
@@ -251,7 +252,9 @@ impl VerifyOkCache {
         let Some(key) = exact_verify_key(pk, message, signature) else {
             return false;
         };
-        self.exact[verify_ok_exact_index(&key.pk, &key.message, &key.signature)].contains(&key)
+        self.exact.as_ref().is_some_and(|cache| {
+            cache[verify_ok_exact_index(&key.pk, &key.message, &key.signature)].contains(&key)
+        })
     }
 
     fn insert_exact_32(&mut self, pk: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
@@ -259,7 +262,10 @@ impl VerifyOkCache {
             return false;
         };
         let slot = verify_ok_exact_index(&entry.pk, &entry.message, &entry.signature);
-        self.exact[slot].insert(entry);
+        let cache = self.exact.get_or_insert_with(|| {
+            vec![VerifyOkExactBucket::default(); VERIFY_OK_EXACT_CACHE_SIZE].into_boxed_slice()
+        });
+        cache[slot].insert(entry);
         true
     }
 
@@ -281,6 +287,11 @@ impl VerifyOkCache {
     #[cfg(test)]
     fn general_cache_allocated(&self) -> bool {
         self.map.is_some()
+    }
+
+    #[cfg(test)]
+    fn exact_cache_allocated(&self) -> bool {
+        self.exact.is_some()
     }
 }
 
@@ -353,6 +364,11 @@ fn verify_ok_cache_key_calls_for_tests() -> usize {
 #[cfg(test)]
 fn verify_ok_general_cache_allocated_for_tests() -> bool {
     VERIFY_OK_CACHE.with(|cache| cache.borrow().general_cache_allocated())
+}
+
+#[cfg(test)]
+fn verify_ok_exact_cache_allocated_for_tests() -> bool {
+    VERIFY_OK_CACHE.with(|cache| cache.borrow().exact_cache_allocated())
 }
 
 #[cfg(test)]
@@ -939,8 +955,16 @@ mod test {
         let message = [0x5A; 32];
         let signature = Ed25519Sha512::sign(&message, &sk);
 
+        assert!(
+            !verify_ok_exact_cache_allocated_for_tests(),
+            "thread-local exact cache must start allocation-free"
+        );
         Ed25519Sha512::verify(&message, &signature, &pk).expect("valid signature");
         assert_eq!(verify_ok_cache_key_calls_for_tests(), 0);
+        assert!(
+            verify_ok_exact_cache_allocated_for_tests(),
+            "a successful exact verification should allocate the bounded cache"
+        );
         assert!(
             !verify_ok_general_cache_allocated_for_tests(),
             "32-byte transaction hashes should only use the exact verify cache"
@@ -951,6 +975,25 @@ mod test {
         assert!(
             !verify_ok_general_cache_allocated_for_tests(),
             "exact cache hits must not allocate the generic verify cache"
+        );
+    }
+
+    #[test]
+    fn ed25519_exact_verify_cache_has_bounded_lazy_footprint() {
+        reset_verify_ok_cache_for_tests();
+        assert!(!verify_ok_exact_cache_allocated_for_tests());
+
+        let bytes = core::mem::size_of::<VerifyOkExactBucket>()
+            .checked_mul(VERIFY_OK_EXACT_CACHE_SIZE)
+            .expect("exact-cache footprint fits usize");
+        assert!(
+            bytes <= 2 * 1024 * 1024,
+            "per-thread exact cache footprint grew beyond 2 MiB: {bytes} bytes"
+        );
+        assert_eq!(
+            VERIFY_OK_EXACT_CACHE_SIZE * 2,
+            VERIFY_OK_CACHE_LIMIT,
+            "two-entry buckets must preserve the configured entry budget"
         );
     }
 
@@ -1241,6 +1284,52 @@ mod test {
         let mut first = [0u8; 32];
         first[..8].copy_from_slice(&0u64.to_le_bytes());
         assert!(cache.get(&first).is_some());
+    }
+
+    #[test]
+    fn public_key_parse_fast_slot_collision_compares_full_key_bytes() {
+        let mut cache = PublicKeyParseCache::new();
+        let first = [0u8; 32];
+        let mut colliding = [0u8; 32];
+        colliding[0] = 1;
+        // `b.rotate_left(17)` maps bit 47 to bit 0, cancelling the first
+        // chunk's low bit while retaining distinct full key bytes.
+        colliding[13] = 0x80;
+        assert_ne!(first, colliding);
+        assert_eq!(
+            public_key_parse_fast_index(&first),
+            public_key_parse_fast_index(&colliding)
+        );
+
+        cache.insert(
+            first,
+            PublicKeyParseOutcome::invalid(ParseError("first rejection".into())),
+        );
+        assert!(
+            cache.get(&colliding).is_none(),
+            "a colliding fast slot must not return another key's negative verdict"
+        );
+
+        cache.insert(
+            colliding,
+            PublicKeyParseOutcome::invalid(ParseError("second rejection".into())),
+        );
+        assert_eq!(
+            cache
+                .get(&first)
+                .expect("first exact entry remains present")
+                .expect_err("first entry is a cached rejection")
+                .0,
+            "first rejection"
+        );
+        assert_eq!(
+            cache
+                .get(&colliding)
+                .expect("second exact entry is present")
+                .expect_err("second entry is a cached rejection")
+                .0,
+            "second rejection"
+        );
     }
 
     #[test]

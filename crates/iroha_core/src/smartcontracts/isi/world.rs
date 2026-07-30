@@ -200,6 +200,27 @@ pub mod isi {
         ))
     }
 
+    fn validate_ivm_heap_parameter(parameter: &Parameter) -> Result<(), Error> {
+        use iroha_data_model::parameter::SmartContractParameter;
+
+        let (name, limit) = match parameter {
+            Parameter::SmartContract(SmartContractParameter::Memory(limit)) => {
+                ("smart_contract.memory", limit.get())
+            }
+            Parameter::Executor(SmartContractParameter::Memory(limit)) => {
+                ("executor.memory", limit.get())
+            }
+            _ => return Ok(()),
+        };
+        if limit > iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES {
+            return Err(invalid_smart_contract_parameter(format!(
+                "{name} exceeds the ABI V1 heap window: {limit} > {} bytes",
+                iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES
+            )));
+        }
+        Ok(())
+    }
+
     #[derive(crate::json_macros::JsonDeserialize)]
     struct GovernedGasRate {
         asset: String,
@@ -284,6 +305,85 @@ pub mod isi {
             }
         }
         Ok(())
+    }
+
+    fn validate_reputation_archive_retention_request(
+        custom: &iroha_data_model::parameter::CustomParameter,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        use iroha_data_model::sorafs::reputation::ReputationFinalizedArchiveRetentionRequestV1;
+
+        let Some(next) = ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(
+            custom,
+        )
+        .map_err(|error| {
+            invalid_smart_contract_parameter(format!(
+                "invalid finalized-reputation archive retention request: {error}"
+            ))
+        })?
+        else {
+            return Ok(());
+        };
+        if &next.chain_id != &state_transaction.chain_id {
+            return Err(invalid_smart_contract_parameter(
+                "finalized-reputation archive retention request targets another chain",
+            ));
+        }
+        if next.compact_through.height >= state_transaction.block_height() {
+            return Err(invalid_smart_contract_parameter(
+                "finalized-reputation archive retention target must precede its authorizing block",
+            ));
+        }
+        let target_index = usize::try_from(next.compact_through.height)
+            .ok()
+            .and_then(|height| height.checked_sub(1))
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter(
+                    "finalized-reputation archive retention target height is not representable",
+                )
+            })?;
+        let target_hash = state_transaction
+            .block_hashes()
+            .get(target_index)
+            .map(|hash| *hash.as_ref())
+            .ok_or_else(|| {
+                invalid_smart_contract_parameter(
+                    "finalized-reputation archive retention target is not a committed ancestor",
+                )
+            })?;
+        if target_hash != next.compact_through.block_hash {
+            return Err(invalid_smart_contract_parameter(
+                "finalized-reputation archive retention target hash is not the committed ancestor",
+            ));
+        }
+
+        let parameter_id = ReputationFinalizedArchiveRetentionRequestV1::parameter_id();
+        let previous = state_transaction
+            .world
+            .parameters
+            .get()
+            .custom()
+            .get(&parameter_id)
+            .map(|previous| {
+                ReputationFinalizedArchiveRetentionRequestV1::from_custom_parameter(previous)
+                    .map_err(|error| {
+                        invalid_smart_contract_parameter(format!(
+                            "active finalized-reputation archive retention request is malformed: {error}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        invalid_smart_contract_parameter(
+                            "active finalized-reputation archive retention parameter changed identity",
+                        )
+                    })
+            })
+            .transpose()?;
+        ReputationFinalizedArchiveRetentionRequestV1::validate_transition(previous.as_ref(), &next)
+            .map_err(|error| {
+                invalid_smart_contract_parameter(format!(
+                    "invalid finalized-reputation archive retention transition: {error}"
+                ))
+            })
     }
 
     fn parse_trigger_callback_alias_namespace(
@@ -1099,7 +1199,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
+        if !crate::zk::is_production_verify_backend_label(backend) {
             return None;
         }
         norito::decode_canonical::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -1154,7 +1254,7 @@ pub mod isi {
         if !is_admissible(record_id) || !is_admissible(env_id) {
             return false;
         }
-        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -1206,7 +1306,7 @@ pub mod isi {
     }
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
             halo2_voting_circuit_matches(record_circuit_id, expected_id)
         } else if crate::zk::is_stark_fri_v1_backend(backend) {
             // Enforce canonical vote circuit roles to avoid swapping ballot/tally VKs.
@@ -1231,14 +1331,14 @@ pub mod isi {
     }
 
     fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta)
+        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
     }
 
-    fn ensure_verifier_backend_registry_id_v1(backend: &str) -> Result<(), Error> {
-        if crate::zk::is_verifier_readiness_claim_label(backend) {
+    fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
+        if crate::zk::is_production_claim_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "readiness-claim verifying key backends are not supported".into(),
+                    "production-claim verifying key backends are not supported".into(),
                 ),
             ));
         }
@@ -1256,7 +1356,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
+        if !crate::zk::is_production_verify_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "unsupported verifying key backends are not supported".into(),
@@ -1417,9 +1517,9 @@ pub mod isi {
         Ok(())
     }
 
-    fn readiness_claim_proof_backend_error() -> Error {
+    fn production_claim_proof_backend_error() -> Error {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            "readiness-claim proof backends are not supported".into(),
+            "production-claim proof backends are not supported".into(),
         ))
         .into()
     }
@@ -2584,7 +2684,7 @@ pub mod isi {
             candidates
                 .iter()
                 .map(|(account_id, bond)| (account_id, bond.clone())),
-            iroha_data_model::isi::governance::CouncilDerivationKind::Vrf,
+            iroha_data_model::isi::governance::CouncilDerivationKind::Sortition,
         );
         let roster_root = compute_parliament_roster_root(&bodies)?;
         Ok(crate::state::GovernanceParliamentSnapshot {
@@ -3122,7 +3222,7 @@ pub mod isi {
                             ),
                         ));
                     }
-                    ensure_verifier_backend_registry_id_v1(id_backend)?;
+                    ensure_production_verifying_key_backend_id(id_backend)?;
                     if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -3140,7 +3240,7 @@ pub mod isi {
                             ),
                         ));
                     }
-                    ensure_verifier_backend_registry_id_v1(id_backend)?;
+                    ensure_production_verifying_key_backend_id(id_backend)?;
                     if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -9673,27 +9773,22 @@ pub mod isi {
             for (account, record) in updated_citizens {
                 state_transaction.world.citizens.insert(account, record);
             }
-            // Idempotent insert: if entry exists and draw metadata match, accept; if different, overwrite.
+            let candidate_count =
+                u32::try_from(self.members.len().saturating_add(self.alternates.len()))
+                    .unwrap_or(u32::MAX);
+            // This instruction is the privileged manual-roster path. Derivation metadata is
+            // ledger-owned so callers cannot assert that unverified cryptographic work occurred.
             let mut rec = crate::state::CouncilState {
                 epoch: self.epoch,
                 members: self.members.clone(),
                 alternates: self.alternates.clone(),
-                verified: self.verified,
-                candidate_count: self.candidates_count,
-                derived_by: self.derived_by,
+                candidate_count,
+                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
             };
             if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
                 let same_members = existing.members == self.members;
                 let same_alternates = existing.alternates == self.alternates;
-                let same_verification = existing.verified == self.verified;
-                let same_candidate_count = existing.candidate_count == self.candidates_count;
-                let same_derivation = existing.derived_by == self.derived_by;
-                if same_members
-                    && same_alternates
-                    && same_verification
-                    && same_candidate_count
-                    && same_derivation
-                {
+                if same_members && same_alternates {
                     rec = existing.clone();
                     let already_recorded = state_transaction
                         .world
@@ -9720,9 +9815,9 @@ pub mod isi {
                         epoch: self.epoch,
                         members_count,
                         alternates_count,
-                        verified: self.verified,
-                        candidates_count: self.candidates_count,
-                        derived_by: self.derived_by,
+                        candidates_count: candidate_count,
+                        derived_by:
+                            iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
                     },
                 ),
             ));
@@ -10373,7 +10468,7 @@ pub mod isi {
                         ),
                     ));
                 }
-                ensure_verifier_backend_registry_id_v1(id_backend)?;
+                ensure_production_verifying_key_backend_id(id_backend)?;
                 if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -10391,7 +10486,7 @@ pub mod isi {
                         ),
                     ));
                 }
-                ensure_verifier_backend_registry_id_v1(id_backend)?;
+                ensure_production_verifying_key_backend_id(id_backend)?;
                 if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -11265,8 +11360,8 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
-        if crate::zk::is_verifier_readiness_claim_label(attachment.backend.as_str()) {
-            return Err(readiness_claim_proof_backend_error());
+        if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
+            return Err(production_claim_proof_backend_error());
         }
         if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -11282,7 +11377,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_verifier_backend_registry_label_v1(attachment.backend.as_str()) {
+        if !crate::zk::is_production_verify_backend_label(attachment.backend.as_str()) {
             return Err(unsupported_proof_backend_error());
         }
         if expects_envelope && envelope_meta.is_none() {
@@ -11309,12 +11404,12 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
-        crate::zk::verifier_backend_registry_tag_v1(backend).is_some_and(|expected| expected == tag)
+        crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
     }
 
     fn backend_requires_open_verify_envelope(backend: &str) -> bool {
         matches!(
-            crate::zk::verifier_backend_registry_tag_v1(backend),
+            crate::zk::production_verify_backend_tag(backend),
             Some(BackendTag::Halo2IpaPasta | BackendTag::Stark)
         )
     }
@@ -20019,41 +20114,6 @@ pub mod isi {
                     )
                     .into());
                 }
-                if state_transaction
-                    .settlement
-                    .repo
-                    .eligible_collateral
-                    .iter()
-                    .any(|definition_id| definition_id == asset_definition_id)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as settlement repo eligible collateral (`settlement.repo.eligible_collateral`); update settlement config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                if let Some((base_definition_id, _)) = state_transaction
-                    .settlement
-                    .repo
-                    .collateral_substitution_matrix
-                    .iter()
-                    .find(|(base_definition_id, substitutes)| {
-                        *base_definition_id == asset_definition_id
-                            || substitutes
-                                .iter()
-                                .any(|definition_id| definition_id == asset_definition_id)
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured in settlement repo collateral substitution matrix (`settlement.repo.collateral_substitution_matrix`, base {base_definition_id}); update settlement config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
                 if let Some((agreement_id, _)) = state_transaction
                     .world
                     .repo_agreements
@@ -20439,8 +20499,10 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
+            validate_ivm_heap_parameter(self.inner())?;
             if let Parameter::Custom(custom) = self.inner() {
                 validate_governed_pipeline_gas_parameter(custom)?;
+                validate_reputation_archive_retention_request(custom, state_transaction)?;
                 match iroha_data_model::nexus::LaneLifecycleParameterV1::from_custom_parameter(
                     custom,
                 ) {
@@ -20655,14 +20717,19 @@ pub mod isi {
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
                 Transaction(transaction.max_decompressed_bytes) => TransactionParameter::MaxDecompressedBytes,
                 Transaction(transaction.max_metadata_depth) => TransactionParameter::MaxMetadataDepth,
+                Transaction(transaction.max_time_to_live_ms) => TransactionParameter::MaxTimeToLiveMs,
 
                 SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
                 SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
                 SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
+                SmartContract(smart_contract.max_output_items) => SmartContractParameter::MaxOutputItems,
+                SmartContract(smart_contract.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
 
                 Executor(executor.fuel) => SmartContractParameter::Fuel,
                 Executor(executor.memory) => SmartContractParameter::Memory,
                 Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
+                Executor(executor.max_output_items) => SmartContractParameter::MaxOutputItems,
+                Executor(executor.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
             );
 
             Ok(())
@@ -20782,7 +20849,10 @@ pub mod isi {
                 SetParameter,
                 bridge::{RecordBridgeReceipt, SubmitBridgeProof},
             },
-            parameter::system::{SumeragiNposParameters, SumeragiParameter},
+            parameter::{
+                SmartContractParameter,
+                system::{SumeragiNposParameters, SumeragiParameter},
+            },
             prelude::Parameter,
             zk::OpenVerifyEnvelope,
         };
@@ -28208,16 +28278,18 @@ seiyaku GovernanceLifecycle {
             stx.world
                 .insert_repo_agreement_entry(iroha_data_model::repo::RepoAgreement::new(
                     repo_id,
-                    initiator,
-                    counterparty,
+                    initiator.clone(),
+                    counterparty.clone(),
                     iroha_data_model::repo::RepoCashLeg {
                         asset_definition_id: cash_def.clone(),
                         quantity: Quantity::from(10_u32),
                     },
+                    AssetId::new(cash_def.clone(), counterparty.clone()),
                     iroha_data_model::repo::RepoCollateralLeg::new(
-                        collateral_def,
+                        collateral_def.clone(),
                         Quantity::from(12_u32),
                     ),
+                    AssetId::new(collateral_def, counterparty),
                     250,
                     1_000,
                     1,
@@ -28604,117 +28676,6 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn unregister_domain_rejects_when_domain_asset_definition_is_settlement_repo_eligible_collateral()
-         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            Register::domain(Domain::new(domain_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup domain");
-
-            let collateral_def =
-                AssetDefinitionId::new(domain_id.clone(), "collateral".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = collateral_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register cleanup-domain asset definition");
-            stx.settlement.repo.eligible_collateral = vec![collateral_def.clone()];
-
-            let err = Unregister::domain(domain_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err(
-                    "domain unregister must reject settlement repo eligible collateral removal",
-                );
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("settlement repo eligible collateral"),
-                "error should explain settlement repo eligible-collateral conflict: {err_string}"
-            );
-            assert!(
-                stx.world.domains.get(&domain_id).is_some(),
-                "cleanup domain should remain after rejected unregister"
-            );
-            assert!(
-                stx.world.asset_definitions.get(&collateral_def).is_some(),
-                "asset definition should remain after rejected unregister"
-            );
-        }
-
-        #[test]
-        fn unregister_domain_rejects_when_domain_asset_definition_is_settlement_repo_substitution_entry()
-         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let foreign_domain: DomainId =
-                DomainId::try_new("foreign", "world").expect("domain id parses");
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            Register::domain(Domain::new(domain_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup domain");
-            Register::domain(Domain::new(foreign_domain.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register foreign domain");
-
-            let base_def = AssetDefinitionId::new(foreign_domain, "base".parse().unwrap());
-            let substitute_def = AssetDefinitionId::new(domain_id.clone(), "sub".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = base_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register foreign base asset definition");
-            Register::asset_definition({
-                let __asset_definition_id = substitute_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register cleanup substitute asset definition");
-            stx.settlement
-                .repo
-                .collateral_substitution_matrix
-                .insert(base_def, vec![substitute_def.clone()]);
-
-            let err = Unregister::domain(domain_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("domain unregister must reject settlement repo substitution removal");
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("collateral substitution matrix"),
-                "error should explain settlement repo substitution conflict: {err_string}"
-            );
-            assert!(
-                stx.world.domains.get(&domain_id).is_some(),
-                "cleanup domain should remain after rejected unregister"
-            );
-            assert!(
-                stx.world.asset_definitions.get(&substitute_def).is_some(),
-                "asset definition should remain after rejected unregister"
-            );
-        }
-
-        #[test]
         fn unregister_domain_removes_offline_escrow_mappings_for_domain_asset_definitions() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -28841,13 +28802,15 @@ seiyaku GovernanceLifecycle {
                 account_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::repo::RepoCashLeg {
-                    asset_definition_id: cash_def,
+                    asset_definition_id: cash_def.clone(),
                     quantity: Quantity::from(10_u32),
                 },
+                AssetId::new(cash_def, ALICE_ID.clone()),
                 iroha_data_model::repo::RepoCollateralLeg::new(
-                    collateral_def,
+                    collateral_def.clone(),
                     Quantity::from(12_u32),
                 ),
+                AssetId::new(collateral_def, ALICE_ID.clone()),
                 250,
                 1_000,
                 1,
@@ -28931,7 +28894,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::nexus::PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: account_id.clone(),
-                    peer_id: PeerId::from(account_id.signatory().clone()),
+                    peer_id: PeerId::from(account_id.expect_single_signatory().clone()),
                     stake_account: account_id.clone(),
                     total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
@@ -29037,7 +29000,6 @@ seiyaku GovernanceLifecycle {
                                     epoch: 1,
                                     members: vec![account_id.clone()],
                                     alternates: Vec::new(),
-                                    verified: 0,
                                     candidate_count: 0,
                                     derived_by: Default::default(),
                                 },
@@ -29174,7 +29136,7 @@ seiyaku GovernanceLifecycle {
             stx.world.lane_relay_emergency_validators.insert(
                 LaneId::new(0),
                 iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(account_id.signatory().clone())],
+                    peers: vec![PeerId::from(account_id.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -32627,7 +32589,7 @@ seiyaku GovernanceLifecycle {
             "sis-with-hints",
         ];
 
-        const READINESS_CLAIM_VERIFIER_LABELS: &[&str] = &[
+        const PRODUCTION_CLAIM_VERIFIER_LABELS: &[&str] = &[
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",
@@ -34889,7 +34851,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn register_vk_rejects_readiness_claim_backend_labels() {
+        fn register_vk_rejects_production_claim_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -34908,9 +34870,9 @@ seiyaku GovernanceLifecycle {
             stx.apply();
 
             let exec = Executor::default();
-            for (idx, backend) in READINESS_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
                 let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_readiness_claim_{idx}"));
+                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
                     unsupported_label_generic_record_profile(backend);
@@ -34935,10 +34897,10 @@ seiyaku GovernanceLifecycle {
                 .into();
                 let err = exec
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("readiness-claim verifier label must be rejected");
+                    .expect_err("production-claim verifier label must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("readiness-claim verifying key backends"),
+                    msg.contains("production-claim verifying key backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
                 assert!(
@@ -36279,6 +36241,184 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
+        fn set_parameter_rejects_heap_limits_outside_the_abi_window() {
+            assert_eq!(
+                iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES,
+                ivm::Memory::HEAP_MAX_SIZE
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            for parameter in [
+                Parameter::SmartContract(SmartContractParameter::Memory(NonZeroU64::MAX)),
+                Parameter::Executor(SmartContractParameter::Memory(NonZeroU64::MAX)),
+            ] {
+                let error = SetParameter::new(parameter)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect_err("heap limit above the ABI address window must fail");
+                assert!(
+                    error.to_string().contains("exceeds the ABI V1 heap window"),
+                    "unexpected heap-limit error: {error}"
+                );
+            }
+
+            let maximum =
+                NonZeroU64::new(ivm::Memory::HEAP_MAX_SIZE).expect("ABI heap window is non-zero");
+            SetParameter::new(Parameter::SmartContract(SmartContractParameter::Memory(
+                maximum,
+            )))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("exact ABI heap ceiling is valid");
+            SetParameter::new(Parameter::Executor(SmartContractParameter::Memory(maximum)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact executor ABI heap ceiling is valid");
+            assert_eq!(
+                stx.world.parameters.get().smart_contract().memory().get(),
+                ivm::Memory::HEAP_MAX_SIZE
+            );
+            assert_eq!(
+                stx.world.parameters.get().executor().memory().get(),
+                ivm::Memory::HEAP_MAX_SIZE
+            );
+        }
+
+        #[test]
+        fn set_parameter_updates_host_output_limits() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let max_items = NonZeroU64::new(19).expect("non-zero item limit");
+            let max_bytes = NonZeroU64::new(65_536).expect("non-zero byte limit");
+
+            for parameter in [
+                Parameter::SmartContract(SmartContractParameter::MaxOutputItems(max_items)),
+                Parameter::SmartContract(SmartContractParameter::MaxOutputBytes(max_bytes)),
+                Parameter::Executor(SmartContractParameter::MaxOutputItems(max_items)),
+                Parameter::Executor(SmartContractParameter::MaxOutputBytes(max_bytes)),
+            ] {
+                SetParameter::new(parameter)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("host output limits are governed parameters");
+            }
+
+            assert_eq!(
+                stx.world
+                    .parameters
+                    .get()
+                    .smart_contract()
+                    .max_output_items(),
+                max_items
+            );
+            assert_eq!(
+                stx.world
+                    .parameters
+                    .get()
+                    .smart_contract()
+                    .max_output_bytes(),
+                max_bytes
+            );
+            assert_eq!(
+                stx.world.parameters.get().executor().max_output_items(),
+                max_items
+            );
+            assert_eq!(
+                stx.world.parameters.get().executor().max_output_bytes(),
+                max_bytes
+            );
+        }
+
+        #[test]
+        fn set_parameter_retention_request_requires_exact_ancestor_and_lineage() {
+            use iroha_data_model::sorafs::reputation::{
+                ReputationFinalizedArchiveRetentionRequestV1,
+                ReputationFinalizedArchiveRetentionTargetV1,
+            };
+
+            let chain_id = iroha_data_model::ChainId::from("retention-request-execution");
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_with_chain_for_testing(
+                World::default(),
+                kura,
+                query_handle,
+                chain_id.clone(),
+            );
+            {
+                let mut block_hashes = state.block_hashes.block();
+                for byte in [0x51, 0x52] {
+                    block_hashes.push_for_tests(
+                        iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                            Hash::prehashed([byte; Hash::LENGTH]),
+                        ),
+                    );
+                }
+                block_hashes.commit_for_tests();
+            }
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(3).expect("nonzero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut state_block = state.block(header);
+            let mut stx = state_block.transaction();
+            let request = |sequence, predecessor, height, hash| {
+                ReputationFinalizedArchiveRetentionRequestV1::try_new(
+                    chain_id.clone(),
+                    sequence,
+                    predecessor,
+                    ReputationFinalizedArchiveRetentionTargetV1::try_new(height, hash)
+                        .expect("valid target shape"),
+                )
+                .expect("valid request shape")
+            };
+
+            let first = request(1, None, 1, [0x51; 32]);
+            SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact committed ancestor is accepted");
+            SetParameter::new(Parameter::Custom(first.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact request replay is idempotent");
+
+            let wrong_hash = request(2, Some(first.request_digest), 2, [0x53; 32]);
+            let error = SetParameter::new(Parameter::Custom(wrong_hash.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("substituted ancestor hash must fail");
+            assert!(
+                error
+                    .to_string()
+                    .contains("target hash is not the committed ancestor")
+            );
+
+            let skipped = request(3, Some(first.request_digest), 2, [0x52; 32]);
+            let error = SetParameter::new(Parameter::Custom(skipped.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("request sequence skips must fail");
+            assert!(error.to_string().contains("sequence is not contiguous"));
+
+            let successor = request(2, Some(first.request_digest), 2, [0x52; 32]);
+            SetParameter::new(Parameter::Custom(successor.clone().into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact successor request");
+
+            let rollback = request(3, Some(successor.request_digest), 1, [0x51; 32]);
+            let error = SetParameter::new(Parameter::Custom(rollback.into_custom_parameter()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("retention target rollback must fail");
+            assert!(error.to_string().contains("target did not advance"));
+        }
+
+        #[test]
         fn set_parameter_rejects_zero_npos_reconfig_fields() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -36497,14 +36637,14 @@ seiyaku GovernanceLifecycle {
                     BackendTag::Halo2IpaPasta,
                     "pallas",
                     "halo2_default",
-                    "readiness-claim verifying key backends",
+                    "production-claim verifying key backends",
                 ),
                 (
                     "stark/fri/security-review-passed",
                     BackendTag::Stark,
                     "goldilocks",
                     "stark_default",
-                    "readiness-claim verifying key backends",
+                    "production-claim verifying key backends",
                 ),
                 (
                     "halo2/kzg",
@@ -36987,8 +37127,8 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn verify_proof_rejects_readiness_claim_backend_labels_before_registry_lookup() {
-            for (idx, backend) in READINESS_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+        fn verify_proof_rejects_production_claim_backend_labels_before_registry_lookup() {
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let state = State::new(World::default(), kura, query_handle);
@@ -37012,7 +37152,7 @@ seiyaku GovernanceLifecycle {
                 let attachment = ProofAttachment::new_ref(
                     backend.into(),
                     proof_box,
-                    VerifyingKeyId::new(backend, format!("vk_readiness_claim_proof_{idx}")),
+                    VerifyingKeyId::new(backend, format!("vk_production_claim_proof_{idx}")),
                 );
 
                 let mut stx_verify = block.transaction();
@@ -37020,10 +37160,12 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = exec
                     .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
-                    .expect_err("readiness-claim proof backend must reject before registry lookup");
+                    .expect_err(
+                        "production-claim proof backend must reject before registry lookup",
+                    );
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("readiness-claim proof backends"),
+                    msg.contains("production-claim proof backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
             }

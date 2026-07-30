@@ -95,11 +95,11 @@ rollout_phase = "default"
 
 ## Matriz de flags SDK & CLI| السطح | الكناري (المرحلة أ) | المنحدر (المرحلة ب) | الافتراضي (المرحلة ج) |
 |---------|------------------|----------------|-------------------|
-| جلب `sorafs_cli` | `--anonymity-policy stage-a` أو قم بالموافقة عليه | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| جلب `sorafs_cli` | `--anonymity-policy anon-guard-pq` أو قم بالموافقة عليه | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | التكوين المنسق JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | تكوين عميل الصدأ (`iroha.toml`) | `rollout_phase = "canary"` (افتراضي) | `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` الأوامر الموقعة | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| جافا/أندرويد `GatewayFetchOptions` | `setRolloutPhase("canary")`، اختياري `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`، اختياري `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`، اختياري `.ANON_STRICT_PQ` |
+| `iroha_cli` الأوامر الموقعة | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| جافا/أندرويد `GatewayFetchOptions` | `setRolloutPhase("canary")`، اختياري `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`، اختياري `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`، اختياري `.ANON_STRICT_PQ` |
 | مساعدين منسق جافا سكريبت | `rolloutPhase: "canary"` أو `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | بايثون `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 | سويفت `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -120,7 +120,7 @@ rollout_phase = "default"
 
 3. ** كناري العميل/SDK (T بالإضافة إلى أسبوع واحد)**
 
-   - Trocar for `rollout_phase = "ramp"` من خلال تكوينات العميل أو تجاوز `stage-b` لمجموعات SDK المخصصة.
+   - Trocar for `rollout_phase = "ramp"` من خلال تكوينات العميل أو تجاوز `anon-majority-pq` لمجموعات SDK المخصصة.
    - التقاط اختلافات القياس عن بعد (`sorafs_orchestrator_policy_events_total` المجمعة بواسطة `client_id` و`region`) والإضافة إلى سجل حوادث الطرح.
 
 4. **العرض الترويجي الافتراضي (T بالإضافة إلى 3 أسابيع)**
@@ -150,7 +150,7 @@ rollout_phase = "default"
 ### المنحدر -> الكناري (المرحلة ب -> المرحلة أ)
 
 1. قم باستيراد لقطة دليل الحماية التي تم التقاطها قبل الترويج باستخدام `sorafs_cli guard-directory import --guard-directory guards.json` واستخدم `sorafs_cli guard-directory verify` بشكل جديد حتى تتضمن حزمة التخفيض التجزئات.
-2. اضبط `rollout_phase = "canary"` (أو تجاوز com `anonymity_policy stage-a`) في تكوينات المنسق والعميل، بعد أن تم استخدام مثقاب السقاطة PQ الجديد [PQ اسئلة Runbook](./pq-ratchet-runbook.md) لاختبار خط أنابيب الرجوع إلى إصدار أقدم.
+2. اضبط `rollout_phase = "canary"` (أو تجاوز com `anonymity_policy anon-guard-pq`) في تكوينات المنسق والعميل، بعد أن تم استخدام مثقاب السقاطة PQ الجديد [PQ اسئلة Runbook](./pq-ratchet-runbook.md) لاختبار خط أنابيب الرجوع إلى إصدار أقدم.
 3. تم تحديث لقطات الشاشة المرفقة من PQ Ratchet والقياس عن بعد SN16 بالإضافة إلى نتائج التنبيهات بسجل الأحداث قبل إخطار الإدارة.
 
 ### تذكير الدرابزين- المرجع `docs/source/ops/soranet_transport_rollback.md` يستمر في إجراء تخفيض الرتبة وتسجيل أي تخفيف مؤقت مثل العنصر `TODO:` بدون تعقب الطرح للمرافقة.

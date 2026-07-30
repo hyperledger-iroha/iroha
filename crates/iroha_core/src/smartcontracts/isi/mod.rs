@@ -170,7 +170,7 @@ define_instruction_handlers! {
     dispatch_instruction::<Burn<Quantity, Asset>>,
     dispatch_instruction::<Transfer<Asset, Quantity, Account>>,
     dispatch_instruction::<TransferAssetBatch>,
-    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferFreeze>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferAvailability>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferControl>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetHoldingLimit>,
@@ -214,7 +214,14 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::ResolveSorafsCapacityDispute>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::ReviseReplicationOrderAssignments>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ExpireReplicationOrder>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::SetProviderIngestCompletionAuthority,
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::RevokeProviderIngestCompletionAuthority,
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsOrderbookPolicy>,
@@ -3345,7 +3352,7 @@ mod tests {
     }
 
     #[test]
-    async fn registering_zero_repeat_trigger_is_noop() -> Result<()> {
+    async fn registering_zero_repeat_trigger_is_rejected() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
         let block_header = ValidBlock::new_dummy(checked_keypair().private_key())
@@ -3368,19 +3375,27 @@ mod tests {
                     .under_authority(account_id.clone()),
             ),
         ));
-        register_trigger.execute(&account_id, &mut state_transaction)?;
+        let error = register_trigger
+            .execute(&account_id, &mut state_transaction)
+            .expect_err("a depleted trigger must not be accepted for registration");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message == "trigger repeat count must be greater than zero"
+        ));
 
         state_transaction.apply();
         state_block.commit().unwrap();
 
-        // The trigger should not be present/active
+        // Rejection must leave trigger state unchanged.
         let active = state
             .view()
             .world
             .triggers()
             .inspect_by_id(&trigger_id, |_| ())
             .is_some();
-        assert!(!active, "zero-repeat triggers must not be registered");
+        assert!(!active, "a rejected zero-repeat trigger must not be stored");
 
         Ok(())
     }

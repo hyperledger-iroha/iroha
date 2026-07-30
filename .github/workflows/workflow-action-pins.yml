@@ -5,12 +5,14 @@ on:
     paths:
       - ".github/workflows/**"
       - "scripts/check_workflow_action_pins.py"
+      - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_workflow_action_pins_test.py"
   push:
     branches: [main]
     paths:
       - ".github/workflows/**"
       - "scripts/check_workflow_action_pins.py"
+      - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/tests/check_workflow_action_pins_test.py"
 
 permissions:
@@ -22,7 +24,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install pinned workflow-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==8.4.2
       - name: Exercise the fail-closed checker
         run: python3 scripts/tests/check_workflow_action_pins_test.py
       - name: Enforce immutable action references
         run: python3 scripts/check_workflow_action_pins.py
+      - name: Enforce SoraFS fixture and SDK workflow routing
+        run: >-
+          python3 -m pytest -q
+          scripts/tests/check_sorafs_fixture_workflow_contract_test.py

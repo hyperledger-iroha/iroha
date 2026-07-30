@@ -136,18 +136,23 @@
           "max_tx_bytes": 10485760,
           "max_decompressed_bytes": 10485760,
           "max_metadata_depth": 8,
+          "max_time_to_live_ms": 86400000,
           "require_height_ttl": false,
           "require_sequence": false
         },
         "executor": {
           "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
+          "memory": 1048576,
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "smart_contract": {
           "fuel": 55000000,
-          "memory": 55000000,
-          "execution_depth": 3
+          "memory": 1048576,
+          "execution_depth": 3,
+          "max_output_items": 4096,
+          "max_output_bytes": 8388608
         },
         "custom": {
           "ivm_gas_limit_per_block": {

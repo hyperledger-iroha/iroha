@@ -35,7 +35,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 ## داخلہ ورک فلو
 
 1. ** تجویز بنائیں **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
      `ProviderAdmissionProposalV1` + توثیق پیکیج تیار کرنے کے لئے۔
    - توثیق: مطلوبہ فیلڈز ، اسٹیک> 0 ، اور چنکر ہینڈل کو یقینی بنائیں `profile_id` میں معیاری ہیں۔
 2. ** گورننس کی منظوری **
@@ -58,7 +58,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
+`cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -95,7 +95,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 1. `provider-admission proposal` اور `provider-admission sign` کا استعمال کرتے ہوئے اس کے بعد کی تجویز/اشتہاری جوڑی بنائیں ، `--retention-epoch` میں اضافہ کریں اور ضرورت کے مطابق اسٹیک/اختتامی نقطہ کو اپ ڈیٹ کریں۔
 2. عمل کریں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -111,7 +111,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 #### ایمرجنسی منسوخی
 1. سمجھوتہ کرنے والے لفافے کی شناخت کریں اور منسوخ جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

@@ -30,18 +30,22 @@ private func canonicalAuthorityLiteral(
 }
 
 final class TransactionEncoderValidationTests: XCTestCase {
-    func testTransferEncoderPreservesTairaAccountLiterals() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge native encoder not linked")
-        }
+    func testTransferEncoderPreservesTairaAccountIdentities() throws {
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge native encoder not linked"
+        )
         let signingKey = try SigningKey.ed25519(
             privateKey: Data(repeating: 0x31, count: 32)
         )
         let authority = try AccountAddress
             .fromAccount(publicKey: signingKey.publicKey())
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let destinationSigningKey = try SigningKey.ed25519(
+            privateKey: Data(repeating: 0x32, count: 32)
+        )
         let destination = try AccountAddress
-            .fromAccount(publicKey: Data(repeating: 0x32, count: 32))
+            .fromAccount(publicKey: destinationSigningKey.publicKey())
             .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
         let transfer = TransferRequest(
             chainId: "taira",
@@ -58,11 +62,20 @@ final class TransactionEncoderValidationTests: XCTestCase {
             signingKey: signingKey,
             creationTimeMs: 1
         )
-        let decoded = try XCTUnwrap(
-            NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito)
+        let inspection = try NoritoNativeBridge.shared.inspectDetachedTransactionScaffold(
+            envelope.norito
         )
-        XCTAssertTrue(decoded.contains(authority), decoded)
-        XCTAssertTrue(decoded.contains(destination), decoded)
+        XCTAssertEqual(
+            try AccountAddress.parseEncoded(inspection.authority).canonicalHex(),
+            try AccountAddress.parseEncoded(authority).canonicalHex()
+        )
+        guard case let .assetTransfer(asset) = inspection.executable else {
+            return XCTFail("expected one asset-transfer instruction")
+        }
+        XCTAssertEqual(
+            try AccountAddress.parseEncoded(asset.destinationAccountId).canonicalHex(),
+            try AccountAddress.parseEncoded(destination).canonicalHex()
+        )
     }
 
     func testAssetBuildersRejectNoncanonicalAndNegativeQuantitiesBeforeNativeDispatch() throws {
@@ -183,8 +196,6 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                             authority: authority,
                                             epoch: 1,
                                             members: ["bob"],
-                                            candidatesCount: 1,
-                                            derivedBy: .vrf,
                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                             ttlMs: nil)
 
@@ -485,9 +496,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
     }
 
     func testCastZkBallotAcceptsCanonicalHints() throws {
-        guard NoritoNativeBridge.shared.isAvailable else {
-            throw XCTSkip("NoritoBridge not available")
-        }
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge not available"
+        )
         let owner = try canonicalOwnerLiteral(
             networkPrefix: SccpV1.tairaI105DiscriminantV1
         )
@@ -516,9 +528,13 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                                signingKey: signingKey,
                                                                creationTimeMs: 1)
         } catch SwiftTransactionEncoderError.nativeBridgeError(.governance) {
-            throw XCTSkip("governance encoder unavailable in linked native bridge")
+            try failRequiredNativeTestCapability(
+                "governance encoder unavailable in linked native bridge"
+            )
         } catch SwiftTransactionEncoderError.nativeBridgeError(.authority) {
-            throw XCTSkip("authority encoder unavailable in linked native bridge")
+            try failRequiredNativeTestCapability(
+                "authority encoder unavailable in linked native bridge"
+            )
         }
     }
 

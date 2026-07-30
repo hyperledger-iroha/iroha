@@ -12,7 +12,6 @@ workspace = true
 
 [features]
 trybuild-tests = ["dep:trybuild"]
-packed-struct = []
 
 [lib]
 proc-macro = true
@@ -26,7 +25,7 @@ darling = { workspace = true }
 trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_version = { workspace = true, features = ["derive", "json"] }
 iroha_macro = { workspace = true }
 

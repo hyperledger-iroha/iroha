@@ -192,7 +192,7 @@ _APALACHE_LAUNCHER_SHA256 = (
 _APALACHE_JAR_SHA256 = (
     "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a"
 )
-_APALACHE_RESULTS = (
+_APALACHE_REFINEMENT_RESULTS = (
     (
         "autoscale-lifecycle",
         "SumeragiV2AutoscaleLifecycle",
@@ -217,6 +217,19 @@ _APALACHE_RESULTS = (
         "multilane_queue_plan_admission_registry_fixed.cfg",
         "8",
     ),
+)
+_APALACHE_LAYOUT_ONLY_RESULTS = (
+    # This row is bounded current-layout evidence, not a Rust transition theorem.
+    (
+        "inflight-first-release-layout",
+        "SumeragiV2InFlightFirstRelease",
+        "inflight_first_release_fixed.cfg",
+        "10",
+    ),
+)
+_APALACHE_RESULTS = (
+    *_APALACHE_REFINEMENT_RESULTS,
+    *_APALACHE_LAYOUT_ONLY_RESULTS,
 )
 _G12_SEED_PREFIX = "nexus-cross-dataspace-v1-seed-"
 _G12_SEED_TEST = (
@@ -340,14 +353,14 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 782
-_G_UNIT_TEST_COUNT = 277
+_PRODUCTION_TEST_COUNT = 785
+_G_UNIT_TEST_COUNT = 280
 _G_UNIT_GROUPS = (
     (
         "required_multilane_core_focus_tests",
         "g-unit-iroha-core",
         "iroha_core",
-        101,
+        104,
         "lib",
     ),
     (
@@ -426,7 +439,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        36,
+        38,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-v2-core", "sumeragi::v2_core::tests", 38),
@@ -461,7 +474,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 33),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 119),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 120),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -610,7 +623,6 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
-    "javascript/iroha_js/dist/toriiClient.js",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",

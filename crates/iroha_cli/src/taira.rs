@@ -18,7 +18,7 @@ use iroha::{
         level::Level as LogLevel,
         metadata::Metadata,
         name::Name,
-        prelude::{FindTransactions, HashOf, QueryBuilderExt, TransactionEntrypoint},
+        prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };
@@ -605,7 +605,7 @@ fn run_write_canary(
         quote_and_sign_transaction(&client, executable, fee_payment, metadata)
             .wrap_err("failed to quote and sign Taira canary transaction")?;
     let signed_hash = transaction.hash();
-    let entrypoint_hash = HashOf::new(&TransactionEntrypoint::External(transaction.clone()));
+    let entrypoint_hash = TransactionEntrypoint::External(transaction.clone()).hash();
 
     client
         .submit_transaction(&transaction)

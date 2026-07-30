@@ -33,7 +33,7 @@ Tarefas de engenharia rastreaveis.
 | التحقق من نقطة النهاية | يجب أن يتم الإعلان عن كل نقطة نهاية من خلال علاقة شهادة mTLS أو QUIC. | تحديد الحمولة Norito `EndpointAttestationV1` وتخزينها من خلال نقطة النهاية داخل حزمة القبول. |
 
 ## تدفق القبول1. **التفكير في الاقتراح**
-   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
+   - سطر الأوامر: إضافة `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`
      المنتج `ProviderAdmissionProposalV1` + حزمة التحقق.
    - التحقق من صحة: ضمان النطاقات المطلوبة، الحصة > 0، التعامل مع وحدة تقطيع الكنسي في `profile_id`.
 2. ** إندوسو دي غوفرانكا **
@@ -60,7 +60,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
 
 ### مرجع CLI
 
-قم بتنفيذ cada comando عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+قم بتنفيذ cada comando عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام المطلوبة: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وأصغر من `--endpoint=<kind:host>`.
@@ -102,7 +102,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
    تعزيز `--retention-epoch` وتحديث الحصة/نقاط النهاية المطابقة للضرورة.
 2. نفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -120,7 +120,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
    CI (`ci/check_sorafs_fixtures.sh`) يؤكد أن Norito موجود دائمًا.#### إعادة النظر في حالات الطوارئ
 1. تحديد المغلف المخترق وإصداره مرة أخرى:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

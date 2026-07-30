@@ -5,6 +5,8 @@ The tool never accepts private signing material. ``prepare`` writes the exact
 domain-separated binary payload for an external Ed25519 HSM, while ``finalize``
 verifies the raw detached signature against an operator-trusted public key and
 writes the schema-closed envelope consumed by the aggregate readiness gate.
+Prerequisite anchors are derived only from validated, exact evidence-package
+files; callers cannot supply digests or evidence timestamps directly.
 """
 
 from __future__ import annotations
@@ -40,8 +42,12 @@ from check_sorafs_production_readiness import (  # noqa: E402
     SENSITIVE_KEYS,
     ValidationOptions,
     canonical_lower_hex,
+    canonical_string,
     foundational_signing_payload,
+    is_archive_portable_artifact_path,
+    load_resilience_qualification_binding,
     parse_foundational_signer_public_key,
+    validate_gate_summary,
     validate_foundational_exact_fields,
     validate_foundational_prerequisite_summary,
 )
@@ -64,17 +70,43 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_runner_preflight import plan_rendered_path_is_safe  # noqa: E402
+from sorafs_topology_qualification import (  # noqa: E402
+    add_topology_qualification_argument,
+    load_topology_qualification_binding,
+    validate_topology_binding_object,
+)
 
 
 MAX_FOUNDATIONAL_ARTIFACT_BYTES = 64 * 1024
+MAX_PREREQUISITE_PACKAGE_BYTES = MAX_SUMMARY_BYTES
 MAX_LANE_SUMMARY_BYTES = MAX_SUMMARY_BYTES
 MAX_DEPLOYMENT_ID_BYTES = 128
 MAX_ENVIRONMENT_BYTES = 16
-MAX_PREREQUISITE_SPEC_BYTES = 256
 MAX_PATH_TEXT_BYTES = 4096
 MAX_TIMESTAMP = (1 << 63) - 1
 RAW_ED25519_PUBLIC_KEY_BYTES = 32
 RAW_ED25519_SIGNATURE_BYTES = 64
+FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_SCHEMA = (
+    "sorafs.production_readiness.foundational_prerequisite_evidence_package.v1"
+)
+FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_FIELDS = frozenset(
+    {
+        "schema",
+        "prerequisite_id",
+        "status",
+        "deployment",
+        "evidence_generated_at_unix",
+        "topology_qualification",
+        "readiness_summary",
+        "errors",
+    }
+)
+FOUNDATIONAL_PREREQUISITE_EVIDENCE_DEPLOYMENT_FIELDS = frozenset(
+    {"deployment_id", "environment"}
+)
+FOUNDATIONAL_PREREQUISITE_EVIDENCE_SUMMARY_FIELDS = frozenset(
+    {"gate", "path", "sha256"}
+)
 UNSIGNED_SIGNATURE_FIELDS = (
     FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS - {"signature_hex"}
 )
@@ -178,10 +210,18 @@ def _validate_bounded_text(
 def parse_prerequisite_specs(
     values: list[str],
     errors: list[str],
+    *,
+    deployment_id: str,
+    environment: str,
+    generated_at_unix: int,
+    now_unix: int,
+    max_evidence_age_secs: int,
+    topology_qualification: dict[str, str],
 ) -> list[dict[str, Any]]:
-    """Parse the exact ordered nine reviewed prerequisite anchor rows."""
+    """Validate and hash the exact ordered nine prerequisite evidence packages."""
 
     rows: list[dict[str, Any]] = []
+    validated_summary_cache: dict[tuple[str, str], dict[str, Any]] = {}
     if len(values) != len(FOUNDATIONAL_PREREQUISITE_IDS):
         errors.append(
             "exactly nine --prerequisite values are required in canonical order"
@@ -195,52 +235,241 @@ def parse_prerequisite_specs(
         except UnicodeEncodeError:
             errors.append(f"--prerequisite[{index}] must be valid UTF-8")
             continue
-        if len(encoded) > MAX_PREREQUISITE_SPEC_BYTES:
-            errors.append(
-                f"--prerequisite[{index}] must be at most "
-                f"{MAX_PREREQUISITE_SPEC_BYTES} UTF-8 bytes"
-            )
+        if len(encoded) > MAX_PATH_TEXT_BYTES + 128:
+            errors.append(f"--prerequisite[{index}] is too long")
             continue
-        parts = value.split(":")
-        if len(parts) != 3:
-            errors.append(
-                f"--prerequisite[{index}] must use ID:SHA256:EVIDENCE_UNIX"
-            )
+        prerequisite_id, separator, path_text = value.partition("=")
+        if separator != "=" or not prerequisite_id or not path_text:
+            errors.append(f"--prerequisite[{index}] must use ID=PATH")
             continue
-        prerequisite_id, anchor_value, timestamp_value = parts
-        anchor = canonical_lower_hex(anchor_value, 64)
-        if anchor is None:
+        expected_id = (
+            FOUNDATIONAL_PREREQUISITE_IDS[index]
+            if index < len(FOUNDATIONAL_PREREQUISITE_IDS)
+            else None
+        )
+        if prerequisite_id != expected_id:
             errors.append(
-                f"--prerequisite[{index}] anchor must be canonical lowercase SHA-256"
+                "foundational prerequisites must match the exact required set and "
+                "canonical order"
             )
-        elif not any(bytes.fromhex(anchor)):
-            errors.append(f"--prerequisite[{index}] anchor must not be zero")
+        package_path = Path(path_text)
+        package_raw, package_read_errors = read_bounded_regular_file(
+            package_path,
+            label=f"--prerequisite[{index}]",
+            maximum_bytes=MAX_PREREQUISITE_PACKAGE_BYTES,
+        )
+        errors.extend(package_read_errors)
+        if package_raw is None:
+            continue
+
+        package_errors: list[str] = []
+        package = _strict_lane_summary_object(
+            package_raw,
+            label=f"--prerequisite[{index}]",
+            errors=package_errors,
+        )
+        if package is None:
+            errors.extend(package_errors)
+            continue
+        validate_foundational_exact_fields(
+            package,
+            FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_FIELDS,
+            f"--prerequisite[{index}] evidence package",
+            package_errors,
+        )
+        if package.get("schema") != FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_SCHEMA:
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package schema must match "
+                "the foundational prerequisite evidence contract"
+            )
+        package_id = canonical_string(package.get("prerequisite_id"))
+        if package_id != prerequisite_id:
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package prerequisite_id must "
+                "match its ordered command-line id"
+            )
+        if package.get("status") != "verified":
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package status must be `verified`"
+            )
+        package_deployment = validate_foundational_exact_fields(
+            package.get("deployment"),
+            FOUNDATIONAL_PREREQUISITE_EVIDENCE_DEPLOYMENT_FIELDS,
+            f"--prerequisite[{index}] evidence package deployment",
+            package_errors,
+        )
+        if package_deployment is not None:
+            if package_deployment.get("deployment_id") != deployment_id:
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package deployment_id must "
+                    "match --deployment-id"
+                )
+            if package_deployment.get("environment") != environment:
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package environment must "
+                    "match --environment"
+                )
+        package_errors.extend(
+            validate_topology_binding_object(
+                package.get("topology_qualification"),
+                expected=topology_qualification,
+                path=(
+                    f"--prerequisite[{index}] evidence package "
+                    "topology_qualification"
+                ),
+            )
+        )
+        if package.get("errors") != []:
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package errors must be empty"
+            )
+        evidence_generated_at_unix = _bounded_positive_integer(
+            package.get("evidence_generated_at_unix"),
+            label=f"--prerequisite[{index}] evidence_generated_at_unix",
+            maximum=MAX_TIMESTAMP,
+            errors=package_errors,
+        )
+        if evidence_generated_at_unix is not None:
+            if evidence_generated_at_unix > now_unix:
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence_generated_at_unix must "
+                    "not be future"
+                )
+            elif now_unix - evidence_generated_at_unix > max_evidence_age_secs:
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence_generated_at_unix exceeds "
+                    "max summary artifact age"
+                )
+            if evidence_generated_at_unix > generated_at_unix:
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence_generated_at_unix must not "
+                    "be later than the signed envelope"
+                )
+
+        summary_reference = validate_foundational_exact_fields(
+            package.get("readiness_summary"),
+            FOUNDATIONAL_PREREQUISITE_EVIDENCE_SUMMARY_FIELDS,
+            f"--prerequisite[{index}] evidence package readiness_summary",
+            package_errors,
+        )
+        summary_row: dict[str, Any] | None = None
+        if summary_reference is not None:
+            gate_name = canonical_string(summary_reference.get("gate"))
+            gate = GATE_BY_NAME.get(gate_name) if gate_name is not None else None
+            if gate is None:
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package readiness_summary.gate "
+                    "must name an authoritative bundled readiness checker"
+                )
+            relative_path = canonical_string(summary_reference.get("path"))
+            if (
+                relative_path is None
+                or not is_archive_portable_artifact_path(relative_path)
+            ):
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package "
+                    "readiness_summary.path must be archive-relative and portable"
+                )
+                summary_path = None
+            else:
+                summary_path = package_path.parent.joinpath(*relative_path.split("/"))
+            expected_digest = canonical_lower_hex(
+                summary_reference.get("sha256"),
+                64,
+            )
+            if expected_digest is None or not any(bytes.fromhex(expected_digest)):
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package "
+                    "readiness_summary.sha256 must be a non-zero canonical "
+                    "lowercase SHA-256"
+                )
+            if summary_path is not None:
+                summary_raw, summary_read_errors = read_bounded_regular_file(
+                    summary_path,
+                    label=(
+                        f"--prerequisite[{index}] evidence package "
+                        "readiness_summary"
+                    ),
+                    maximum_bytes=MAX_SUMMARY_BYTES,
+                )
+                package_errors.extend(summary_read_errors)
+            else:
+                summary_raw = None
+            if summary_raw is not None:
+                observed_digest = hashlib.sha256(summary_raw).hexdigest()
+                if expected_digest != observed_digest:
+                    package_errors.append(
+                        f"--prerequisite[{index}] evidence package readiness_summary "
+                        "digest does not match the exact file"
+                    )
+                cache_key = (
+                    (gate.name, observed_digest) if gate is not None else None
+                )
+                if cache_key is not None:
+                    summary_row = validated_summary_cache.get(cache_key)
+                if summary_row is None:
+                    summary_payload = _strict_lane_summary_object(
+                        summary_raw,
+                        label=(
+                            f"--prerequisite[{index}] evidence package "
+                            "readiness_summary"
+                        ),
+                        errors=package_errors,
+                    )
+                    if gate is not None and summary_payload is not None:
+                        if summary_payload.get("schema") != gate.schema:
+                            package_errors.append(
+                                f"--prerequisite[{index}] evidence package "
+                                "readiness_summary schema must match its gate"
+                            )
+                        summary_row, summary_errors = validate_gate_summary(
+                            gate,
+                            summary_payload,
+                            ValidationOptions(
+                                now_unix=now_unix,
+                                max_summary_artifact_age_secs=max_evidence_age_secs,
+                                deployment_id=deployment_id,
+                                environment=environment,
+                                topology_qualification=topology_qualification,
+                            ),
+                        )
+                        package_errors.extend(
+                            f"--prerequisite[{index}] evidence package "
+                            f"readiness_summary: {error}"
+                            for error in summary_errors
+                        )
+                        if (
+                            cache_key is not None
+                            and expected_digest == observed_digest
+                            and not summary_errors
+                            and summary_payload.get("schema") == gate.schema
+                        ):
+                            validated_summary_cache[cache_key] = summary_row
         if (
-            not timestamp_value.isascii()
-            or not timestamp_value.isdecimal()
-            or timestamp_value.startswith("0")
+            summary_row is not None
+            and evidence_generated_at_unix is not None
+            and summary_row.get("newest_generated_at_unix")
+            != evidence_generated_at_unix
         ):
-            errors.append(
-                f"--prerequisite[{index}] evidence timestamp must be a positive "
-                "canonical integer"
+            package_errors.append(
+                f"--prerequisite[{index}] evidence_generated_at_unix must match "
+                "the authoritative readiness summary"
             )
-            evidence_generated_at_unix = None
-        else:
-            evidence_generated_at_unix = _bounded_positive_integer(
-                int(timestamp_value),
-                label=f"--prerequisite[{index}] evidence timestamp",
-                maximum=MAX_TIMESTAMP,
-                errors=errors,
-            )
-        if anchor is not None and evidence_generated_at_unix is not None:
-            rows.append(
-                {
-                    "id": prerequisite_id,
-                    "status": "verified",
-                    "evidence_anchor_sha256": anchor,
-                    "evidence_generated_at_unix": evidence_generated_at_unix,
-                }
-            )
+        errors.extend(package_errors)
+        if (
+            package_errors
+            or prerequisite_id != expected_id
+            or evidence_generated_at_unix is None
+        ):
+            continue
+        rows.append(
+            {
+                "id": prerequisite_id,
+                "status": "verified",
+                "evidence_anchor_sha256": hashlib.sha256(package_raw).hexdigest(),
+                "evidence_generated_at_unix": evidence_generated_at_unix,
+            }
+        )
 
     observed_ids = [row["id"] for row in rows]
     expected_ids = list(FOUNDATIONAL_PREREQUISITE_IDS)
@@ -303,6 +532,8 @@ def _strict_lane_summary_object(
 def parse_lane_summary_specs(
     values: list[str],
     errors: list[str],
+    *,
+    topology_qualification: dict[str, str],
 ) -> list[dict[str, str]]:
     """Read and hash the exact ordered 17 lane summaries approved for signing."""
 
@@ -358,6 +589,13 @@ def parse_lane_summary_specs(
             errors.append(f"{label} schema must match the {gate_name} gate")
         if payload.get("status") != "ready":
             errors.append(f"{label} status must be `ready`")
+        errors.extend(
+            validate_topology_binding_object(
+                payload.get("topology_qualification"),
+                expected=topology_qualification,
+                path=f"{label} topology_qualification",
+            )
+        )
         rows.append(
             {
                 "gate": gate_name,
@@ -718,6 +956,8 @@ def validation_options(
     public_key: bytes,
     release_sequence: int,
     previous_envelope_sha256: str,
+    topology_qualification: dict[str, str] | None,
+    resilience_qualification: dict[str, Any] | None = None,
 ) -> ValidationOptions:
     """Build exact aggregate-gate options for one reviewed envelope."""
 
@@ -729,6 +969,8 @@ def validation_options(
         foundational_signer_public_key=public_key,
         foundational_release_sequence=release_sequence,
         foundational_previous_envelope_sha256=previous_envelope_sha256,
+        topology_qualification=topology_qualification,
+        resilience_qualification=resilience_qualification,
     )
 
 
@@ -781,6 +1023,8 @@ def build_unsigned_envelope(
     public_key: bytes,
     prerequisites: list[dict[str, Any]],
     lane_summaries: list[dict[str, str]],
+    topology_qualification: dict[str, str],
+    resilience_qualification: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the schema-closed body carried by the binary signing payload."""
 
@@ -794,6 +1038,8 @@ def build_unsigned_envelope(
         "generated_at_unix": args.generated_at_unix,
         "release_sequence": args.release_sequence,
         "previous_envelope_sha256": args.previous_envelope_sha256,
+        "topology_qualification": topology_qualification,
+        "resilience_qualification": resilience_qualification,
         "prerequisites": prerequisites,
         "lane_summaries": lane_summaries,
         "signature": {
@@ -809,6 +1055,8 @@ def validate_prepare_inputs(
     bytes | None,
     list[dict[str, Any]],
     list[dict[str, str]],
+    dict[str, str] | None,
+    dict[str, Any] | None,
     list[str],
 ]:
     """Validate all reviewed prepare-phase inputs."""
@@ -853,8 +1101,54 @@ def validate_prepare_inputs(
     elif args.release_sequence > 1 and not any(bytes.fromhex(predecessor)):
         errors.append("--release-sequence after 1 requires a non-zero predecessor")
     public_key = parse_trusted_public_key(args.trusted_public_key_hex, errors)
-    prerequisites = parse_prerequisite_specs(args.prerequisite, errors)
-    lane_summaries = parse_lane_summary_specs(args.lane_summary, errors)
+    resilience_signer_public_key = parse_foundational_signer_public_key(
+        args.resilience_qualification_signer_public_key_hex,
+        errors,
+        path="--resilience-qualification-signer-public-key-hex",
+    )
+    topology_qualification, topology_errors = load_topology_qualification_binding(
+        args.topology_qualification_summary,
+        expected_deployment_id=args.deployment_id,
+        expected_environment=args.environment,
+    )
+    errors.extend(topology_errors)
+    resilience_qualification = None
+    if topology_qualification is not None and resilience_signer_public_key is not None:
+        resilience_qualification, resilience_errors = (
+            load_resilience_qualification_binding(
+                args.resilience_qualification_summary,
+                expected_deployment_id=args.deployment_id,
+                expected_environment=args.environment,
+                expected_topology_qualification=topology_qualification,
+                now_unix=args.now_unix,
+                max_age_secs=args.max_evidence_age_secs,
+                trusted_public_key=resilience_signer_public_key,
+            )
+        )
+        errors.extend(resilience_errors)
+    prerequisites = (
+        parse_prerequisite_specs(
+            args.prerequisite,
+            errors,
+            deployment_id=args.deployment_id,
+            environment=args.environment,
+            generated_at_unix=args.generated_at_unix,
+            now_unix=args.now_unix,
+            max_evidence_age_secs=args.max_evidence_age_secs,
+            topology_qualification=topology_qualification,
+        )
+        if topology_qualification is not None
+        else []
+    )
+    lane_summaries = (
+        parse_lane_summary_specs(
+            args.lane_summary,
+            errors,
+            topology_qualification=topology_qualification,
+        )
+        if topology_qualification is not None
+        else []
+    )
     if public_key is not None:
         errors.extend(
             validate_previous_envelope(
@@ -873,14 +1167,33 @@ def validate_prepare_inputs(
         label="--signing-payload-out",
         errors=errors,
     )
-    return public_key, prerequisites, lane_summaries, errors
+    return (
+        public_key,
+        prerequisites,
+        lane_summaries,
+        topology_qualification,
+        resilience_qualification,
+        errors,
+    )
 
 
 def prepare(args: argparse.Namespace) -> int:
     """Write the exact external-HSM signing payload."""
 
-    public_key, prerequisites, lane_summaries, errors = validate_prepare_inputs(args)
-    if errors or public_key is None:
+    (
+        public_key,
+        prerequisites,
+        lane_summaries,
+        topology_qualification,
+        resilience_qualification,
+        errors,
+    ) = validate_prepare_inputs(args)
+    if (
+        errors
+        or public_key is None
+        or topology_qualification is None
+        or resilience_qualification is None
+    ):
         emit_checker_error_lines(errors)
         return 2
     unsigned = build_unsigned_envelope(
@@ -888,6 +1201,8 @@ def prepare(args: argparse.Namespace) -> int:
         public_key,
         prerequisites,
         lane_summaries,
+        topology_qualification,
+        resilience_qualification,
     )
     options = validation_options(
         now_unix=args.now_unix,
@@ -897,6 +1212,8 @@ def prepare(args: argparse.Namespace) -> int:
         public_key=public_key,
         release_sequence=args.release_sequence,
         previous_envelope_sha256=args.previous_envelope_sha256,
+        topology_qualification=topology_qualification,
+        resilience_qualification=resilience_qualification,
     )
     errors = validate_unsigned_envelope(unsigned, options)
     if errors:
@@ -1091,6 +1408,7 @@ def validate_previous_envelope(
         public_key=public_key,
         release_sequence=previous_sequence,
         previous_envelope_sha256=previous_predecessor,
+        topology_qualification=None,
     )
     _summary, checker_errors, _context = validate_foundational_prerequisite_summary(
         previous,
@@ -1129,7 +1447,15 @@ def load_unsigned_signing_payload(
 
 def validate_finalize_inputs(
     args: argparse.Namespace,
-) -> tuple[bytes | None, bytes | None, dict[str, Any] | None, bytes | None, list[str]]:
+) -> tuple[
+    bytes | None,
+    bytes | None,
+    dict[str, Any] | None,
+    bytes | None,
+    dict[str, str] | None,
+    dict[str, Any] | None,
+    list[str],
+]:
     """Validate reviewed finalization inputs and load bounded public artifacts."""
 
     errors: list[str] = []
@@ -1172,13 +1498,46 @@ def validate_finalize_inputs(
             "--expected-release-sequence after 1 requires a non-zero predecessor"
         )
     public_key = parse_trusted_public_key(args.trusted_public_key_hex, errors)
+    resilience_signer_public_key = parse_foundational_signer_public_key(
+        args.resilience_qualification_signer_public_key_hex,
+        errors,
+        path="--resilience-qualification-signer-public-key-hex",
+    )
+    topology_qualification, topology_errors = load_topology_qualification_binding(
+        args.topology_qualification_summary,
+        expected_deployment_id=args.expected_deployment_id,
+        expected_environment=args.expected_environment,
+    )
+    errors.extend(topology_errors)
+    resilience_qualification = None
+    if topology_qualification is not None and resilience_signer_public_key is not None:
+        resilience_qualification, resilience_errors = (
+            load_resilience_qualification_binding(
+                args.resilience_qualification_summary,
+                expected_deployment_id=args.expected_deployment_id,
+                expected_environment=args.expected_environment,
+                expected_topology_qualification=topology_qualification,
+                now_unix=args.now_unix,
+                max_age_secs=args.max_evidence_age_secs,
+                trusted_public_key=resilience_signer_public_key,
+            )
+        )
+        errors.extend(resilience_errors)
     validate_output_path(
         args.envelope_out,
         label="--envelope-out",
         errors=errors,
     )
     if errors:
-        return None, None, None, public_key, errors
+        return (
+            None,
+            None,
+            None,
+            public_key,
+            topology_qualification,
+            resilience_qualification,
+            errors,
+        )
 
     signing_payload, unsigned, payload_errors = load_unsigned_signing_payload(
         args.signing_payload
@@ -1214,7 +1573,15 @@ def validate_finalize_inputs(
             errors.append("--signature-file must contain exactly 64 raw bytes")
         elif not any(signature):
             errors.append("--signature-file must not contain an all-zero signature")
-    return signing_payload, signature, unsigned, public_key, errors
+    return (
+        signing_payload,
+        signature,
+        unsigned,
+        public_key,
+        topology_qualification,
+        resilience_qualification,
+        errors,
+    )
 
 
 def finalize(args: argparse.Namespace) -> int:
@@ -1225,6 +1592,8 @@ def finalize(args: argparse.Namespace) -> int:
         signature,
         unsigned,
         public_key,
+        topology_qualification,
+        resilience_qualification,
         errors,
     ) = validate_finalize_inputs(args)
     if (
@@ -1233,6 +1602,8 @@ def finalize(args: argparse.Namespace) -> int:
         or signature is None
         or unsigned is None
         or public_key is None
+        or topology_qualification is None
+        or resilience_qualification is None
     ):
         emit_checker_error_lines(errors)
         return 2
@@ -1245,6 +1616,8 @@ def finalize(args: argparse.Namespace) -> int:
         public_key=public_key,
         release_sequence=args.expected_release_sequence,
         previous_envelope_sha256=args.expected_previous_envelope_sha256,
+        topology_qualification=topology_qualification,
+        resilience_qualification=resilience_qualification,
     )
     errors = validate_unsigned_envelope(unsigned, options)
     if errors:
@@ -1313,6 +1686,24 @@ def build_parser() -> EvidenceArgumentParser:
         "prepare",
         help="Write the exact binary payload for an external Ed25519 signer.",
     )
+    add_topology_qualification_argument(prepare_parser)
+    prepare_parser.add_argument(
+        "--resilience-qualification-summary",
+        required=True,
+        type=Path,
+        help=(
+            "Exact evidence-qualified resilience/DR summary to bind beside the "
+            "existing nine prerequisite anchors."
+        ),
+    )
+    prepare_parser.add_argument(
+        "--resilience-qualification-signer-public-key-hex",
+        required=True,
+        help=(
+            "Operator-trusted raw Ed25519 key authenticating the resilience "
+            "receipt, in lowercase hex."
+        ),
+    )
     prepare_parser.add_argument("--deployment-id", required=True)
     prepare_parser.add_argument("--environment", required=True)
     prepare_parser.add_argument(
@@ -1349,11 +1740,12 @@ def build_parser() -> EvidenceArgumentParser:
         "--prerequisite",
         action="append",
         default=[],
-        metavar="ID:SHA256:EVIDENCE_UNIX",
+        metavar="ID=PATH",
         help=(
-            "One verified prerequisite anchor. Repeat exactly nine times in "
-            "canonical SFM-1, SF-1, SF-2, SF-2c, SF-3, SF-4, SF-5b, SF-6, "
-            "SF-8a order."
+            "One exact prerequisite evidence-package manifest. Repeat exactly "
+            "nine times in canonical SFM-1, SF-1, SF-2, SF-2c, SF-3, SF-4, "
+            "SF-5b, SF-6, SF-8a order. Each manifest and its digest-bound "
+            "readiness summary are opened and validated before signing."
         ),
     )
     prepare_parser.add_argument(
@@ -1377,6 +1769,24 @@ def build_parser() -> EvidenceArgumentParser:
     finalize_parser = subparsers.add_parser(
         "finalize",
         help="Verify a raw detached signature and write the final envelope.",
+    )
+    add_topology_qualification_argument(finalize_parser)
+    finalize_parser.add_argument(
+        "--resilience-qualification-summary",
+        required=True,
+        type=Path,
+        help=(
+            "Exact evidence-qualified resilience/DR summary reviewed during "
+            "prepare."
+        ),
+    )
+    finalize_parser.add_argument(
+        "--resilience-qualification-signer-public-key-hex",
+        required=True,
+        help=(
+            "Operator-trusted raw Ed25519 key authenticating the resilience "
+            "receipt, in lowercase hex."
+        ),
     )
     finalize_parser.add_argument(
         "--signing-payload",

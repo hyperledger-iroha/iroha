@@ -131,8 +131,10 @@ $ cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profil
 ]
 ```
 
-The `handle` field (`namespace.name@semver`) matches what the CLIs accept via
-`--profile=…`, making it safe to copy directly into automation.
+The `handle` field (`namespace.name@semver`) is the exact selector accepted by
+provider tooling via `--chunker-profile=…`, making it safe to copy directly
+into automation. Numeric IDs, registry aliases, slash-form handles, case
+variants, and whitespace normalization are not V1 selector forms.
 
 ### Negotiating Chunkers
 
@@ -146,11 +148,13 @@ ProviderAdvertBodyV1 {
 }
 ```
 
-Multi-source chunk scheduling is announced via the `range` capability. The
-CLI accepts it with `--capability=range[:streams]`, where the optional numeric
-suffix encodes the provider's preferred range-fetch concurrency (for example,
-`--capability=range:64` advertises a 64-stream budget). When omitted, consumers
-fall back to the general `max_streams` hint published elsewhere in the advert.
+Multi-source chunk scheduling is announced with the typed
+`--range-capability=max_span=…,min_granularity=…` selector. Optional exact
+fields are `sparse`, `alignment`, and `merkle`, each with a `true|false` value.
+Concurrency and throughput are carried separately by
+`--stream-budget=max_in_flight=…,max_bytes_per_sec=…[,burst=…]`; transport order
+uses repeated `--transport-hint=protocol:priority` entries. The retired raw
+`--capability=range[:streams]` representation is rejected in V1.
 
 When requesting CAR data, clients should send an `Accept-Chunker` header listing
 supported `(namespace, name, semver)` tuples in preference order:

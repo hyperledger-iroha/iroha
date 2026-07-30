@@ -97,11 +97,11 @@ rollout_phase = "default"
 
 |表面|金丝雀（A 阶段）|坡道（B 阶段）|默认（C 阶段）|
 |--------------------|--------------------------------|----------------|--------------------|
-| `sorafs_cli` 获取 | `--anonymity-policy stage-a` 还是靠相| `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
+| `sorafs_cli` 获取 | `--anonymity-policy anon-guard-pq` 还是靠相| `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
 | Orchestrator 配置 JSON (`sorafs.gateway.rollout_phase`) | `canary` | `ramp` | `default` |
 | Rust 客户端配置 (`iroha.toml`) | `rollout_phase = "canary"`（默认）| `rollout_phase = "ramp"` | `rollout_phase = "default"` |
-| `iroha_cli` 签名命令 | `--anonymity-policy stage-a` | `--anonymity-policy stage-b` | `--anonymity-policy stage-c` |
-| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`，可选 `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`，可选 `.ANON_MAJORIY_PQ` | `setRolloutPhase("default")`，可选 `.ANON_STRICT_PQ` |
+| `iroha_cli` 签名命令 | `--anonymity-policy anon-guard-pq` | `--anonymity-policy anon-majority-pq` | `--anonymity-policy anon-strict-pq` |
+| Java/Android `GatewayFetchOptions` | `setRolloutPhase("canary")`，可选 `setAnonymityPolicy(AnonymityPolicy.ANON_GUARD_PQ)` | `setRolloutPhase("ramp")`，可选 `.ANON_MAJORITY_PQ` | `setRolloutPhase("default")`，可选 `.ANON_STRICT_PQ` |
 | JavaScript 协调器助手 | `rolloutPhase: "canary"` 或 `anonymityPolicy: "anon-guard-pq"` | `"ramp"` / `"anon-majority-pq"` | `"default"` / `"anon-strict-pq"` |
 | Python `fetch_manifest` | `rollout_phase="canary"` | `"ramp"` | `"default"` |
 |斯威夫特 `SorafsGatewayFetchOptions` | `anonymityPolicy: "anon-guard-pq"` | `"anon-majority-pq"` | `"anon-strict-pq"` |
@@ -124,7 +124,7 @@ rollout_phase = "default"
 
 3. **客户端/SDK 金丝雀（T 加 1 周）**
 
-   - 在客户端配置中翻转 `rollout_phase = "ramp"` 或为指定的 SDK 群组传递 `stage-b` 覆盖。
+   - 在客户端配置中翻转 `rollout_phase = "ramp"` 或为指定的 SDK 群组传递 `anon-majority-pq` 覆盖。
    - 捕获遥测差异（`sorafs_orchestrator_policy_events_total` 由 `client_id` 和 `region` 分组）并将其附加到推出事件日志中。
 
 4. **默认促销（T+3周）**
@@ -160,7 +160,7 @@ rollout_phase = "default"
 ### 坡道→金丝雀（B 阶段→A 阶段）
 
 1. 使用 `sorafs_cli guard-directory import --guard-directory guards.json` 导入升级前捕获的保护目录快照，然后重新运行 `sorafs_cli guard-directory verify`，以便降级数据包包含哈希值。
-2. 在协调器和客户端配置上设置 `rollout_phase = "canary"`（或用 `anonymity_policy stage-a` 覆盖），然后重播 [PQ 棘轮运行手册](./pq-ratchet-runbook.md) 中的 PQ 棘轮演练以证明降级管道。
+2. 在协调器和客户端配置上设置 `rollout_phase = "canary"`（或用 `anonymity_policy anon-guard-pq` 覆盖），然后重播 [PQ 棘轮运行手册](./pq-ratchet-runbook.md) 中的 PQ 棘轮演练以证明降级管道。
 3. 在通知治理之前，将更新的 PQ Ratchet 和 SN16 遥测屏幕截图以及警报结果附加到事件日志中。
 
 ### 护栏提醒- 每当发生降级时参考 `docs/source/ops/soranet_transport_rollback.md`，并将任何临时缓解措施记录为部署跟踪器中的 `TODO:` 项目以进行后续工作。

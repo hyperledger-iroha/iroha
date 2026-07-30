@@ -13,6 +13,18 @@ use crate::{Error, KeyGenOption};
 const MESSAGE_1: &[u8; 22] = b"This is a test message";
 const MESSAGE_2: &[u8; 20] = b"Another test message";
 const SEED: &[u8; 10] = &[1u8; 10];
+// Canonical compressed encodings of on-curve points outside the prime-order
+// subgroups. Tests first validate them with the backend's unchecked decoder so
+// a malformed fixture cannot make the subgroup tripwire pass accidentally.
+const NON_SUBGROUP_G1: [u8; 48] = hex_literal::hex!(
+    "8000000000000000000000000000000000000000000000000000000000000000\
+     00000000000000000000000000000000"
+);
+const NON_SUBGROUP_G2: [u8; 96] = hex_literal::hex!(
+    "8158b0083c00046272a9b63583963fff07e147f3f9e6e24174328ad8bc2aa150\
+     298f3189a9cf6ed626f461e944bbd3d117762a3b9108c4a74a151b732a6075bf\
+     2199bc19c48c393d4ceb92d0a76057be02f08540770fabd60262cea73ea1906c"
+);
 
 #[cfg(feature = "rand")]
 struct FixedTryRng {
@@ -146,6 +158,22 @@ fn test_signature_verification_different_keys<
         .expect_err("Signature verification for wrong public key should fail");
 }
 
+fn test_verify_cache_rejects_variable_length_tuple_splice<
+    C: BlsConfiguration + PreparedPublicKeyCacheAccess,
+>() {
+    let (pk, sk) =
+        BlsImpl::<C>::keypair(KeyGenOption::UseSeed(vec![0x74; 32])).expect("BLS keypair");
+    let message = b"cached BLS tuple";
+    let signature = BlsImpl::<C>::sign(message, &sk).expect("BLS sign");
+
+    BlsImpl::<C>::verify(message, &signature, &pk).expect("seed positive verification cache");
+
+    let mut spliced_message = message.to_vec();
+    spliced_message.push(signature[0]);
+    BlsImpl::<C>::verify(&spliced_message, &signature[1..], &pk)
+        .expect_err("malformed signature must not borrow a cached tuple verdict");
+}
+
 fn test_verify_rejects_all_zero_signature_material<
     C: BlsConfiguration + PreparedPublicKeyCacheAccess,
 >() {
@@ -227,7 +255,7 @@ mod normal {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
     use crate::signature::bls::implementation;
-    use blstrs::{G1Affine, G2Affine, Scalar};
+    use blstrs::{G1Affine, G2Affine, G2Projective, Scalar};
     use group::prime::PrimeCurveAffine;
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
@@ -288,6 +316,11 @@ mod normal {
     #[test]
     fn signature_verification_different_keys() {
         test_signature_verification_different_keys::<NormalConfiguration>();
+    }
+
+    #[test]
+    fn verify_cache_rejects_variable_length_tuple_splice() {
+        test_verify_cache_rejects_variable_length_tuple_splice::<NormalConfiguration>();
     }
 
     #[test]
@@ -385,6 +418,19 @@ mod normal {
     #[test]
     fn parse_public_key_rejects_all_zero_material() {
         test_parse_public_key_rejects_all_zero_material::<NormalConfiguration>();
+    }
+
+    #[test]
+    fn parse_public_key_rejects_non_subgroup_point() {
+        let unchecked = G1Affine::from_compressed_unchecked(&NON_SUBGROUP_G1)
+            .into_option()
+            .expect("tripwire fixture is a compressed on-curve G1 point");
+        assert!(bool::from(unchecked.is_on_curve()));
+        assert!(!bool::from(unchecked.is_torsion_free()));
+        assert!(
+            BlsImpl::<NormalConfiguration>::parse_public_key(&NON_SUBGROUP_G1).is_err(),
+            "BLS-normal parser must enforce the G1 prime-order subgroup"
+        );
     }
 
     #[test]
@@ -565,13 +611,55 @@ mod normal {
             "identity aggregate signature must be rejected before pairing"
         );
     }
+
+    #[test]
+    fn multi_message_rejects_balancing_altered_signatures() {
+        let (pk1, sk1) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::UseSeed(vec![0x31; 32]))
+                .expect("first BLS keypair");
+        let (pk2, sk2) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::UseSeed(vec![0x32; 32]))
+                .expect("second BLS keypair");
+        let msg1 = b"independent-normal-a";
+        let msg2 = b"independent-normal-b";
+        let sig1 = BlsImpl::<NormalConfiguration>::sign(msg1, &sk1).expect("first BLS signature");
+        let sig2 = BlsImpl::<NormalConfiguration>::sign(msg2, &sk2).expect("second BLS signature");
+        let sig1_encoded: [u8; 96] = sig1.as_slice().try_into().expect("normal signature length");
+        let sig2_encoded: [u8; 96] = sig2.as_slice().try_into().expect("normal signature length");
+        let sig1_point = G2Affine::from_compressed(&sig1_encoded)
+            .into_option()
+            .expect("first canonical signature");
+        let sig2_point = G2Affine::from_compressed(&sig2_encoded)
+            .into_option()
+            .expect("second canonical signature");
+        let delta = G2Affine::generator() * Scalar::from(41_u64);
+        let altered_sig1 = G2Affine::from(G2Projective::from(sig1_point) + delta).to_compressed();
+        let altered_sig2 = G2Affine::from(G2Projective::from(sig2_point) - delta).to_compressed();
+
+        BlsImpl::<NormalConfiguration>::verify(msg1, altered_sig1.as_ref(), &pk1)
+            .expect_err("first altered signature must fail independently");
+        BlsImpl::<NormalConfiguration>::verify(msg2, altered_sig2.as_ref(), &pk2)
+            .expect_err("second altered signature must fail independently");
+
+        let pk1_bytes = pk1.to_bytes();
+        let pk2_bytes = pk2.to_bytes();
+        let messages: [&[u8]; 2] = [msg1.as_ref(), msg2.as_ref()];
+        let signatures: [&[u8]; 2] = [altered_sig1.as_ref(), altered_sig2.as_ref()];
+        let public_keys: [&[u8]; 2] = [pk1_bytes.as_ref(), pk2_bytes.as_ref()];
+        BlsImpl::<NormalConfiguration>::verify_aggregate_multi_message(
+            &messages,
+            &signatures,
+            &public_keys,
+        )
+        .expect_err("multi-message verification must prove each signature independently");
+    }
 }
 
 mod small {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
     use crate::signature::bls::implementation;
-    use blstrs::{G1Affine, G2Affine, Scalar};
+    use blstrs::{G1Affine, G1Projective, G2Affine, Scalar};
     use group::prime::PrimeCurveAffine;
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
@@ -635,6 +723,11 @@ mod small {
     }
 
     #[test]
+    fn verify_cache_rejects_variable_length_tuple_splice() {
+        test_verify_cache_rejects_variable_length_tuple_splice::<SmallConfiguration>();
+    }
+
+    #[test]
     fn verify_rejects_identity_signature_as_parse_error() {
         let (pk, _sk) =
             BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
@@ -653,6 +746,19 @@ mod small {
     #[test]
     fn parse_public_key_rejects_all_zero_material() {
         test_parse_public_key_rejects_all_zero_material::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn parse_public_key_rejects_non_subgroup_point() {
+        let unchecked = G2Affine::from_compressed_unchecked(&NON_SUBGROUP_G2)
+            .into_option()
+            .expect("tripwire fixture is a compressed on-curve G2 point");
+        assert!(bool::from(unchecked.is_on_curve()));
+        assert!(!bool::from(unchecked.is_torsion_free()));
+        assert!(
+            BlsImpl::<SmallConfiguration>::parse_public_key(&NON_SUBGROUP_G2).is_err(),
+            "BLS-small parser must enforce the G2 prime-order subgroup"
+        );
     }
 
     #[test]
@@ -811,5 +917,49 @@ mod small {
             .is_err(),
             "identity aggregate signature must be rejected before pairing"
         );
+    }
+
+    #[test]
+    fn multi_message_rejects_balancing_altered_signatures() {
+        let (pk1, sk1) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::UseSeed(vec![0x41; 32]))
+                .expect("first compact BLS keypair");
+        let (pk2, sk2) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::UseSeed(vec![0x42; 32]))
+                .expect("second compact BLS keypair");
+        let msg1 = b"independent-small-a";
+        let msg2 = b"independent-small-b";
+        let sig1 =
+            BlsImpl::<SmallConfiguration>::sign(msg1, &sk1).expect("first compact BLS signature");
+        let sig2 =
+            BlsImpl::<SmallConfiguration>::sign(msg2, &sk2).expect("second compact BLS signature");
+        let sig1_encoded: [u8; 48] = sig1.as_slice().try_into().expect("small signature length");
+        let sig2_encoded: [u8; 48] = sig2.as_slice().try_into().expect("small signature length");
+        let sig1_point = G1Affine::from_compressed(&sig1_encoded)
+            .into_option()
+            .expect("first canonical signature");
+        let sig2_point = G1Affine::from_compressed(&sig2_encoded)
+            .into_option()
+            .expect("second canonical signature");
+        let delta = G1Affine::generator() * Scalar::from(43_u64);
+        let altered_sig1 = G1Affine::from(G1Projective::from(sig1_point) + delta).to_compressed();
+        let altered_sig2 = G1Affine::from(G1Projective::from(sig2_point) - delta).to_compressed();
+
+        BlsImpl::<SmallConfiguration>::verify(msg1, altered_sig1.as_ref(), &pk1)
+            .expect_err("first altered signature must fail independently");
+        BlsImpl::<SmallConfiguration>::verify(msg2, altered_sig2.as_ref(), &pk2)
+            .expect_err("second altered signature must fail independently");
+
+        let pk1_bytes = pk1.to_bytes();
+        let pk2_bytes = pk2.to_bytes();
+        let messages: [&[u8]; 2] = [msg1.as_ref(), msg2.as_ref()];
+        let signatures: [&[u8]; 2] = [altered_sig1.as_ref(), altered_sig2.as_ref()];
+        let public_keys: [&[u8]; 2] = [pk1_bytes.as_ref(), pk2_bytes.as_ref()];
+        BlsImpl::<SmallConfiguration>::verify_aggregate_multi_message(
+            &messages,
+            &signatures,
+            &public_keys,
+        )
+        .expect_err("multi-message verification must prove each signature independently");
     }
 }

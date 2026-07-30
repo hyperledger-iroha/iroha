@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "closure_mutations": [
     {
       "id": "ML-MUT-NAT-01",
@@ -329,6 +329,313 @@
       ]
     }
   ],
+  "inflight_first_release_layout_contract": {
+    "claim": "layout_only_no_transition_refinement",
+    "module": "SumeragiV2InFlightFirstRelease",
+    "positive_config": "inflight_first_release_fixed.cfg",
+    "runner": "scripts/formal/run_sumeragi_v2_inflight_first_release.sh",
+    "evidence": "docs/formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md",
+    "required_invariants": [
+      "FirstReleaseTypeInvariant",
+      "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
+      "MLValidatorCarrierOwnership",
+      "MLPutBatchV4BeforeReservationV5",
+      "MLReservationV5BeforeKuraActive",
+      "MLKuraActiveBeforeExecutionInput",
+      "MLExecutionInputBeforeReady",
+      "MLCrashPrefixLossFree",
+      "MLCommitAndReleaseRetainExactScope",
+      "MLExactlyOnceCarrierApplication",
+      "MLQueuePlanV4PutBatchBound4096"
+    ],
+    "mutations": [
+      {
+        "config": "inflight_first_release_reservation_before_put_batch_bug.cfg",
+        "invariant": "MLPutBatchV4BeforeReservationV5"
+      },
+      {
+        "config": "inflight_first_release_kura_before_reservation_bug.cfg",
+        "invariant": "MLReservationV5BeforeKuraActive"
+      },
+      {
+        "config": "inflight_first_release_ready_before_input_bug.cfg",
+        "invariant": "MLExecutionInputBeforeReady"
+      },
+      {
+        "config": "inflight_first_release_crash_drops_durable_bug.cfg",
+        "invariant": "MLCrashPrefixLossFree"
+      },
+      {
+        "config": "inflight_first_release_payload_conflict_bug.cfg",
+        "invariant": "MLPayloadSchemaV2CarriesExactAdmissionPreimage"
+      },
+      {
+        "config": "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "invariant": "MLCommitAndReleaseRetainExactScope"
+      },
+      {
+        "config": "inflight_first_release_release_scope_conflict_bug.cfg",
+        "invariant": "MLCommitAndReleaseRetainExactScope"
+      },
+      {
+        "config": "inflight_first_release_duplicate_apply_bug.cfg",
+        "invariant": "MLExactlyOnceCarrierApplication"
+      },
+      {
+        "config": "inflight_first_release_oversize_put_batch_bug.cfg",
+        "invariant": "MLQueuePlanV4PutBatchBound4096"
+      }
+    ],
+    "production_symbols": [
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "struct",
+        "symbol": "LaneExecutablePayloadV1",
+        "required_tokens": [
+          "pub version: u8",
+          "pub entrypoint_hashes: Vec<Hash>",
+          "pub entrypoints: Vec<TransactionEntrypoint>",
+          "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+          "pub routing_plans: Vec<RoutingPlan>",
+          "pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>",
+          "pub payload_hash: Hash",
+          "pub producer_signature: Vec<u8>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "method",
+        "symbol": "LaneExecutablePayloadV1::new_signed_with_reservations",
+        "required_tokens": [
+          "version: LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
+          "reservation_keys",
+          "routing_plans",
+          "native_amx_receipts",
+          "payload.computed_payload_hash()?",
+          "Signature::try_new",
+          "payload.validate(chain_id_hash, epoch)?"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "fn",
+        "symbol": "validate_lane_executable_payload_body",
+        "required_tokens": [
+          "version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
+          "entrypoints.is_empty()",
+          "entrypoints.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS",
+          "reservation_keys.len() != entrypoints.len()",
+          "routing_plans.len() != entrypoints.len()",
+          "native_amx_receipts.len() != entrypoints.len()",
+          "key.validate().is_err()",
+          "key.lane_incarnation != descriptor.lane_incarnation",
+          "routing_plan.digest() != key.routing_plan_digest",
+          "compute_lane_executable_payload_hash("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/journal.rs",
+        "kind": "struct",
+        "symbol": "QueuePlanJournalRecordV4",
+        "required_tokens": [
+          "pub version: u16",
+          "pub entrypoint: TransactionEntrypoint",
+          "pub entrypoint_hash: HashOf<TransactionEntrypoint>",
+          "pub routing_plan: RoutingPlan",
+          "pub admission_context: QueuePlanAdmissionContextV2",
+          "pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "struct",
+        "symbol": "LaneQueueReservationKeyV2",
+        "required_tokens": [
+          "pub version: u16",
+          "pub entrypoint_hash: HashOf<TransactionEntrypoint>",
+          "pub queue_plan_admission_binding_hash: Hash",
+          "pub routing_plan_digest: Hash",
+          "pub coordinator_leg: RouteLeg",
+          "pub lane_incarnation: Hash",
+          "pub proposal_height: u64",
+          "pub lane_block_height: u64",
+          "pub lane_block_view: u64",
+          "pub reservation_owner_hash: Hash",
+          "pub proposal_identity_hash: Hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "struct",
+        "symbol": "LaneQueueReservationRecordV5",
+        "required_tokens": [
+          "version: u16",
+          "key: LaneQueueReservationKeyV2",
+          "enqueue_timestamp_ms: u64",
+          "fifo_order: LaneQueueFifoOrderV5"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "fn",
+        "symbol": "reserve_transactions_for_lane_bounded",
+        "required_tokens": [
+          "durable_claim.global_admission_binding()",
+          "QueuePlanAdmissionRegistryMatch::Exact",
+          "version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION",
+          "journal.put_batch(",
+          "restore_popped_hash_locked",
+          "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "struct",
+        "symbol": "LaneBlockExecutionInputArtifact",
+        "required_tokens": [
+          "pub format: LaneBlockExecutionInputArtifactFormat",
+          "pub proposal: LaneBlockProposalV1",
+          "pub autonomous_chain_id_hash: Option<Hash>",
+          "pub autonomous_epoch: Option<u64>",
+          "pub autonomous_payload_hash: Option<Hash>",
+          "pub entrypoint_hashes: Vec<Hash>",
+          "pub entrypoints: Vec<TransactionEntrypoint>",
+          "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+          "pub routing_plans: Vec<RoutingPlan>",
+          "pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::validate_lane_block_execution_input_artifact",
+        "required_tokens": [
+          "artifact.reservation_keys.len() != artifact.entrypoints.len()",
+          "artifact.routing_plans.len() != artifact.entrypoints.len()",
+          "artifact.native_amx_receipts.len() != artifact.entrypoints.len()",
+          "key.validate().is_err()",
+          "artifact.entrypoint_hashes != descriptor.accepted_transaction_hashes",
+          "Hash::from(entrypoint.hash()) != expected_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::recover_lane_block_execution_input_source",
+        "required_tokens": [
+          "recover_autonomous_lane_block_payload_with_sidecar_repair",
+          "recover_lane_block_payload_with_sidecar_repair",
+          "LaneBlockPayloadAvailability::DescriptorMismatch"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::persist_lane_block_execution_input",
+        "required_tokens": [
+          "recover_lane_block_execution_input_source(",
+          "if &verified != recovered",
+          "LaneBlockExecutionInputArtifact::new(verified)",
+          "write_lane_block_execution_input_artifact(&artifact)"
+        ]
+      }
+    ],
+    "ordered_source_checks": [
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "fn",
+        "symbol": "reserve_transactions_for_lane_bounded",
+        "tokens": [
+          "durable_claim.global_admission_binding()",
+          "QueuePlanAdmissionRegistryMatch::Exact",
+          "journal.put_batch(",
+          "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::persist_lane_block_execution_input",
+        "tokens": [
+          "recover_lane_block_execution_input_source(",
+          "if &verified != recovered",
+          "LaneBlockExecutionInputArtifact::new(verified)",
+          "write_lane_block_execution_input_artifact(&artifact)"
+        ]
+      }
+    ],
+    "source_checks": [
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "required_tokens": [
+          "pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;",
+          "pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;",
+          "unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;"
+        ]
+      },
+      {
+        "path": "crates/iroha_data_model/src/merge.rs",
+        "required_tokens": [
+          "pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/journal.rs",
+        "required_tokens": [
+          "pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 4;",
+          "unsupported.version = QUEUE_PLAN_JOURNAL_VERSION + 1;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "required_tokens": [
+          "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
+          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;"
+        ]
+      },
+      {
+        "path": "scripts/formal/run_sumeragi_v2_tlc.sh",
+        "required_tokens": [
+          "readonly INFLIGHT_FIRST_RELEASE_RUNNER=\"${REPO_ROOT}/scripts/formal/run_sumeragi_v2_inflight_first_release.sh\"",
+          "bash \"$INFLIGHT_FIRST_RELEASE_RUNNER\""
+        ]
+      },
+      {
+        "path": "scripts/write_sumeragi_v2_release_receipt.py",
+        "required_tokens": [
+          "_APALACHE_LAYOUT_ONLY_RESULTS = (",
+          "\"inflight-first-release-layout\"",
+          "\"SumeragiV2InFlightFirstRelease\"",
+          "\"inflight_first_release_fixed.cfg\"",
+          "*_APALACHE_REFINEMENT_RESULTS",
+          "*_APALACHE_LAYOUT_ONLY_RESULTS"
+        ]
+      },
+      {
+        "path": "pytests/scripts/sumeragi_v2_release_receipt_test.py",
+        "required_tokens": [
+          "canonical.replace(\"result_count\\t5\", \"result_count\\t4\", 1)",
+          "\"result\\tinflight-first-release-refinement\\t\"",
+          "\"is not exact source-bound NoError evidence\""
+        ]
+      }
+    ],
+    "forbidden_tokens": [
+      "LaneExecutablePayloadV3",
+      "QueuePlanV5",
+      "QueuePlan V5",
+      "queuePlanV5",
+      "everQueuePlanV5",
+      "PutBatchV5",
+      "reservationV9",
+      "everReservationV9",
+      "FsyncReservationV9",
+      "reservation V9",
+      "MLPayloadV3CarriesExactAdmissionPreimage",
+      "MLPutBatchV5BeforeReservationV9",
+      "MLReservationV9BeforeKuraActive"
+    ]
+  },
   "models": [
     {
       "module": "SumeragiV2AutoscaleLifecycle",
@@ -474,10 +781,19 @@
           "kind": "fn",
           "symbol": "merge_lane_execution_carries_lane",
           "required_tokens": [
-            "decode_from_bytes::<LaneQueueReservationKeyV2>",
+            "decode_canonical_merge_reservation_key",
             "reservation.validate",
             "receipt_shape_matches_coordinator_payload",
             "native_amx_receipt_carries_separate_participant_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "decode_canonical_merge_reservation_key",
+          "required_tokens": [
+            "norito::decode_canonical",
+            ".ok()"
           ]
         },
         {
@@ -1102,7 +1418,7 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "struct",
-          "symbol": "NativeAmxParticipantReceiptLatestIndexV1",
+          "symbol": "NativeAmxParticipantReceiptLatestIndexV2",
           "required_tokens": [
             "version: u8",
             "lane_id: LaneId",
@@ -1113,7 +1429,9 @@
             "participant_settlement_hash: HashOf<LaneBlockCommitment>",
             "application_block_height: u64",
             "application_block_hash: HashOf<BlockHeader>",
-            "receipt_digest: Hash"
+            "executed_block_wire_hash: Hash",
+            "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+            "manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>"
           ]
         },
         {
@@ -1172,7 +1490,7 @@
             "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
             "try_reserve_exact",
             "NativeAmxEvidencePruneIntentV1::VERSION",
-            "norito::to_bytes",
+            "norito::encode_canonical",
             "encoded_len > shared_budget"
           ]
         },
@@ -1268,6 +1586,9 @@
             "difference(&manifest_payload_heights)",
             "difference(&receipt_payload_heights)",
             "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "current.matches_receipt",
+            "current.matches_manifest",
+            "is not backed by its exact receipt or QC-authenticated manifest",
             "persist_native_amx_participant_receipt_latest_index_locked",
             "prune_native_amx_evidence_pairs_locked",
             "progress_mutation_namespace_unchanged",
@@ -1323,7 +1644,7 @@
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
             "NativeAmxParticipantApplicationManifestArtifactV1",
             "NativeAmxParticipantApplicationReceiptArtifact::new",
-            "NativeAmxParticipantReceiptLatestIndexV1::from_receipt",
+            "NativeAmxParticipantReceiptLatestIndexV2::from_receipt",
             "native_prune_intent_routes.insert",
             "native_amx_evidence_prune_intent_max_bytes"
           ]
@@ -1536,7 +1857,8 @@
           "symbol": "release_lane_reservation",
           "required_tokens": [
             "fifo_with_released_reservations_locked",
-            "journal_mut()?.release",
+            "apply_lane_reservation_journal",
+            "journal.release(*key)",
             "replace_fifo_locked"
           ]
         },
@@ -1560,7 +1882,8 @@
           "required_tokens": [
             "ensure_release_no_conflict",
             "ordered_keys.iter().all",
-            "journal_mut()?.prepare_release",
+            "apply_lane_reservation_journal",
+            "journal.prepare_release(barrier.clone())",
             "release_barriers.push"
           ]
         },
@@ -1571,20 +1894,22 @@
           "required_tokens": [
             "release_barriers",
             "ordered_records",
-            "journal_mut()?.complete_release",
-            "finalize_one_completed_release_locked"
+            "journal.complete_release(completion.clone())",
+            "fifo_with_released_reservations_locked",
+            "journal.forget_release(completion.barrier.clone())",
+            "completed_releases.remove"
           ]
         },
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "fn",
-          "symbol": "finalize_one_completed_release_locked",
+          "symbol": "apply_lane_reservation_journal",
           "required_tokens": [
-            "ordered_records",
-            "fifo_with_released_reservations_locked",
-            "replace_fifo_locked",
-            "forget_release",
-            "completed_releases.remove"
+            "lane_reservation_journal.lock",
+            "JournalNotInstalled",
+            "operation(journal)",
+            "latch_lane_reservation_durability_fault_locked",
+            "publish_latched_lane_reservation_durability_fault"
           ]
         },
         {
@@ -1935,7 +2260,8 @@
           "kind": "fn",
           "symbol": "commit_lane_reservation",
           "required_tokens": [
-            "journal_mut()?.commit",
+            "journal.commit(*key)",
+            "journal.forget_commit(*key)",
             "commit_barriers",
             "remove_transaction_locked"
           ]
@@ -2144,7 +2470,7 @@
           "required_tokens": [
             "MAX_MERGE_EXECUTION_ENTRYPOINTS",
             "transaction_selection_durability_faulted",
-            "store.journal.is_none()",
+            "lane_reservation_journal.lock().is_none()",
             "live_by_hash",
             "commit_barriers",
             "release_barriers",
@@ -2570,7 +2896,34 @@
             "push_remove_lock",
             "global_admission_binding",
             "indexed_binding != binding",
-            "reject_conflicting_global_admission_locked"
+            "tombstone_conflicting_global_admission",
+            "finalize_conflicting_global_admission_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "tombstone_conflicting_global_admission",
+          "required_tokens": [
+            "remove_exact_strict_durable",
+            "binding.entrypoint_hash.clone()",
+            "binding.routing_plan_digest",
+            "binding.journal_record_digest",
+            "QueuePlanJournalExactRemoveResult::Removed",
+            "mark_plan_journal_durability_fault"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "finalize_conflicting_global_admission_locked",
+          "required_tokens": [
+            "hash_as_entrypoint",
+            "routing_plan.digest",
+            "durable_plan_claims.remove",
+            "remove_hashes_from_fifo_locked",
+            "remove_transaction_locked",
+            "removed_hashes.insert"
           ]
         },
         {

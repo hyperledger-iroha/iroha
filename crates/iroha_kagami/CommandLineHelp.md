@@ -225,7 +225,7 @@ Generate cryptographic key pairs and optional validator Proofs-of-Possession
 * `-p`, `--private-key <PRIVATE_KEY>` — A private key to generate the key-pair from
 
    `--private-key` specifies the payload of the private key, while `--algorithm` specifies its algorithm.
-* `-s`, `--seed <SEED>` — The Unicode `seed` string to generate the key-pair from
+* `--seed-hex <HEX>` — A 32-byte secret key-generation seed encoded as 64 hexadecimal characters. This is for reproducible fixtures. Omit it for OS-random production keys
 * `-j`, `--json` — Output the key-pair in JSON format
 * `--json-mh-prefixed` — Use algorithm-prefixed multihash strings in JSON (e.g., "ml-dsa:...")
 * `-c`, `--compact` — Output the key-pair without additional text
@@ -266,7 +266,7 @@ Sign the genesis block
 * `-t`, `--topology <TOPOLOGY>` — Use this topology instead of specified in genesis.json. JSON-serialized vector of `PeerId`. For use in `iroha_swarm`
 * `--peer-pop <PEER_POPS>` — Embed one or more PoPs into the same transaction as `--topology`. Repeatable flag: `--peer-pop <public_key=pop_hex>`
 * `--private-key <HEX>` — Private key hex (multihash payload, not prefixed) that matches the genesis public key
-* `--seed <SEED>` — Seed string to derive the genesis key (testing convenience)
+* `--seed-hex <HEX>` — A 32-byte secret genesis key-generation seed encoded as 64 hexadecimal characters. This is a testing convenience. Production operators should prefer an owner-held private-key file
 * `--algorithm <ALGORITHM>` — Algorithm of the genesis key (must match the genesis public key)
 
   Default value: `ed25519`
@@ -377,7 +377,7 @@ Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
 
   Default value: `bls_normal`
 * `--private-key <PRIVATE_KEY>` — Private key hex (multihash payload, not prefixed)
-* `--seed <SEED>` — Seed string to derive the key pair (for testing)
+* `--seed-hex <HEX>` — A 32-byte secret key-generation seed encoded as 64 hexadecimal characters. This is for reproducible fixtures. Omit it for OS-random validator keys
 * `--json` — Output JSON instead of plain text
 * `--expose-private-key` — Print the private key in plain-text output (disabled by default)
 
@@ -470,9 +470,7 @@ Generate per-client CLI configs from a base client.toml
 * `--domain <SCOPE>` — Account scope for generated client configs (`dataspace` or `domain.dataspace`)
 
   Default value: `acme.universal`
-* `--seed-prefix <SEED>` — Seed prefix for deterministic key generation (`<prefix>-<name>`)
-
-  Default value: `demo`
+* `--seed-hex <HEX>` — A 32-byte secret master seed encoded as 64 hexadecimal characters. Per-client keys are derived with an explicit domain and client name. Omit this option for independent operating-system-random keys
 * `--names <NAME>` — Comma-separated list of client names
 
 

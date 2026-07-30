@@ -126,7 +126,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # ליצור manifest + CAR וללכוד chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -135,7 +135,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   --json-out=sf2.report.json
 
 # להריץ שוב עם fetch plan שמור (מגן מפני offsets מיושנים)
-cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

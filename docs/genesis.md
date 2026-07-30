@@ -2,7 +2,10 @@
 
 A `genesis.json` file defines the first transactions that run when an Iroha network starts. The file is a JSON object with these fields:
 
-- `chain` – unique chain identifier.
+- `chain` – the deployment-unique chain identifier. It is exact,
+  case-sensitive ASCII, is at most 128 bytes, begins and ends with an
+  alphanumeric character, and otherwise permits only alphanumerics plus
+  `.`, `_`, `:`, and `-`.
 - `executor` (optional) – path to the executor bytecode (`.to`). If present,
   genesis includes an Upgrade instruction as the first transaction. If omitted,
   no upgrade is performed and the built‑in executor is used.
@@ -14,6 +17,52 @@ A `genesis.json` file defines the first transactions that run when an Iroha netw
   - `ivm_triggers` – triggers with IVM bytecode executables.
   - `topology` – initial peer topology. Each entry keeps the peer id and PoP together: `{ "peer": "<public_key>", "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
 - `crypto` – cryptography snapshot mirrored from `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` mirrors `crypto.curves.allowed_curve_ids` so manifests can advertise which controller curves the cluster accepts. Tooling enforces SM combinations: manifests that list `sm2` must also switch the hash to `sm3-256`, while builds compiled without the `sm` feature reject `sm2` entirely. Normalization injects a `crypto_manifest_meta` custom parameter into the signed genesis; nodes refuse to start if the injected payload disagrees with the advertised snapshot.
+
+The signed genesis block is the deployment trust anchor, not the chain label
+by itself. Genesis has one authentication boundary: exactly one block signature
+from the configured, single-key genesis authority. That signature covers the
+consensus header, including height, previous-block hash, and the Merkle root of
+the ordered transaction intents. Admission recomputes that root from the
+external entrypoints and checks every intent's exact `chain`, authority, and
+instruction-only executable. It also requires height 1 with no previous block,
+and the state-dependent pipeline accepts that height only against an empty
+chain.
+
+The authorization-proof bytes carried by individual genesis transaction
+containers are not separate trust anchors and are deliberately not reverified.
+The block signature authenticates the execution-affecting transaction intent,
+so requiring an additional valid signature over every transaction would add a
+redundant second proof by the same authority without protecting more state.
+Normal, non-genesis transactions continue to require their own authorization
+signatures.
+
+Peer bootstrap additionally checks the requested chain and public key, and
+requires `genesis.expected_hash` to pin the exact consensus-header hash on every
+remote fetch. A local signed genesis file is itself the configured artifact and
+does not require a separate hash pin. Operators must therefore assign a
+different chain identifier to each distinct deployment; intentionally reusing
+both a chain identifier and its signing authority declares the same transaction
+replay domain.
+
+Genesis is also the chain's authorization root. It may create accounts, assign
+roles and genesis-only administrative permissions, register active verifier
+keys and confidential-asset policy, seed governance state, and select the
+executor that will govern later blocks. Those effects intentionally survive
+genesis: preventing a correctly signed genesis from choosing them would only
+move the same trust decision into node-local code. Review the normalized
+manifest and its executor bytecode before signing, distribute the signed block
+or its exact hash out of band, and treat a maliciously signed genesis as a
+different chain—not as an untrusted transaction that runtime permissions can
+repair.
+
+The built-in initial executor still applies structural validation during
+genesis. References must resolve, verifier records must be active where
+required, and every instruction must execute successfully. After genesis,
+`CanUpgradeExecutor` and the other genesis-only administrative permissions
+cannot be newly delegated by resource ownership: the genesis-only-name check
+runs before capability-root resolution, while executor upgrade requires an
+exact permission already established by genesis or the active executor's own
+governance policy.
 
 Example (`kagami genesis generate default --consensus-mode npos` output, instructions trimmed):
 
@@ -183,6 +232,9 @@ Kagami and the node code ensure this ordering so that, for example, parameters a
 Notes:
 - Kagami’s “default” template registers a sample domain and accounts, mints a few assets, and grants minimal permissions using only built‑in ISIs – no `.to` required.
 - If you do include an executor upgrade, it must be the first transaction. Kagami enforces this when generating/signing.
+- The executor must implement the migration entrypoint and return a canonical
+  Norito migration result. Production nodes always run that guest entrypoint;
+  they do not infer migration behavior from bytecode size or IVM header fields.
 - Use `kagami genesis validate` to catch invalid `Name` values (e.g., whitespace) and malformed instructions before signing.
 
 ## Running with Docker/Swarm

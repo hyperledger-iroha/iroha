@@ -4,6 +4,17 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    'cfg(feature, values("bench-internal"))',
+    'cfg(feature, values("compact-len"))',
+    'cfg(feature, values("cuda"))',
+    'cfg(feature, values("metal"))',
+    'cfg(feature, values("packed-struct"))',
+    'cfg(feature, values("parallel-stage1"))',
+    'cfg(feature, values("schema-structural"))',
+] }
+
 [[bin]]
 name = "torii-mock-harness"
 path = "src/bin/torii_mock_harness.rs"
@@ -15,34 +26,30 @@ path = "src/bin/control_plane_mock.rs"
 [features]
 default = []
 vote-tally = ["dep:halo2_proofs"]
-schema-structural = []
-packed-struct = []
-compact-len = []
 
 [dependencies]
 hex = { workspace = true }
-norito = { workspace = true, features = ["bench-internal", "simd-accel", "parallel-stage1"] }
+norito = { workspace = true, features = ["node-codec", "bench-internal", "simd-accel", "parallel-stage1"], default-features = false }
 tempfile = { workspace = true }
-iroha_core = { workspace = true }
+iroha_core = { workspace = true, default-features = false, features = ["node"] }
 iroha_config = { workspace = true }
 iroha_torii = { workspace = true, features = [
-    "app_api",
+    "node-api",
+    "ws_integration_tests",
     "telemetry",
     "profiling",
     "schema",
     "p2p_ws",
-    "connect",
-    "gov_vrf",
     "zk-verify-batch",
-    "push",
-] }
-iroha_crypto = { workspace = true }
-iroha_data_model = { workspace = true, features = ["transparent_api", "json"] }
+], default-features = false }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
+iroha_data_model = { workspace = true, features = ["application-model", "transparent_api"], default-features = false }
 iroha_telemetry = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha = { workspace = true }
-ivm = { workspace = true }
+ivm = { workspace = true, default-features = false, features = ["runtime"] }
+norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }
 fastpq_isi = { path = "../crates/fastpq_isi" }
 arrow-array = { version = "53.4.1", default-features = false }
@@ -83,5 +90,5 @@ soranet-relay = { path = "../tools/soranet-relay" }
 [dev-dependencies]
 assert_cmd = "2.1.1"
 tempfile = { workspace = true }
-norito = { path = "../crates/norito" }
+norito = { path = "../crates/norito", default-features = false, features = ["node-codec"] }
 soranet_pq = { path = "../crates/soranet_pq" }

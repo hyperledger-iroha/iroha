@@ -9,6 +9,7 @@
 use std::collections::BTreeSet;
 
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use iroha_schema::IntoSchema;
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -746,7 +747,17 @@ impl SignedReplicationOrderV1 {
 
 /// Assignment binding a provider to store a manifest slice.
 #[derive(
-    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+    Debug,
+    Clone,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    IntoSchema,
 )]
 pub struct ReplicationAssignmentV1 {
     /// Provider identifier as authorised by governance.

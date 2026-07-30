@@ -217,8 +217,7 @@ impl CommitmentKey {
             let committed = Point(msm_best(
                 &row.iter().map(|scalar| scalar.0).collect::<Vec<_>>(),
                 &self.generator_affines[..row.len()],
-            ))
-            .add(self.hiding_generator.mul_scalar(blinding));
+            )) + self.hiding_generator.mul_scalar(blinding);
             if committed.is_identity() {
                 return Err(CommitmentError::InvalidDimension);
             }
@@ -261,22 +260,6 @@ fn batch_normalize(points: &[Point]) -> Vec<T256Affine> {
     affine
 }
 
-#[cfg(test)]
-pub(super) fn combine(commitments: &[&Commitment]) -> Result<Commitment, CommitmentError> {
-    if commitments.is_empty() {
-        return Err(CommitmentError::InvalidDimension);
-    }
-    let capacity = commitments.iter().try_fold(0_usize, |sum, commitment| {
-        sum.checked_add(commitment.len())
-            .ok_or(CommitmentError::InvalidDimension)
-    })?;
-    let mut points = Vec::with_capacity(capacity);
-    for commitment in commitments {
-        points.extend_from_slice(commitment.points());
-    }
-    Commitment::from_points(points)
-}
-
 pub(super) fn fold(
     commitments: &[&Commitment],
     weights: &[Scalar],
@@ -293,12 +276,12 @@ pub(super) fn fold(
     }
     let mut output = Vec::with_capacity(first.len());
     for point_index in 0..first.len() {
-        let point = commitments.iter().zip(weights.iter().copied()).fold(
-            Point::identity(),
-            |sum, (commitment, weight)| {
-                sum.add(commitment.points()[point_index].mul_scalar(weight))
-            },
-        );
+        let point = commitments
+            .iter()
+            .zip(weights.iter().copied())
+            .fold(Point::identity(), |sum, (commitment, weight)| {
+                sum + commitment.points()[point_index].mul_scalar(weight)
+            });
         if point.is_identity() {
             return Err(CommitmentError::InvalidDimension);
         }
@@ -330,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn commitments_are_linear_and_combine_by_rows() {
+    fn commitments_are_linear_and_fold_by_rows() {
         let key = CommitmentKey::derive(b"vega-commitment-test", 4).expect("canonical key");
         let left = key
             .commit(&[s(1), s(2), s(3), s(4)], &[s(9)])
@@ -344,10 +327,6 @@ mod tests {
             .commit(&expected_values, &[s(97)])
             .expect("linear commitment");
         assert_eq!(folded, expected);
-
-        let combined = combine(&[&left, &right]).expect("two nonempty commitments");
-        assert_eq!(combined.len(), 2);
-        assert_eq!(combined.points(), &[left.points()[0], right.points()[0]]);
     }
 
     #[test]
@@ -359,7 +338,6 @@ mod tests {
         assert!(msm(&[s(1)], &[]).is_err());
         let commitment = key.commit(&[s(1), s(2)], &[s(3)]).expect("valid");
         assert!(fold(&[&commitment], &[Scalar::zero()]).is_err());
-        assert!(combine(&[]).is_err());
     }
 
     #[test]

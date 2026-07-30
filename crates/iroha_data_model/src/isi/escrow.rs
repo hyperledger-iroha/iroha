@@ -1343,7 +1343,7 @@ mod tests {
         }
         for path in [
             "negative/cancel_asset_lock_legacy_missing_expected_v1.to",
-            "negative/cancel_asset_lock_trailing_bytes_v1.to",
+            "negative/cancel_asset_lock_nested_escrow_id_v1.to",
         ] {
             assert!(
                 norito::decode_from_bytes::<CancelAssetLock>(&read(path)).is_err(),

@@ -26,8 +26,20 @@ from typing import Callable, Iterator, Mapping, Sequence
 # proof shards keep normal TLAPM runs well below it while preserving enough
 # headroom for the pinned frontend and one backend worker.
 MAX_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+MAX_CONFIGURABLE_MEMORY_BYTES = 4 * 1024 * 1024 * 1024
 SAMPLE_INTERVAL_SECONDS = 0.25
-PROCESS_INSPECTION_TIMEOUT_SECONDS = 0.2
+# `footprint` suspends each inspected task while collecting its stronger macOS
+# accounting. Probing a just-execed task in dyld at the RSS cadence can prevent
+# it from completing loader startup. Keep cheap `ps` RSS sampling frequent and
+# run the intrusive footprint measurement on the same reviewed cadence used by
+# the Kagemusha staged-resource guard.
+PHYSICAL_FOOTPRINT_INTERVAL_SECONDS = 5.0
+CONTROL_RECORD_TIMEOUT_SECONDS = 0.2
+# macOS does not provide a sub-200 ms completion guarantee for ``ps`` or
+# ``footprint``, even when the host is otherwise idle. Keep the probes bounded
+# and fail closed, but allow enough time to avoid scheduler-jitter false
+# positives during long-running release ceremonies.
+PROCESS_INSPECTION_TIMEOUT_SECONDS = 2.0
 TERM_GRACE_SECONDS = 2.0
 SESSION_READY_TIMEOUT_SECONDS = 2.0
 MEMORY_LIMIT_EXIT_CODE = 75
@@ -156,7 +168,7 @@ def _read_guarded_exit(session: GuardedSession) -> tuple[int, bool, int]:
     """Read and validate the wrapper's child status and kernel RSS evidence."""
 
     wrapper_exit = session.control.read_line(
-        timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
+        timeout=CONTROL_RECORD_TIMEOUT_SECONDS,
         description="lifeline wrapper exit status",
     )
     fields = wrapper_exit.split()
@@ -321,7 +333,10 @@ def _process_rows() -> list[ProcessRow]:
             timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as error:
-        raise GuardError("process inspection exceeded 200 ms") from error
+        raise GuardError(
+            "process inspection exceeded "
+            f"{PROCESS_INSPECTION_TIMEOUT_SECONDS:g} s"
+        ) from error
     except OSError as error:
         raise GuardError("could not start process inspection") from error
     if completed.returncode != 0:
@@ -446,7 +461,10 @@ def _physical_footprint_bytes(process_ids: Sequence[int]) -> int:
             timeout=PROCESS_INSPECTION_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as error:
-        raise GuardError("macOS physical-footprint inspection exceeded 200 ms") from error
+        raise GuardError(
+            "macOS physical-footprint inspection exceeded "
+            f"{PROCESS_INSPECTION_TIMEOUT_SECONDS:g} s"
+        ) from error
     except OSError as error:
         raise GuardError("could not start macOS physical-footprint inspection") from error
     if completed.returncode != 0:
@@ -465,12 +483,18 @@ def _physical_footprint_bytes(process_ids: Sequence[int]) -> int:
 def _sample_group(
     process_group_id: int,
     rows: Sequence[ProcessRow] | None = None,
+    *,
+    include_physical_footprint: bool = True,
 ) -> MemorySample:
     """Measure the larger aggregate RSS or macOS physical footprint."""
 
     group_rows = _group_rows(process_group_id, rows)
     rss_bytes = sum(row.rss_bytes for row in group_rows)
-    footprint_bytes = _physical_footprint_bytes([row.pid for row in group_rows])
+    footprint_bytes = (
+        _physical_footprint_bytes([row.pid for row in group_rows])
+        if include_physical_footprint
+        else 0
+    )
     if footprint_bytes > 0:
         memory_bytes = max(rss_bytes, footprint_bytes)
         method = "max_rss_physical_footprint"
@@ -888,7 +912,12 @@ def _run_guarded(
     report_path: Path,
     summary_path: Path,
     memory_limit_bytes: int = MAX_MEMORY_BYTES,
+    maximum_memory_bytes: int = MAX_MEMORY_BYTES,
+    absolute_memory_ceiling_bytes: int = MAX_CONFIGURABLE_MEMORY_BYTES,
     sample_interval_seconds: float = SAMPLE_INTERVAL_SECONDS,
+    physical_footprint_interval_seconds: float = (
+        PHYSICAL_FOOTPRINT_INTERVAL_SECONDS
+    ),
     held_lock_descriptors: Sequence[int] = (),
     child_directory_descriptors: Sequence[int] = (),
     post_run_cleanup: Callable[[], int | None] | None = None,
@@ -901,10 +930,18 @@ def _run_guarded(
 
     if not command:
         raise GuardError("guarded command is empty")
-    if not 0 < memory_limit_bytes <= MAX_MEMORY_BYTES:
-        raise GuardError("memory limit must be positive and no greater than 2 GiB")
+    if not 0 < maximum_memory_bytes <= absolute_memory_ceiling_bytes:
+        raise GuardError(
+            "guard ceiling must be positive and no greater than the selected absolute maximum"
+        )
+    if not 0 < memory_limit_bytes <= maximum_memory_bytes:
+        raise GuardError(
+            "memory limit must be positive and no greater than the selected guard ceiling"
+        )
     if sample_interval_seconds <= 0:
         raise GuardError("sample interval must be positive")
+    if physical_footprint_interval_seconds <= 0:
+        raise GuardError("physical-footprint interval must be positive")
     frozen_context: dict[str, object] | None = None
     if report_context is not None:
         try:
@@ -960,6 +997,9 @@ def _run_guarded(
             {
                 "event": "start",
                 "memory_limit_bytes": memory_limit_bytes,
+                "physical_footprint_interval_seconds": (
+                    physical_footprint_interval_seconds
+                ),
                 "report_context": frozen_context,
                 "sample_interval_seconds": sample_interval_seconds,
                 "schema_version": 1,
@@ -1000,6 +1040,9 @@ def _run_guarded(
             }
         )
         next_sample = time.monotonic()
+        next_physical_footprint = (
+            next_sample + physical_footprint_interval_seconds
+        )
         while True:
             if received_signal:
                 exit_reason = "signal"
@@ -1038,7 +1081,16 @@ def _run_guarded(
                         owned_process_group_id=session.process_group_id,
                     )
                     break
-                sample = _sample_group(session.process_group_id, process_rows)
+                include_physical_footprint = now >= next_physical_footprint
+                sample = _sample_group(
+                    session.process_group_id,
+                    process_rows,
+                    include_physical_footprint=include_physical_footprint,
+                )
+                if include_physical_footprint:
+                    next_physical_footprint = (
+                        time.monotonic() + physical_footprint_interval_seconds
+                    )
                 sample_count += 1
                 peak_memory_bytes = max(peak_memory_bytes, sample.memory_bytes)
                 peak_rss_bytes = max(peak_rss_bytes, sample.rss_bytes)
@@ -1072,7 +1124,10 @@ def _run_guarded(
                         kernel_peak_rss_bytes,
                     ) = _read_guarded_exit(session)
                     break
-                next_sample = now + sample_interval_seconds
+                # Schedule from probe completion. Reusing the timestamp from
+                # before ``ps``/``footprint`` can create an immediate catch-up
+                # storm whenever an inspection exceeds the target cadence.
+                next_sample = time.monotonic() + sample_interval_seconds
 
             wrapper_returncode = session.wrapper.poll()
             if wrapper_returncode is not None:
@@ -1178,6 +1233,9 @@ def _run_guarded(
             ),
             "kernel_peak_rss_scope": "direct_guarded_body",
             "memory_limit_bytes": memory_limit_bytes,
+            "physical_footprint_interval_seconds": (
+                physical_footprint_interval_seconds
+            ),
             "peak_memory_bytes": peak_memory_bytes,
             "peak_physical_footprint_bytes": peak_footprint_bytes,
             "peak_rss_bytes": peak_rss_bytes,

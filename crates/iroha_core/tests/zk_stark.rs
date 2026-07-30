@@ -1296,6 +1296,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     );
     vk_record.status = ConfidentialStatus::Active;
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
+    vk_record.max_proof_bytes = 8 * 1024 * 1024;
     vk_record.key = Some(vk_box.clone());
 
     {
@@ -1314,9 +1315,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     let mut state = iroha_core::state::State::new_for_testing(world, Arc::clone(&kura), query);
     state.zk.halo2.enabled = false;
     state.zk.stark.enabled = true;
-    state.pipeline.ivm_proved.enabled = true;
-    state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
-
     const TEST_GAS_LIMIT: u64 = 50_000_000;
 
     // Derive the proved payload by executing the IVM program once.

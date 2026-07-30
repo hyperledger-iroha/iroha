@@ -20,10 +20,10 @@ const signingPublicKey = Buffer.from(
   "hex",
 );
 const walletSignature = Buffer.from(
-  "a79c4abe27cff185da6be1af15f0b7b36ca8f8729bd671eceed6758ec07a68ef79771ef904484f3ee3f8546f71aa8a40e99b5bf18820e80192491e32cedd9a01",
+  "d39065822f28108f70f8089f64357cc33a0072e45aa65f6b3e2696b93a3d9779d376ddf19c8e7dabce79a484275b681dea5213df060848d8fe098edeebcc3c07",
   "hex",
 );
-const signedTransactionHashHex = "6f39fd5e193f09f750939f0b089188b9a327a9dda0c8fb3de312c953bf2d93bb";
+const signedTransactionHashHex = "b410d55b960d396c1034221dea22464d08de1237363b02cb1f7c35d4c6eaf0a1";
 
 const connectTransport = {
   async startConnect() {

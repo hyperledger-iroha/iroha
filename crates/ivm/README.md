@@ -73,9 +73,9 @@ Notes
 - Real proving is not performed on consensus paths; the host verifies proofs only. Any future proving flows should run off‑chain or outside consensus‑critical logic.
 - All paths remain deterministic across hardware (no nondeterministic parallel reductions). When acceleration is enabled, results are required to match scalar fallbacks bit‑for‑bit.
 - Acceleration milestones (see `roadmap.md`, sections **WP1–WP4**) include:
-  1. **CUDA helper-surface hardening (delivered)** — the PTX build script now compiles real kernels or falls back to bundled PTX artifacts, the public CUDA helper surface covers vectors, SHA‑256/Merkle, Keccak, Poseidon2/6, AES rounds/batches, BN254, Ed25519, and bitonic sort, and downstream callers such as `iroha_core` use the stable `ivm` root exports instead of private module paths.
+  1. **CUDA helper surface present; release qualification pending** — the public CUDA helper surface covers vectors, SHA‑256/Merkle, Keccak, Poseidon2/6, AES rounds/batches, BN254, Ed25519, and bitonic sort, and downstream callers such as `iroha_core` use the stable `ivm` root exports instead of private module paths. Ordinary CUDA builds now require checked-in real PTX and fail closed because the 11 reproducible artifacts, full kernel qualification, and signed provenance manifest are not yet complete; see [`cuda/README.md`](cuda/README.md).
   2. **Metal vector hot path (delivered)** — interpreter vector ops (`VADD32/64`, `VAND`, `VXOR`, `VOR`, `VROT32`) now route through the shared vector helpers so Metal/CUDA/CPU back-ends are selected at runtime with deterministic fallbacks and chunked logical vector lengths (`roadmap.md`, WP2-A/B/D).
-  3. **Ed25519 batch opcode (delivered)** — `ED25519BATCHVERIFY` now consumes a Norito-encoded request, charges a base + per-entry gas cost, writes the failure index to `rs2`, and reuses the CUDA fast path when available with deterministic CPU fallback (closing `roadmap.md`, WP3-A/B/C).
+  3. **Ed25519 batch opcode (delivered)** — `ED25519BATCHVERIFY` consumes a bounded Norito request containing only the ordered entries, charges bytes before hashing/decoding and all admitted entries before cryptographic work, writes the first failure index to `rs2`, and verifies each entry exactly once with strict hardware-independent semantics (closing `roadmap.md`, WP3-A/B/C).
   4. **CRC64 GPU back-ends (delivered)** — Chunked Metal/CUDA helpers now feed `hardware_crc64` with a 192 KiB default cutoff (`NORITO_GPU_CRC64_MIN_BYTES` override) and support explicit helper overrides via `NORITO_CRC64_GPU_LIB` (stubbed in tests). The CUDA path composes per-chunk CRC outputs on-host, Metal mirrors the same chunking, and Stage‑1 cutovers were re-benchmarked (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`), keeping the scalar cutover at 4 KiB while aligning the Stage‑1 GPU minimum to 192 KiB, closing WP4-A/B/C.
   5. **Kotodama codegen completion (delivered)** — the Kotodama compiler now lives in `crates/kotodama_lang`, emits pointer-ABI-aware IVM bytecode, and generates first-release manifest metadata for permissions, state, triggers, and compiler-derived access hints. Dynamic or malformed helper payloads remain conservative instead of emitting guessed access descriptors.
 
@@ -102,7 +102,7 @@ High-level smart contract language targeting IVM bytecode:
 - **Host Interoperability (Syscalls):** A trait-based host interface (`IVMHost`) allows the VM to invoke host environment services via the `SCALL` instruction (opcode `0x60`) with an 8-bit call number. A default host implementation is provided (which treats all calls as unimplemented).
  - **Vector Extensions (feature: `simd`)**: Compile-time gated intrinsics (x86 SSE/AVX, aarch64 NEON) with runtime selection among the compiled-in options. If disabled, the scalar path is used. `SHA256BLOCK` uses a Metal kernel on macOS when enabled (`metal` feature). Lane‑wise ops (vadd32/vadd64/and/xor/or/rot32) leverage SIMD when compiled in; deterministic CPU fallbacks remain.
  - **Apple Metal (feature: `metal`, macOS-only):** When enabled and a compatible device is present, Metal kernels accelerate vector ops (`vadd*`, `vand`, `vxor`, `vor`, `vrot32`) and SHA‑256 compression. The code is not compiled on non-macOS targets and falls back to CPU/SIMD when Metal is unavailable or disabled.
- - **CUDA (feature: `cuda`):** Optional PTX kernels with a `build.rs` that compiles or falls back to bundled PTX, failing the CUDA build if no real PTX exists. If not enabled or runtime hardware is unavailable, CPU fallbacks are used.
+ - **CUDA (feature: `cuda`):** Optional PTX kernels with a `build.rs` that installs checked-in PTX by default and fails closed if an artifact is missing or structurally invalid. Explicit `generate` and byte-for-byte `check` modes are reserved for qualified CUDA runners. If the feature is not enabled or runtime hardware is unavailable, CPU fallbacks are used.
 - **Zero-Knowledge Support:** When a program specifies a non-zero `max_cycles` limit, execution traces are padded to that length and assertion failures do not immediately abort. Per-cycle Merkle roots of registers and memory are logged so proofs can verify each step without reconstructing the entire state. The default padding limit has been increased to **131,072 cycles** so more complex programs can be proven.
 - **ZK Trace And Circuit Checks:** ZK mode records trace commitments for bounded executions. Halo2 gadget tests validate arithmetic, crypto, memory, and assertion constraints with `MockProver`, while runtime host proof verification uses OpenVerify IPA/Pasta envelopes from `iroha_zkp_halo2`. Consensus paths verify envelopes only; proof generation remains off-chain.
 - **Program Hashing:** When a program is loaded the VM computes a SHA-256 hash of the code. It can be obtained via `IVM::code_hash()` and supplied as a public input so verifiers agree on the exact contract that was executed.
@@ -112,9 +112,9 @@ High-level smart contract language targeting IVM bytecode:
 - **Quantum-Resistant Signatures:** Optional verification of ML‑DSA (Crystals Dilithium) signatures via the `ml-dsa` feature.
 - **SIMD Poseidon Hashing:** `POSEIDON2` hashes two scalar registers and `POSEIDON6` hashes one six-register window, avoiding transient memory traffic. Both automatically use deterministic hardware acceleration when supported by the host CPU.
 - **SIMD Field Arithmetic:** BN254 helpers are implemented on CPU with runtime SIMD detection plumbed through vector utilities. For benchmarking or deterministic testing, thread `AccelerationPolicy::with_forced_simd(Some(SimdChoice::{Scalar|Sse2|Avx2|Avx512|Neon}))` through `IvmConfig`, or call `ivm::set_forced_simd` in tests; unsupported requests automatically fall back to the scalar implementation to preserve safety. Future work: add architecture-specific intrinsics where beneficial.
-- **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches and ed25519 batch verification (when the `ed25519` feature is enabled) via Metal when a compatible device is present. Acceleration is gated by `AccelerationPolicy::with_metal(true)`, honours developer toggles like `IVM_DISABLE_METAL`/`IVM_FORCE_METAL_ENUM`, and falls back to CPU/SIMD with identical semantics when Metal is unavailable or disabled.
+- **Apple Metal Acceleration:** On macOS the VM accelerates vector lanes (`vadd32`/`vadd64`/`vand`/`vxor`/`vor`/`vrot32`), SHA‑256 compression and tree reductions, Keccak‑f1600, AES rounds/batches, and non-opcode Ed25519 batch helpers via Metal when a compatible device is present. Acceleration is gated by `AccelerationPolicy::with_metal(true)`, honours developer toggles like `IVM_DISABLE_METAL`/`IVM_FORCE_METAL_ENUM`, and falls back to CPU/SIMD with identical semantics when Metal is unavailable or disabled. The consensus-visible `ED25519BATCHVERIFY` opcode always uses ordered strict CPU verification.
 - **Optional backends remain deterministic:** Metal/CUDA are best-effort accelerators; when features are disabled or hardware is unavailable, helpers fall back to scalar/SIMD paths so results stay identical across hosts.
-- **CUDA Acceleration:** The `cuda` feature enables CUDA bindings for the explicit helper surface covering vectors, SHA‑256/Merkle, Keccak‑f1600, Poseidon2/6, AES rounds/batches, BN254 arithmetic, Ed25519 batch verification, and the scheduler bitonic-sort helper. `build.rs` invokes `nvcc` (overridable via `IVM_CUDA_NVCC`/`NVCC`) to compile `cuda/*.cu` into PTX, falls back to bundled PTX when present, and fails the CUDA build if no real GPU artifacts are available. Use `IVM_DISABLE_CUDA=1` to force CPU-only execution, `IVM_MAX_GPUS` to cap device count, and `IVM_CUDA_GENCODE` / `IVM_CUDA_NVCC_EXTRA` to tune compilation flags.
+- **CUDA Acceleration:** The `cuda` feature enables CUDA bindings for the explicit helper surface covering vectors, SHA‑256/Merkle, Keccak‑f1600, Poseidon2/6, AES rounds/batches, BN254 arithmetic, non-opcode Ed25519 batch verification, and the scheduler bitonic-sort helper. `build.rs` uses checked-in PTX by default. `IVM_CUDA_PTX_MODE=generate` invokes `nvcc`, while `IVM_CUDA_PTX_MODE=check` regenerates every artifact and requires byte identity with the checked-in copy. `IVM_CUDA_NVCC`/`NVCC`, `IVM_CUDA_GENCODE`, and `IVM_CUDA_NVCC_EXTRA` configure those explicit modes. Use `IVM_DISABLE_CUDA=1` to force CPU-only execution and `IVM_MAX_GPUS` to cap device count. The required 11 PTX artifacts and signed provenance are still a release blocker documented in [`cuda/README.md`](cuda/README.md).
 - **Hybrid STM/HTM Transactions:** When built with the optional `htm` feature on x86‑64, the scheduler attempts to commit transactions using hardware transactional memory (RTM) and falls back to a mutex-based path if unavailable.
 - **Startup Jingle:** When built with the optional `beep` feature,
   `irohad` calls `IVM::beep_music()` and plays a short tune when the
@@ -122,7 +122,7 @@ High-level smart contract language targeting IVM bytecode:
   config.
 - **Adaptive Branch Prediction:** A built‑in two‑bit predictor tracks recent branch outcomes so tight loops execute faster. Accuracy can be queried via `IVM::branch_prediction_accuracy()` for diagnostics.
 - **Merkle‑Backed Memory:** Memory writes are batched until `commit()` recomputes a Merkle root over the entire image. The root calculation now hashes chunks in parallel with Rayon for faster commits. Authentication paths can be requested for proofs.
-- **Dynamic Heap Growth:** The heap may be extended at runtime using the `SYSCALL_GROW_HEAP` syscall when allocations exceed the initial 64 KB.
+- **Governed Heap Growth:** Hosts set a per-runtime heap ceiling. `SYSCALL_GROW_HEAP` may extend the active heap only up to that ceiling and never beyond the ABI address window.
 - **Conflict Prediction Scheduler:** Parallel execution groups transactions by predicted access conflicts to maximize throughput while preserving determinism.
 - **Expanded Crypto Opcodes:** Poseidon permutations, BLS12‑381 key operations and pairings are provided for advanced ZK applications.
 
@@ -130,8 +130,9 @@ High-level smart contract language targeting IVM bytecode:
 
 The VM divides memory into a set of regions. Code is loaded starting at
 `0x0000_0000` and is marked read/execute only.  The heap begins at
-`0x0010_0000` and can dynamically grow (via `SYSCALL_GROW_HEAP`) beyond its
-initial 64&nbsp;KB as allocations are requested through `SYSCALL_ALLOC`.
+`0x0010_0000`; its ABI-v1 address window ends at `0x0020_0000`. Hosts may set a
+smaller deterministic per-runtime ceiling, and `SYSCALL_GROW_HEAP` cannot grow
+past it. Allocations are requested through `SYSCALL_ALLOC`.
 The read-only input buffer begins at `0x0020_0000` (64&nbsp;KB) and the
 read/write output buffer begins at `0x0021_0000` (32&nbsp;KB).  Finally a
 4&nbsp;MB stack begins at `0x0030_0000`.  All loads and stores are checked
@@ -190,11 +191,13 @@ cargo build -p irohad --features beep
 Beep runs by default; set `ivm.banner.beep = false` in your configuration to disable
 it for local runs.
 
-To compile with CUDA support enabled, build with the `cuda` feature. The CUDA
-toolkit and drivers must be installed. At runtime GPUs are detected automatically.
+To compile with CUDA support enabled, build with the `cuda` feature. Ordinary
+builds consume the qualified PTX checked into `cuda/`; the CUDA toolkit is only
+needed for the explicit `generate` and `check` modes described in
+[`cuda/README.md`](cuda/README.md). At runtime GPUs are detected automatically.
 Set `IVM_DISABLE_CUDA=1` to force CPU mode or `IVM_MAX_GPUS` to limit how many
-devices are initialised. The build script is a no-op without this feature, so builds
-that omit `--features cuda` skip CUDA kernel compilation.
+devices are initialised. The build script is a no-op without this feature, so
+builds that omit `--features cuda` skip CUDA artifact installation.
 
 You can also override CPU SIMD detection via configuration: set
 `AccelerationPolicy::with_forced_simd(Some(SimdChoice::Scalar|Sse2|Avx2|Avx512|Neon))`

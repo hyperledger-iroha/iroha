@@ -188,20 +188,16 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
                     .into(),
                 ));
             }
-            let archived = norito::from_bytes::<BfvIdentifierPublicParameters>(
-                &policy.commitment.public_parameters,
-            )
-            .map_err(|err| {
-                Error::InvariantViolation(
-                    format!(
-                        "RAM-LFE program policy {} has invalid BFV public parameters: {err}",
-                        policy.program_id
-                    )
-                    .into(),
-                )
-            })?;
             let public_parameters: BfvIdentifierPublicParameters =
-                norito::core::NoritoDeserialize::deserialize(archived);
+                norito::decode_from_bytes(&policy.commitment.public_parameters).map_err(|err| {
+                    Error::InvariantViolation(
+                        format!(
+                            "RAM-LFE program policy {} has invalid BFV public parameters: {err}",
+                            policy.program_id
+                        )
+                        .into(),
+                    )
+                })?;
             public_parameters.validate().map_err(|err| {
                 Error::InvariantViolation(
                     format!(
@@ -503,6 +499,31 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+
+    #[test]
+    fn malformed_bfv_parameters_are_rejected_without_panicking() {
+        let resolver = checked_keypair();
+        let mut policy = RamLfeProgramPolicy::new(
+            RamLfeProgramId::from_str("malformed_bfv").expect("program id"),
+            checked_account_id(),
+            RamLfeBackend::BfvAffineSha3_256V1,
+            RamLfeVerificationMode::Signed,
+            PolicyCommitment {
+                backend: RamLfeBackend::BfvAffineSha3_256V1,
+                policy_hash: Hash::new(b"malformed-bfv-policy"),
+                public_parameters: vec![0xFF, 0x00, 0x7F],
+            },
+            resolver.public_key().clone(),
+        );
+        policy.active = true;
+
+        let error = validate_program_policy(&policy)
+            .expect_err("malformed BFV parameters must fail policy admission");
+        assert!(
+            error.to_string().contains("invalid BFV public parameters"),
+            "unexpected error: {error}"
+        );
     }
 
     fn sample_policy() -> RamLfeProgramPolicy {

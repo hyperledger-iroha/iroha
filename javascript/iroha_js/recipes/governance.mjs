@@ -136,8 +136,6 @@ async function main() {
         buildPersistCouncilForEpochInstruction({
             epoch: 42,
             members: [AUTHORITY],
-            candidatesCount: 10,
-            derivedBy: "Vrf",
         }),
     },
   ];

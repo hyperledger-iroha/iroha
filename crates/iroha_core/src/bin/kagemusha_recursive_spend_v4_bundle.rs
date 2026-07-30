@@ -134,7 +134,7 @@ process group, physical-memory ceiling, per-run staging identity, cleanup, and
 resource report. If generation is terminated, the launcher removes only the
 owner-private staging directory carrying that invocation's unguessable id.
 Build the source-sealed release binary with the helper before entering that
-256 MiB guard: wrapping `cargo run` would include the compiler in the guarded
+16 GiB guard: wrapping `cargo run` would include the compiler in the guarded
 process group. The finalize-release and validate-candidate commands do not
 require the generation guard.
 ";
@@ -3931,8 +3931,10 @@ mod tests {
         let circuit_params = KagemushaStepCircuitParamsV4 {
             version: iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![8],
-            num_lookup_advice_per_phase: vec![1],
+            num_advice_per_phase:
+                iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase:
+                iroha_data_model::offline::KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,

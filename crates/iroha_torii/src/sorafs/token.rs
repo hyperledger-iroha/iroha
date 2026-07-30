@@ -11,7 +11,7 @@ use std::{
 
 use base64::Engine as _;
 use ed25519_dalek::VerifyingKey;
-use iroha_config::parameters::actual;
+use iroha_config::parameters::{actual, validate_production_runtime_handle};
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -22,10 +22,10 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 
-/// Fixed rolling window applied to per-client issuance quotas.
-const CLIENT_QUOTA_WINDOW: Duration = Duration::from_mins(1);
-/// Maximum number of active issuance-client budgets retained by one gateway.
-const MAX_ISSUANCE_CLIENTS: usize = 4_096;
+/// Fixed rolling window applied to authenticated-subject issuance quotas.
+const ISSUANCE_QUOTA_WINDOW: Duration = Duration::from_mins(1);
+/// Maximum number of active authenticated issuance subjects retained by one gateway.
+const MAX_ISSUANCE_SUBJECTS: usize = 4_096;
 /// Maximum accepted encoded token header length.
 pub(crate) const MAX_STREAM_TOKEN_BASE64_BYTES: usize = STREAM_TOKEN_MAX_BASE64_BYTES_V1;
 /// Maximum accepted decoded token frame length.
@@ -44,7 +44,7 @@ pub(crate) const MAX_NONCE_BYTES: usize = 128;
 const MAX_TOKEN_STREAMS: u16 = 1_024;
 /// Maximum per-request byte budget encoded in one token (1 GiB).
 const MAX_TOKEN_RATE_LIMIT_BYTES: u64 = 1_073_741_824;
-/// Maximum per-token and per-client request budget.
+/// Maximum per-token request budget and per-subject issuance quota.
 const MAX_TOKEN_REQUESTS_PER_MINUTE: u32 = 10_000;
 /// Maximum tolerated positive clock skew for an otherwise valid token.
 pub(crate) const MAX_TOKEN_FUTURE_SKEW_SECS: u64 = 60;
@@ -85,9 +85,30 @@ pub struct StreamTokenIssuer {
     signer: Arc<dyn StreamTokenRuntimeSigner>,
     verifying_key: VerifyingKey,
     defaults: TokenDefaults,
-    client_budgets: Mutex<BTreeMap<String, ClientBudget>>,
-    max_client_budgets: usize,
+    issuance_budgets: Mutex<BTreeMap<StreamTokenQuotaSubject, IssuanceBudget>>,
+    max_issuance_budgets: usize,
     max_seen_epoch: AtomicU64,
+}
+
+/// Opaque, non-secret identity used for stream-token issuance accounting.
+///
+/// The subject is derived only after the Torii API credential has been
+/// authenticated. Display labels such as `X-SoraFS-Client` must never be used
+/// to construct quota identities.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) struct StreamTokenQuotaSubject([u8; 32]);
+
+impl StreamTokenQuotaSubject {
+    const DERIVATION_CONTEXT: &'static str =
+        "iroha.torii.sorafs.stream-token.issuance-quota-subject.v1";
+
+    /// Derive a non-reversible quota subject from an already validated API
+    /// credential.
+    pub(crate) fn from_validated_api_token(api_token: &str) -> Self {
+        let mut hasher = blake3::Hasher::new_derive_key(Self::DERIVATION_CONTEXT);
+        hasher.update(api_token.as_bytes());
+        Self(*hasher.finalize().as_bytes())
+    }
 }
 
 /// Default limits applied when overrides are not supplied.
@@ -101,13 +122,13 @@ struct TokenDefaults {
     max_streams: u16,
     /// Default per-token byte budget.
     rate_limit_bytes: u64,
-    /// Default per-client issuance quota (requests per minute).
+    /// Default per-authenticated-subject issuance quota (requests per minute).
     requests_per_minute: u32,
 }
 
-/// Quota accounting snapshot for a client.
+/// Quota accounting snapshot for one authenticated issuance subject.
 #[derive(Debug, Clone, Copy)]
-struct ClientBudget {
+struct IssuanceBudget {
     /// Start timestamp of the active quota window.
     window_start: Instant,
     /// Issuances already consumed within the window.
@@ -145,6 +166,7 @@ impl StreamTokenIssuer {
     /// runtime signer do not form one exact, safe binding.
     pub fn from_config(
         config: &actual::SorafsTokenConfig,
+        configured_api_tokens: &[String],
         signer: Option<Arc<dyn StreamTokenRuntimeSigner>>,
     ) -> Result<Option<Self>, StreamTokenIssuerError> {
         if !config.enabled {
@@ -153,15 +175,23 @@ impl StreamTokenIssuer {
             }
             return Ok(None);
         }
+        if configured_api_tokens.is_empty() {
+            return Err(StreamTokenIssuerError::MissingIssuanceApiCredential);
+        }
+        if configured_api_tokens
+            .iter()
+            .any(|token| token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_graphic()))
+        {
+            return Err(StreamTokenIssuerError::InvalidIssuanceApiCredential);
+        }
 
         let signer = signer.ok_or(StreamTokenIssuerError::MissingRuntimeSigner)?;
         let configured_handle = config
             .signer_handle
             .as_ref()
             .ok_or(StreamTokenIssuerError::MissingRuntimeSignerHandle)?;
-        if !is_production_runtime_handle(configured_handle) {
-            return Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle);
-        }
+        validate_production_runtime_handle(configured_handle)
+            .map_err(|_| StreamTokenIssuerError::InvalidRuntimeSignerHandle)?;
         let configured_public_key = config
             .signer_public_key
             .ok_or(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)?;
@@ -188,8 +218,8 @@ impl StreamTokenIssuer {
             signer,
             verifying_key,
             defaults,
-            client_budgets: Mutex::new(BTreeMap::new()),
-            max_client_budgets: MAX_ISSUANCE_CLIENTS,
+            issuance_budgets: Mutex::new(BTreeMap::new()),
+            max_issuance_budgets: MAX_ISSUANCE_SUBJECTS,
             max_seen_epoch: AtomicU64::new(0),
         }))
     }
@@ -201,15 +231,14 @@ impl StreamTokenIssuer {
     /// Returns [`StreamTokenIssuerError`] when system time overflows, the
     /// runtime signer fails, or the request violates the configured issuance
     /// quotas.
-    pub fn issue_token(
+    pub(crate) fn issue_token(
         &self,
-        client_id: &str,
+        quota_subject: StreamTokenQuotaSubject,
         manifest_cid: Vec<u8>,
         provider_id: [u8; 32],
         profile_handle: String,
         overrides: TokenOverrides,
     ) -> Result<TokenIssue, StreamTokenIssuerError> {
-        validate_client_id(client_id)?;
         let ttl_secs = checked_override("ttl_secs", overrides.ttl_secs, self.defaults.ttl_secs)?;
         let max_streams = checked_override(
             "max_streams",
@@ -250,7 +279,7 @@ impl StreamTokenIssuer {
         };
         validate_token_body(&body)?;
 
-        let remaining_quota = self.reserve_client_budget(client_id, Instant::now())?;
+        let remaining_quota = self.reserve_issuance_budget(quota_subject, Instant::now())?;
         let signing_payload = body
             .signing_payload_bytes()
             .map_err(StreamTokenError::from)
@@ -290,31 +319,30 @@ impl StreamTokenIssuer {
         self.defaults.key_version
     }
 
-    fn reserve_client_budget(
+    fn reserve_issuance_budget(
         &self,
-        client_id: &str,
+        quota_subject: StreamTokenQuotaSubject,
         now: Instant,
     ) -> Result<u32, StreamTokenIssuerError> {
         let limit = self.defaults.requests_per_minute;
         let mut budgets = self
-            .client_budgets
+            .issuance_budgets
             .lock()
-            .map_err(|_| StreamTokenIssuerError::ClientQuotaStateUnavailable)?;
+            .map_err(|_| StreamTokenIssuerError::IssuanceQuotaStateUnavailable)?;
         budgets.retain(|_, budget| {
-            now.saturating_duration_since(budget.window_start) < CLIENT_QUOTA_WINDOW
+            now.saturating_duration_since(budget.window_start) < ISSUANCE_QUOTA_WINDOW
         });
 
-        if let Some(budget) = budgets.get_mut(client_id) {
+        if let Some(budget) = budgets.get_mut(&quota_subject) {
             let elapsed = now.saturating_duration_since(budget.window_start);
             if budget.used >= limit {
                 let remaining =
-                    CLIENT_QUOTA_WINDOW.saturating_sub(elapsed.min(CLIENT_QUOTA_WINDOW));
+                    ISSUANCE_QUOTA_WINDOW.saturating_sub(elapsed.min(ISSUANCE_QUOTA_WINDOW));
                 let retry_after_secs = remaining
                     .as_secs()
                     .saturating_add(u64::from(remaining.subsec_nanos() != 0))
                     .max(1);
-                return Err(StreamTokenIssuerError::ClientQuotaExceeded {
-                    client_id: client_id.to_owned(),
+                return Err(StreamTokenIssuerError::IssuanceQuotaExceeded {
                     limit,
                     retry_after_secs,
                 });
@@ -323,14 +351,14 @@ impl StreamTokenIssuer {
             return Ok(limit - budget.used);
         }
 
-        if budgets.len() >= self.max_client_budgets {
-            return Err(StreamTokenIssuerError::ClientQuotaCapacityExceeded {
-                capacity: self.max_client_budgets,
+        if budgets.len() >= self.max_issuance_budgets {
+            return Err(StreamTokenIssuerError::IssuanceQuotaCapacityExceeded {
+                capacity: self.max_issuance_budgets,
             });
         }
         budgets.insert(
-            client_id.to_owned(),
-            ClientBudget {
+            quota_subject,
+            IssuanceBudget {
                 window_start: now,
                 used: 1,
             },
@@ -407,39 +435,8 @@ where
     Ok(value)
 }
 
-fn validate_client_id(client_id: &str) -> Result<(), StreamTokenIssuerError> {
-    if client_id.is_empty() || client_id.len() > MAX_CLIENT_ID_BYTES {
-        return Err(StreamTokenIssuerError::InvalidClientId);
-    }
-    if !client_id.bytes().all(|byte| byte.is_ascii_graphic()) {
-        return Err(StreamTokenIssuerError::InvalidClientId);
-    }
-    Ok(())
-}
-
-fn is_production_runtime_handle(value: &str) -> bool {
-    if value.is_empty()
-        || value.len() > 256
-        || !value.is_ascii()
-        || value
-            .bytes()
-            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
-    {
-        return false;
-    }
-    let lowercase = value.to_ascii_lowercase();
-    !lowercase
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .any(|component| {
-            matches!(
-                component,
-                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
-            )
-        })
-}
-
 /// Validate the context-free, canonical v1 stream-token body policy.
-pub(crate) fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
+pub fn validate_token_body(body: &StreamTokenBodyV1) -> Result<(), StreamTokenBodyError> {
     if body.token_id.len() != TOKEN_ID_HEX_LEN
         || !body
             .token_id
@@ -504,6 +501,13 @@ pub enum StreamTokenIssuerError {
     /// A signer was injected while stream-token issuance is disabled.
     #[error("stream-token runtime signer injected while issuance is disabled")]
     UnexpectedRuntimeSigner,
+    /// Stream-token issuance was enabled without an API credential.
+    #[error("stream-token issuance requires at least one configured Torii API token")]
+    MissingIssuanceApiCredential,
+    /// A configured issuance credential cannot be represented canonically in
+    /// an HTTP header.
+    #[error("stream-token issuance API tokens must be non-empty visible ASCII strings")]
+    InvalidIssuanceApiCredential,
     /// Stream-token issuance is enabled without a runtime signer.
     #[error("stream-token issuance requires an injected runtime signer")]
     MissingRuntimeSigner,
@@ -546,9 +550,6 @@ pub enum StreamTokenIssuerError {
         /// Human-readable constraint violation.
         reason: String,
     },
-    /// The issuance client identifier was empty, oversized, or non-canonical.
-    #[error("stream-token client identifier must be 1-{MAX_CLIENT_ID_BYTES} visible ASCII bytes")]
-    InvalidClientId,
     /// The generated token body failed canonical structural validation.
     #[error("invalid stream-token body: {0}")]
     InvalidBody(#[from] StreamTokenBodyError),
@@ -574,25 +575,23 @@ pub enum StreamTokenIssuerError {
         /// Underlying RNG error message.
         message: String,
     },
-    /// The issuing client exceeded their per-minute token quota.
-    #[error("client {client_id} exceeded token issuance quota ({limit} requests/minute)")]
-    ClientQuotaExceeded {
-        /// Identifier of the client whose quota was exceeded.
-        client_id: String,
+    /// The authenticated issuance subject exceeded its per-minute token quota.
+    #[error("authenticated subject exceeded token issuance quota ({limit} requests/minute)")]
+    IssuanceQuotaExceeded {
         /// Configured quota limit in requests per minute.
         limit: u32,
         /// Recommended retry delay in seconds before issuing another token.
         retry_after_secs: u64,
     },
-    /// The bounded set of active issuance clients is full.
-    #[error("stream-token issuance state capacity exhausted ({capacity} active clients)")]
-    ClientQuotaCapacityExceeded {
-        /// Maximum active client budgets retained by this process.
+    /// The bounded set of active issuance subjects is full.
+    #[error("stream-token issuance state capacity exhausted ({capacity} active subjects)")]
+    IssuanceQuotaCapacityExceeded {
+        /// Maximum active issuance budgets retained by this process.
         capacity: usize,
     },
     /// The issuance accounting lock was poisoned; issuance fails closed.
     #[error("stream-token issuance quota state is unavailable")]
-    ClientQuotaStateUnavailable,
+    IssuanceQuotaStateUnavailable,
 }
 
 /// Canonical structural errors in a v1 stream-token body.
@@ -815,6 +814,10 @@ mod tests {
         }
     }
 
+    fn configured_api_tokens() -> Vec<String> {
+        vec!["stream-token-api-credential".to_owned()]
+    }
+
     fn issuer_and_signer(
         limit: u32,
         mode: TestSignerMode,
@@ -826,9 +829,10 @@ mod tests {
         ));
         let config = token_config(signer.public_key(), limit);
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
-        let issuer = StreamTokenIssuer::from_config(&config, Some(runtime_signer))
-            .expect("valid runtime signer binding")
-            .expect("enabled issuer");
+        let issuer =
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(runtime_signer))
+                .expect("valid runtime signer binding")
+                .expect("enabled issuer");
         (issuer, signer)
     }
 
@@ -874,6 +878,40 @@ mod tests {
     }
 
     #[test]
+    fn enabled_issuance_requires_a_canonical_api_credential_at_startup() {
+        let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
+            "pkcs11:prod/stream-token/v1",
+            [0x33; 32],
+            TestSignerMode::Sign,
+        ));
+        let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
+        let config = token_config(signer.public_key(), 2);
+
+        assert!(matches!(
+            StreamTokenIssuer::from_config(&config, &[], Some(runtime_signer.clone())),
+            Err(StreamTokenIssuerError::MissingIssuanceApiCredential)
+        ));
+        for invalid_credential in ["", "contains space", "non-ascii-\u{2713}"] {
+            assert!(matches!(
+                StreamTokenIssuer::from_config(
+                    &config,
+                    &[invalid_credential.to_owned()],
+                    Some(runtime_signer.clone()),
+                ),
+                Err(StreamTokenIssuerError::InvalidIssuanceApiCredential)
+            ));
+        }
+
+        let mut disabled_config = token_config(signer.public_key(), 2);
+        disabled_config.enabled = false;
+        assert!(
+            StreamTokenIssuer::from_config(&disabled_config, &[], None)
+                .expect("disabled issuance needs no credential")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn runtime_signer_binding_fails_closed() {
         let signer = Arc::new(TestStreamTokenRuntimeSigner::new(
             "pkcs11:prod/stream-token/v1",
@@ -883,40 +921,79 @@ mod tests {
         let runtime_signer: Arc<dyn StreamTokenRuntimeSigner> = signer.clone();
         let mut config = token_config(signer.public_key(), 2);
 
+        assert!(
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(runtime_signer.clone()),
+            )
+            .expect("canonical production handle must be accepted")
+            .is_some()
+        );
+
         config.enabled = false;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(runtime_signer.clone()),
+            ),
             Err(StreamTokenIssuerError::UnexpectedRuntimeSigner)
         ));
 
         config.enabled = true;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, None),
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), None),
             Err(StreamTokenIssuerError::MissingRuntimeSigner)
         ));
 
         config.signer_handle = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(runtime_signer.clone()),
+            ),
             Err(StreamTokenIssuerError::MissingRuntimeSignerHandle)
         ));
 
-        config.signer_handle = Some("mock-stream-token".to_owned());
-        assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
-            Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
-        ));
+        for invalid_handle in [
+            "mock-stream-token",
+            "https://operator:secret@signer",
+            "https://signer/path?credential=secret",
+            "https://signer/path#fragment",
+            "pkcs11:prod/%73tream-token/v1",
+            "pkcs11:prod\\stream-token\\v1",
+        ] {
+            config.signer_handle = Some(invalid_handle.to_owned());
+            assert!(matches!(
+                StreamTokenIssuer::from_config(
+                    &config,
+                    &configured_api_tokens(),
+                    Some(runtime_signer.clone()),
+                ),
+                Err(StreamTokenIssuerError::InvalidRuntimeSignerHandle)
+            ));
+        }
 
         config.signer_handle = Some("pkcs11:prod/other-token/v1".to_owned());
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(runtime_signer.clone()),
+            ),
             Err(StreamTokenIssuerError::RuntimeSignerHandleMismatch)
         ));
 
         config.signer_handle = Some("pkcs11:prod/stream-token/v1".to_owned());
         config.signer_public_key = None;
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(runtime_signer.clone()),
+            ),
             Err(StreamTokenIssuerError::MissingRuntimeSignerPublicKey)
         ));
 
@@ -924,7 +1001,11 @@ mod tests {
         weak_public_key[0] = 1;
         config.signer_public_key = Some(weak_public_key);
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer.clone())),
+            StreamTokenIssuer::from_config(
+                &config,
+                &configured_api_tokens(),
+                Some(runtime_signer.clone()),
+            ),
             Err(StreamTokenIssuerError::WeakRuntimeSignerPublicKey)
         ));
 
@@ -934,7 +1015,7 @@ mod tests {
                 .to_bytes(),
         );
         assert!(matches!(
-            StreamTokenIssuer::from_config(&config, Some(runtime_signer)),
+            StreamTokenIssuer::from_config(&config, &configured_api_tokens(), Some(runtime_signer),),
             Err(StreamTokenIssuerError::RuntimeSignerPublicKeyMismatch)
         ));
     }
@@ -951,13 +1032,17 @@ mod tests {
     }
 
     fn issuer_with_limit(limit: u32) -> StreamTokenIssuer {
-        issuer_with_capacity(limit, MAX_ISSUANCE_CLIENTS)
+        issuer_with_capacity(limit, MAX_ISSUANCE_SUBJECTS)
     }
 
-    fn issuer_with_capacity(limit: u32, max_client_budgets: usize) -> StreamTokenIssuer {
+    fn issuer_with_capacity(limit: u32, max_issuance_budgets: usize) -> StreamTokenIssuer {
         let (mut issuer, _) = issuer_and_signer(limit, TestSignerMode::Sign);
-        issuer.max_client_budgets = max_client_budgets;
+        issuer.max_issuance_budgets = max_issuance_budgets;
         issuer
+    }
+
+    fn quota_subject(credential: &str) -> StreamTokenQuotaSubject {
+        StreamTokenQuotaSubject::from_validated_api_token(credential)
     }
 
     #[test]
@@ -965,7 +1050,7 @@ mod tests {
         let (issuer, signer) = issuer_and_signer(2, TestSignerMode::Sign);
         let issue = issuer
             .issue_token(
-                "client-exact",
+                quota_subject("credential-exact"),
                 vec![0xAA],
                 [0x11; 32],
                 "sorafs.sf1@1.0.0".to_owned(),
@@ -1006,7 +1091,7 @@ mod tests {
             let (issuer, signer) = issuer_and_signer(1, mode);
             let error = issuer
                 .issue_token(
-                    "client-hsm",
+                    quota_subject("credential-hsm"),
                     vec![0xAA],
                     [0x11; 32],
                     "sorafs.sf1@1.0.0".to_owned(),
@@ -1022,13 +1107,13 @@ mod tests {
 
             assert!(matches!(
                 issuer.issue_token(
-                    "client-hsm",
+                    quota_subject("credential-hsm"),
                     vec![0xAA],
                     [0x11; 32],
                     "sorafs.sf1@1.0.0".to_owned(),
                     TokenOverrides::default(),
                 ),
-                Err(StreamTokenIssuerError::ClientQuotaExceeded { .. })
+                Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
             ));
             assert_eq!(
                 signer.calls.load(Ordering::Relaxed),
@@ -1044,7 +1129,7 @@ mod tests {
             let (issuer, signer) = issuer_and_signer(2, mode);
             assert!(matches!(
                 issuer.issue_token(
-                    "client-invalid-output",
+                    quota_subject("credential-invalid-output"),
                     vec![0xAA],
                     [0x11; 32],
                     "sorafs.sf1@1.0.0".to_owned(),
@@ -1057,9 +1142,10 @@ mod tests {
     }
 
     #[test]
-    fn client_quota_is_enforced() {
+    fn authenticated_subject_quota_is_enforced() {
         let issuer = issuer_with_limit(2);
         let provider = [0x11; 32];
+        let subject = quota_subject("credential-a");
         let overrides = TokenOverrides {
             requests_per_minute: Some(2),
             ..TokenOverrides::default()
@@ -1067,7 +1153,7 @@ mod tests {
 
         let first = issuer
             .issue_token(
-                "client-a",
+                subject,
                 vec![0xAA],
                 provider,
                 "sorafs.sf1@1.0.0".to_string(),
@@ -1078,7 +1164,7 @@ mod tests {
 
         let second = issuer
             .issue_token(
-                "client-a",
+                subject,
                 vec![0xAA],
                 provider,
                 "sorafs.sf1@1.0.0".to_string(),
@@ -1089,7 +1175,7 @@ mod tests {
 
         let err = issuer
             .issue_token(
-                "client-a",
+                subject,
                 vec![0xAA],
                 provider,
                 "sorafs.sf1@1.0.0".to_string(),
@@ -1098,17 +1184,17 @@ mod tests {
             .expect_err("quota exceeded");
         assert!(matches!(
             err,
-            StreamTokenIssuerError::ClientQuotaExceeded { .. }
+            StreamTokenIssuerError::IssuanceQuotaExceeded { .. }
         ));
 
         if let Some(entry) = issuer
-            .client_budgets
+            .issuance_budgets
             .lock()
-            .expect("client budgets")
-            .get_mut("client-a")
+            .expect("issuance budgets")
+            .get_mut(&subject)
         {
             if let Some(reset) =
-                Instant::now().checked_sub(CLIENT_QUOTA_WINDOW + Duration::from_secs(1))
+                Instant::now().checked_sub(ISSUANCE_QUOTA_WINDOW + Duration::from_secs(1))
             {
                 entry.window_start = reset;
             }
@@ -1117,7 +1203,7 @@ mod tests {
 
         let refreshed = issuer
             .issue_token(
-                "client-a",
+                subject,
                 vec![0xAA],
                 provider,
                 "sorafs.sf1@1.0.0".to_string(),
@@ -1133,11 +1219,11 @@ mod tests {
         let provider = [0x22; 32];
         for overrides in [
             TokenOverrides {
-                requests_per_minute: Some(0),
+                ttl_secs: Some(0),
                 ..TokenOverrides::default()
             },
             TokenOverrides {
-                requests_per_minute: Some(3),
+                ttl_secs: Some(901),
                 ..TokenOverrides::default()
             },
             TokenOverrides {
@@ -1145,13 +1231,29 @@ mod tests {
                 ..TokenOverrides::default()
             },
             TokenOverrides {
-                ttl_secs: Some(901),
+                max_streams: Some(3),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                rate_limit_bytes: Some(0),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                rate_limit_bytes: Some(512 * 1024 + 1),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                requests_per_minute: Some(0),
+                ..TokenOverrides::default()
+            },
+            TokenOverrides {
+                requests_per_minute: Some(3),
                 ..TokenOverrides::default()
             },
         ] {
             assert!(matches!(
                 issuer.issue_token(
-                    "client-free",
+                    quota_subject("credential-free"),
                     vec![0xBB],
                     provider,
                     "sorafs.sf1@1.0.0".to_string(),
@@ -1163,7 +1265,7 @@ mod tests {
 
         let valid = issuer
             .issue_token(
-                "client-free",
+                quota_subject("credential-free"),
                 vec![0xBB],
                 provider,
                 "sorafs.sf1@1.0.0".to_string(),
@@ -1174,12 +1276,12 @@ mod tests {
     }
 
     #[test]
-    fn issuance_state_capacity_fails_closed_and_prunes_idle_clients() {
+    fn issuance_state_capacity_fails_closed_and_prunes_idle_subjects() {
         let issuer = issuer_with_capacity(2, 2);
-        for client in ["client-a", "client-b"] {
+        for credential in ["credential-a", "credential-b"] {
             issuer
                 .issue_token(
-                    client,
+                    quota_subject(credential),
                     vec![0xBB],
                     [0x22; 32],
                     "sorafs.sf1@1.0.0".to_string(),
@@ -1189,28 +1291,28 @@ mod tests {
         }
         assert!(matches!(
             issuer.issue_token(
-                "client-c",
+                quota_subject("credential-c"),
                 vec![0xBB],
                 [0x22; 32],
                 "sorafs.sf1@1.0.0".to_string(),
                 TokenOverrides::default(),
             ),
-            Err(StreamTokenIssuerError::ClientQuotaCapacityExceeded { capacity: 2 })
+            Err(StreamTokenIssuerError::IssuanceQuotaCapacityExceeded { capacity: 2 })
         ));
 
         let stale = Instant::now()
-            .checked_sub(CLIENT_QUOTA_WINDOW + Duration::from_secs(1))
+            .checked_sub(ISSUANCE_QUOTA_WINDOW + Duration::from_secs(1))
             .expect("stale instant");
         issuer
-            .client_budgets
+            .issuance_budgets
             .lock()
-            .expect("client budgets")
-            .get_mut("client-a")
-            .expect("client-a")
+            .expect("issuance budgets")
+            .get_mut(&quota_subject("credential-a"))
+            .expect("credential-a")
             .window_start = stale;
         issuer
             .issue_token(
-                "client-c",
+                quota_subject("credential-c"),
                 vec![0xBB],
                 [0x22; 32],
                 "sorafs.sf1@1.0.0".to_string(),
@@ -1220,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_issuance_never_exceeds_client_budget() {
+    fn concurrent_issuance_never_exceeds_authenticated_subject_budget() {
         use std::{
             sync::{Arc, Barrier, atomic::AtomicUsize, atomic::Ordering},
             thread,
@@ -1239,7 +1341,7 @@ mod tests {
             joins.push(thread::spawn(move || {
                 barrier.wait();
                 match issuer.issue_token(
-                    "client-race",
+                    quota_subject("credential-race"),
                     vec![0xBB],
                     [0x22; 32],
                     "sorafs.sf1@1.0.0".to_string(),
@@ -1248,7 +1350,7 @@ mod tests {
                     Ok(_) => {
                         successes.fetch_add(1, Ordering::Relaxed);
                     }
-                    Err(StreamTokenIssuerError::ClientQuotaExceeded { .. }) => {}
+                    Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. }) => {}
                     Err(other) => panic!("unexpected issuance error: {other}"),
                 }
             }));
@@ -1266,7 +1368,7 @@ mod tests {
         let issuer = Arc::new(issuer_with_limit(2));
         let poisoner = Arc::clone(&issuer);
         let poisoned = thread::spawn(move || {
-            let _guard = poisoner.client_budgets.lock().expect("issuance lock");
+            let _guard = poisoner.issuance_budgets.lock().expect("issuance lock");
             panic!("poison issuance state");
         })
         .join();
@@ -1274,13 +1376,13 @@ mod tests {
 
         assert!(matches!(
             issuer.issue_token(
-                "client-a",
+                quota_subject("credential-a"),
                 vec![0xBB],
                 [0x22; 32],
                 "sorafs.sf1@1.0.0".to_string(),
                 TokenOverrides::default(),
             ),
-            Err(StreamTokenIssuerError::ClientQuotaStateUnavailable)
+            Err(StreamTokenIssuerError::IssuanceQuotaStateUnavailable)
         ));
     }
 

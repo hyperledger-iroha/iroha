@@ -22,12 +22,12 @@ dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 "iroha-gateway 1.0.0"
 --hardware-profile
 gateway-load-hardware-c6i-2xlarge
---cache-state
-cold-cache
 --duration-seconds
-3600
+86400
 --stream-count
 1200
+--peak-concurrent-range-streams
+1000
 --provider-count
 4
 --provider
@@ -38,6 +38,16 @@ gateway-load-provider-b
 gateway-load-provider-c
 --provider
 gateway-load-provider-d
+--corruption-injection-bps
+100
+--cold-cache-exercised
+--warm-cache-exercised
+--mixed-cache-exercised
+--revocation-exercised
+--malformed-flood-exercised
+--denylist-pressure-exercised
+--rate-limit-pressure-exercised
+--failover-exercised
 --success-rate-bps
 9950
 --error-rate-bps

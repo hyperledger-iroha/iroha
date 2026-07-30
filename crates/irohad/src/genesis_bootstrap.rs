@@ -74,14 +74,14 @@ pub trait GenesisNetwork: Clone + Send + Sync + 'static {
         &self,
         msg: Post<NetworkMessage>,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    ) -> Result<(), Box<NetworkActorAdmissionError<Post<NetworkMessage>>>>;
     /// Admit a reply over the exact authenticated route of its request.
     fn post_reply_recoverable(
         &self,
         msg: Post<NetworkMessage>,
         reply_route: &Self::ReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>;
+    ) -> Result<NetworkReplyAdmissionOutcome, Box<NetworkActorAdmissionError<Post<NetworkMessage>>>>;
     /// Extract the authenticated reply route carried by one inbound message.
     fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute>;
     /// Derive the stable authenticated-source owner of an opaque reply route.
@@ -116,8 +116,8 @@ impl GenesisNetwork for IrohaNetwork {
         &self,
         msg: Post<NetworkMessage>,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
-        iroha_p2p::network::NetworkBaseHandle::post_recoverable(self, msg, ticket)
+    ) -> Result<(), Box<NetworkActorAdmissionError<Post<NetworkMessage>>>> {
+        iroha_p2p::network::NetworkBaseHandle::post_recoverable(self, msg, ticket).map_err(Box::new)
     }
 
     fn post_reply_recoverable(
@@ -125,7 +125,7 @@ impl GenesisNetwork for IrohaNetwork {
         msg: Post<NetworkMessage>,
         reply_route: &NetworkReplyRoute,
         ticket: Option<NetworkActorAdmissionTicket>,
-    ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>
+    ) -> Result<NetworkReplyAdmissionOutcome, Box<NetworkActorAdmissionError<Post<NetworkMessage>>>>
     {
         iroha_p2p::network::NetworkBaseHandle::post_reply_recoverable(
             self,
@@ -133,6 +133,7 @@ impl GenesisNetwork for IrohaNetwork {
             reply_route,
             ticket,
         )
+        .map_err(Box::new)
     }
 
     fn reply_route(&self, message: &PeerMessage<NetworkMessage>) -> Option<Self::ReplyRoute> {
@@ -229,15 +230,37 @@ pub struct FetchResult {
     pub hash: HashOf<BlockHeader>,
 }
 
+/// Operator-pinned trust root required for every remote genesis fetch.
+///
+/// Keeping this distinct from responder configuration makes an unpinned
+/// requester preflight unrepresentable inside the bootstrap client.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GenesisFetchPin(HashOf<BlockHeader>);
+
+impl GenesisFetchPin {
+    /// Resolve the mandatory remote-fetch pin from genesis configuration.
+    pub(crate) fn from_config(config: &GenesisConfig) -> Result<Self, BootstrapError> {
+        config
+            .expected_hash
+            .clone()
+            .map(Self)
+            .ok_or(BootstrapError::MissingExpectedHash)
+    }
+
+    fn as_hash(&self) -> &HashOf<BlockHeader> {
+        &self.0
+    }
+}
+
 /// Error taxonomy for genesis bootstrap.
 #[derive(Debug)]
 pub enum BootstrapError {
+    /// Remote bootstrap was requested without an operator-pinned genesis hash.
+    MissingExpectedHash,
     /// No peer responded within the allotted window.
     NoResponse,
     /// Another clone already owns the single bounded fetch producer.
     FetchAlreadyActive,
-    /// Conflicting genesis hashes were observed across peers.
-    ConflictingHashes,
     /// Peer advertised a hash that did not match the expected one.
     HashMismatch {
         /// Expected hash from config or preflight.
@@ -268,11 +291,13 @@ pub enum BootstrapError {
 impl fmt::Display for BootstrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingExpectedHash => {
+                write!(f, "remote genesis bootstrap requires genesis.expected_hash")
+            }
             Self::NoResponse => write!(f, "no genesis response from trusted peers"),
             Self::FetchAlreadyActive => {
                 write!(f, "another genesis bootstrap fetch is already active")
             }
-            Self::ConflictingHashes => write!(f, "peers returned conflicting genesis hashes"),
             Self::HashMismatch { expected, got } => write!(
                 f,
                 "expected genesis hash {expected:?} but peer responded with {got:?}"
@@ -381,9 +406,8 @@ struct InboundResponse {
 }
 
 struct PreflightOutcome {
-    hash: HashOf<BlockHeader>,
+    pin: GenesisFetchPin,
     responders: Vec<PeerId>,
-    size_bytes: u64,
 }
 
 struct PendingGenesisRequestPost {
@@ -416,12 +440,13 @@ where
     S: Clone + Eq + std::hash::Hash,
 {
     fn new(capacity: NonZeroUsize, max_payload_bytes: u64) -> Self {
+        const REPLY_ENVELOPE_ALLOWANCE: u64 = 64 * 1024;
+
         let capacity = capacity.get();
         // Preserve capacity for several independent authenticated sources while
         // still allowing a trusted hub to carry more than one bootstrap client.
         let per_source_capacity = genesis_reply_waiters_per_source(capacity)
             .expect("non-zero subscriber queue has an exact per-source genesis reply share");
-        const REPLY_ENVELOPE_ALLOWANCE: u64 = 64 * 1024;
         let encoded_byte_capacity_per_source =
             max_payload_bytes.saturating_add(REPLY_ENVELOPE_ALLOWANCE);
         let encoded_byte_capacity = encoded_byte_capacity_per_source.saturating_mul(2);
@@ -446,17 +471,17 @@ where
         &mut self,
         source: S,
         pending: PendingGenesisReplyPost<R>,
-    ) -> Result<(), PendingGenesisReplyPost<R>> {
+    ) -> Result<(), Box<PendingGenesisReplyPost<R>>> {
         let source_bytes = self
             .encoded_bytes_by_source
             .get(&source)
             .copied()
             .unwrap_or(0);
         let Some(next_bytes) = self.encoded_bytes.checked_add(pending.encoded_bytes) else {
-            return Err(pending);
+            return Err(Box::new(pending));
         };
         let Some(next_source_bytes) = source_bytes.checked_add(pending.encoded_bytes) else {
-            return Err(pending);
+            return Err(Box::new(pending));
         };
         if self.len >= self.capacity
             || self
@@ -466,7 +491,7 @@ where
             || next_bytes > self.encoded_byte_capacity
             || next_source_bytes > self.encoded_byte_capacity_per_source
         {
-            return Err(pending);
+            return Err(Box::new(pending));
         }
         let queue = self.by_source.entry(source.clone()).or_insert_with(|| {
             self.source_order.push_back(source.clone());
@@ -538,40 +563,42 @@ fn post_or_retain_genesis_reply<N: GenesisNetwork>(
             );
             true
         }
-        Err(NetworkActorAdmissionError::Backpressured {
-            message, ticket, ..
-        }) => {
-            let source = network.reply_source(&reply_route);
-            if let Err(dropped) = pending.push(
-                source,
-                PendingGenesisReplyPost {
-                    message,
-                    ticket,
-                    reply_route,
-                    encoded_bytes,
-                },
-            ) {
-                iroha_logger::debug!(
-                    peer = %dropped.message.peer_id,
-                    "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the response-rematerialization witness"
-                );
+        Err(error) => match *error {
+            NetworkActorAdmissionError::Backpressured {
+                message, ticket, ..
+            } => {
+                let source = network.reply_source(&reply_route);
+                if let Err(dropped) = pending.push(
+                    source,
+                    PendingGenesisReplyPost {
+                        message,
+                        ticket,
+                        reply_route,
+                        encoded_bytes,
+                    },
+                ) {
+                    iroha_logger::debug!(
+                        peer = %dropped.message.peer_id,
+                        "bounded genesis reply retry queue is full for this authenticated source; requester retransmission remains the response-rematerialization witness"
+                    );
+                }
+                true
             }
-            true
-        }
-        Err(NetworkActorAdmissionError::Closed { .. }) => {
-            iroha_logger::warn!("genesis response corridor closed with the P2P actor");
-            false
-        }
-        Err(NetworkActorAdmissionError::Rejected {
-            message, reason, ..
-        }) => {
-            iroha_logger::warn!(
-                peer = %message.peer_id,
-                ?reason,
-                "genesis response permanently rejected by P2P actor admission"
-            );
-            true
-        }
+            NetworkActorAdmissionError::Closed { .. } => {
+                iroha_logger::warn!("genesis response corridor closed with the P2P actor");
+                false
+            }
+            NetworkActorAdmissionError::Rejected {
+                message, reason, ..
+            } => {
+                iroha_logger::warn!(
+                    peer = %message.peer_id,
+                    ?reason,
+                    "genesis response permanently rejected by P2P actor admission"
+                );
+                true
+            }
+        },
     }
 }
 
@@ -625,25 +652,27 @@ impl GenesisRequestFanout {
                 });
             match network.post_recoverable(message, ticket) {
                 Ok(()) => {}
-                Err(NetworkActorAdmissionError::Backpressured {
-                    message, ticket, ..
-                }) => {
-                    target.pending = Some(PendingGenesisRequestPost { message, ticket });
-                }
-                Err(NetworkActorAdmissionError::Closed { .. }) => {
-                    actor_open = false;
-                    break;
-                }
-                Err(NetworkActorAdmissionError::Rejected {
-                    message, reason, ..
-                }) => {
-                    target.permanently_rejected = true;
-                    iroha_logger::warn!(
-                        peer = %message.peer_id,
-                        ?reason,
-                        "genesis request permanently rejected by P2P actor admission"
-                    );
-                }
+                Err(error) => match *error {
+                    NetworkActorAdmissionError::Backpressured {
+                        message, ticket, ..
+                    } => {
+                        target.pending = Some(PendingGenesisRequestPost { message, ticket });
+                    }
+                    NetworkActorAdmissionError::Closed { .. } => {
+                        actor_open = false;
+                        break;
+                    }
+                    NetworkActorAdmissionError::Rejected {
+                        message, reason, ..
+                    } => {
+                        target.permanently_rejected = true;
+                        iroha_logger::warn!(
+                            peer = %message.peer_id,
+                            ?reason,
+                            "genesis request permanently rejected by P2P actor admission"
+                        );
+                    }
+                },
             }
         }
         actor_open
@@ -747,12 +776,11 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                         None
                     }
                     message = rx.recv(), if rx_open => {
-                        match message {
-                            Some(message) => Some(message),
-                            None => {
-                                rx_open = false;
-                                None
-                            }
+                        if let Some(message) = message {
+                            Some(message)
+                        } else {
+                            rx_open = false;
+                            None
                         }
                     }
                     else => break 'listener,
@@ -869,11 +897,11 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
     /// When bootstrap is enabled, transient no-response windows are retried across diagnostic
     /// cycles so a partition that heals after the first cycle cannot permanently fail startup.
     /// Permanent validation errors are returned to the caller.
-    pub async fn fetch_genesis(
+    pub(crate) async fn fetch_genesis(
         &self,
         peers: &[PeerId],
         genesis_account: &AccountId,
-        expected_hash: Option<HashOf<BlockHeader>>,
+        pin: GenesisFetchPin,
     ) -> Result<FetchResult, BootstrapError> {
         if !self.enabled {
             return Err(BootstrapError::NoResponse);
@@ -881,10 +909,9 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         let Some(_fetch_permit) = GenesisProducerPermit::try_acquire(&self.fetch_active) else {
             return Err(BootstrapError::FetchAlreadyActive);
         };
-        let expected_hash = expected_hash.or(self.expected_hash);
         let mut no_response_windows = 0_u32;
         loop {
-            match self.try_preflight(peers, expected_hash).await {
+            match self.try_preflight(peers, &pin).await {
                 Ok(preflight) => {
                     let payload = self
                         .request_payload(&preflight, peers, genesis_account)
@@ -909,7 +936,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
     async fn try_preflight(
         &self,
         peers: &[PeerId],
-        expected_hash: Option<HashOf<BlockHeader>>,
+        pin: &GenesisFetchPin,
     ) -> Result<PreflightOutcome, BootstrapError> {
         if peers.is_empty() {
             return Err(BootstrapError::NoResponse);
@@ -919,7 +946,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         let request = GenesisRequest {
             request_id,
             chain_id: self.chain_id.clone(),
-            expected_hash,
+            expected_hash: Some(pin.as_hash().clone()),
             expected_pubkey: Some(self.expected_pubkey.clone()),
             kind: GenesisRequestKind::Preflight,
         };
@@ -932,9 +959,8 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
         let retry_period = self.retry_interval.max(Duration::from_millis(1));
         let mut retry = time::interval_at(Instant::now() + retry_period, retry_period);
         retry.set_missed_tick_behavior(time::MissedTickBehavior::Delay);
-        let mut hashes = HashSet::new();
         let mut responders: Vec<PeerId> = Vec::new();
-        let mut selected: Option<(HashOf<BlockHeader>, u64)> = None;
+        let mut received_valid_response = false;
         loop {
             let inbound = tokio::select! {
                 biased;
@@ -958,26 +984,15 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
             match validate_preflight_response(
                 &inbound.response,
                 &self.expected_pubkey,
-                expected_hash,
+                pin.as_hash(),
                 self.max_bytes,
                 &self.chain_id,
             ) {
-                Ok(Some(validated)) => {
-                    hashes.insert(validated.hash);
+                Ok(Some(_validated)) => {
                     if !responders.contains(&inbound.peer.id) {
                         responders.push(inbound.peer.id.clone());
                     }
-                    if let Some((selected_hash, size)) = &selected {
-                        if selected_hash != &validated.hash {
-                            self.unregister_request(request_id).await;
-                            return Err(BootstrapError::ConflictingHashes);
-                        }
-                        if validated.size_bytes > *size {
-                            selected = Some((validated.hash, validated.size_bytes));
-                        }
-                    } else {
-                        selected = Some((validated.hash, validated.size_bytes));
-                    }
+                    received_valid_response = true;
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -987,14 +1002,10 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
             }
         }
         self.unregister_request(request_id).await;
-        if hashes.len() > 1 {
-            return Err(BootstrapError::ConflictingHashes);
-        }
-        if let Some((hash, size_bytes)) = selected {
+        if received_valid_response {
             return Ok(PreflightOutcome {
-                hash,
+                pin: pin.clone(),
                 responders,
-                size_bytes,
             });
         }
         Err(BootstrapError::NoResponse)
@@ -1016,7 +1027,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
             let request = GenesisRequest {
                 request_id,
                 chain_id: self.chain_id.clone(),
-                expected_hash: Some(preflight.hash),
+                expected_hash: Some(preflight.pin.as_hash().clone()),
                 expected_pubkey: Some(self.expected_pubkey.clone()),
                 kind: GenesisRequestKind::Fetch,
             };
@@ -1059,7 +1070,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                     &inbound.response,
                     &self.chain_id,
                     &self.expected_pubkey,
-                    &preflight.hash,
+                    preflight.pin.as_hash(),
                     self.max_bytes,
                 ) {
                     Ok(Some((block, bytes))) => {
@@ -1067,7 +1078,7 @@ impl<N: GenesisNetwork> GenesisBootstrapper<N> {
                         validate_genesis_block(&block.0, genesis_account, &self.chain_id)
                             .map_err(|err| BootstrapError::InvalidGenesis(err.to_string()))?;
                         return Ok(FetchResult {
-                            hash: preflight.hash.clone(),
+                            hash: preflight.pin.as_hash().clone(),
                             block,
                             bytes,
                         });
@@ -1277,15 +1288,12 @@ impl ResponderState {
     }
 }
 
-struct ValidatedPreflight {
-    hash: HashOf<BlockHeader>,
-    size_bytes: u64,
-}
+struct ValidatedPreflight;
 
 fn validate_preflight_response(
     response: &GenesisResponse,
     expected_pubkey: &PublicKey,
-    expected_hash: Option<HashOf<BlockHeader>>,
+    expected_hash: &HashOf<BlockHeader>,
     max_bytes: u64,
     chain_id: &ChainId,
 ) -> Result<Option<ValidatedPreflight>, BootstrapError> {
@@ -1303,14 +1311,13 @@ fn validate_preflight_response(
                 expected: expected_pubkey.clone(),
                 advertised: response.public_key.clone(),
             }),
-            GenesisResponseError::MismatchedHash => {
-                if let Some(expected) = expected_hash {
-                    let got = response.hash.clone().unwrap_or(expected);
-                    Err(BootstrapError::HashMismatch { expected, got })
-                } else {
-                    Ok(None)
-                }
-            }
+            GenesisResponseError::MismatchedHash => Err(BootstrapError::HashMismatch {
+                expected: expected_hash.clone(),
+                got: response
+                    .hash
+                    .clone()
+                    .unwrap_or_else(|| expected_hash.clone()),
+            }),
             GenesisResponseError::TooLarge => Err(BootstrapError::PayloadTooLarge {
                 hint: response.size_hint.unwrap_or(max_bytes.saturating_add(1)),
                 cap: max_bytes,
@@ -1345,15 +1352,13 @@ fn validate_preflight_response(
             });
         }
     }
-    if let Some(expected) = expected_hash {
-        if expected != hash {
-            return Err(BootstrapError::HashMismatch {
-                expected,
-                got: hash,
-            });
-        }
+    if expected_hash != &hash {
+        return Err(BootstrapError::HashMismatch {
+            expected: expected_hash.clone(),
+            got: hash,
+        });
     }
-    Ok(Some(ValidatedPreflight { hash, size_bytes }))
+    Ok(Some(ValidatedPreflight))
 }
 
 fn validate_payload_response(
@@ -1513,6 +1518,9 @@ fn next_request_id() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    use iroha_config::base::WithOrigin;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{Level, block::SignedBlock, isi::Log};
     use iroha_p2p::peer::message::PeerMessage;
@@ -1586,7 +1594,7 @@ mod tests {
             &self,
             msg: Post<NetworkMessage>,
             _ticket: Option<NetworkActorAdmissionTicket>,
-        ) -> Result<(), NetworkActorAdmissionError<Post<NetworkMessage>>> {
+        ) -> Result<(), Box<NetworkActorAdmissionError<Post<NetworkMessage>>>> {
             if self
                 .backpressure_remaining
                 .fetch_update(
@@ -1596,11 +1604,11 @@ mod tests {
                 )
                 .is_ok()
             {
-                return Err(NetworkActorAdmissionError::Backpressured {
+                return Err(Box::new(NetworkActorAdmissionError::Backpressured {
                     message: msg,
                     ticket: None,
                     rank: 1,
-                });
+                }));
             }
             self.posted.lock().expect("posted mutex").push(msg);
             Ok(())
@@ -1611,8 +1619,10 @@ mod tests {
             msg: Post<NetworkMessage>,
             reply_route: &Self::ReplyRoute,
             ticket: Option<NetworkActorAdmissionTicket>,
-        ) -> Result<NetworkReplyAdmissionOutcome, NetworkActorAdmissionError<Post<NetworkMessage>>>
-        {
+        ) -> Result<
+            NetworkReplyAdmissionOutcome,
+            Box<NetworkActorAdmissionError<Post<NetworkMessage>>>,
+        > {
             if self
                 .unavailable_reply_peers
                 .lock()
@@ -1628,11 +1638,11 @@ mod tests {
                 .expect("blocked reply peers")
                 .contains(reply_route)
             {
-                return Err(NetworkActorAdmissionError::Backpressured {
+                return Err(Box::new(NetworkActorAdmissionError::Backpressured {
                     message: msg,
                     ticket,
                     rank: 1,
-                });
+                }));
             }
             self.post_recoverable(msg, ticket)
                 .map(|()| NetworkReplyAdmissionOutcome::Admitted)
@@ -1698,6 +1708,75 @@ mod tests {
         .sign(signer.private_key());
         let signed_block = SignedBlock::genesis(vec![tx], signer.private_key(), None, None);
         GenesisBlock(signed_block)
+    }
+
+    fn sample_pin(byte: u8) -> GenesisFetchPin {
+        GenesisFetchPin(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed([byte; 32]),
+        ))
+    }
+
+    #[test]
+    fn remote_fetch_pin_rejects_missing_operator_hash_before_network_use() {
+        let network = MockNetwork::default();
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let cfg = GenesisConfig {
+            public_key: signer.public_key().clone(),
+            file: None,
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: Vec::new(),
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(1),
+            bootstrap_retry_interval: Duration::from_millis(10),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: true,
+        };
+
+        assert!(matches!(
+            GenesisFetchPin::from_config(&cfg),
+            Err(BootstrapError::MissingExpectedHash)
+        ));
+        assert!(
+            network.posted.lock().expect("posted").is_empty(),
+            "resolving an unpinned remote fetch must fail before any request is admitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_signed_genesis_payload_does_not_require_remote_fetch_pin() {
+        let network = MockNetwork::default();
+        let chain_id = ChainId::from("local-genesis-artifact");
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let block = sample_block(&chain_id, &signer);
+        let cfg = GenesisConfig {
+            public_key: signer.public_key().clone(),
+            file: Some(WithOrigin::inline(PathBuf::from("genesis.signed.nrt"))),
+            manifest_json: None,
+            expected_hash: None,
+            bootstrap_allowlist: Vec::new(),
+            bootstrap_max_bytes: 1_048_576,
+            bootstrap_response_throttle: Duration::ZERO,
+            bootstrap_request_timeout: Duration::from_secs(1),
+            bootstrap_retry_interval: Duration::from_millis(10),
+            bootstrap_max_attempts: 1,
+            bootstrap_enabled: false,
+        };
+        let bootstrapper = GenesisBootstrapper::new(&cfg, network, chain_id);
+
+        bootstrapper
+            .set_payload(&block)
+            .await
+            .expect("the locally supplied signed genesis is its own trusted artifact");
+        assert!(
+            bootstrapper
+                .responder
+                .lock()
+                .expect("responder")
+                .payload
+                .is_some()
+        );
     }
 
     fn pending_reply(peer: PeerId, encoded_bytes: u64) -> PendingGenesisReplyPost<PeerId> {
@@ -1882,7 +1961,7 @@ mod tests {
             let first_fetch = bootstrapper.fetch_genesis(
                 std::slice::from_ref(target.id()),
                 &genesis_account,
-                None,
+                sample_pin(1),
             );
             tokio::pin!(first_fetch);
             tokio::select! {
@@ -1894,7 +1973,11 @@ mod tests {
             assert_eq!(network.posted.lock().expect("posted").len(), 1);
 
             let second = clone
-                .fetch_genesis(std::slice::from_ref(target.id()), &genesis_account, None)
+                .fetch_genesis(
+                    std::slice::from_ref(target.id()),
+                    &genesis_account,
+                    sample_pin(1),
+                )
                 .await;
             assert!(matches!(second, Err(BootstrapError::FetchAlreadyActive)));
             assert_eq!(
@@ -1944,7 +2027,9 @@ mod tests {
         network.backpressure_next_posts(1);
 
         assert!(matches!(
-            bootstrapper.try_preflight(&[peer.id().clone()], None).await,
+            bootstrapper
+                .try_preflight(&[peer.id().clone()], &sample_pin(2))
+                .await,
             Err(BootstrapError::NoResponse)
         ));
 
@@ -2260,11 +2345,40 @@ mod tests {
         let result = validate_preflight_response(
             &response,
             expected.public_key(),
-            None,
+            sample_pin(0).as_hash(),
             1024,
             &ChainId::from("chain"),
         );
         assert!(matches!(result, Err(BootstrapError::SignerMismatch { .. })));
+    }
+
+    #[test]
+    fn preflight_rejects_hash_different_from_operator_pin() {
+        let signer = checked_genesis_bootstrap_key_fixture();
+        let pin = sample_pin(7);
+        let advertised = sample_pin(8);
+        let response = GenesisResponse {
+            request_id: 2,
+            chain_id: ChainId::from("chain"),
+            public_key: Some(signer.public_key().clone()),
+            hash: Some(advertised.as_hash().clone()),
+            size_hint: Some(10),
+            payload: None,
+            error: None,
+        };
+
+        let result = validate_preflight_response(
+            &response,
+            signer.public_key(),
+            pin.as_hash(),
+            1024,
+            &ChainId::from("chain"),
+        );
+        assert!(matches!(
+            result,
+            Err(BootstrapError::HashMismatch { expected, got })
+                if expected == *pin.as_hash() && got == *advertised.as_hash()
+        ));
     }
 
     #[test]
@@ -2282,7 +2396,7 @@ mod tests {
         let result = validate_preflight_response(
             &response,
             kp.public_key(),
-            None,
+            sample_pin(0).as_hash(),
             u64::MAX,
             &ChainId::from("chain"),
         );
@@ -2308,7 +2422,7 @@ mod tests {
         let result = validate_preflight_response(
             &response,
             kp.public_key(),
-            None,
+            sample_pin(0).as_hash(),
             1024,
             &ChainId::from("chain"),
         );
@@ -2510,7 +2624,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fetch_genesis_continues_across_diagnostic_retry_cycles() {
+    async fn pinned_fetch_accepts_the_exact_genesis_across_diagnostic_retry_cycles() {
         let network = MockNetwork::default();
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let kp = checked_genesis_bootstrap_key_fixture();
@@ -2538,8 +2652,14 @@ mod tests {
 
         let genesis_account = AccountId::new(kp.public_key().clone());
         let peers = [peer.id().clone(), fallback_peer.id().clone()];
-        let fetch = bootstrapper.fetch_genesis(&peers, &genesis_account, None);
+        let pinned_hash = payload.hash.clone();
+        let fetch = bootstrapper.fetch_genesis(
+            &peers,
+            &genesis_account,
+            GenesisFetchPin(pinned_hash.clone()),
+        );
         let posted = network.posted.clone();
+        let task_pin = pinned_hash.clone();
         tokio::spawn(async move {
             let mut first_request_id = None;
             let mut preflight_req = None;
@@ -2571,6 +2691,11 @@ mod tests {
             }
             let preflight_req = preflight_req
                 .expect("bootstrap must continue with a new request after one diagnostic cycle");
+            assert_eq!(
+                preflight_req.expected_hash.as_ref(),
+                Some(&task_pin),
+                "preflight must carry the operator-pinned genesis hash"
+            );
             let preflight = GenesisResponse {
                 chain_id: preflight_req.chain_id.clone(),
                 request_id: preflight_req.request_id,
@@ -2605,6 +2730,11 @@ mod tests {
             }
             let payload_req =
                 payload_req.expect("a non-responder must remain a payload recovery target");
+            assert_eq!(
+                payload_req.expected_hash.as_ref(),
+                Some(&task_pin),
+                "payload fetch must retain the operator-pinned genesis hash"
+            );
             let payload_response = GenesisResponse {
                 chain_id: payload_req.chain_id.clone(),
                 request_id: payload_req.request_id,
@@ -2621,7 +2751,7 @@ mod tests {
             .await
             .expect("bootstrap must not stall on the failed preflight responder")
             .expect("fetch succeeds");
-        assert_eq!(result.hash, payload.hash);
+        assert_eq!(result.hash, pinned_hash);
         assert!(!result.bytes.is_empty());
     }
 

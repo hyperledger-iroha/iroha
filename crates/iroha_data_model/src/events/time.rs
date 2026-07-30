@@ -62,6 +62,9 @@ mod model {
         /// The first execution time
         pub start_ms: u64,
         /// If some, the period between cyclic executions
+        ///
+        /// Trigger registration requires this value to be at least the signed
+        /// Sumeragi block cadence.
         pub period_ms: Option<u64>,
     }
 
@@ -172,61 +175,51 @@ impl EventFilter for TimeEventFilter {
 /// Count something with the `schedule` within the `interval`
 #[cfg(feature = "transparent_api")]
 fn count_matches_in_interval(schedule: &Schedule, interval: &TimeInterval) -> u32 {
-    schedule.period().map_or_else(
+    schedule.period_ms.map_or_else(
         || {
             // One-shot schedule: include if start lies within [since, to) (right-open)
-            // Align semantics with periodic matching (which uses Range::contains and is end-exclusive)
-            let start = schedule.start();
-            let since = interval.since();
-            let end = since + interval.length();
+            // to match the end-exclusive periodic semantics.
+            let start = u128::from(schedule.start_ms);
+            let since = u128::from(interval.since_ms);
+            let end = since + u128::from(interval.length_ms);
             u32::from(start >= since && start < end)
         },
-        |period| {
-            if period.is_zero() {
-                // Zero period is invalid; treat as non-matching to avoid panicking.
+        |period_ms| {
+            let period = u128::from(period_ms);
+            if period == 0 {
+                // Zero period is invalid; treat it as non-matching even if corrupt
+                // state bypassed registration validation.
                 return 0;
             }
-            #[allow(clippy::integer_division)]
-            let k = interval
-                .since()
-                .saturating_sub(schedule.start())
-                .as_millis()
-                / period.as_millis();
-            let start = schedule.start() + multiply_duration_by_u128(period, k);
-            let range = Range::from(*interval);
-            (0..)
-                .map(|i| start + period * i)
-                .skip_while(|time| *time < interval.since())
-                .take_while(|time| range.contains(time))
-                .count()
-                .try_into()
-                .expect("Overflow. The schedule is too frequent relative to the interval length")
+
+            let schedule_start = u128::from(schedule.start_ms);
+            let interval_start = u128::from(interval.since_ms);
+            let interval_end = interval_start + u128::from(interval.length_ms);
+            if interval_end <= schedule_start {
+                return 0;
+            }
+
+            // Find the first schedule point in the half-open interval without
+            // iterating over every missed tick.
+            let first_index = if interval_start <= schedule_start {
+                0
+            } else {
+                let elapsed = interval_start - schedule_start;
+                elapsed.div_ceil(period)
+            };
+            let first_match = schedule_start + first_index * period;
+            if first_match >= interval_end {
+                return 0;
+            }
+
+            // Count the arithmetic progression in O(1). Saturation keeps this
+            // total function safe even for intervals spanning more than
+            // `u32::MAX` schedule points; execution applies a separate
+            // consensus resource cap before materialising matches.
+            let count = 1 + (interval_end - 1 - first_match) / period;
+            u32::try_from(count).unwrap_or(u32::MAX)
         },
     )
-}
-
-/// Multiply `duration` by `n`
-///
-/// Usage of this function allows to operate with much longer time *intervals*
-/// with much less *periods* than just `impl Mul<u32> for Duration` does
-///
-/// # Panics
-/// Panics if resulting number in seconds can't be represented as `u64`
-#[cfg(feature = "transparent_api")]
-fn multiply_duration_by_u128(duration: Duration, n: u128) -> Duration {
-    if let Ok(n) = u32::try_from(n) {
-        return duration * n;
-    }
-
-    let new_ms = duration.as_millis() * n;
-    if let Ok(ms) = u64::try_from(new_ms) {
-        return Duration::from_millis(ms);
-    }
-
-    #[allow(clippy::integer_division)]
-    let new_secs = u64::try_from(new_ms / 1000)
-        .expect("Overflow. Resulting number in seconds can't be represented as `u64`");
-    Duration::from_secs(new_secs)
 }
 
 impl Schedule {
@@ -837,6 +830,20 @@ mod tests {
             let length = Duration::from_secs(7);
             let interval = TimeInterval::new(since, length);
             assert_eq!(count_matches_in_interval(&schedule, &interval), 7);
+        }
+
+        #[test]
+        fn excessive_periodic_match_count_saturates_without_iteration() {
+            let schedule = Schedule {
+                start_ms: 0,
+                period_ms: Some(1),
+            };
+            let interval = TimeInterval {
+                since_ms: 0,
+                length_ms: u64::MAX,
+            };
+
+            assert_eq!(count_matches_in_interval(&schedule, &interval), u32::MAX);
         }
     }
 

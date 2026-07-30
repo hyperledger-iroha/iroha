@@ -14,17 +14,16 @@ workspace = true
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract_utils/debug"]
 trybuild-tests = ["dep:trybuild"]
-packed-struct = []
 
 [dependencies]
 iroha_smart_contract_derive = { path = "../iroha_smart_contract_derive" }
 
 iroha_macro.workspace = true
-iroha_data_model.workspace = true
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_smart_contract_utils.workspace = true
 iroha_smart_contract_codec.workspace = true
 
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 derive_more.workspace = true
 
 displaydoc.workspace = true

@@ -12,9 +12,9 @@ categories = ["network-programming"]
 workspace = true
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_logger = { workspace = true }
-iroha_crypto = { workspace = true, default-features = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 iroha_primitives = { workspace = true }
 iroha_config = { workspace = true }
@@ -57,6 +57,8 @@ handshake_chain_id = []
 p2p_bounded_queues = []
 # Expose opaque reply-route minting only to dependent-crate test builds.
 test-fixtures = []
+# Enable GOST public-key support in transport geometry.
+gost = ["iroha_crypto/gost"]
 # Enable Chinese SM public-key support in transport geometry and tests.
 sm = ["iroha_crypto/sm"]
 # Optional future transport/handshake features (scaffolding)

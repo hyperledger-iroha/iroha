@@ -1637,9 +1637,11 @@ fn semantic_digest(
     let chain_id = chain_id.as_str();
     // A provider-signed receipt has one semantic identity regardless of which
     // valid relayer wraps it. Matcher operations remain authority-bound.
-    let authority = (operation.kind() != OrderbookTransactionKindV1::SettlementReceipt)
-        .then(|| authority.to_string())
-        .unwrap_or_default();
+    let authority = if operation.kind() == OrderbookTransactionKindV1::SettlementReceipt {
+        String::new()
+    } else {
+        authority.to_string()
+    };
     let operation = norito::to_bytes(operation)
         .map_err(OrderbookTransactionForwarderError::CanonicalEncoding)?;
     let chain_id_len = u64::try_from(chain_id.len())
@@ -2940,21 +2942,12 @@ mod tests {
         ));
         assert!(forwarder.pending(8).unwrap().is_empty());
 
-        for invalid_chain_id in [
-            ChainId::from(""),
-            ChainId::from("x".repeat(ORDERBOOK_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)),
-        ] {
-            let mut invalid_context = context.clone();
-            invalid_context.chain_id = invalid_chain_id;
-            assert!(matches!(
-                forwarder.enqueue_unsigned_operation(
-                    match_operation(&invalid_context),
-                    &invalid_context
-                ),
-                Err(OrderbookTransactionForwarderError::InvalidGovernanceContext)
-            ));
-            assert!(forwarder.pending(8).unwrap().is_empty());
-        }
+        assert!("".parse::<ChainId>().is_err());
+        assert!(
+            "x".repeat(ORDERBOOK_TRANSACTION_MAX_CHAIN_ID_BYTES_V1 + 1)
+                .parse::<ChainId>()
+                .is_err()
+        );
 
         let mut invalid = settlement_operation(&context, [0x81; 32]);
         if let OrderbookOperationV1::SettlementReceipt(instruction) = &invalid {

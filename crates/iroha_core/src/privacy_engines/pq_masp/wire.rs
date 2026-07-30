@@ -11,8 +11,8 @@ use chacha20poly1305::{
 };
 use iroha_data_model::privacy::{
     PqMaspStarkStatementV1, PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1,
-    PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyRecipientIdV1,
-    PrivacyStatementDigestV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
+    PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNativeConsensusBindingDigestV1,
+    PrivacyRecipientIdV1, PrivacyStatementDigestV1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
 };
 use sha2::{Digest as _, Sha256};
 use soranet_pq::{
@@ -77,10 +77,10 @@ pub(crate) const PQ_MASP_ENCRYPTED_OUTPUT_KAT_SHA256_V1: [u8; 32] = [
     0x20, 0xd0, 0x17, 0x79, 0x17, 0x4a, 0xc5, 0x54, 0x2a, 0x9c, 0x07, 0xdf, 0x05, 0xb8, 0xe9, 0x34,
 ];
 
-/// SHA-256 of the canonical PQA1 authorization-wrapper KAT.
+/// SHA-256 of the canonical consensus-bound PQA1 authorization-wrapper KAT.
 pub(crate) const PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1: [u8; 32] = [
-    0x0a, 0x2a, 0x27, 0x9c, 0xde, 0x86, 0x66, 0xa7, 0x6a, 0xa5, 0x6e, 0x08, 0x1e, 0x77, 0x01, 0xc6,
-    0xa7, 0x97, 0xdc, 0xce, 0xcf, 0xa1, 0x3b, 0xdf, 0x5d, 0x3f, 0x63, 0x04, 0x6f, 0x7c, 0x77, 0x14,
+    0xf7, 0xda, 0x65, 0x35, 0x39, 0xb3, 0x2e, 0x7a, 0xbc, 0xd4, 0x67, 0x89, 0x3e, 0x8c, 0xd5, 0x54,
+    0x38, 0x5c, 0x54, 0x8f, 0xc8, 0xbd, 0x06, 0x40, 0xdd, 0xe8, 0x4e, 0xbe, 0x6d, 0x86, 0x97, 0x5a,
 ];
 
 /// Exact decoded ML-DSA authorization wrapper.
@@ -237,6 +237,7 @@ pub(super) fn derive_encapsulation_digest_v1(
 
 fn authorization_message_v1(
     statement_digest: PrivacyStatementDigestV1,
+    consensus_binding_digest: PrivacyNativeConsensusBindingDigestV1,
     stark_proof: &[u8],
 ) -> Result<[u8; 32], PqMaspWireErrorV1> {
     let proof_length = u64::try_from(stark_proof.len()).map_err(|_| PqMaspWireErrorV1::Encoding)?;
@@ -244,6 +245,7 @@ fn authorization_message_v1(
     let mut hash = Sha256::new();
     hash.update(AUTHORIZATION_MESSAGE_DOMAIN_V1);
     hash.update(statement_digest.as_bytes());
+    hash.update(consensus_binding_digest.as_bytes());
     hash.update(proof_length.to_be_bytes());
     hash.update(proof_digest);
     Ok(hash.finalize().into())
@@ -328,9 +330,10 @@ fn encode_authorization_proof_v1(
     Ok(bytes)
 }
 
-/// Sign a complete statement and its exact inner STARK proof with ML-DSA-65.
+/// Sign a statement, consensus binding, and exact inner STARK with ML-DSA-65.
 pub(crate) fn authorize_pq_masp_stark_proof_v1(
     statement_digest: PrivacyStatementDigestV1,
+    consensus_binding_digest: PrivacyNativeConsensusBindingDigestV1,
     expected_key_digest: PrivacyAuthorizationKeyDigestV1,
     secret_key: &[u8],
     stark_proof: &[u8],
@@ -345,7 +348,8 @@ pub(crate) fn authorize_pq_masp_stark_proof_v1(
     if derive_pq_masp_authorization_key_digest_v1(&public_key)? != expected_key_digest {
         return Err(PqMaspWireErrorV1::AuthorizationKeyMismatch);
     }
-    let message = authorization_message_v1(statement_digest, stark_proof)?;
+    let message =
+        authorization_message_v1(statement_digest, consensus_binding_digest, stark_proof)?;
     let mut rng = deterministic_chacha20_rng(seed, AUTHORIZATION_MESSAGE_DOMAIN_V1);
     let signature = sign_mldsa(
         MlDsaSuite::MlDsa65,
@@ -361,6 +365,7 @@ pub(crate) fn authorize_pq_masp_stark_proof_v1(
 /// Verify the ML-DSA-65 wrapper and return the exact inner STARK proof.
 pub(crate) fn verify_pq_masp_authorization_v1<'a>(
     statement_digest: PrivacyStatementDigestV1,
+    consensus_binding_digest: PrivacyNativeConsensusBindingDigestV1,
     expected_key_digest: PrivacyAuthorizationKeyDigestV1,
     bytes: &'a [u8],
 ) -> Result<PqMaspAuthorizationProofRefV1<'a>, PqMaspWireErrorV1> {
@@ -368,7 +373,11 @@ pub(crate) fn verify_pq_masp_authorization_v1<'a>(
     if derive_pq_masp_authorization_key_digest_v1(decoded.public_key)? != expected_key_digest {
         return Err(PqMaspWireErrorV1::AuthorizationKeyMismatch);
     }
-    let message = authorization_message_v1(statement_digest, decoded.stark_proof)?;
+    let message = authorization_message_v1(
+        statement_digest,
+        consensus_binding_digest,
+        decoded.stark_proof,
+    )?;
     verify_mldsa(
         MlDsaSuite::MlDsa65,
         decoded.public_key,
@@ -967,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn mldsa_authorization_binds_statement_key_and_inner_proof_bytes() {
+    fn mldsa_authorization_binds_statement_consensus_key_and_inner_proof_bytes() {
         let authorization_keys = generate_mldsa_keypair_from_seed(
             MlDsaSuite::MlDsa65,
             HedgedRngSeed::from_entropy(raw(31)),
@@ -978,9 +987,11 @@ mod tests {
             derive_pq_masp_authorization_key_digest_v1(authorization_keys.public_key())
                 .expect("key digest");
         let statement_digest = PrivacyStatementDigestV1::new(raw(32));
+        let consensus_binding_digest = PrivacyNativeConsensusBindingDigestV1::new(raw(36));
         let stark_proof = b"deterministic-inner-transparent-stark-proof";
         let encoded = authorize_pq_masp_stark_proof_v1(
             statement_digest,
+            consensus_binding_digest,
             key_digest,
             authorization_keys.secret_key(),
             stark_proof,
@@ -992,8 +1003,13 @@ mod tests {
             PQ_MASP_AUTHORIZATION_WIRE_KAT_SHA256_V1,
             "canonical PQ-MASP PQA1 authorization wire changed"
         );
-        let verified = verify_pq_masp_authorization_v1(statement_digest, key_digest, &encoded)
-            .expect("verify authorization");
+        let verified = verify_pq_masp_authorization_v1(
+            statement_digest,
+            consensus_binding_digest,
+            key_digest,
+            &encoded,
+        )
+        .expect("verify authorization");
         assert_eq!(verified.stark_proof, stark_proof);
 
         let mut mutations = Vec::new();
@@ -1015,12 +1031,19 @@ mod tests {
         }
         for mutated in mutations {
             assert!(
-                verify_pq_masp_authorization_v1(statement_digest, key_digest, &mutated).is_err()
+                verify_pq_masp_authorization_v1(
+                    statement_digest,
+                    consensus_binding_digest,
+                    key_digest,
+                    &mutated,
+                )
+                .is_err()
             );
         }
         assert_eq!(
             verify_pq_masp_authorization_v1(
                 PrivacyStatementDigestV1::new(raw(34)),
+                consensus_binding_digest,
                 key_digest,
                 &encoded,
             ),
@@ -1029,6 +1052,16 @@ mod tests {
         assert_eq!(
             verify_pq_masp_authorization_v1(
                 statement_digest,
+                PrivacyNativeConsensusBindingDigestV1::new(raw(37)),
+                key_digest,
+                &encoded,
+            ),
+            Err(PqMaspWireErrorV1::AuthorizationFailed)
+        );
+        assert_eq!(
+            verify_pq_masp_authorization_v1(
+                statement_digest,
+                consensus_binding_digest,
                 PrivacyAuthorizationKeyDigestV1::new(raw(35)),
                 &encoded,
             ),
@@ -1037,6 +1070,7 @@ mod tests {
         assert_eq!(
             authorize_pq_masp_stark_proof_v1(
                 statement_digest,
+                consensus_binding_digest,
                 key_digest,
                 authorization_keys.secret_key(),
                 stark_proof,

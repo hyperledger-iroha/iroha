@@ -374,22 +374,10 @@ pub struct DaIngestReceipt {
   `iroha::da::{decode_pdp_commitment_header, receipt_pdp_commitment}` ကာဗာ Rust၊ Python `ToriiClient`
   ယခု `decode_pdp_commitment_header` နှင့် `IrohaSwift` တို့သည် မိုဘိုင်းလ်အကူအညီပေးသူများနှင့် ကိုက်ညီသောသင်္ဘောများ
   ဖောက်သည်များသည် ကုဒ်လုပ်ထားသောနမူနာအချိန်ဇယားကို ချက်ချင်းသိမ်းဆည်းနိုင်သည်။【crates/iroha/src/da.rs:1】【python/iroha_torii_client/client.py:1】【IrohaSwift/Sources/IrohaSwift/ToriiClient.swift:1】
-- Torii သည် `GET /v1/da/manifests/{storage_ticket}` ကိုလည်း ဖော်ထုတ်ပေးသောကြောင့် SDK နှင့် အော်ပရေတာများသည် မန်နီးဖက်စ်များကို ရယူနိုင်သည်။
-  နှင့် node ၏ spool directory ကိုမထိဘဲ အစီအစဥ်များကို အပိုင်းပိုင်းဖြတ်ပါ။ တုံ့ပြန်မှုသည် Norito bytes ကို ပြန်ပေးသည်။
-  (base64)၊ manifest ပြန်ဆိုထားသော JSON၊ `chunk_plan` JSON blob သည် `sorafs fetch` အတွက် အဆင်သင့်ဖြစ်သည့်အပြင် သက်ဆိုင်ရာ၊
-  hex digests (`storage_ticket`၊ `client_blob_id`၊ `blob_hash`၊ `chunk_root`) ထို့ကြောင့် downstream tooling လုပ်နိုင်သည်
-  အချေအတင်များကို ပြန်လည်တွက်ချက်ခြင်းမပြုဘဲ တီးမှုတ်ဆရာအား ကျွေးမွေးပြီး တူညီသော `Sora-PDP-Commitment` ခေါင်းစီးအား ထုတ်လွှတ်သည်
-  mirror ingest တုံ့ပြန်မှုများ။ မေးမြန်းမှု ကန့်သတ်ချက်တစ်ခုအနေဖြင့် `block_hash=<hex>` ကို ကျော်ဖြတ်ခြင်းသည် အဆုံးအဖြတ်တစ်ခုကို ပြန်ပေးသည်
-  `sampling_plan` ပါဝင်သော `block_hash || client_blob_id` (တရားဝင်စစ်ဆေးသူများတွင် မျှဝေထားသည်)
-  တောင်းဆိုထားသော `assignment_hash`၊ တောင်းဆိုထားသော `sample_window`၊ နှင့် `(index, role, group)` ပတ်ထားသော tuples နမူနာများ
-  2D အစင်းအကွက် တစ်ခုလုံးသည် PoR နမူနာများနှင့် စစ်ဆေးသူများ တူညီသော အညွှန်းကိန်းများကို ပြန်ဖွင့်နိုင်သည်။ နမူနာယူပါ။
-  assignment hash တွင် `client_blob_id`၊ `chunk_root` နှင့် `ipa_commitment` တို့ကို ရောနှောထားသည်။ `iroha app da get
-  --block-hash ` now writes `sampling_plan_.json` နှင့်အတူ manifest + အတုံးအခဲ အစီအစဉ်ဘေးရှိ
-  hash ကို ထိန်းသိမ်းထားပြီး JS/Swift Torii ဖောက်သည်များသည် တူညီသော `assignment_hash_hex` ကို ဖော်ထုတ်ပေးသောကြောင့် validators
-  နှင့် သုသေသနများသည် တစ်ခုတည်းသော အဆုံးအဖြတ်ပေးသည့် စုံစမ်းစစ်ဆေးမှုတစ်ခုကို မျှဝေကြသည်။ Torii သည် နမူနာအစီအစဉ်ကို ပြန်ပေးသောအခါ `iroha app da
-  prove-availability` now reuses that deterministic probe set (seed derived from `sample_seed`) အစား
-  အော်ပရေတာမှ ချန်လှပ်ထားသော်လည်း PoR သက်သေများသည် တရားဝင်သတ်မှတ်ပေးထားသော တာဝန်များနှင့် ကိုက်ညီအောင် နမူနာယူခြင်း၏
-  `--block-hash` override
+- `GET /v1/da/manifests/{storage_ticket}` returns only the stored manifest, canonical chunk plan,
+  digests, and PDP commitment header. Manifest retrieval intentionally has no sampling or challenge
+  query. Explicit local PoR sampling is a retrievability diagnostic, not an availability guarantee
+  or evidence for rewards, slashing, or consensus.
 
 ### ကြီးမားသော Payload Streaming Flowစီစဉ်သတ်မှတ်ထားသော တောင်းဆိုချက် ကန့်သတ်ချက်ထက် ကြီးသော ပိုင်ဆိုင်မှုများကို ထည့်သွင်းရန် လိုအပ်သော ဖောက်သည်များသည် a စတင်သည်။
 `POST /v1/da/ingest/chunk/start` ကိုခေါ်ဆိုခြင်းဖြင့် တိုက်ရိုက်ထုတ်လွှင့်ခြင်း Torii သည် a ဖြင့် တုံ့ပြန်သည်။

@@ -2227,6 +2227,23 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
         }
         Ok(asset)
     };
+    let exact_account_asset_target =
+        |permission: &str| -> Result<(AccountId, AssetDefinitionId), String> {
+            if map.len() != 3
+                || !map.contains_key("type")
+                || !map.contains_key("account")
+                || !map.contains_key("asset_definition")
+            {
+                return Err(format!(
+                    "{permission} permission json requires exactly type, account, and asset_definition"
+                ));
+            }
+            let account = parse_account_literal(target("account")?)?;
+            let asset_definition =
+                AssetDefinitionId::parse_address_literal(target("asset_definition")?)
+                    .map_err(|_| "invalid `asset_definition` canonical id".to_owned())?;
+            Ok((account, asset_definition))
+        };
     match kind {
         "register_domain" => Ok(PermissionToken::RegisterDomain),
         "register_account" => Ok(PermissionToken::RegisterAccount),
@@ -2273,12 +2290,12 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
         "CanTransferAsset" => Ok(PermissionToken::TransferAssetBucket(
             exact_transfer_bucket()?
         )),
-        "CanSetAssetTransferFreeze" => {
-            let (asset_definition, account_domain, account_dataspace) = transfer_control_scope()?;
-            Ok(PermissionToken::SetAssetTransferFreeze {
+        "CanSetAssetTransferAvailability" => {
+            let (account, asset_definition) =
+                exact_account_asset_target("CanSetAssetTransferAvailability")?;
+            Ok(PermissionToken::SetAssetTransferAvailability {
+                account,
                 asset_definition,
-                account_domain,
-                account_dataspace,
             })
         }
         "CanSetAssetTransferDailyLimit" => {
@@ -2287,6 +2304,14 @@ fn parse_permission_token_json(raw: &str) -> Result<PermissionToken, String> {
                 asset_definition,
                 account_domain,
                 account_dataspace,
+            })
+        }
+        "CanSetAssetHoldingLimit" => {
+            let (account, asset_definition) =
+                exact_account_asset_target("CanSetAssetHoldingLimit")?;
+            Ok(PermissionToken::SetAssetHoldingLimit {
+                account,
+                asset_definition,
             })
         }
         "manage_roles" => Ok(PermissionToken::ManageRoles),
@@ -4175,10 +4200,26 @@ mod tests {
         )
         .expect("register exact target alias scope");
 
-        let permission_expr = |kind: &str, domain: &str| Expr::Call {
+        let availability_permission_expr = |account: &AccountId| Expr::Call {
+            name: "Json::parse".to_owned(),
+            args: vec![Expr::String(format!(
+                r#"{{"type":"CanSetAssetTransferAvailability","account":"{account}","asset_definition":"{asset_literal}"}}"#,
+            ))],
+            argument_names: None,
+            implicit_receiver: false,
+        };
+        let scoped_permission_expr = |kind: &str, domain: &str| Expr::Call {
             name: "Json::parse".to_owned(),
             args: vec![Expr::String(format!(
                 r#"{{"type":"{kind}","asset_definition":"{asset_literal}","account_domain":"{domain}","account_dataspace":10}}"#,
+            ))],
+            argument_names: None,
+            implicit_receiver: false,
+        };
+        let exact_holding_permission_expr = |account: &AccountId| Expr::Call {
+            name: "Json::parse".to_owned(),
+            args: vec![Expr::String(format!(
+                r#"{{"type":"CanSetAssetHoldingLimit","account":"{account}","asset_definition":"{asset_literal}"}}"#,
             ))],
             argument_names: None,
             implicit_receiver: false,
@@ -4188,32 +4229,32 @@ mod tests {
                 name: "grant_permission".to_owned(),
                 args: vec![
                     Expr::String("controller".to_owned()),
-                    permission_expr("CanSetAssetTransferFreeze", "hbl"),
+                    availability_permission_expr(&target),
                 ],
             },
             &mut host,
             &mut public_inputs,
         )
-        .expect("grant exact freeze permission to app only");
+        .expect("grant exact availability permission to app only");
         apply_fixture_action(
             &FixtureAction {
                 name: "grant_seiyaku_effect_permission".to_owned(),
-                args: vec![permission_expr("CanSetAssetTransferFreeze", "ubl")],
+                args: vec![availability_permission_expr(&controller)],
             },
             &mut host,
             &mut public_inputs,
         )
-        .expect("grant wrong-domain freeze permission to subject");
+        .expect("grant wrong-account availability permission to subject");
 
         host.inner
             .bind_contract_runtime_context(
                 controller.clone(),
                 host.contract_address.clone(),
-                "apply_freeze".to_owned(),
+                "apply_availability".to_owned(),
             )
             .expect("bind contract runtime context");
 
-        let call_freeze = |host: &mut KotoTestHost| {
+        let call_availability = |host: &mut KotoTestHost| {
             let mut vm = IVM::new(u64::MAX);
             let account = norito::to_bytes(&target).expect("encode target account");
             let asset_bytes = norito::to_bytes(&asset).expect("encode target asset");
@@ -4225,30 +4266,41 @@ mod tests {
                 .expect("allocate target asset");
             vm.set_register(10, account_pointer);
             vm.set_register(11, asset_pointer);
-            vm.set_register(12, 1);
-            host.inner
-                .syscall(crate::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE, &mut vm)
+            vm.set_register(12, 0);
+            vm.set_register(13, 0);
+            let reason_layout =
+                crate::sum::SumLayoutV1::option(1).expect("availability reason option layout");
+            let reason_pointer = crate::sum::allocate_words(&mut vm, reason_layout, 0, &[])
+                .expect("allocate absent availability reason");
+            vm.set_register(14, reason_pointer);
+            host.inner.syscall(
+                crate::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+                &mut vm,
+            )
         };
         assert_eq!(
-            call_freeze(&mut host),
+            call_availability(&mut host),
             Err(crate::VMError::PermissionDenied),
-            "an app grant and a wrong-domain subject grant must not authorize the effect",
+            "an app grant and a wrong-account subject grant must not authorize the effect",
         );
-        assert_eq!(host.inner.wsv.asset_transfer_freeze(&target, &asset), None);
+        assert_eq!(
+            host.inner.wsv.asset_transfer_availability(&target, &asset),
+            None
+        );
 
         apply_fixture_action(
             &FixtureAction {
                 name: "grant_seiyaku_effect_permission".to_owned(),
-                args: vec![permission_expr("CanSetAssetTransferFreeze", "hbl")],
+                args: vec![availability_permission_expr(&target)],
             },
             &mut host,
             &mut public_inputs,
         )
-        .expect("grant exact freeze permission to contract subject");
-        call_freeze(&mut host).expect("exact contract-subject freeze effect succeeds");
+        .expect("grant exact availability permission to contract subject");
+        call_availability(&mut host).expect("exact contract-subject availability effect succeeds");
         assert_eq!(
-            host.inner.wsv.asset_transfer_freeze(&target, &asset),
-            Some(true)
+            host.inner.wsv.asset_transfer_availability(&target, &asset),
+            Some((1, false, false))
         );
 
         let mut authority_vm = IVM::new(u64::MAX);
@@ -4265,7 +4317,10 @@ mod tests {
         apply_fixture_action(
             &FixtureAction {
                 name: "grant_seiyaku_effect_permission".to_owned(),
-                args: vec![permission_expr("CanSetAssetTransferDailyLimit", "hbl")],
+                args: vec![scoped_permission_expr(
+                    "CanSetAssetTransferDailyLimit",
+                    "hbl",
+                )],
             },
             &mut host,
             &mut public_inputs,
@@ -4305,6 +4360,46 @@ mod tests {
             .expect("exact contract-subject daily limit succeeds");
         assert_eq!(
             host.inner.wsv.asset_transfer_daily_limit(&target, &asset),
+            Some(Some(cap.clone()))
+        );
+
+        apply_fixture_action(
+            &FixtureAction {
+                name: "grant_seiyaku_effect_permission".to_owned(),
+                args: vec![exact_holding_permission_expr(&target)],
+            },
+            &mut host,
+            &mut public_inputs,
+        )
+        .expect("grant exact holding-limit permission to contract subject");
+        let mut holding_vm = IVM::new(u64::MAX);
+        let account_pointer = holding_vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account))
+            .expect("allocate holding-limit account");
+        let asset_pointer = holding_vm
+            .alloc_input_tlv(&make_tlv(PointerType::AssetDefinitionId, &asset_bytes))
+            .expect("allocate holding-limit asset");
+        let limit_pointer = holding_vm
+            .alloc_input_tlv(&make_tlv(PointerType::Quantity, &cap_payload))
+            .expect("allocate holding-limit quantity");
+        let limit_option = crate::sum::allocate_words(
+            &mut holding_vm,
+            crate::sum::SumLayoutV1::option(1).expect("holding option layout"),
+            1,
+            &[limit_pointer],
+        )
+        .expect("allocate holding-limit option");
+        holding_vm.set_register(10, account_pointer);
+        holding_vm.set_register(11, asset_pointer);
+        holding_vm.set_register(12, limit_option);
+        host.inner
+            .syscall(
+                crate::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT,
+                &mut holding_vm,
+            )
+            .expect("exact contract holding limit succeeds");
+        assert_eq!(
+            host.inner.wsv.asset_holding_limit(&target, &asset),
             Some(Some(cap))
         );
     }
@@ -4471,50 +4566,60 @@ mod tests {
                 .expect_err("ambiguous or non-canonical transfer bucket must fail");
         }
 
-        for (kind, expected_daily_limit) in [
-            ("CanSetAssetTransferFreeze", false),
-            ("CanSetAssetTransferDailyLimit", true),
-        ] {
-            let payload = format!(
-                r#"{{"type":"{kind}","asset_definition":"{}","account_domain":"hbl","account_dataspace":10}}"#,
-                asset.canonical_address(),
-            );
-            let token = parse_permission_token_json(&payload)
-                .expect("parse exact transfer-control effect permission");
-            match token {
-                PermissionToken::SetAssetTransferFreeze {
-                    asset_definition,
-                    account_domain,
-                    account_dataspace,
-                } if !expected_daily_limit => {
-                    assert_eq!(asset_definition, asset);
-                    assert_eq!(account_domain.as_ref(), "hbl");
-                    assert_eq!(account_dataspace, DataSpaceId::new(10));
-                }
-                PermissionToken::SetAssetTransferDailyLimit {
-                    asset_definition,
-                    account_domain,
-                    account_dataspace,
-                } if expected_daily_limit => {
-                    assert_eq!(asset_definition, asset);
-                    assert_eq!(account_domain.as_ref(), "hbl");
-                    assert_eq!(account_dataspace, DataSpaceId::new(10));
-                }
-                other => panic!("unexpected transfer-control permission: {other:?}"),
-            }
-        }
+        let availability_account = parse_account_literal(DEFAULT_CALLER).expect("account");
+        let availability = parse_permission_token_json(&format!(
+            r#"{{"type":"CanSetAssetTransferAvailability","account":"{availability_account}","asset_definition":"{}"}}"#,
+            asset.canonical_address(),
+        ))
+        .expect("parse exact availability permission");
+        assert!(matches!(
+            availability,
+            PermissionToken::SetAssetTransferAvailability {
+                account,
+                asset_definition,
+            } if account == availability_account && asset_definition == asset
+        ));
+
+        let daily_limit = parse_permission_token_json(&format!(
+            r#"{{"type":"CanSetAssetTransferDailyLimit","asset_definition":"{}","account_domain":"hbl","account_dataspace":10}}"#,
+            asset.canonical_address(),
+        ))
+        .expect("parse scoped daily-limit permission");
+        assert!(matches!(
+            daily_limit,
+            PermissionToken::SetAssetTransferDailyLimit {
+                asset_definition,
+                account_domain,
+                account_dataspace,
+            } if asset_definition == asset
+                && account_domain.as_ref() == "hbl"
+                && account_dataspace == DataSpaceId::new(10)
+        ));
+
+        let holding_limit = parse_permission_token_json(&format!(
+            r#"{{"type":"CanSetAssetHoldingLimit","account":"{availability_account}","asset_definition":"{}"}}"#,
+            asset.canonical_address(),
+        ))
+        .expect("parse exact holding-limit permission");
+        assert!(matches!(
+            holding_limit,
+            PermissionToken::SetAssetHoldingLimit {
+                account,
+                asset_definition,
+            } if account == availability_account && asset_definition == asset
+        ));
 
         for invalid in [
             format!(
-                r#"{{"type":"CanSetAssetTransferFreeze","asset_definition":"{}","account_domain":"hbl"}}"#,
+                r#"{{"type":"CanSetAssetTransferAvailability","asset_definition":"{}"}}"#,
                 asset.canonical_address(),
             ),
             format!(
-                r#"{{"type":"CanSetAssetTransferFreeze","asset_definition":"{}","account_domain":"hbl","account_dataspace":"sbp"}}"#,
+                r#"{{"type":"CanSetAssetTransferAvailability","account":"not-an-account","asset_definition":"{}"}}"#,
                 asset.canonical_address(),
             ),
             format!(
-                r#"{{"type":"CanSetAssetTransferFreeze","asset_definition":"{}","account_domain":"hbl","account_dataspace":10,"legacy":true}}"#,
+                r#"{{"type":"CanSetAssetTransferAvailability","account":"{availability_account}","asset_definition":"{}","legacy":true}}"#,
                 asset.canonical_address(),
             ),
         ] {

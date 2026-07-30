@@ -14,6 +14,8 @@ use iroha_core::{
     state::State,
     tx::{AcceptTransactionFail, SignatureRejectionCode},
 };
+#[cfg(feature = "bls")]
+use iroha_crypto::Signature;
 use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::prelude::*;
 use nonzero_ext::nonzero;
@@ -217,11 +219,6 @@ fn presigned_block_with_creation_after_txs(
 #[cfg(feature = "bls")]
 fn enable_bls_batching(state: &mut iroha_core::state::State) {
     let cfg = iroha_config::parameters::actual::Pipeline {
-        ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-            enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-            skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-            allowed_circuits: Vec::new(),
-        },
         dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
         access_set_cache_enabled:
             iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -339,7 +336,7 @@ fn bls_same_message_group_duplicate_rejected() {
 
 /// BLS mixed micro-batch: includes a same-message group (two identical valid txs)
 /// and two distinct singletons. Signature preverification should run the fast-aggregate
-/// for the group and the multi-message aggregate for the singletons. The overall
+/// for the group and exact multi-message verification for the singletons. The overall
 /// block is rejected due to duplicate payloads.
 #[cfg(feature = "bls")]
 #[test]
@@ -380,7 +377,7 @@ fn bls_mixed_group_and_singletons_duplicate_rejected() {
     {
         let (same, multi, det) = state.view().metrics().pipeline_sig_bls_counts();
         assert!(same >= 1, "expected same-message aggregate to be used");
-        assert!(multi >= 1, "expected multi-message aggregate to be used");
+        assert!(multi >= 1, "expected multi-message verification to be used");
         assert_eq!(det, 0, "unexpected deterministic count");
     }
 }
@@ -428,11 +425,11 @@ fn bls_same_message_group_bisect_bad() {
     }
 }
 
-/// BLS multi-message aggregate across distinct messages: two valid BLS txs with
+/// BLS multi-message verification across distinct messages: two valid BLS txs with
 /// different payloads should be accepted when batching is enabled.
 #[cfg(feature = "bls")]
 #[test]
-fn bls_multi_message_aggregate_ok() {
+fn bls_multi_message_verification_ok() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let leader = good.clone();
@@ -476,7 +473,7 @@ fn bls_multi_message_aggregate_ok() {
     {
         let (same, multi, det) = state.view().metrics().pipeline_sig_bls_counts();
         assert_eq!(same, 0, "unexpected same-message aggregate count");
-        assert!(multi >= 1, "expected multi-message aggregate to be used");
+        assert!(multi >= 1, "expected multi-message verification to be used");
         assert_eq!(det, 0, "unexpected deterministic count");
     }
 
@@ -529,11 +526,94 @@ fn bls_multi_message_aggregate_ok() {
     }
 }
 
-/// BLS multi-message aggregate bisection: one of two distinct payloads is signed by a wrong key
-/// and should trigger a multi-message aggregate failure plus telemetry bookkeeping.
+/// Distinct-message admission must preserve the validity of each transaction
+/// signature, rather than relying on a verdict over their combined point.
 #[cfg(feature = "bls")]
 #[test]
-fn bls_multi_message_aggregate_fails_and_counts() {
+fn bls_multi_message_rejects_balancing_altered_transaction_signatures() {
+    let (mut state, authority, chain, signer) = setup_world_with_account(Algorithm::BlsNormal);
+    enable_bls_batching(&mut state);
+    let leader = signer.clone();
+
+    let mut tx1 = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "independent admission signature one".to_string(),
+    )])
+    .with_metadata(bls_pop_metadata(&signer))
+    .sign(signer.private_key());
+    let mut tx2 = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(
+        Level::INFO,
+        "independent admission signature two".to_string(),
+    )])
+    .with_metadata(bls_pop_metadata(&signer))
+    .sign(signer.private_key());
+
+    let sig1 = tx1.signature().0.payload().to_vec();
+    let sig2 = tx2.signature().0.payload().to_vec();
+    let delta = Signature::try_new(signer.private_key(), b"admission balancing point")
+        .expect("produce canonical BLS point")
+        .payload()
+        .to_vec();
+    assert_eq!(delta.len(), 96, "BLS-normal signatures use compressed G2");
+    let mut negative_delta = delta.clone();
+    // In the canonical compressed BLS12-381 encoding, negation flips the
+    // lexicographic-sort flag while retaining the same x-coordinate.
+    negative_delta[0] ^= 0x20;
+
+    let altered_sig1 =
+        iroha_crypto::bls_normal_aggregate_signatures(&[sig1.as_slice(), delta.as_slice()])
+            .expect("first altered signature remains canonical");
+    let altered_sig2 = iroha_crypto::bls_normal_aggregate_signatures(&[
+        sig2.as_slice(),
+        negative_delta.as_slice(),
+    ])
+    .expect("second altered signature remains canonical");
+    tx1.set_signature(TransactionSignature(SignatureOf::from_signature(
+        Signature::from_bytes(&altered_sig1),
+    )));
+    tx2.set_signature(TransactionSignature(SignatureOf::from_signature(
+        Signature::from_bytes(&altered_sig2),
+    )));
+
+    tx1.verify_signature()
+        .expect_err("first altered transaction signature must fail independently");
+    tx2.verify_signature()
+        .expect_err("second altered transaction signature must fail independently");
+
+    let block = presigned_block_with_creation_after_txs(&leader, vec![tx1, tx2]);
+    let peer = PeerId::from(leader.public_key().clone());
+    let topology = iroha_core::sumeragi::network_topology::Topology::new(vec![peer]);
+    let result = ValidBlock::validate(
+        block,
+        &topology,
+        &chain,
+        &authority,
+        &iroha_primitives::time::TimeSource::new_system(),
+        &mut state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)),
+    )
+    .unpack(|_| {});
+
+    assert!(
+        result.is_err(),
+        "block admission must reject individually invalid BLS signatures"
+    );
+}
+
+/// BLS multi-message verification: one of two distinct payloads is signed by a wrong key
+/// and should trigger an exact-verification failure plus telemetry bookkeeping.
+#[cfg(feature = "bls")]
+#[test]
+fn bls_multi_message_verification_fails_and_counts() {
     let (mut state, authority, chain, good) = setup_world_with_account(Algorithm::BlsNormal);
     enable_bls_batching(&mut state);
     let bad = checked_random_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -558,7 +638,7 @@ fn bls_multi_message_aggregate_fails_and_counts() {
     .unpack(|_| {});
     assert!(
         result.is_err(),
-        "block must be rejected when multi-message aggregate contains a bad signature"
+        "block must be rejected when multi-message verification finds a bad signature"
     );
 
     #[cfg(feature = "telemetry")]
@@ -572,11 +652,11 @@ fn bls_multi_message_aggregate_fails_and_counts() {
         );
         assert_eq!(
             multi_success, 0,
-            "no multi-message aggregate should succeed"
+            "no multi-message verification should succeed"
         );
         assert!(
             multi_failure >= 1,
-            "multi-message aggregate failures should be counted"
+            "multi-message verification failures should be counted"
         );
     }
 }

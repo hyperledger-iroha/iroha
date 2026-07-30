@@ -20,16 +20,17 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::{Domain, DomainId},
     isi::{
-        InstructionBox,
-        error::{InstructionEvaluationError, InstructionExecutionError, TypeError},
+        Grant, InstructionBox,
         settlement::{
-            DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementLeg,
-            SettlementPlan,
+            DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
+            SettlementLeg, SettlementPlan,
         },
     },
     metadata::Metadata,
+    permission::Permission,
     prelude::{AccountId, NumericSpec, Quantity, ValidationFail},
 };
+use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -141,6 +142,28 @@ fn asset_balance(
         .map_or_else(Quantity::zero, |owned| owned.0.clone())
 }
 
+fn grant_exact_settlement_consent(
+    stx: &mut iroha_core::state::StateTransaction<'_, '_>,
+    debited_asset: AssetId,
+    instruction_id: &SettlementId,
+    intent_hash: iroha_data_model::prelude::Hash,
+) {
+    let permission = Permission::from(CanExecuteSettlement {
+        debited_asset,
+        settlement_id: instruction_id.clone(),
+        intent_hash,
+    });
+    apply_overlay(
+        stx,
+        &BOB_ID,
+        vec![InstructionBox::from(Grant::account_permission(
+            permission,
+            ALICE_ID.clone(),
+        ))],
+    )
+    .expect("counterparty should grant exact settlement consent");
+}
+
 #[test]
 fn dvp_overlay_rejects_underfunded_leg() {
     let (state, delivery_def_id, payment_def_id) = settlement_state();
@@ -168,6 +191,12 @@ fn dvp_overlay_rejects_underfunded_leg() {
         ),
         metadata: Metadata::default(),
     };
+    grant_exact_settlement_consent(
+        &mut stx,
+        AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
+        instruction.settlement_id(),
+        instruction.intent_hash(),
+    );
 
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect_err("insufficient payment leg should fail admission");
@@ -215,6 +244,12 @@ fn pvp_overlay_executes_when_funded() {
         plan: SettlementPlan::default(),
         metadata: Metadata::default(),
     };
+    grant_exact_settlement_consent(
+        &mut stx,
+        AssetId::new(counter_def_id.clone(), BOB_ID.clone()),
+        instruction.settlement_id(),
+        instruction.intent_hash(),
+    );
 
     apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
         .expect("funded PvP overlay should succeed");
@@ -238,7 +273,7 @@ fn pvp_overlay_executes_when_funded() {
 }
 
 #[test]
-fn dvp_overlay_commit_first_keeps_delivery_on_payment_failure() {
+fn dvp_overlay_rejects_commit_first_without_moving_assets() {
     let (state, delivery_def_id, payment_def_id) =
         settlement_state_with_payment_spec(NumericSpec::fractional(2));
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -265,13 +300,18 @@ fn dvp_overlay_commit_first_keeps_delivery_on_payment_failure() {
         ),
         metadata: Metadata::default(),
     };
+    grant_exact_settlement_consent(
+        &mut stx,
+        AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
+        instruction.settlement_id(),
+        instruction.intent_hash(),
+    );
 
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
-        .expect_err("scale violation should fail payment leg");
+        .expect_err("partial-commit DvP must fail admission");
     match err {
-        ValidationFail::InstructionFailed(InstructionExecutionError::Evaluate(
-            InstructionEvaluationError::Type(TypeError::AssetNumericSpec(_)),
-        )) => {}
+        ValidationFail::InstructionFailed(exec_err)
+            if exec_err.to_string().contains("AllOrNothing") => {}
         ValidationFail::InstructionFailed(exec_err) => panic!("unexpected error: {exec_err:?}"),
         other => panic!("unexpected validation error: {other:?}"),
     }
@@ -281,17 +321,14 @@ fn dvp_overlay_commit_first_keeps_delivery_on_payment_failure() {
     let alice_cash = asset_balance(&stx, &payment_def_id, &ALICE_ID);
     let bob_cash = asset_balance(&stx, &payment_def_id, &BOB_ID);
 
-    assert!(
-        alice_delivery.is_zero(),
-        "seller delivery leg should remain debited"
-    );
-    assert_eq!(bob_delivery, Quantity::from(5u32));
+    assert_eq!(alice_delivery, Quantity::from(5u32));
+    assert_eq!(bob_delivery, Quantity::zero());
     assert_eq!(alice_cash, Quantity::zero());
     assert_eq!(bob_cash, Quantity::from(2u32));
 }
 
 #[test]
-fn dvp_overlay_commit_second_rolls_back_on_payment_failure() {
+fn dvp_overlay_rejects_commit_second_without_moving_assets() {
     let (state, delivery_def_id, payment_def_id) =
         settlement_state_with_payment_spec(NumericSpec::fractional(2));
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -322,13 +359,18 @@ fn dvp_overlay_commit_second_rolls_back_on_payment_failure() {
         ),
         metadata: Metadata::default(),
     };
+    grant_exact_settlement_consent(
+        &mut stx,
+        AssetId::new(payment_def_id.clone(), BOB_ID.clone()),
+        instruction.settlement_id(),
+        instruction.intent_hash(),
+    );
 
     let err = apply_overlay(&mut stx, &ALICE_ID, vec![InstructionBox::from(instruction)])
-        .expect_err("scale violation should fail payment leg");
+        .expect_err("partial-commit DvP must fail admission");
     match err {
-        ValidationFail::InstructionFailed(InstructionExecutionError::Evaluate(
-            InstructionEvaluationError::Type(TypeError::AssetNumericSpec(_)),
-        )) => {}
+        ValidationFail::InstructionFailed(exec_err)
+            if exec_err.to_string().contains("AllOrNothing") => {}
         ValidationFail::InstructionFailed(exec_err) => panic!("unexpected error: {exec_err:?}"),
         other => panic!("unexpected validation error: {other:?}"),
     }

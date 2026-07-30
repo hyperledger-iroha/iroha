@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-02-07
 ## داخلہ کا عمل
 
 1. ** ایک پیش کش بنائیں **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں ،
+   - CLI: `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں ،
      `ProviderAdmissionProposalV1` + سرٹیفیکیشن بنڈل تشکیل دینا۔
    - توثیق: `profile_id` میں مطلوبہ فیلڈز ، اسٹیک> 0 ، کیننیکل چنکر ہینڈل کی موجودگی کو یقینی بنائیں۔
 2. ** گورننس کی منظوری **
@@ -64,7 +64,7 @@ translation_last_reviewed: 2026-02-07
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
+`cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -109,7 +109,7 @@ translation_last_reviewed: 2026-02-07
    `--retention-epoch` میں اضافہ اور ضرورت کے مطابق اسٹیکس/اختتامی مقامات کو اپ ڈیٹ کرنا۔
 2. عمل کریں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -130,7 +130,7 @@ translation_last_reviewed: 2026-02-07
 #### ایمرجنسی یاد
 1. سمجھوتہ شدہ لفافے کی شناخت کریں اور رائے جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

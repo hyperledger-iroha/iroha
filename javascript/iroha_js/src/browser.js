@@ -9,7 +9,9 @@ export {
 
 export {
   buildMintAssetInstruction,
+  buildSetAssetTransferAvailabilityInstruction,
   buildTransferAssetInstruction,
+  ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
   SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
   buildIssueReplicationOrderInstruction,
   buildCompleteReplicationOrderInstruction,
@@ -78,6 +80,9 @@ export {
   noritoEncodeMultisigContractCallApproveRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigProposeRequest,
+  noritoEncodeSorafsBillingAcknowledgementProofV1,
+  SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1,
+  SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1,
   verifyBlockMerkleProof,
   verifyBlockProofs,
   validateSorafsReplicationOrderPayloadV1,

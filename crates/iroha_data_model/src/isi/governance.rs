@@ -88,7 +88,7 @@ impl norito::json::JsonDeserialize for VotingMode {
     }
 }
 
-/// Council derivation method
+/// Council derivation method.
 #[derive(
     Clone,
     Copy,
@@ -103,19 +103,19 @@ impl norito::json::JsonDeserialize for VotingMode {
     iroha_schema::IntoSchema,
 )]
 pub enum CouncilDerivationKind {
-    /// Derived from verified VRF proofs
-    Vrf,
-    /// Derived from deterministic fallback (no proofs available)
+    /// Derived automatically from deterministic bonded-citizen sortition.
+    Sortition,
+    /// Supplied explicitly by an authorized parliament administrator.
     #[default]
-    Fallback,
+    Manual,
 }
 
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for CouncilDerivationKind {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
-            CouncilDerivationKind::Vrf => "Vrf",
-            CouncilDerivationKind::Fallback => "Fallback",
+            CouncilDerivationKind::Sortition => "Sortition",
+            CouncilDerivationKind::Manual => "Manual",
         };
         norito::json::write_json_string(label, out);
     }
@@ -128,8 +128,8 @@ impl norito::json::JsonDeserialize for CouncilDerivationKind {
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
         match value.as_str() {
-            "Vrf" => Ok(CouncilDerivationKind::Vrf),
-            "Fallback" => Ok(CouncilDerivationKind::Fallback),
+            "Sortition" => Ok(CouncilDerivationKind::Sortition),
+            "Manual" => Ok(CouncilDerivationKind::Manual),
             other => Err(norito::json::Error::unknown_field(other.to_owned())),
         }
     }
@@ -230,16 +230,14 @@ pub struct CastZkBallot {
 
 impl crate::seal::Instruction for CastZkBallot {}
 
-#[cfg(feature = "zk-ballot")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-/// Sketch of a ZK ballot proof envelope.
+/// Canonical V1 ZK ballot proof envelope.
 ///
 /// Opaque container for the ballot proof and minimal public context.
-/// Threaded under a feature for prototyping; not used by execution yet.
 pub struct BallotProof {
     /// Proof backend tag (e.g., "halo2/ipa" or "halo2/pasta/tiny-add").
     pub backend: iroha_schema::Ident,
@@ -410,10 +408,9 @@ impl crate::seal::Instruction for CastParliamentBallot {}
 
 /// Persist a council membership for an epoch.
 ///
-/// This instruction records `members` for `epoch` in the WSV. It includes a
-/// `candidates_count` for auditability and a `derived_by` flag to indicate
-/// whether members were derived from verified VRF proofs or via a deterministic
-/// fallback.
+/// This instruction records an explicitly administered `members` roster for
+/// `epoch` in the WSV. Selection metadata is derived by the ledger and is not
+/// accepted from the caller.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct PersistCouncilForEpoch {
     /// Epoch index
@@ -423,13 +420,6 @@ pub struct PersistCouncilForEpoch {
     /// Alternates that can replace members who decline or are ineligible.
     #[norito(default)]
     pub alternates: Vec<crate::account::AccountId>,
-    /// Number of candidates whose VRF proofs verified successfully.
-    #[norito(default)]
-    pub verified: u32,
-    /// Total number of candidates considered
-    pub candidates_count: u32,
-    /// Derivation method
-    pub derived_by: CouncilDerivationKind,
 }
 
 impl crate::seal::Instruction for PersistCouncilForEpoch {}
@@ -652,9 +642,6 @@ impl_governance_decode_from_slice!(PersistCouncilForEpoch {
     epoch: u64,
     members: Vec<crate::account::AccountId>,
     alternates: Vec<crate::account::AccountId>,
-    verified: u32,
-    candidates_count: u32,
-    derived_by: CouncilDerivationKind,
 });
 
 impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
@@ -950,9 +937,6 @@ mod tests {
             epoch: 7,
             members: vec![account(1), account(2)],
             alternates: vec![account(3)],
-            verified: 2,
-            candidates_count: 4,
-            derived_by: CouncilDerivationKind::Vrf,
         });
         assert_slice_roundtrip(RecordCitizenServiceOutcome {
             owner: account(1),
@@ -1015,9 +999,6 @@ mod tests {
                 epoch: 7,
                 members: vec![account(1), account(2)],
                 alternates: Vec::new(),
-                verified: 2,
-                candidates_count: 4,
-                derived_by: CouncilDerivationKind::Fallback,
             },
         );
         assert_registry_decodes(

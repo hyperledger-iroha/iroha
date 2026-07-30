@@ -106,13 +106,15 @@ def test_foreign_job_detection_excludes_owned_process_group() -> None:
 def test_process_inspection_is_bounded_and_timeout_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert 0 < guard.PROCESS_INSPECTION_TIMEOUT_SECONDS <= 0.2
+    assert guard.CONTROL_RECORD_TIMEOUT_SECONDS == 0.2
+    assert guard.PROCESS_INSPECTION_TIMEOUT_SECONDS == 2.0
+    assert guard.PHYSICAL_FOOTPRINT_INTERVAL_SECONDS == 5.0
 
     def timeout(*_args: object, **_kwargs: object) -> None:
         raise subprocess.TimeoutExpired([guard.PS], guard.PROCESS_INSPECTION_TIMEOUT_SECONDS)
 
     monkeypatch.setattr(guard.subprocess, "run", timeout)
-    with pytest.raises(guard.GuardError, match="exceeded 200 ms"):
+    with pytest.raises(guard.GuardError, match="exceeded 2 s"):
         guard._process_rows()
 
 
@@ -128,7 +130,7 @@ def test_macos_footprint_timeout_fails_closed(
     monkeypatch.setattr(guard, "FOOTPRINT", "/usr/bin/footprint")
     monkeypatch.setattr(guard.subprocess, "run", timeout)
 
-    with pytest.raises(guard.GuardError, match="footprint inspection exceeded 200 ms"):
+    with pytest.raises(guard.GuardError, match="footprint inspection exceeded 2 s"):
         guard._physical_footprint_bytes([123])
 
 
@@ -167,6 +169,74 @@ def test_sample_group_reuses_supplied_process_snapshot(
 
     assert sample.memory_bytes == 9
     assert sample.process_count == 1
+
+
+def test_rss_sample_can_defer_intrusive_physical_footprint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A loader-startup sample must not invoke macOS footprint eagerly."""
+
+    uid = os.getuid()
+    rows = [guard.ProcessRow(11, 1, 55, uid, 9, "/bin/tool")]
+
+    def unexpected_footprint(_pids: object) -> int:
+        raise AssertionError("deferred sample invoked physical footprint")
+
+    monkeypatch.setattr(guard, "_physical_footprint_bytes", unexpected_footprint)
+
+    sample = guard._sample_group(
+        55,
+        rows,
+        include_physical_footprint=False,
+    )
+
+    assert sample.memory_bytes == 9
+    assert sample.physical_footprint_bytes == 0
+    assert sample.accounting_method == "rss"
+
+
+def test_delayed_process_inspection_schedules_from_probe_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    jsonl = tmp_path / "resource.jsonl"
+    summary = tmp_path / "summary.json"
+    sample_interval_seconds = 0.04
+    probe_delay_seconds = 0.06
+    probe_windows: list[tuple[float, float]] = []
+
+    def delayed_process_rows() -> list[guard.ProcessRow]:
+        started = time.monotonic()
+        time.sleep(probe_delay_seconds)
+        probe_windows.append((started, time.monotonic()))
+        return []
+
+    monkeypatch.setattr(guard, "_process_rows", delayed_process_rows)
+    monkeypatch.setattr(guard.os, "fsync", lambda _descriptor: None)
+
+    def unexpected_footprint(_pids: object) -> int:
+        raise AssertionError("short-lived child was footprint-probed during startup")
+
+    monkeypatch.setattr(guard, "_physical_footprint_bytes", unexpected_footprint)
+
+    status = guard._run_guarded(
+        [sys.executable, "-c", "import time; time.sleep(0.4)"],
+        report_path=jsonl,
+        summary_path=summary,
+        sample_interval_seconds=sample_interval_seconds,
+    )
+
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    sample_count = int(document["sample_count"])
+    runtime_probes = probe_windows[1 : 1 + sample_count]
+    assert status == 0
+    assert len(runtime_probes) >= 2
+    gaps_after_probe = [
+        current_started - previous_finished
+        for (_, previous_finished), (current_started, _) in zip(
+            runtime_probes, runtime_probes[1:]
+        )
+    ]
+    assert min(gaps_after_probe) >= sample_interval_seconds * 0.9
 
 
 def test_sampling_failure_terminates_known_group_and_fails_closed(
@@ -356,7 +426,9 @@ def test_memory_limit_terminates_owned_group_and_exits_75(
     monkeypatch.setattr(
         guard,
         "_sample_group",
-        lambda _pgid, _rows=None: guard.MemorySample(2, 2, 0, 1, "rss"),
+        lambda _pgid, _rows=None, **_options: guard.MemorySample(
+            2, 2, 0, 1, "rss"
+        ),
     )
     immediate_kills = 0
     kill_immediately = guard._kill_owned_group_immediately
@@ -407,7 +479,9 @@ def test_kernel_high_water_mark_catches_a_spike_between_polls(
     monkeypatch.setattr(
         guard,
         "_sample_group",
-        lambda _pgid, _rows=None: guard.MemorySample(0, 0, 0, 1, "rss"),
+        lambda _pgid, _rows=None, **_options: guard.MemorySample(
+            0, 0, 0, 1, "rss"
+        ),
     )
 
     status = guard._run_guarded(

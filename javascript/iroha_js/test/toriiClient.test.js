@@ -32,6 +32,7 @@ import {
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
   signEd25519,
+  verifyEd25519,
   ValidationError,
   ValidationErrorCode,
 } from "../src/index.js";
@@ -43,7 +44,12 @@ import {
 import { sorafsGatewayFetch } from "../src/sorafs.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "../src/ivmArtifact.js";
 import { blake2b256 } from "../src/blake2b.js";
-import { makeNativeTest, nativeBinding, nativeSkipMessage } from "./helpers/native.js";
+import {
+  makeNativeTest,
+  nativeBinding,
+  nativeBindingError,
+  nativeUnavailableMessage,
+} from "./helpers/native.js";
 
 const BASE_URL = "https://localhost:8080";
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
@@ -1779,8 +1785,12 @@ test("listRepoAgreements normalizes repo payload", async () => {
   const agreement = page.items[0];
   assert.equal(agreement.id, "alpha_repo");
   assert.equal(agreement.cashLeg.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
+  assert.match(agreement.cashSource, /^7EAD8EFYUx1aVKZPUU1fyKvr8dF1@/);
   assert.equal(agreement.collateralLeg.metadata.isin, "US0000000001");
+  assert.match(agreement.collateralCustodyAsset, /^4fEiy2n5VMFVfi6BzDJge519zAzg@/);
   assert.equal(agreement.governance.marginFrequencySecs, 86400);
+  assert.equal(agreement.settlementTimestampMs, null);
+  assert.equal(agreement.status, "active");
 });
 
 test("listRepoAgreements preserves bounded count metadata", async () => {
@@ -3376,11 +3386,8 @@ test("getIsoMessageStatus rejects unknown ISO status values and pacs002 codes", 
   );
 });
 
-test("getSorafsPinManifest enforces alias proof policy", async (t) => {
-  const native = requireSorafsNative(t);
-  if (!native) {
-    return;
-  }
+test("getSorafsPinManifest enforces alias proof policy", async () => {
+  const native = requireSorafsNative();
   const policy = native.sorafsAliasPolicyDefaults();
   const now = Math.floor(Date.now() / 1000);
   const fixture = native.sorafsAliasProofFixture({
@@ -3415,11 +3422,8 @@ test("getSorafsPinManifest enforces alias proof policy", async (t) => {
   assert.deepEqual(result, { digest_hex: "deadbeef" });
 });
 
-test("getSorafsPinManifest rejects stale alias proof", async (t) => {
-  const native = requireSorafsNative(t);
-  if (!native) {
-    return;
-  }
+test("getSorafsPinManifest rejects stale alias proof", async () => {
+  const native = requireSorafsNative();
   const policy = native.sorafsAliasPolicyDefaults();
   const now = Math.floor(Date.now() / 1000);
   const fixture = native.sorafsAliasProofFixture({
@@ -3451,11 +3455,8 @@ test("getSorafsPinManifest rejects stale alias proof", async (t) => {
   );
 });
 
-test("getSorafsPinManifest invokes warning hook for refresh-window proofs", async (t) => {
-  const native = requireSorafsNative(t);
-  if (!native) {
-    return;
-  }
+test("getSorafsPinManifest invokes warning hook for refresh-window proofs", async () => {
+  const native = requireSorafsNative();
   const policy = native.sorafsAliasPolicyDefaults();
   const now = Math.floor(Date.now() / 1000);
   const refreshStart = policy.positiveTtlSecs - policy.refreshWindowSecs;
@@ -3612,11 +3613,8 @@ test("registerSorafsPinManifestTyped rejects pre-finality fee or custody claims"
   );
 });
 
-test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async (t) => {
-  const native = requireSorafsNative(t);
-  if (!native) {
-    return;
-  }
+test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async () => {
+  const native = requireSorafsNative();
   const policy = native.sorafsAliasPolicyDefaults();
   const now = Math.floor(Date.now() / 1000);
   const fixture = native.sorafsAliasProofFixture({
@@ -3992,6 +3990,59 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
   const snapshotIdHex = "ab".repeat(16);
   const merkleRootHex = "cd".repeat(32);
   const providerId = "provider:alpha";
+  const reputationWeights = {
+    version: 1,
+    por_success_bps: 2200,
+    pdp_success_bps: 2000,
+    potr_success_bps: 1800,
+    latency_bps: 1500,
+    dispute_bps: 1000,
+    token_violation_bps: 500,
+    repair_breach_bps: 1000,
+  };
+  const providerRecord = {
+    provider_id: providerId,
+    score_bps: 9800,
+    degradation_flags: [],
+    raw_metrics: {
+      version: 1,
+      por_success_bps: 9900,
+      pdp_success_bps: 9800,
+      potr_success_bps: 9700,
+      latency_health_bps: 9600,
+      dispute_rate_bps: 100,
+      token_violation_rate_bps: 0,
+      repair_breach_rate_bps: 0,
+    },
+    raw_metrics_hash_hex: "ef".repeat(32),
+  };
+  const snapshotEvent = {
+    version: 1,
+    sequence: 8,
+    snapshot_id_hex: snapshotIdHex,
+    generated_at_unix: 1_800_000_000,
+    merkle_root_hex: merkleRootHex,
+    provider_count: 1,
+    previous_snapshot_id_hex: null,
+  };
+  const privateKey = Buffer.alloc(32, 29);
+  const privateKeyObject = crypto.createPrivateKey({
+    key: Buffer.concat([
+      Buffer.from("302e020100300506032b657004220420", "hex"),
+      privateKey,
+    ]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const publicKey = Buffer.from(
+    crypto
+      .createPublicKey(privateKeyObject)
+      .export({ format: "der", type: "spki" }),
+  ).subarray(-32);
+  const canonicalAuth = {
+    accountId: "reputation-reader@sora",
+    privateKey,
+  };
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({ url, init });
@@ -3999,7 +4050,7 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
       return createSseResponse([
         "id: 8\n",
         "event: reputation_snapshot\n",
-        `data: {"sequence":8,"snapshot_id_hex":"${snapshotIdHex}"}\n`,
+        `data: ${JSON.stringify(snapshotEvent)}\n`,
         "\n",
       ]);
     }
@@ -4012,10 +4063,13 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
           previous_snapshot_id_hex: null,
           merkle_root_hex: merkleRootHex,
           provider_count: 1,
-          alpha_bps: 2500,
-          current_score_weight_bps: 7500,
-          weights: { por_success_bps: 5000 },
-          providers: [],
+          returned_provider_count: 1,
+          limit: 50,
+          truncated_providers: false,
+          alpha_bps: 8500,
+          current_score_weight_bps: 7000,
+          weights: reputationWeights,
+          providers: [providerRecord],
         },
         headers: { "content-type": "application/json" },
       });
@@ -4027,14 +4081,13 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
           snapshot_id_hex: snapshotIdHex,
           generated_at_unix: 1_800_000_000,
           merkle_root_hex: merkleRootHex,
-          provider: {
+          provider: providerRecord,
+          proof: {
             provider_id: providerId,
-            score_bps: 9800,
-            degradation_flags: [],
-            raw_metrics: { version: 1 },
-            raw_metrics_hash_hex: "ef".repeat(32),
+            leaf_index: 0,
+            leaf_count: 1,
+            siblings_hex: [],
           },
-          proof: { provider_id: providerId, leaf_index: 0, siblings_hex: [] },
         },
         headers: { "content-type": "application/json" },
       });
@@ -4048,9 +4101,9 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
         jsonData: {
           snapshot_id_hex: snapshotIdHex,
           generated_at_unix: 1_800_000_000,
-          alpha_bps: 2500,
-          current_score_weight_bps: 7500,
-          weights: { pdp_success_bps: 4000 },
+          alpha_bps: 8500,
+          current_score_weight_bps: 7000,
+          weights: reputationWeights,
         },
         headers: { "content-type": "application/json" },
       });
@@ -4063,17 +4116,7 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
           limit: 2,
           count: 1,
           next_since: 8,
-          events: [
-            {
-              version: 1,
-              sequence: 8,
-              snapshot_id_hex: snapshotIdHex,
-              generated_at_unix: 1_800_000_000,
-              merkle_root_hex: merkleRootHex,
-              provider_count: 1,
-              previous_snapshot_id_hex: null,
-            },
-          ],
+          events: [snapshotEvent],
         },
         headers: { "content-type": "application/json" },
       });
@@ -4082,20 +4125,26 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
-  const latest = await client.getSorafsReputationLatest({ ifNoneMatch: '"old"' });
+  const latest = await client.getSorafsReputationLatest({
+    canonicalAuth,
+    ifNoneMatch: '"old"',
+  });
   assert.equal(latest?.snapshot_id_hex, snapshotIdHex);
   assert.equal(calls[0]?.url, `${BASE_URL}/v1/sorafs/reputation/latest`);
   assert.equal(calls[0]?.init?.headers?.["If-None-Match"], '"old"');
 
-  const provider = await client.getSorafsReputationProvider(providerId);
+  const provider = await client.getSorafsReputationProvider(providerId, {
+    canonicalAuth,
+  });
   assert.equal(provider?.provider?.provider_id, providerId);
   assert.equal(
     calls[1]?.url,
-    `${BASE_URL}/v1/sorafs/reputation/providers/${encodeURIComponent(providerId)}`,
+    `${BASE_URL}/v1/sorafs/reputation/providers/${providerId}`,
   );
 
-  const snapshot = await client.getSorafsReputationSnapshot(`0x${snapshotIdHex.toUpperCase()}`, {
-    etag: '"snapshot-etag"',
+  const snapshot = await client.getSorafsReputationSnapshot(snapshotIdHex, {
+    canonicalAuth,
+    ifNoneMatch: '"snapshot-etag"',
   });
   assert.equal(snapshot, null);
   assert.equal(
@@ -4104,10 +4153,11 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
   );
   assert.equal(calls[2]?.init?.headers?.["If-None-Match"], '"snapshot-etag"');
 
-  const weights = await client.getSorafsReputationWeights();
-  assert.equal(weights?.current_score_weight_bps, 7500);
+  const weights = await client.getSorafsReputationWeights({ canonicalAuth });
+  assert.equal(weights?.current_score_weight_bps, 7000);
 
   const events = await client.listSorafsReputationEvents({
+    canonicalAuth,
     since: 0,
     limit: "2",
     ifNoneMatch: '"events-etag"',
@@ -4117,27 +4167,366 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
   assert.equal(eventsUrl.searchParams.get("since"), "0");
   assert.equal(eventsUrl.searchParams.get("limit"), "2");
   assert.equal(calls[4]?.init?.headers?.["If-None-Match"], '"events-etag"');
+  assert.equal(calls[4]?.init?.redirect, "error");
+  const eventHeaders = calls[4]?.init?.headers;
+  const eventMessage = canonicalRequestSignatureMessage({
+    method: "GET",
+    path: eventsUrl.pathname,
+    query: eventsUrl.search.slice(1),
+    body: Buffer.alloc(0),
+    timestampMs: Number(eventHeaders?.["X-Iroha-Timestamp-Ms"]),
+    nonce: eventHeaders?.["X-Iroha-Nonce"],
+  });
+  assert.equal(
+    verifyEd25519(
+      eventMessage,
+      Buffer.from(eventHeaders?.["X-Iroha-Signature"], "base64"),
+      publicKey,
+    ),
+    true,
+  );
 
   const iterator = client.streamSorafsReputationEvents({
+    canonicalAuth,
     since: 7,
     limit: 1,
-    lastEventId: "7",
   });
   const first = await iterator.next();
   assert.equal(first.done, false);
   assert.equal(first.value.event, "reputation_snapshot");
-  assert.deepEqual(first.value.data, {
-    sequence: 8,
-    snapshot_id_hex: snapshotIdHex,
-  });
+  assert.deepEqual(first.value.data, snapshotEvent);
   const streamUrl = new URL(calls[5]?.url);
   assert.equal(streamUrl.pathname, "/v1/sorafs/reputation/events/stream");
   assert.equal(streamUrl.searchParams.get("since"), "7");
   assert.equal(streamUrl.searchParams.get("limit"), "1");
-  assert.equal(calls[5]?.init?.headers?.["Last-Event-ID"], "7");
+  assert.equal(calls[5]?.init?.headers?.["Last-Event-ID"], undefined);
+  assert.equal(calls[5]?.init?.headers?.Accept, "text/event-stream");
+  assert.equal(
+    typeof calls[5]?.init?.headers?.["X-Iroha-Signature"],
+    "string",
+  );
+});
+
+test("SoraFS reputation helpers preserve exact u64 values in REST and SSE", async () => {
+  const snapshotIdHex = "ab".repeat(16);
+  const merkleRootHex = "cd".repeat(32);
+  const providerId = "provider:alpha";
+  const maxU64 = "18446744073709551615";
+  const maxU64Value = 18_446_744_073_709_551_615n;
+  const witness = Buffer.from("canonical-witness", "utf8").toString("base64");
+  const weights = {
+    version: 1,
+    por_success_bps: 2200,
+    pdp_success_bps: 2000,
+    potr_success_bps: 1800,
+    latency_bps: 1500,
+    dispute_bps: 1000,
+    token_violation_bps: 500,
+    repair_breach_bps: 1000,
+  };
+  const provider = {
+    provider_id: providerId,
+    score_bps: 9800,
+    degradation_flags: [],
+    raw_metrics: {
+      version: 1,
+      por_success_bps: 9900,
+      pdp_success_bps: 9800,
+      potr_success_bps: 9700,
+      latency_health_bps: 9600,
+      dispute_rate_bps: 100,
+      token_violation_rate_bps: 0,
+      repair_breach_rate_bps: 0,
+    },
+    raw_metrics_hash_hex: "ef".repeat(32),
+  };
+  const eventJson =
+    `{"version":1,"sequence":${maxU64},"snapshot_id_hex":"${snapshotIdHex}",` +
+    `"generated_at_unix":${maxU64},"merkle_root_hex":"${merkleRootHex}",` +
+    `"provider_count":1,"previous_snapshot_id_hex":null}`;
+  const latestJson =
+    `{"snapshot_id_hex":"${snapshotIdHex}","generated_at_unix":${maxU64},` +
+    `"previous_snapshot_id_hex":null,"merkle_root_hex":"${merkleRootHex}",` +
+    `"provider_count":1,"returned_provider_count":1,"limit":50,` +
+    `"truncated_providers":false,"alpha_bps":8500,` +
+    `"current_score_weight_bps":7000,"weights":${JSON.stringify(weights)},` +
+    `"providers":[${JSON.stringify(provider)}]}`;
+  const eventsJson =
+    `{"since":null,"limit":50,"count":1,"next_since":${maxU64},` +
+    `"events":[${eventJson}]}`;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      if (url.includes("/events/stream")) {
+        return createSseResponse([
+          `id: ${maxU64}\n`,
+          "event: reputation_snapshot\n",
+          `data: ${eventJson}\n\n`,
+          "event: lagged\n",
+          `data: ${maxU64}\n\n`,
+        ]);
+      }
+      return createResponse({
+        status: 200,
+        textBody: url.endsWith("/events") ? eventsJson : latestJson,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const auth = { headers: { "X-Iroha-Witness": witness } };
+
+  const latest = await client.getSorafsReputationLatest(auth);
+  assert.equal(latest?.generated_at_unix, maxU64Value);
+
+  const events = await client.listSorafsReputationEvents(auth);
+  assert.equal(events?.since, null);
+  assert.equal(events?.limit, 50);
+  assert.equal(events?.next_since, maxU64Value);
+  assert.equal(events?.events[0]?.sequence, maxU64Value);
+  assert.equal(events?.events[0]?.generated_at_unix, maxU64Value);
+
+  const iterator = client.streamSorafsReputationEvents({
+    ...auth,
+    since: maxU64Value - 1n,
+  });
+  const streamed = await iterator.next();
+  assert.equal(streamed.value?.id, maxU64);
+  assert.equal(streamed.value?.data.sequence, maxU64Value);
+  assert.equal(streamed.value?.data.generated_at_unix, maxU64Value);
+  const lagged = await iterator.next();
+  assert.equal(lagged.value?.event, "lagged");
+  assert.equal(lagged.value?.data, maxU64Value);
+});
+
+test("SoraFS reputation helpers reject noncanonical V1 responses", async () => {
+  const snapshotIdHex = "ab".repeat(16);
+  const otherSnapshotIdHex = "ac".repeat(16);
+  const merkleRootHex = "cd".repeat(32);
+  const providerId = "provider:alpha";
+  const witness = Buffer.from("canonical-witness", "utf8").toString("base64");
+  const auth = { headers: { "X-Iroha-Witness": witness } };
+  const weights = () => ({
+    version: 1,
+    por_success_bps: 2200,
+    pdp_success_bps: 2000,
+    potr_success_bps: 1800,
+    latency_bps: 1500,
+    dispute_bps: 1000,
+    token_violation_bps: 500,
+    repair_breach_bps: 1000,
+  });
+  const provider = (id = providerId) => ({
+    provider_id: id,
+    score_bps: 9800,
+    degradation_flags: [],
+    raw_metrics: {
+      version: 1,
+      por_success_bps: 9900,
+      pdp_success_bps: 9800,
+      potr_success_bps: 9700,
+      latency_health_bps: 9600,
+      dispute_rate_bps: 100,
+      token_violation_rate_bps: 0,
+      repair_breach_rate_bps: 0,
+    },
+    raw_metrics_hash_hex: "ef".repeat(32),
+  });
+  const snapshot = (id = snapshotIdHex) => ({
+    snapshot_id_hex: id,
+    generated_at_unix: 1_800_000_000,
+    previous_snapshot_id_hex: null,
+    merkle_root_hex: merkleRootHex,
+    provider_count: 1,
+    returned_provider_count: 1,
+    limit: 50,
+    truncated_providers: false,
+    alpha_bps: 8500,
+    current_score_weight_bps: 7000,
+    weights: weights(),
+    providers: [provider()],
+  });
+  const responseClient = (jsonData) =>
+    new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+  const missingField = snapshot();
+  delete missingField.returned_provider_count;
+  await assert.rejects(
+    () => responseClient(missingField).getSorafsReputationLatest(auth),
+    /fields are not canonical.*returned_provider_count/,
+  );
+
+  const extraField = snapshot();
+  extraField.compatibility_alias = true;
+  await assert.rejects(
+    () => responseClient(extraField).getSorafsReputationLatest(auth),
+    /fields are not canonical.*compatibility_alias/,
+  );
+
+  const wrongAlpha = snapshot();
+  wrongAlpha.alpha_bps = 8499;
+  await assert.rejects(
+    () => responseClient(wrongAlpha).getSorafsReputationLatest(auth),
+    /alpha_bps must be between 8500 and 8500/,
+  );
+
+  const wrongWeightTotal = snapshot();
+  wrongWeightTotal.weights.repair_breach_bps = 999;
+  await assert.rejects(
+    () => responseClient(wrongWeightTotal).getSorafsReputationLatest(auth),
+    /basis-point fields must sum to exactly 10000/,
+  );
+
+  const wrongFlagOrder = snapshot();
+  wrongFlagOrder.providers[0].degradation_flags = [
+    { flag: "low_score", value: null },
+    { flag: "reserve_warning", value: null },
+  ];
+  await assert.rejects(
+    () => responseClient(wrongFlagOrder).getSorafsReputationLatest(auth),
+    /degradation_flags must use canonical enum order/,
+  );
+
+  const providerMismatch = {
+    snapshot_id_hex: snapshotIdHex,
+    generated_at_unix: 1_800_000_000,
+    merkle_root_hex: merkleRootHex,
+    provider: provider("provider:other"),
+    proof: {
+      provider_id: "provider:other",
+      leaf_index: 0,
+      leaf_count: 1,
+      siblings_hex: [],
+    },
+  };
+  await assert.rejects(
+    () =>
+      responseClient(providerMismatch).getSorafsReputationProvider(
+        providerId,
+        auth,
+      ),
+    /does not match the requested provider/,
+  );
+
+  const invalidProof = {
+    ...providerMismatch,
+    provider: provider(),
+    proof: {
+      provider_id: providerId,
+      leaf_index: 0,
+      leaf_count: 2,
+      siblings_hex: [],
+    },
+  };
+  await assert.rejects(
+    () =>
+      responseClient(invalidProof).getSorafsReputationProvider(
+        providerId,
+        auth,
+      ),
+    /siblings_hex must have the exact Merkle depth/,
+  );
+
+  await assert.rejects(
+    () =>
+      responseClient(snapshot(otherSnapshotIdHex)).getSorafsReputationSnapshot(
+        snapshotIdHex,
+        auth,
+      ),
+    /does not match the requested snapshot/,
+  );
+
+  const event = {
+    version: 1,
+    sequence: 8,
+    snapshot_id_hex: snapshotIdHex,
+    generated_at_unix: 1_800_000_000,
+    merkle_root_hex: merkleRootHex,
+    provider_count: 1,
+    previous_snapshot_id_hex: null,
+  };
+  const mismatchedPage = {
+    since: 6,
+    limit: 2,
+    count: 1,
+    next_since: 8,
+    events: [event],
+  };
+  await assert.rejects(
+    () =>
+      responseClient(mismatchedPage).listSorafsReputationEvents({
+        ...auth,
+        since: 7,
+        limit: 2,
+      }),
+    /since does not match the requested cursor/,
+  );
+  mismatchedPage.since = 7;
+  await assert.rejects(
+    () =>
+      responseClient(mismatchedPage).listSorafsReputationEvents({
+        ...auth,
+        since: 7,
+        limit: 3,
+    }),
+    /limit does not match the requested limit/,
+  );
+  const wrongDefaultLimitPage = {
+    ...mismatchedPage,
+    since: null,
+    limit: 500,
+  };
+  await assert.rejects(
+    () =>
+      responseClient(wrongDefaultLimitPage).listSorafsReputationEvents(auth),
+    /limit does not match the requested limit/,
+  );
+
+  const sseClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createSseResponse([
+        "id: 9\n",
+        "event: reputation_snapshot\n",
+        `data: ${JSON.stringify(event)}\n\n`,
+      ]),
+  });
+  const iterator = sseClient.streamSorafsReputationEvents({
+    ...auth,
+    since: 7,
+  });
+  await assert.rejects(
+    () => iterator.next(),
+    /id must equal data.sequence/,
+  );
+
+  const staleSseClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createSseResponse([
+        "id: 8\n",
+        "event: reputation_snapshot\n",
+        `data: ${JSON.stringify(event)}\n\n`,
+      ]),
+  });
+  const staleIterator = staleSseClient.streamSorafsReputationEvents({
+    ...auth,
+    since: 8,
+  });
+  await assert.rejects(
+    () => staleIterator.next(),
+    /sequence must be greater than the requested since cursor/,
+  );
 });
 
 test("SoraFS reputation helpers validate options and identifiers before fetch", async () => {
+  const canonicalAuth = {
+    accountId: "reputation-reader@sora",
+    privateKey: Buffer.alloc(32, 31),
+  };
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not run for invalid reputation inputs");
@@ -4152,25 +4541,230 @@ test("SoraFS reputation helpers validate options and identifiers before fetch", 
     /getSorafsReputationLatest options contains unsupported fields: unknown/,
   );
   await assert.rejects(
-    () => client.getSorafsReputationLatest({ ifNoneMatch: '"a"', etag: '"b"' }),
-    /only one of ifNoneMatch or etag/,
+    () => client.getSorafsReputationLatest({ canonicalAuth, etag: '"b"' }),
+    /unsupported fields: etag/,
+  );
+  await assert.rejects(
+    () => client.getSorafsReputationLatest(),
+    /requires canonicalAuth or an exact X-Iroha-Witness header/,
   );
   await assert.rejects(
     () => client.getSorafsReputationProvider("bad provider"),
     /unsupported characters/,
   );
+  for (const providerId of [".", ".."]) {
+    await assert.rejects(
+      () =>
+        client.getSorafsReputationProvider(providerId, {
+          canonicalAuth,
+        }),
+      /must not be a URL dot segment/,
+    );
+  }
   await assert.rejects(
     () => client.getSorafsReputationSnapshot("ab".repeat(15)),
-    /16-byte hex string/,
+    /exactly 32 lowercase hexadecimal characters/,
+  );
+  await assert.rejects(
+    () =>
+      client.getSorafsReputationSnapshot("AB".repeat(16), {
+        canonicalAuth,
+      }),
+    /exactly 32 lowercase hexadecimal characters/,
+  );
+  await assert.rejects(
+    () =>
+      client.getSorafsReputationSnapshot("0".repeat(32), {
+        canonicalAuth,
+      }),
+    /must be nonzero/,
   );
   await assert.rejects(
     () => client.listSorafsReputationEvents({ limit: 0 }),
-    /listSorafsReputationEvents\.limit must be a positive integer/,
+    /listSorafsReputationEvents\.limit must be positive/,
+  );
+  await assert.rejects(
+    () =>
+      client.listSorafsReputationEvents({
+        canonicalAuth,
+        limit: 501,
+      }),
+    /listSorafsReputationEvents\.limit must be at most 500/,
+  );
+  await assert.rejects(
+    () =>
+      client.listSorafsReputationEvents({
+        canonicalAuth,
+        since: "01",
+      }),
+    /canonical unsigned decimal integer/,
+  );
+  await assert.rejects(
+    () =>
+      client.listSorafsReputationEvents({
+        canonicalAuth,
+        since: 18446744073709551616n,
+      }),
+    /must be at most 18446744073709551615/,
   );
   assert.throws(
     () => client.streamSorafsReputationEvents({ extra: true }),
     /streamSorafsReputationEvents options contains unsupported fields: extra/,
   );
+  assert.throws(
+    () =>
+      client.streamSorafsReputationEvents({
+        canonicalAuth,
+        lastEventId: "7",
+      }),
+    /unsupported fields: lastEventId/,
+  );
+  assert.throws(
+    () =>
+      client.streamSorafsReputationEvents({
+        canonicalAuth,
+        headers: { "Last-Event-ID": "7" },
+      }),
+    /does not accept Last-Event-ID/,
+  );
+  const defaultResumeClient = new ToriiClient(BASE_URL, {
+    defaultHeaders: { "Last-Event-ID": "7" },
+    fetchImpl: async () => {
+      throw new Error("fetch should not run for Last-Event-ID");
+    },
+  });
+  assert.throws(
+    () => defaultResumeClient.streamSorafsReputationEvents({ canonicalAuth }),
+    /does not accept Last-Event-ID/,
+  );
+  await assert.rejects(
+    () =>
+      client.getSorafsReputationLatest({
+        headers: { "X-Iroha-Signature": "partial" },
+      }),
+    /cannot supply signature proof fields directly/,
+  );
+  await assert.rejects(
+    () =>
+      client.getSorafsReputationLatest({
+        canonicalAuth,
+        headers: { "X-Iroha-Witness": Buffer.from("witness").toString("base64") },
+      }),
+    /exactly one canonical authentication mode/,
+  );
+  const witness = Buffer.from("canonical-witness").toString("base64");
+  await assert.rejects(
+    () =>
+      client.getSorafsReputationLatest({
+        headers: { "X-Iroha-Witness": Buffer.from(witness) },
+      }),
+    /must be exact standard-base64/,
+  );
+  await assert.rejects(
+    () =>
+      client.getSorafsReputationLatest({
+        headers: {
+          "X-Iroha-Witness": witness,
+          "X-Iroha-Account": Buffer.from("reputation-reader@sora"),
+        },
+      }),
+    /must be an exact canonical I105 account or ASCII account alias/,
+  );
+});
+
+test("SoraFS reputation witness auth is exact and signed streams do not replay", async () => {
+  const witness = Buffer.from("canonical-witness", "utf8").toString("base64");
+  const witnessCalls = [];
+  const witnessClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      witnessCalls.push({ url, init });
+      return createResponse({
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const latest = await witnessClient.getSorafsReputationLatest({
+    headers: {
+      "X-Iroha-Witness": witness,
+      "X-Iroha-Account": "reputation-reader@sora",
+    },
+  });
+  assert.equal(latest, null);
+  assert.equal(witnessCalls[0]?.init?.headers?.["X-Iroha-Witness"], witness);
+
+  await assert.rejects(
+    () =>
+      witnessClient.getSorafsReputationLatest({
+        headers: { "X-Iroha-Witness": ` ${witness}` },
+      }),
+    /must be exact standard-base64/,
+  );
+
+  let insecureAttempts = 0;
+  const insecureClient = new ToriiClient("http://torii.example", {
+    fetchImpl: async () => {
+      insecureAttempts += 1;
+      return createResponse({ status: 404 });
+    },
+  });
+  await assert.rejects(
+    () =>
+      insecureClient.getSorafsReputationLatest({
+        headers: { "X-Iroha-Witness": witness },
+      }),
+    /refusing to send sensitive request material over insecure protocol/,
+  );
+  assert.equal(insecureAttempts, 0);
+
+  const allowedInsecureClient = new ToriiClient("http://torii.example", {
+    allowInsecure: true,
+    fetchImpl: async () => {
+      insecureAttempts += 1;
+      return createResponse({ status: 404 });
+    },
+  });
+  assert.equal(
+    await allowedInsecureClient.getSorafsReputationLatest({
+      headers: { "X-Iroha-Witness": witness },
+    }),
+    null,
+  );
+  assert.equal(insecureAttempts, 1);
+
+  let witnessStreamAttempts = 0;
+  const witnessStreamClient = new ToriiClient(BASE_URL, {
+    maxRetries: 3,
+    fetchImpl: async () => {
+      witnessStreamAttempts += 1;
+      throw new TypeError("witness stream network failure");
+    },
+  });
+  const witnessIterator = witnessStreamClient.streamSorafsReputationEvents({
+    headers: { "X-Iroha-Witness": witness },
+  });
+  await assert.rejects(
+    () => witnessIterator.next(),
+    /witness stream network failure/,
+  );
+  assert.equal(witnessStreamAttempts, 1);
+
+  let attempts = 0;
+  const signedClient = new ToriiClient(BASE_URL, {
+    maxRetries: 3,
+    fetchImpl: async () => {
+      attempts += 1;
+      throw new TypeError("network failure");
+    },
+  });
+  const iterator = signedClient.streamSorafsReputationEvents({
+    canonicalAuth: {
+      accountId: "reputation-reader@sora",
+      privateKey: Buffer.alloc(32, 32),
+    },
+  });
+  await assert.rejects(() => iterator.next(), /network failure/);
+  assert.equal(attempts, 1);
 });
 
 function finalizedOrderbookTestFixtures() {
@@ -5527,13 +6121,7 @@ test("getDaManifest fetches manifest bundle", async () => {
   const chunkPlan = chunkFetchPlan([
     { chunk_index: 0, offset: 0, length: 1, digest_blake3: "ff".repeat(32) },
   ], "dd".repeat(32));
-  const samplingPlan = {
-    assignment_hash: "aa".repeat(32),
-    sample_window: 4,
-    samples: [{ index: 2, role: "global_parity", group: 1 }],
-  };
   const manifestHashHex = "ff".repeat(32);
-  const blockHashHex = "bb".repeat(32);
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({
@@ -5550,18 +6138,15 @@ test("getDaManifest fetches manifest bundle", async () => {
         manifest_norito: manifestB64,
         manifest: { version: 1 },
         chunk_plan: chunkPlan,
-        sampling_plan: samplingPlan,
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getDaManifest(ticketHex, {
-    blockHashHex,
-  });
+  const result = await client.getDaManifest(ticketHex);
   assert.equal(
     captured?.url,
-    `${BASE_URL}/v1/da/manifests/${ticketHex.slice(2).toLowerCase()}?block_hash=${blockHashHex.toLowerCase()}`,
+    `${BASE_URL}/v1/da/manifests/${ticketHex.slice(2).toLowerCase()}`,
   );
   assert.equal(
     captured?.init?.headers?.Accept,
@@ -5571,9 +6156,6 @@ test("getDaManifest fetches manifest bundle", async () => {
   assert.equal(result.manifest_b64, manifestB64);
   assert.equal(result.manifest_hash_hex, manifestHashHex.toLowerCase());
   assert.deepEqual(result.chunk_plan, chunkPlan);
-  assert.deepEqual(result.sampling_plan?.assignment_hash_hex, samplingPlan.assignment_hash.toLowerCase());
-  assert.equal(result.sampling_plan?.sample_window, samplingPlan.sample_window);
-  assert.equal(result.sampling_plan?.samples[0].index, 2);
   assert(Buffer.isBuffer(result.manifest_bytes));
   assert.equal(
     result.manifest_bytes.toString("utf8"),
@@ -5643,11 +6225,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
   const chunkPlan = chunkFetchPlan([
     { chunk_index: 0, offset: 0, length: 1, digest_blake3: "ff".repeat(32) },
   ], "dd".repeat(32));
-  const samplingPlan = {
-    assignment_hash: "aa".repeat(32),
-    sample_window: 2,
-    samples: [{ index: 0, role: "data", group: 0 }],
-  };
   const manifestHashHex = "ff".repeat(32);
   const fetchImpl = async () =>
     createResponse({
@@ -5664,7 +6241,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
         manifest_norito: manifestB64,
         manifest: { version: 1 },
         chunk_plan: chunkPlan,
-        sampling_plan: samplingPlan,
       },
       headers: { "content-type": "application/json" },
     });
@@ -5677,7 +6253,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
     const manifestPath = path.join(tmpDir, `manifest_${label}.norito`);
     const manifestJsonPath = path.join(tmpDir, `manifest_${label}.json`);
     const chunkPlanPath = path.join(tmpDir, `chunk_plan_${label}.json`);
-    const samplingPlanPath = path.join(tmpDir, `sampling_plan_${label}.json`);
 
     assert.equal(result.paths.label, label);
     const persisted = await fs.readFile(manifestPath);
@@ -5687,8 +6262,6 @@ test("getDaManifestToDir writes manifest and plan artefacts", async () => {
     const planJson = JSON.parse(await fs.readFile(chunkPlanPath, "utf8"));
     assert.equal(planJson.schema, "sorafs.chunk_fetch_plan.v1");
     assert.equal(planJson.chunk_fetch_specs[0].chunk_index, 0);
-    const samplingJson = JSON.parse(await fs.readFile(samplingPlanPath, "utf8"));
-    assert.equal(samplingJson.sample_window, samplingPlan.sample_window);
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
@@ -6958,7 +7531,16 @@ test("SoraFS storage helpers reject unsupported option fields", async () => {
       () => client.getSorafsManifest("ab".repeat(32), { unexpected: "nope" }),
       "unexpected",
     ],
-    ["getDaManifest", () => client.getDaManifest("ff".repeat(32), { note: "skip" }), "note"],
+    [
+      "getDaManifest",
+      () => client.getDaManifest("ff".repeat(32), { blockHashHex: "aa".repeat(32) }),
+      "blockHashHex",
+    ],
+    [
+      "getDaManifestToDir",
+      () => client.getDaManifestToDir("ff".repeat(32), { blockHashHex: "aa".repeat(32) }),
+      "blockHashHex",
+    ],
   ];
   for (const [label, invoke, field] of cases) {
     // eslint-disable-next-line no-await-in-loop
@@ -6980,29 +7562,10 @@ test("governance helpers validate options", async () => {
     proposal_id: "ab".repeat(32),
   };
   const enactPayload = { proposal_id: "cd".repeat(32) };
-  const councilPayload = {
-    committee_size: 1,
-    candidates: [
-      {
-        account_id: SAMPLE_ACCOUNT_FORMS.i105,
-        variant: "Normal",
-        pk_b64: Buffer.from("pk").toString("base64"),
-        proof_b64: Buffer.from("proof").toString("base64"),
-      },
-    ],
-  };
 
   await assert.rejects(
     () => client.getGovernanceCouncilCurrent("invalid"),
     /getGovernanceCouncilCurrent options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit("invalid"),
-    /getGovernanceCouncilAudit options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit({ epoch: 1, extra: true }),
-    /getGovernanceCouncilAudit options contains unsupported fields: extra/,
   );
   await assert.rejects(
     () => client.governanceFinalizeReferendum(finalizePayload, { signal: "nope" }),
@@ -7036,16 +7599,6 @@ test("governance helpers validate options", async () => {
       () => client.getGovernanceTally("ref-1", "invalid"),
       /getGovernanceTally options must be an object/,
     ],
-    [
-      "governanceDeriveCouncilVrf",
-      () => client.governanceDeriveCouncilVrf(councilPayload, "invalid"),
-      /governanceDeriveCouncilVrf options must be an object/,
-    ],
-    [
-      "governancePersistCouncil",
-      () => client.governancePersistCouncil(councilPayload, "invalid"),
-      /governancePersistCouncil options must be an object/,
-    ],
   ];
   for (const [_label, invoke, error] of optionTypeCases) {
     // eslint-disable-next-line no-await-in-loop
@@ -7067,16 +7620,6 @@ test("governance helpers validate options", async () => {
       () => client.getGovernanceTally("ref-1", { signal: "nope" }),
       /getGovernanceTally options.signal must be an AbortSignal/,
     ],
-    [
-      "governanceDeriveCouncilVrf",
-      () => client.governanceDeriveCouncilVrf(councilPayload, { signal: "nope" }),
-      /governanceDeriveCouncilVrf options.signal must be an AbortSignal/,
-    ],
-    [
-      "governancePersistCouncil",
-      () => client.governancePersistCouncil(councilPayload, { signal: "nope" }),
-      /governancePersistCouncil options.signal must be an AbortSignal/,
-    ],
   ];
   for (const [_label, invoke, error] of invalidSignalCases) {
     // eslint-disable-next-line no-await-in-loop
@@ -7097,16 +7640,6 @@ test("governance helpers validate options", async () => {
       "getGovernanceTally",
       () => client.getGovernanceTally("ref-1", { extra: true }),
       /getGovernanceTally options contains unsupported fields: extra/,
-    ],
-    [
-      "governanceDeriveCouncilVrf",
-      () => client.governanceDeriveCouncilVrf(councilPayload, { extra: true }),
-      /governanceDeriveCouncilVrf options contains unsupported fields: extra/,
-    ],
-    [
-      "governancePersistCouncil",
-      () => client.governancePersistCouncil(councilPayload, { extra: true }),
-      /governancePersistCouncil options contains unsupported fields: extra/,
     ],
   ];
   for (const [_label, invoke, error] of extraFieldCases) {
@@ -15034,139 +15567,6 @@ test("getGovernanceCouncilCurrent rejects non-object options", async () => {
   );
 });
 
-test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
-  let captured;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      captured = JSON.parse(init.body);
-      const payload = cloneFixture(toriiFixtures.governance.councilDerive);
-      if (Array.isArray(payload.members) && payload.members.length > 0) {
-        payload.members[0].account_id = FIXTURE_VALIDATOR_TEST_ID;
-      }
-      return createResponse({
-        status: 200,
-        jsonData: payload,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const payload = await client.governanceDeriveCouncilVrf({
-    committeeSize: "3",
-    epoch: "9",
-    candidates: [
-      {
-        accountId: FIXTURE_VALIDATOR_TEST_ID,
-        variant: "small",
-        pk_b64: Buffer.alloc(48, 0xaa),
-        proof_b64: Buffer.alloc(96, 0xbb),
-      },
-    ],
-  });
-  assert.equal(captured.committee_size, 3);
-  assert.equal(captured.epoch, 9);
-  assert.equal(captured.candidates.length, 1);
-  assert.equal(captured.candidates[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
-  assert.equal(captured.candidates[0].variant, "Small");
-  assert.match(captured.candidates[0].pk_b64, /^[A-Za-z0-9+/]+=*$/);
-  assert.match(captured.candidates[0].proof_b64, /^[A-Za-z0-9+/]+=*$/);
-  assert.equal(payload.members[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
-  assert.equal(payload.total_candidates, 1);
-  assert.equal(payload.verified, 1);
-  assert.equal(payload.derived_by, "Vrf");
-});
-
-test("governancePersistCouncil forwards credentials and validates pairing", async () => {
-  let captured;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      captured = JSON.parse(init.body);
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.councilPersist),
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const response = await client.governancePersistCouncil({
-    committeeSize: 1,
-    candidates: [
-      {
-        accountId: FIXTURE_VALIDATOR_TEST_ID,
-        variant: "Normal",
-        pk_b64: Buffer.alloc(48).toString("base64"),
-        proof_b64: Buffer.alloc(96).toString("base64"),
-      },
-    ],
-    authority: FIXTURE_COUNCIL_TEST_ID,
-    privateKey: "ed25519:deadbeef",
-  });
-  assert.equal(captured.authority, FIXTURE_COUNCIL_TEST_ID);
-  assert.equal(captured.private_key, "ed25519:deadbeef");
-  assert.equal(response.derived_by, "Vrf");
-  await assert.rejects(
-    () =>
-      client.governancePersistCouncil({
-        committeeSize: 1,
-        candidates: [
-          {
-            accountId: FIXTURE_VALIDATOR_TEST_ID,
-            variant: "Normal",
-            pk_b64: Buffer.alloc(48).toString("base64"),
-            proof_b64: Buffer.alloc(96).toString("base64"),
-          },
-        ],
-        authority: FIXTURE_COUNCIL_TEST_ID,
-      }),
-    /requires both authority and privateKey/,
-  );
-});
-
-test("getGovernanceCouncilAudit forwards query parameters", async () => {
-  let capturedUrl;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url) => {
-      capturedUrl = url;
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.councilAudit),
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const audit = await client.getGovernanceCouncilAudit({ epoch: 10 });
-  assert.equal(
-    capturedUrl,
-    `${BASE_URL}/v1/gov/council/audit?epoch=10`,
-  );
-  assert.equal(audit.epoch, 10);
-  assert.equal(audit.members_count, 5);
-  assert.equal(audit.candidate_count, 8);
-  assert.equal(audit.chain_id, "chain");
-});
-
-test("getGovernanceCouncilAudit validates options and signal", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit("bad"),
-    /getGovernanceCouncilAudit options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit(null),
-    /getGovernanceCouncilAudit options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit({ signal: {} }),
-    /getGovernanceCouncilAudit options\.signal must be an AbortSignal/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit({ epoch: 1, extra: true }),
-    /getGovernanceCouncilAudit options contains unsupported fields: extra/,
-  );
-});
-
 test("governanceFinalizeReferendum validates required fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 204 }),
@@ -15311,44 +15711,6 @@ test("governance helpers surface structured hex validation", async () => {
       return true;
     });
   }
-});
-
-test("governance council candidate validation emits structured errors", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("governanceDeriveCouncilVrf should not perform network requests");
-    },
-  });
-  const validCandidate = {
-    account_id: SAMPLE_ACCOUNT_ID,
-    variant: "Normal",
-    pk_b64: Buffer.from("candidate-pk").toString("base64"),
-    proof_b64: Buffer.from("candidate-proof").toString("base64"),
-  };
-  await assert.rejects(
-    () =>
-      client.governanceDeriveCouncilVrf({
-        committeeSize: 1,
-        candidates: null,
-      }),
-    (error) => expectValidationErrorFixture(error, "governanceDeriveCouncilVrf_candidates_array"),
-  );
-  await assert.rejects(
-    () =>
-      client.governanceDeriveCouncilVrf({
-        committeeSize: 1,
-        candidates: [{ ...validCandidate, pk_b64: undefined }],
-      }),
-    (error) => expectValidationErrorFixture(error, "governanceDeriveCouncilVrf_candidate_pk"),
-  );
-  await assert.rejects(
-    () =>
-      client.governanceDeriveCouncilVrf({
-        committeeSize: 1,
-        candidates: [{ ...validCandidate, variant: "unknown" }],
-      }),
-    (error) => expectValidationErrorFixture(error, "governanceDeriveCouncilVrf_variant_value"),
-  );
 });
 
 test("setProtectedNamespaces posts trimmed namespace list", async () => {
@@ -27438,23 +27800,28 @@ test("http errors surface reject header codes", async () => {
   );
 });
 
-function requireSorafsNative(t) {
-  const native = nativeBinding;
-  if (
-    !native ||
-    typeof native.sorafsAliasPolicyDefaults !== "function" ||
-    typeof native.sorafsAliasProofFixture !== "function" ||
-    typeof native.sorafsEvaluateAliasProof !== "function"
-  ) {
-    if (t && typeof t.skip === "function") {
-      t.skip(nativeSkipMessage);
-      return null;
-    }
+function requireSorafsNative() {
+  if (!nativeBinding) {
     throw new Error(
-      "SoraFS native helpers unavailable. Run `npm run build:native` before executing tests.",
+      nativeBindingError
+        ? `${nativeUnavailableMessage}: ${nativeBindingError.message}`
+        : nativeUnavailableMessage,
     );
   }
-  return native;
+  const required = [
+    "sorafsAliasPolicyDefaults",
+    "sorafsAliasProofFixture",
+    "sorafsEvaluateAliasProof",
+  ];
+  const missing = required.filter(
+    (method) => typeof nativeBinding[method] !== "function",
+  );
+  if (missing.length !== 0) {
+    throw new Error(
+      `native iroha_js_host binding is missing required method(s): ${missing.join(", ")}`,
+    );
+  }
+  return nativeBinding;
 }
 
 function validNodeCapabilitiesPayload() {

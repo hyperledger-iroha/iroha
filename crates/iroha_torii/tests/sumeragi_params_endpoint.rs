@@ -157,30 +157,13 @@ fn configuration_update_body(gas: ConfidentialGas) -> Vec<u8> {
 }
 
 #[cfg(feature = "telemetry")]
-fn configuration_update_without_logger_body(gas: ConfidentialGas) -> Vec<u8> {
-    format!(
-        r#"{{"confidential_gas":{{"proof_base":{},"per_public_input":{},"per_proof_byte":{},"per_nullifier":{},"per_commitment":{}}}}}"#,
-        gas.proof_base,
-        gas.per_public_input,
-        gas.per_proof_byte,
-        gas.per_nullifier,
-        gas.per_commitment
-    )
-    .into_bytes()
+fn configuration_update_without_logger_body() -> Vec<u8> {
+    b"{}".to_vec()
 }
 
 #[cfg(feature = "telemetry")]
-fn configuration_update_with_logger_level_body(level: &str, gas: ConfidentialGas) -> Vec<u8> {
-    format!(
-        r#"{{"logger":{{"level":"{}","filter":null}},"confidential_gas":{{"proof_base":{},"per_public_input":{},"per_proof_byte":{},"per_nullifier":{},"per_commitment":{}}}}}"#,
-        level,
-        gas.proof_base,
-        gas.per_public_input,
-        gas.per_proof_byte,
-        gas.per_nullifier,
-        gas.per_commitment
-    )
-    .into_bytes()
+fn configuration_update_with_logger_level_body(level: &str) -> Vec<u8> {
+    format!(r#"{{"logger":{{"level":"{level}","filter":null}}}}"#).into_bytes()
 }
 
 #[cfg(feature = "telemetry")]
@@ -621,8 +604,9 @@ async fn configuration_endpoint_uses_configured_confidential_gas_values() {
 
 #[cfg(feature = "telemetry")]
 #[tokio::test]
-async fn configuration_endpoint_updates_confidential_gas_via_post() {
+async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let initial_gas = cfg.confidential.gas;
     let harness = torii_test_harness(cfg);
     let updated = ConfidentialGas {
         proof_base: 101,
@@ -640,13 +624,13 @@ async fn configuration_endpoint_updates_confidential_gas_via_post() {
     );
 
     let resp = harness.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let resp = signed_get_configuration(&harness).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
-    assert_confidential_gas_matches(dto.confidential_gas, updated);
+    assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
 }
 
 #[cfg(feature = "telemetry")]
@@ -654,14 +638,7 @@ async fn configuration_endpoint_updates_confidential_gas_via_post() {
 async fn configuration_endpoint_accepts_vendor_json_content_type() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-    let updated = ConfidentialGas {
-        proof_base: 61,
-        per_public_input: 62,
-        per_proof_byte: 63,
-        per_nullifier: 64,
-        per_commitment: 65,
-    };
-    let body_bytes = configuration_update_body(updated);
+    let body_bytes = configuration_update_with_logger_level_body("DEBUG");
     let req = signed_post_configuration(
         &harness,
         body_bytes.clone(),
@@ -676,7 +653,7 @@ async fn configuration_endpoint_accepts_vendor_json_content_type() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
-    assert_confidential_gas_matches(dto.confidential_gas, updated);
+    assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
 }
 
 #[cfg(feature = "telemetry")]
@@ -684,14 +661,7 @@ async fn configuration_endpoint_accepts_vendor_json_content_type() {
 async fn configuration_endpoint_accepts_json_update_without_content_type() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-    let updated = ConfidentialGas {
-        proof_base: 71,
-        per_public_input: 72,
-        per_proof_byte: 73,
-        per_nullifier: 74,
-        per_commitment: 75,
-    };
-    let body_bytes = configuration_update_body(updated);
+    let body_bytes = configuration_update_with_logger_level_body("DEBUG");
     let req = fixtures::operator_signed_request(
         &harness.cfg.common.key_pair,
         Request::builder()
@@ -709,7 +679,7 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = collect_body(resp).await;
     let dto: ConfigGetDTO = norito::json::from_slice(&body).unwrap();
-    assert_confidential_gas_matches(dto.confidential_gas, updated);
+    assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
 }
 
 #[cfg(feature = "telemetry")]
@@ -717,20 +687,8 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
 async fn configuration_endpoint_rejects_post_body_tampering() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-    let signed = configuration_update_body(ConfidentialGas {
-        proof_base: 1,
-        per_public_input: 2,
-        per_proof_byte: 3,
-        per_nullifier: 4,
-        per_commitment: 5,
-    });
-    let tampered = configuration_update_body(ConfidentialGas {
-        proof_base: 6,
-        per_public_input: 7,
-        per_proof_byte: 8,
-        per_nullifier: 9,
-        per_commitment: 10,
-    });
+    let signed = configuration_update_with_logger_level_body("INFO");
+    let tampered = configuration_update_with_logger_level_body("DEBUG");
     let req = signed_post_configuration(&harness, tampered, &signed, "application/json");
 
     let resp = harness.app.clone().oneshot(req).await.unwrap();
@@ -749,13 +707,7 @@ async fn configuration_endpoint_rejects_post_body_tampering() {
 async fn configuration_endpoint_rejects_signed_non_json_content_type() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
-    let body_bytes = configuration_update_body(ConfidentialGas {
-        proof_base: 7,
-        per_public_input: 8,
-        per_proof_byte: 9,
-        per_nullifier: 10,
-        per_commitment: 11,
-    });
+    let body_bytes = configuration_update_with_logger_level_body("INFO");
     let req = signed_post_configuration(&harness, body_bytes.clone(), &body_bytes, "text/plain");
 
     let resp = harness.app.clone().oneshot(req).await.unwrap();
@@ -769,13 +721,7 @@ async fn configuration_endpoint_rejects_update_without_required_logger() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = cfg.confidential.gas;
     let harness = torii_test_harness(cfg);
-    let body_bytes = configuration_update_without_logger_body(ConfidentialGas {
-        proof_base: 12,
-        per_public_input: 13,
-        per_proof_byte: 14,
-        per_nullifier: 15,
-        per_commitment: 16,
-    });
+    let body_bytes = configuration_update_without_logger_body();
     let req = signed_post_configuration(
         &harness,
         body_bytes.clone(),
@@ -799,16 +745,7 @@ async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas()
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = cfg.confidential.gas;
     let harness = torii_test_harness(cfg);
-    let body_bytes = configuration_update_with_logger_level_body(
-        "VERBOSE",
-        ConfidentialGas {
-            proof_base: 21,
-            per_public_input: 22,
-            per_proof_byte: 23,
-            per_nullifier: 24,
-            per_commitment: 25,
-        },
-    );
+    let body_bytes = configuration_update_with_logger_level_body("VERBOSE");
     let req = signed_post_configuration(
         &harness,
         body_bytes.clone(),

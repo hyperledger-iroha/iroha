@@ -51,6 +51,19 @@ def load_checker():
     return module
 
 
+def test_checker_remains_python39_compatible() -> None:
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"), filename=str(SCRIPT))
+    strict_zip_calls = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "zip"
+        and any(keyword.arg == "strict" for keyword in node.keywords)
+    ]
+    assert strict_zip_calls == []
+
+
 def copy_transport_hardening_fixture(tmp_path: Path) -> None:
     """Copy only production sources bound by the sidecar transport checker."""
 
@@ -9923,7 +9936,7 @@ def test_liveness_ownership_source_seal_rejects_skipped_ci_invocation(
             "same-source/context/height/control-kind predecessor identity",
         ),
         (
-            "try_recv_if_at",
+            "try_recv_if_at_checked",
             "!has_live_control_predecessor",
             "true",
             "live control predecessor blocks strict-newer dequeue bypass",
@@ -21404,28 +21417,57 @@ def test_adequate_leader_static_carrier_rejects_branch_loss_or_dynamic_state(
             "try_push_at",
             "state.last_admission_ordinal.checked_add(1)",
             "state.last_admission_ordinal.wrapping_add(1)",
-            "ordinal exhaustion must fail admission closed",
+            "physical carrier ordinal exhaustion must fail stop",
         ),
         (
             "try_push_at",
             "            state.open = false;\n"
-            "            return Err(FairV2IngressPushError::Closed(inbound));",
-            "            return Err(FairV2IngressPushError::Closed(inbound));",
-            "ordinal exhaustion must fail admission closed",
+            "            return Err(FairV2IngressPushError::FailStop(inbound));",
+            "            return Err(FairV2IngressPushError::FailStop(inbound));",
+            "physical carrier ordinal exhaustion must fail stop",
         ),
         (
-            "try_recv_if_at",
-            "            .map(|entry| entry.admission_ordinal)\n"
-            "            .min();",
-            "            .map(|entry| entry.admission_ordinal)\n"
-            "            .max();",
-            "globally earliest exact Serve request ordinal",
+            "try_push_at",
+            "        let admission_ordinal = carrier_admission_ordinal;",
+            "        let admission_ordinal = leader_wire_token.as_ref().map_or(\n"
+            "            carrier_admission_ordinal,\n"
+            "            |token| token.admission_ordinal,\n"
+            "        );",
+            "validated admission must commit the fresh physical carrier",
         ),
         (
-            "try_recv_if_at",
+            "try_push_at",
+            "        let Some(carrier_admission_ordinal) = "
+            "state.last_admission_ordinal.checked_add(1) else {",
+            "        let _premature_leader_publication = "
+            "fair_v2_ingress_admit_leader_wire(\n"
+            "            &mut state,\n"
+            "            derivation,\n"
+            "            true,\n"
+            "        );\n"
+            "        let Some(carrier_admission_ordinal) = "
+            "state.last_admission_ordinal.checked_add(1) else {",
+            "fresh physical carrier allocation must follow all capacity cuts",
+        ),
+        (
+            "try_recv_if_at_checked",
+            "            .map(|entry| entry.admission_ordinal)\n"
+            "                        .min()",
+            "            .map(|entry| entry.admission_ordinal)\n"
+            "                        .max()",
+            "globally earliest eligible Serve physical carrier",
+        ),
+        (
+            "try_recv_if_at_checked",
             "entry.admission_ordinal <= cutoff",
             "entry.admission_ordinal >= cutoff",
-            "later work of every class must be excluded",
+            "fallback must retain the earliest physical request cutoff",
+        ),
+        (
+            "try_recv_if_at_checked",
+            "serve.carrier_ordinal() <= leader_ordinal",
+            "serve.lifecycle_ordinal() <= u128::from(leader_ordinal)",
+            "must compare current physical carrier ordinals",
         ),
         (
             "configure_roster_with_byte_requirements",
@@ -21443,7 +21485,7 @@ def test_serve_ingress_ordinal_contract_rejects_ordering_mutations(
     new: str,
     expected_error: str,
 ) -> None:
-    """Wrapping, reuse, latest-first, and reversed cutoff mutations fail."""
+    """Wrapping, reuse, late allocation, scheduler, and cutoff mutants fail."""
 
     module = load_checker()
     relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
@@ -21498,6 +21540,8 @@ def test_serve_ingress_ordinal_carrier_must_remain_private(
         "fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
         "fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
         "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
+        "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
+        "restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant",
     ),
 )
 def test_serve_ingress_ordinal_regressions_cannot_be_deleted(
@@ -21627,6 +21671,13 @@ def test_serve_ingress_gate_contract_rejects_implementation_mutations(
             (
                 "fair_ingress_rollover_retires_ticket_before_old_service_"
                 "teardown"
+            ),
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+            (
+                "selected_serve_physical_carrier_precedes_reactivated_"
+                "older_leader_lifecycle"
             ),
         ),
     ),
@@ -26054,6 +26105,75 @@ def test_authority_deadline_selected_lifecycle_episode_pins_local_dependencies(
     ), errors
 
 
+def test_authority_deadline_global_blocker_rejects_same_rank_candidate_swap(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderAuthorityDeadlineServiceProofs"
+    symbol = "AdequateLeaderFixedGlobalBlockerSelectionGoal"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = replace_tla_operator_body(
+        source,
+        symbol,
+        """
+  \\/ AdequateLeaderFixedPipelineServiceRankDescentGoal(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank)
+  \\/ AdequateLeaderFixedSelectedPipelineServiceRankFrontier(
+       initialContext, target, leaderContext,
+       leader, leaderView, receipt, sourceRank)
+""",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "AdequateLeaderFixedSelectedPipelineServiceRankFrontierForCell"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_adequate_leader_timeout_gate_rejects_unselected_ingress_record(
+) -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    target_module = "SumeragiV2AdequateLeaderServiceClosureProofs"
+    symbol = "AdequateLeaderProtectedIngressLifecycleOwned"
+    source = (module.FORMAL_DIR / f"{target_module}.tla").read_text(
+        encoding="utf-8"
+    )
+    mutated = replace_tla_operator_body(
+        source,
+        symbol,
+        """
+  \\E record \\in AsyncLeaderWireIngressProtectedRecordsAt(node):
+    /\\ record.context = leaderContext
+    /\\ record.height = leaderContext.height
+    /\\ record.view = leaderView
+    /\\ record.schedulerOrdinal
+         < AsyncEffectiveTimeoutLifecycleOrdinal(node)
+""",
+    )
+
+    errors = module._proof_obligation_architecture_errors(
+        ledger["obligations"],
+        {target_module: mutated},
+    )
+
+    assert any(
+        symbol in error
+        and "AsyncLeaderWireIngressOwnsSharedPhysicalTurn" in error
+        for error in errors
+    ), errors
+
+
 @pytest.mark.parametrize(
     "forbidden",
     (
@@ -28618,6 +28738,13 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "typed deferred event to canonical-envelope comparator declaration, contract, and "
             "complete control flow must match",
         ),
+        (
+            "wire_ingress_missing_execution_commitment",
+            "if vote.validate(&self.wire_context).is_err()",
+            "if false",
+            "structurally validated missing-execution-commitment ingress classifier declaration, "
+            "contract, and complete control flow must match",
+        ),
     )
     for item_name, old, new, expected_error in deferred_owner_adapter_mutations:
         adapter.write_text(
@@ -28817,8 +28944,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "can_merge_downstream",
-            "self.runtime_bytes != candidate.runtime_bytes",
-            "self.runtime_bytes == candidate.runtime_bytes",
+            "merged.merge_downstream(candidate.clone()).is_ok()",
+            "merged.merge_downstream(candidate.clone()).is_err()",
             "non-mutating per-source ownership merge preflight declaration and complete control flow must match",
         ),
         (
@@ -28835,8 +28962,8 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             "accept_driver_dispatch",
-            "if !self.reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)",
-            "        if false {",
+            ".reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)\n            .is_err()",
+            ".reconcile_deferred_ingress_ownership(dispatch.deferred_ingress)\n            .is_ok()",
             "driver dispatch ownership acceptance declaration and complete control flow must match",
         ),
         (
@@ -29240,7 +29367,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     ), errors
     adapter.write_text(canonical_adapter, encoding="utf-8")
 
-    tc_name = "fn tc_promoted_historical_commit_is_fsynced_before_sign_and_status()"
+    tc_name = "fn tc_promoted_lock_requires_same_subject_reproposal_before_commit()"
     tc_start = canonical_adapter.index(tc_name)
     no_sign_start = canonical_adapter.index("        assert!(\n            installed", tc_start)
     match_start = canonical_adapter.index(
@@ -29253,7 +29380,7 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
     )
     exact_match = canonical_adapter[match_start:match_end]
     commit_witness_start = canonical_adapter.index(
-        "        let sign = adapter", match_end
+        "        let validation = adapter", match_end
     )
     tc_test_end = canonical_adapter.index(
         "\n    }\n\n    #[test]", commit_witness_start
@@ -29274,15 +29401,6 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
                 tc_name + " {",
                 tc_name + " {\n        if false { return; }",
             ),
-            "strengthened TC regression declaration and complete control flow "
-            "must match the exact reviewed token digest",
-        ),
-        (
-            canonical_adapter[:commit_witness_start]
-            + "        if false {\n"
-            + canonical_adapter[commit_witness_start:tc_test_end]
-            + "\n        }"
-            + canonical_adapter[tc_test_end:],
             "strengthened TC regression declaration and complete control flow "
             "must match the exact reviewed token digest",
         ),
@@ -29324,10 +29442,9 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
             "TC regression must reject signing and exactly match EnterView-before-FetchBody",
         ),
         (
-            canonical_adapter.replace(
-                "                && *fetched_subject == subject\n",
-                "",
-                1,
+            mutate_tc(
+                "                && *fetched_subject == subject",
+                "                && *fetched_subject != subject",
             ),
             "TC regression must reject signing and exactly match EnterView-before-FetchBody",
         ),
@@ -29342,60 +29459,56 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         ),
         (
             mutate_tc(
-                "            ] if *tag == fetch_tag\n"
-                "                && vote.round == round",
-                "            ] if *tag == timeout_tag\n"
-                "                && vote.round == round",
+                "            }] if *tag == fetch_tag\n"
+                "                && *validated_round == round",
+                "            }] if *tag == timeout_tag\n"
+                "                && *validated_round == round",
             ),
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
+            "TC regression must pin exact StoreBody/ValidateBody tags, rounds, and subjects",
         ),
         (
             mutate_tc(
-                "            Some(core_commit_vote.vote()),",
-                "            Some(other_core_vote.vote()),",
+                "validation.is_empty()",
+                "!validation.is_empty()",
             ),
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
         ),
         (
-            canonical_adapter.replace(
+            mutate_tc(
                 ".validation_succeeded(fetch_tag, round, subject, &validated)",
                 ".validation_succeeded(fetch_tag, round, subject, &other)",
-                1,
             ),
             "strengthened TC regression must contain exactly one "
             "adapter.validation_succeeded(fetch_tag, round, subject, &validated)",
         ),
         (
-            canonical_adapter[:commit_witness_start]
-            + canonical_adapter[tc_test_end:],
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
-        ),
-        (
-            canonical_adapter[:commit_witness_start]
-            + canonical_adapter[commit_witness_start:tc_test_end].replace(
-                "wire::SumeragiV2OutboundIntentStage::PendingSignature",
-                "wire::SumeragiV2OutboundIntentStage::Sent",
-                1,
-            )
-            + canonical_adapter[tc_test_end:],
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
-        ),
-        (
-            canonical_adapter[:commit_witness_start]
-            + canonical_adapter[commit_witness_start:tc_test_end].replace(
-                "            adapter.wal.recovered_records().len(),\n"
-                "            3,\n",
+            mutate_tc(
                 "            adapter.wal.recovered_records().len(),\n"
                 "            2,\n",
-                1,
-            )
-            + canonical_adapter[tc_test_end:],
-            "TC regression must pin the post-validation Commit signing authority, "
-            "WAL, and status witness",
+                "            adapter.wal.recovered_records().len(),\n"
+                "            3,\n",
+            ),
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
+        ),
+        (
+            mutate_tc(
+                "            .commit_intent(core_current_round),\n"
+                "            None,",
+                "            .commit_intent(core_current_round),\n"
+                "            Some(reducer::Vote::new(round, subject, 0)),",
+            ),
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
+        ),
+        (
+            mutate_tc(
+                "wire::SumeragiV2OutboundIntentKind::CommitQc",
+                "wire::SumeragiV2OutboundIntentKind::PrepareQc",
+            ),
+            "TC regression must pin the post-validation no-Commit boundary, WAL, "
+            "and status witness",
         ),
     )
     for mutated_adapter, expected_error in tc_mutations:
@@ -40137,16 +40250,16 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "45-mutation typed rollover contract fragment",
         ),
         (
-            "readonly expected_multilane_focus_test_count=277",
-            "readonly expected_multilane_focus_test_count=276",
-            "multilane G-UNIT source count must be sealed as 277",
+            "readonly expected_multilane_focus_test_count=280",
+            "readonly expected_multilane_focus_test_count=279",
+            "multilane G-UNIT source count must be sealed as 280",
         ),
         (
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 278 ]]; then""",
+            """'[:space:]')" != 281 ]]; then""",
             '  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '
-            """'[:space:]')" != 277 ]]; then""",
-            "G-UNIT TSV guard must require one header plus exactly 277 focus rows",
+            """'[:space:]')" != 280 ]]; then""",
+            "G-UNIT TSV guard must require one header plus exactly 280 focus rows",
         ),
         (
             "  native_amx::tests::signing_guard_durably_binds_full_source_session_and_participant_incarnation\n"
@@ -42656,14 +42769,16 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
         "native_amx_receipt_v1_",
         "native_amx_evidence_prune_intent_v1.norito",
         "native_amx_evidence_prune_intent_v1.norito.tmp",
-        "native_amx_participant_receipts.latest_v1.norito",
-        "native_amx_participant_receipts.latest_v1.norito.tmp",
+        "native_amx_participant_receipts.latest_v2.norito",
+        "native_amx_participant_receipts.latest_v2.norito.tmp",
     )
     for name in current_names:
         assert name in inventory_source
         assert name in kura_source
 
     obsolete_dense_names = (
+        "native_amx_participant_receipts.latest_v1.norito",
+        "native_amx_participant_receipts.latest_v1.norito.tmp",
         "native_amx_participant_receipts.norito",
         "native_amx_participant_receipts.index",
         "native_amx_application_manifests.norito",
@@ -44893,7 +45008,7 @@ def test_transport_geometry_rejects_ordinal_equivalent_weak_authority_mutant(
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "try_recv_if_at",
+            "try_recv_if_at_checked",
             "state.pending_wire_owners.remove(key)",
             "state.pending_wire_owners.get(key).cloned()",
             "semantic request ownership retires only when its queued occurrence is serviced",
@@ -45693,7 +45808,7 @@ def test_transport_geometry_source_fidelity_rejects_progress_lease_drop_digest_m
     mutate_rust_item_source(
         module,
         core_path,
-        "try_recv_if_at",
+        "try_recv_if_at_checked",
         "} else if matches!(&source, FairV2IngressSource::Authenticated(_)) {",
         "} else if false && matches!(&source, FairV2IngressSource::Authenticated(_)) {",
     )
@@ -45937,7 +46052,7 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
             "roster-origin premise for completion relayed through any authenticated hop",
         ),
         (
-            "try_recv_if_at",
+            "try_recv_if_at_checked",
             (("impl", "FairV2Ingress"),),
             "if entry.class == FairV2IngressClass::TransportCompletion {",
             "if false && entry.class == FairV2IngressClass::TransportCompletion {",

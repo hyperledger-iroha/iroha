@@ -11,6 +11,8 @@
     clippy::unnecessary_wraps
 )]
 
+mod secure_private_fs;
+
 macro_rules! norito_json {
     ({ $($key:literal : $value:expr),+ $(,)? }) => {{
         let mut object = norito::json::Map::new();
@@ -83,9 +85,10 @@ use iroha_data_model::{
         address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
-        AssetDefinitionAlias,
+        AssetDefinitionAlias, AssetTransferAvailability,
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
+        validate_asset_transfer_availability_reason,
     },
     block::{
         BlockHeader,
@@ -106,11 +109,12 @@ use iroha_data_model::{
         RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
         SetKeyValue, SetKeyValueBox, SetParameter, Transfer, TransferAssetBatch, TransferBox,
         Unregister, UnregisterBox,
+        asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-            ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
+            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+            PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
+            RegisterCitizen, VotingMode,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -152,7 +156,7 @@ use iroha_data_model::{
         PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1,
         validate_privacy_capability_archive_v1,
     },
-    proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
+    proof::{ProofAttachment, ProofAttachmentList},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::{
@@ -181,7 +185,6 @@ use iroha_data_model::{
         ValidationFeePlainElectorateRulesV1, ValidationFeePolicyV1,
         ValidationFeeTreasuryPayoutBindingV1,
     },
-    zk::{ZkAcePublicInputsV1, ZkAceWitnessV1},
 };
 use iroha_primitives::{
     json::Json,
@@ -248,12 +251,13 @@ use sorafs_manifest::{
         SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
-    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
-    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
-    validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
-    validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
-    validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_appeal_finance_cancel_asset_lock_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
+    validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
+    validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
+    validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
+    validate_pdp_proof_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, GatewayOrchestratorError, OrchestratorConfig, OrchestratorError,
@@ -981,37 +985,7 @@ pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     Ok(Buffer::from(digest.as_bytes().to_vec()))
 }
 
-fn parse_zk_ace_verifier_key_id(value: Option<String>) -> napi::Result<VerifyingKeyId> {
-    let Some(value) = value else {
-        return Ok(zk_ace_prover::zk_ace_verifier_key_id(
-            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
-        ));
-    };
-    let trimmed = value.trim();
-    let Some((backend, name)) = trimmed.split_once(':') else {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "verifier_key_id must be in 'backend:name' format",
-        ));
-    };
-    let backend = backend.trim();
-    let name = name.trim();
-    if backend.is_empty() || name.is_empty() {
-        return Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            "verifier_key_id backend and name must be non-empty",
-        ));
-    }
-    let backend = iroha_schema::Ident::from_str(backend).map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid verifier_key_id backend: {err}"),
-        )
-    })?;
-    Ok(VerifyingKeyId::new(backend, name))
-}
-
-fn parse_zk_ace_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
+fn parse_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     let bytes = value.as_ref();
     if bytes.len() != 32 {
         return Err(napi::Error::new(
@@ -1022,183 +996,6 @@ fn parse_zk_ace_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 
     let mut out = [0u8; 32];
     out.copy_from_slice(bytes);
     Ok(out)
-}
-
-fn parse_optional_zk_ace_commitment(value: Option<Uint8Array>) -> napi::Result<[u8; 32]> {
-    match value {
-        Some(value) => parse_zk_ace_fixed32(&value, "vk_commitment"),
-        None => zk_ace_prover::zk_ace_verifying_key_commitment_v1()
-            .map_err(|err| norito_to_napi(format!("build ZK-ACE verifier commitment: {err}"))),
-    }
-}
-
-fn hex32_lower(value: &[u8; 32]) -> String {
-    hex::encode(value)
-}
-
-fn proof_attachment_to_js_value(attachment: &ProofAttachment) -> napi::Result<Value> {
-    let mut vk_ref = Map::new();
-    vk_ref.insert(
-        "backend".to_owned(),
-        Value::String(attachment.vk_ref.backend.as_str().to_owned()),
-    );
-    vk_ref.insert(
-        "name".to_owned(),
-        Value::String(attachment.vk_ref.name.clone()),
-    );
-
-    let mut proof = Map::new();
-    proof.insert(
-        "backend".to_owned(),
-        Value::String(attachment.backend.as_str().to_owned()),
-    );
-    proof.insert("verifying_key_ref".to_owned(), Value::Object(vk_ref));
-    proof.insert(
-        "proof_b64".to_owned(),
-        Value::String(STANDARD.encode(&attachment.proof.bytes)),
-    );
-    if let Some(commitment) = attachment.vk_commitment {
-        proof.insert(
-            "verifying_key_commitment".to_owned(),
-            Value::String(hex32_lower(&commitment)),
-        );
-    }
-    if let Some(envelope_hash) = attachment.envelope_hash {
-        proof.insert(
-            "envelope_hash".to_owned(),
-            Value::String(hex32_lower(&envelope_hash)),
-        );
-    }
-    Ok(Value::Object(proof))
-}
-
-fn zk_ace_authorization_to_json(
-    public_inputs: &ZkAcePublicInputsV1,
-    proof: &ProofAttachment,
-    public_inputs_bytes: &[u8],
-) -> napi::Result<String> {
-    let mut root = Map::new();
-    root.insert(
-        "public_inputs".to_owned(),
-        json::to_value(public_inputs).map_err(norito_to_napi)?,
-    );
-    root.insert("proof".to_owned(), proof_attachment_to_js_value(proof)?);
-    root.insert(
-        "identity_commitment".to_owned(),
-        Value::String(hex32_lower(&public_inputs.identity_commitment)),
-    );
-    root.insert(
-        "tx_digest".to_owned(),
-        Value::String(hex32_lower(&public_inputs.tx_digest)),
-    );
-    root.insert(
-        "replay_nullifier".to_owned(),
-        Value::String(hex32_lower(&public_inputs.replay_nullifier)),
-    );
-    root.insert(
-        "policy_hash".to_owned(),
-        Value::String(hex32_lower(&public_inputs.policy_hash)),
-    );
-    root.insert(
-        "verifier_key_id".to_owned(),
-        Value::String(format!(
-            "{}:{}",
-            public_inputs.verifier_key_id.backend.as_str(),
-            public_inputs.verifier_key_id.name
-        )),
-    );
-    root.insert(
-        "authorization_proof_bytes".to_owned(),
-        json::to_value(&proof.proof.bytes.len()).map_err(norito_to_napi)?,
-    );
-    root.insert(
-        "authorization_public_input_bytes".to_owned(),
-        json::to_value(&public_inputs_bytes.len()).map_err(norito_to_napi)?,
-    );
-    root.insert(
-        "replay_nullifier_bytes".to_owned(),
-        json::to_value(&32usize).map_err(norito_to_napi)?,
-    );
-    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
-}
-
-#[napi(js_name = "zkAceBuildAuthorizationProofV1")]
-#[allow(clippy::needless_pass_by_value)]
-/// Build a ZK-ACE authorization proof from canonical public inputs and private witness JSON.
-pub fn zk_ace_build_authorization_proof_v1(
-    public_inputs_json: String,
-    witness_json: String,
-    vk_commitment: Option<Uint8Array>,
-) -> napi::Result<String> {
-    let public_inputs: ZkAcePublicInputsV1 =
-        json::from_json(&public_inputs_json).map_err(norito_to_napi)?;
-    let witness: ZkAceWitnessV1 = json::from_json(&witness_json).map_err(norito_to_napi)?;
-    let vk_commitment = parse_optional_zk_ace_commitment(vk_commitment)?;
-    let proof =
-        zk_ace_prover::build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
-            .map_err(|err| norito_to_napi(format!("build ZK-ACE proof: {err}")))?;
-    let public_inputs_bytes = norito::to_bytes(&public_inputs).map_err(norito_to_napi)?;
-    zk_ace_authorization_to_json(&public_inputs, &proof, &public_inputs_bytes)
-}
-
-#[napi(js_name = "zkAceBuildTransferAuthorizationV1")]
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
-/// Build a complete ZK-ACE transparent-transfer authorization proof and public input payload.
-pub fn zk_ace_build_transfer_authorization_v1(
-    from_account_id: String,
-    to_account_id: String,
-    asset_definition_id: String,
-    amount: String,
-    chain_id: String,
-    identity_root: Uint8Array,
-    identity_blinding: Uint8Array,
-    replay_secret: Uint8Array,
-    policy_hash: Uint8Array,
-    verifier_key_id: Option<String>,
-    vk_commitment: Option<Uint8Array>,
-) -> napi::Result<String> {
-    let from = parse_account_id(&from_account_id, "from_account_id")?;
-    let to = parse_account_id(&to_account_id, "to_account_id")?;
-    let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid asset_definition_id: {err}"),
-        )
-    })?;
-    let amount = amount.trim().parse::<u128>().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("amount must be an unsigned integer string: {err}"),
-        )
-    })?;
-    let chain_id: ChainId = chain_id.parse().map_err(|err| {
-        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain_id: {err}"))
-    })?;
-    let witness = ZkAceWitnessV1 {
-        identity_root: parse_zk_ace_fixed32(&identity_root, "identity_root")?,
-        identity_blinding: parse_zk_ace_fixed32(&identity_blinding, "identity_blinding")?,
-        replay_secret: parse_zk_ace_fixed32(&replay_secret, "replay_secret")?,
-    };
-    let policy_hash = parse_zk_ace_fixed32(&policy_hash, "policy_hash")?;
-    let verifier_key_id = parse_zk_ace_verifier_key_id(verifier_key_id)?;
-    let vk_commitment = parse_optional_zk_ace_commitment(vk_commitment)?;
-    let authorization = zk_ace_prover::build_zk_ace_transfer_authorization_v1(
-        from,
-        to,
-        asset,
-        amount,
-        chain_id,
-        witness,
-        policy_hash,
-        verifier_key_id,
-        vk_commitment,
-    )
-    .map_err(|err| norito_to_napi(format!("build ZK-ACE transfer authorization: {err}")))?;
-    zk_ace_authorization_to_json(
-        &authorization.public_inputs,
-        &authorization.proof,
-        &authorization.public_inputs_bytes,
-    )
 }
 
 fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
@@ -1386,11 +1183,24 @@ pub fn build_kaigi_roster_join_proof(
     build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
 
+fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
+    if seed.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "key-generation seed must be exactly 32 bytes",
+        ));
+    }
+    Ok(seed.to_vec())
+}
+
 /// Generate an Ed25519 key pair using `iroha_crypto`.
+///
+/// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
+/// of entropy. Omit it for operating-system-random production keys.
 #[napi]
 pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     let keypair = match seed {
-        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519),
+        Some(seed) => KeyPair::try_from_seed(checked_keygen_seed(seed)?, Algorithm::Ed25519),
         None => KeyPair::try_random_with_algorithm(Algorithm::Ed25519),
     }
     .map_err(norito_to_napi)?;
@@ -1477,6 +1287,9 @@ pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<
 }
 
 /// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
+///
+/// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
+/// of entropy. Omit it for operating-system-random production keys.
 #[napi(js_name = "cryptoKeypair")]
 #[allow(clippy::needless_pass_by_value)]
 pub fn crypto_keypair(
@@ -1485,7 +1298,7 @@ pub fn crypto_keypair(
 ) -> napi::Result<JsKeyPair> {
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let keypair = match seed {
-        Some(seed) => KeyPair::try_from_seed(seed.to_vec(), algorithm),
+        Some(seed) => KeyPair::try_from_seed(checked_keygen_seed(seed)?, algorithm),
         None => KeyPair::try_random_with_algorithm(algorithm),
     }
     .map_err(norito_to_napi)?;
@@ -3844,7 +3657,7 @@ pub struct JsDaProofRecord {
     pub segment_leaves_hex: Vec<String>,
     #[doc = "Hex digests for each segment-level branch."]
     pub chunk_segments_hex: Vec<String>,
-    #[doc = "Total number of chunks committed by the PoR root."]
+    #[doc = "Total number of chunks committed by the `PoR` root."]
     pub chunk_count: JsU64,
     #[doc = "Hex digests in the chunk-level Merkle authentication path."]
     pub chunk_merkle_path_hex: Vec<String>,
@@ -5262,8 +5075,7 @@ fn build_scoreboard_metadata_value(
         "anonymity_policy_override_label".into(),
         anonymity_override_label.map_or(Value::Null, Value::from),
     );
-    let write_mode_label = config.write_mode.label().replace('_', "-");
-    metadata.insert("write_mode".into(), Value::from(write_mode_label));
+    metadata.insert("write_mode".into(), Value::from(config.write_mode.label()));
     metadata.insert(
         "write_mode_enforces_pq".into(),
         Value::from(config.write_mode.enforces_pq_only()),
@@ -5320,7 +5132,7 @@ fn build_gateway_metadata(
                 config.fetch.provider_failure_threshold
             ))
         })?;
-    let write_mode_label = config.write_mode.label().replace('_', "-");
+    let write_mode_label = config.write_mode.label().to_string();
     let write_mode_enforces_pq = config.write_mode.enforces_pq_only();
 
     Ok(JsGatewayMetadata {
@@ -5387,14 +5199,8 @@ fn apply_gateway_options(
         config.telemetry_region = Some(trimmed.to_string());
     }
     if let Some(phase) = options.rollout_phase.as_ref() {
-        let trimmed = phase.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg("rolloutPhase must not be empty when provided"));
-        }
-        let parsed = RolloutPhase::parse(trimmed).ok_or_else(|| {
-            invalid_arg(
-                "rolloutPhase must be one of 'canary', 'ramp', 'default', or stage_a/stage_b/stage_c aliases",
-            )
+        let parsed = RolloutPhase::parse(phase).ok_or_else(|| {
+            invalid_arg("rolloutPhase must be one of 'canary', 'ramp', or 'default'")
         })?;
         config.rollout_phase = parsed;
         if config.anonymity_policy_override.is_none() {
@@ -5402,26 +5208,14 @@ fn apply_gateway_options(
         }
     }
     if let Some(policy) = options.transport_policy.as_ref() {
-        let trimmed = policy.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg(
-                "transportPolicy must not be empty when provided",
-            ));
-        }
-        config.transport_policy = TransportPolicy::parse(trimmed).ok_or_else(|| {
+        config.transport_policy = TransportPolicy::parse(policy).ok_or_else(|| {
             invalid_arg(
                 "transportPolicy must be one of 'soranet-first', 'soranet-strict', or 'direct-only'",
             )
         })?;
     }
     if let Some(policy) = options.anonymity_policy.as_ref() {
-        let trimmed = policy.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg(
-                "anonymityPolicy must not be empty when provided",
-            ));
-        }
-        config.anonymity_policy = AnonymityPolicy::parse(trimmed).ok_or_else(|| {
+        config.anonymity_policy = AnonymityPolicy::parse(policy).ok_or_else(|| {
             invalid_arg(
                 "anonymityPolicy must be one of 'anon-guard-pq', 'anon-majority-pq', or 'anon-strict-pq'",
             )
@@ -5429,14 +5223,8 @@ fn apply_gateway_options(
         config.anonymity_policy_override = Some(config.anonymity_policy);
     }
     if let Some(mode) = options.write_mode.as_ref() {
-        let trimmed = mode.trim();
-        if trimmed.is_empty() {
-            return Err(invalid_arg("writeMode must not be empty when provided"));
-        }
-        config.write_mode = WriteModeHint::parse(trimmed).ok_or_else(|| {
-            invalid_arg(
-                "writeMode must be one of 'read-only', 'read_only', 'upload-pq-only', or 'upload_pq_only'",
-            )
+        config.write_mode = WriteModeHint::parse(mode).ok_or_else(|| {
+            invalid_arg("writeMode must be one of 'read-only' or 'upload-pq-only'")
         })?;
     }
     if let Some(proxy_cfg) = options.local_proxy.as_ref() {
@@ -6661,7 +6449,20 @@ fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
 }
 
 fn parse_sorafs_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
-    parse_zk_ace_fixed32(value, context)
+    parse_fixed32(value, context)
+}
+
+/// Validate a canonical appeal-finance `CancelAssetLock` V1 payload.
+#[napi]
+pub fn sorafs_validate_appeal_finance_cancel_asset_lock_json(
+    bytes: Uint8Array,
+    label: String,
+    generated_at_unix: i64,
+) -> napi::Result<String> {
+    let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
+    let outcome =
+        validate_appeal_finance_cancel_asset_lock_bytes(bytes.as_ref(), label, generated_at);
+    json::to_string(&outcome).map_err(norito_to_napi)
 }
 
 /// Validate a Norito-encoded orderbook payload and return canonical outcome JSON.
@@ -7007,7 +6808,7 @@ pub fn sorafs_validate_pdp_bundle_json(
     json::to_string(&outcome).map_err(norito_to_napi)
 }
 
-/// Validate a bounded heterogeneous SoraFS fixture bundle and its canonical
+/// Validate a bounded heterogeneous `SoraFS` fixture bundle and its canonical
 /// cross-links, returning `ValidationOutcomeV1` JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API boundary requires owned inputs
@@ -7319,6 +7120,40 @@ mod sorafs_orderbook_validation_tests {
         assert_eq!(outcome.status.as_str(), "Ok");
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
+    }
+
+    #[test]
+    fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
+        let canonical = include_bytes!(
+            "../../../fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.to"
+        );
+        let zero = include_bytes!(
+            "../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
+        );
+
+        let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json(
+            Uint8Array::from(canonical.to_vec()),
+            "cancel_asset_lock_v1.to".to_owned(),
+            41,
+        )
+        .expect("validate canonical CancelAssetLock");
+        let accepted: json::Value = json::from_json(&accepted).expect("accepted outcome JSON");
+        assert_eq!(
+            accepted.get("code").and_then(json::Value::as_str),
+            Some("SFS-OK-000")
+        );
+
+        let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json(
+            Uint8Array::from(zero.to_vec()),
+            "cancel_asset_lock_zero_expected_v1.to".to_owned(),
+            42,
+        )
+        .expect("validate zero-quantity CancelAssetLock");
+        let rejected: json::Value = json::from_json(&rejected).expect("rejected outcome JSON");
+        assert_eq!(
+            rejected.get("code").and_then(json::Value::as_str),
+            Some("SFS-VAL-001")
+        );
     }
 
     #[test]
@@ -8028,29 +7863,6 @@ fn parse_optional_voting_mode(
     }
 }
 
-fn parse_council_derivation_kind(
-    value: json::Value,
-    context: &str,
-) -> napi::Result<CouncilDerivationKind> {
-    let label = parse_string_value(value, context)?;
-    match label.as_str() {
-        "Vrf" | "vrf" | "VRF" => Ok(CouncilDerivationKind::Vrf),
-        "Fallback" | "fallback" | "FALLBACK" => Ok(CouncilDerivationKind::Fallback),
-        other => Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be either \"Vrf\" or \"Fallback\" (found {other})"),
-        )),
-    }
-}
-
-fn council_derivation_to_json(kind: CouncilDerivationKind) -> json::Value {
-    let label = match kind {
-        CouncilDerivationKind::Vrf => "Vrf",
-        CouncilDerivationKind::Fallback => "Fallback",
-    };
-    json::Value::String(label.to_owned())
-}
-
 fn voting_mode_to_json(mode: VotingMode) -> &'static str {
     match mode {
         VotingMode::Zk => "Zk",
@@ -8690,6 +8502,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 || map.contains_key("Settlement")
                 || map.contains_key("CancelSmartContractCodeUpload")
                 || map.contains_key("CancelAssetLock")
+                || map.contains_key("SetAssetTransferAvailability")
                 || map.contains_key("ProposeValidationFeePolicy")
     );
     if !requires_explicit_parser {
@@ -8699,6 +8512,118 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(payload) = map.remove("SetAssetTransferAvailability") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferAvailability instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut fields) = payload else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "SetAssetTransferAvailability must be an object",
+                    ));
+                };
+                let account_id = parse_account_id_value(
+                    required_value(&mut fields, "account_id", "SetAssetTransferAvailability")?,
+                    "SetAssetTransferAvailability.account_id",
+                )?;
+                let asset_definition_literal = parse_string_value(
+                    required_value(
+                        &mut fields,
+                        "asset_definition_id",
+                        "SetAssetTransferAvailability",
+                    )?,
+                    "SetAssetTransferAvailability.asset_definition_id",
+                )?;
+                let asset_definition_id = AssetDefinitionId::parse_address_literal(
+                    &asset_definition_literal,
+                )
+                .map_err(|error| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "invalid SetAssetTransferAvailability.asset_definition_id: {error}"
+                        ),
+                    )
+                })?;
+                let expected_revision = parse_u64_value(
+                    required_value(
+                        &mut fields,
+                        "expected_revision",
+                        "SetAssetTransferAvailability",
+                    )?,
+                    "SetAssetTransferAvailability.expected_revision",
+                )?;
+                let parse_availability =
+                    |value: json::Value,
+                     context: &str|
+                     -> napi::Result<AssetTransferAvailability> {
+                        match value {
+                            json::Value::String(value) if value == "Enabled" => {
+                                Ok(AssetTransferAvailability::Enabled)
+                            }
+                            json::Value::String(value) if value == "Disabled" => {
+                                Ok(AssetTransferAvailability::Disabled)
+                            }
+                            other => Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!(
+                                    "{context} must be exactly \"Enabled\" or \"Disabled\" (found {other:?})"
+                                ),
+                            )),
+                        }
+                    };
+                let incoming = parse_availability(
+                    required_value(&mut fields, "incoming", "SetAssetTransferAvailability")?,
+                    "SetAssetTransferAvailability.incoming",
+                )?;
+                let outgoing = parse_availability(
+                    required_value(&mut fields, "outgoing", "SetAssetTransferAvailability")?,
+                    "SetAssetTransferAvailability.outgoing",
+                )?;
+                let reason = match fields.remove("reason") {
+                    None | Some(json::Value::Null) => None,
+                    Some(json::Value::String(value))
+                        if !value.is_empty() && value.trim() == value =>
+                    {
+                        Some(value)
+                    }
+                    Some(other) => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetAssetTransferAvailability.reason must be non-empty exact text or null (found {other:?})"
+                            ),
+                        ));
+                    }
+                };
+                validate_asset_transfer_availability_reason(reason.as_deref()).map_err(
+                    |error| napi::Error::new(napi::Status::InvalidArg, error.to_string()),
+                )?;
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetTransferAvailability contains unexpected field(s): {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                return Ok(SetAssetTransferAvailability::new(
+                    account_id,
+                    asset_definition_id,
+                    expected_revision,
+                    incoming,
+                    outgoing,
+                    reason,
+                )
+                .into());
+            }
             if let Some(payload) = map.remove("DeploySoracloudService") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -10029,29 +9954,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .unwrap_or_else(|| json::Value::Array(Vec::new()));
                 let alternates: Vec<AccountId> =
                     json::from_value(alternates_value).map_err(norito_to_napi)?;
-                let verified = parse_u32_value(
-                    fields
-                        .remove("verified")
-                        .unwrap_or_else(|| json::Value::Number(json::Number::from(0u64))),
-                    "PersistCouncilForEpoch.verified",
-                )?;
-                let candidates_count = parse_u32_value(
-                    required_value(&mut fields, "candidates_count", "PersistCouncilForEpoch")?,
-                    "PersistCouncilForEpoch.candidates_count",
-                )?;
-                let derived_by_value =
-                    required_value(&mut fields, "derived_by", "PersistCouncilForEpoch")?;
-                let derived_by = parse_council_derivation_kind(
-                    derived_by_value,
-                    "PersistCouncilForEpoch.derived_by",
-                )?;
                 let persist = PersistCouncilForEpoch {
                     epoch,
                     members,
                     alternates,
-                    verified,
-                    candidates_count,
-                    derived_by,
                 };
                 return Ok(Box::new(persist).into_instruction_box());
             }
@@ -10508,6 +10414,59 @@ fn exact_json_object_fields(
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(availability) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetTransferAvailability>()
+    {
+        let mut inner = json::Map::new();
+        inner.insert(
+            "account_id".to_owned(),
+            json::to_value(&availability.account_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "asset_definition_id".to_owned(),
+            json::to_value(&availability.asset_definition_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "expected_revision".to_owned(),
+            json::Value::String(availability.expected_revision.to_string()),
+        );
+        inner.insert(
+            "incoming".to_owned(),
+            json::Value::String(
+                match availability.incoming {
+                    AssetTransferAvailability::Enabled => "Enabled",
+                    AssetTransferAvailability::Disabled => "Disabled",
+                }
+                .to_owned(),
+            ),
+        );
+        inner.insert(
+            "outgoing".to_owned(),
+            json::Value::String(
+                match availability.outgoing {
+                    AssetTransferAvailability::Enabled => "Enabled",
+                    AssetTransferAvailability::Disabled => "Disabled",
+                }
+                .to_owned(),
+            ),
+        );
+        inner.insert(
+            "reason".to_owned(),
+            availability
+                .reason
+                .as_ref()
+                .map_or(json::Value::Null, |value| {
+                    json::Value::String(value.clone())
+                }),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetTransferAvailability".to_owned(),
+            json::Value::Object(inner),
+        );
+        return Ok(json::Value::Object(outer));
+    }
     if let Some(cancel) = instruction_ref.as_any().downcast_ref::<CancelAssetLock>() {
         if cancel.expected_remaining_amount.is_zero() {
             return Err(napi::Error::new(
@@ -11400,18 +11359,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "alternates".to_owned(),
             json::to_value(&persist.alternates).map_err(norito_to_napi)?,
         );
-        inner.insert(
-            "verified".to_owned(),
-            json::to_value(&persist.verified).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "candidates_count".to_owned(),
-            json::to_value(&persist.candidates_count).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "derived_by".to_owned(),
-            council_derivation_to_json(persist.derived_by),
-        );
         let mut outer = json::Map::new();
         outer.insert(
             "PersistCouncilForEpoch".to_owned(),
@@ -11901,6 +11848,12 @@ fn configure_transaction_builder(
 
     if let Some(ms) = ttl_ms {
         let millis = js_number_to_u64(ms, "ttl_ms")?;
+        if millis == 0 {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "ttl_ms must be positive",
+            ));
+        }
         builder.set_ttl(Duration::from_millis(millis));
     }
 
@@ -12248,10 +12201,6 @@ pub struct JsTransactionPayload {
 }
 
 /// Exact unsigned transaction draft used by the fee quote-to-sign flow.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the payload-prefixed field names are the stable public JavaScript transaction-draft API"
-)]
 #[napi(object)]
 pub struct JsTransactionPayloadDraft {
     /// Canonical Norito JSON for `TransactionPayload`, sent unchanged to `/v1/fees/quote`.
@@ -12877,9 +12826,14 @@ pub fn build_transfer_asset_payload(
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     let instruction: InstructionBox =
         Transfer::asset_quantity(source, quantity, destination).into();
+    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid canonical chain id: {error}"),
+        )
+    })?;
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(ChainId::from(chain_id), authority, fee_payment)
-            .with_instructions([instruction]),
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions([instruction]),
         metadata,
         None,
         creation_time_ms,
@@ -14466,9 +14420,9 @@ mod tests {
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
-                AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-                ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
+                AtWindow, CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+                PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
+                RegisterCitizen, VotingMode,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -15047,6 +15001,18 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn keypair_bindings_reject_non_cryptographic_seed_lengths() {
+        let short = Uint8Array::from(b"human password".to_vec());
+        let err = ed25519_keypair(Some(short)).expect_err("short Ed25519 seed must fail");
+        assert!(err.reason.contains("exactly 32 bytes"));
+
+        let short = Uint8Array::from(b"human password".to_vec());
+        let err = crypto_keypair(Some("secp256k1".to_owned()), Some(short))
+            .expect_err("short generic seed must fail");
+        assert!(err.reason.contains("exactly 32 bytes"));
+    }
+
+    #[test]
     fn crypto_keypair_random_path_uses_checked_generation() {
         let keypair = crypto_keypair(Some("ed25519".to_owned()), None)
             .expect("checked random keypair generation");
@@ -15482,6 +15448,19 @@ seiyaku Privacy {
             .to_owned()
     }
 
+    fn register_citizen_json(owner: &AccountId, amount: json::Value) -> json::Value {
+        json::Value::Object(json::Map::from_iter([(
+            "RegisterCitizen".to_owned(),
+            json::Value::Object(json::Map::from_iter([
+                (
+                    "owner".to_owned(),
+                    json::Value::String(account_json_literal(owner)),
+                ),
+                ("amount".to_owned(), amount),
+            ])),
+        )]))
+    }
+
     fn canonical_owner_literal(_domain: &str) -> String {
         account_json_literal(&sample_account("wonderland"))
     }
@@ -15793,6 +15772,120 @@ seiyaku Privacy {
         opts.write_mode = Some("upload-pq-only".to_string());
         apply_gateway_options(&mut config, &opts).expect("apply write mode");
         assert_eq!(config.write_mode, WriteModeHint::UploadPqOnly);
+    }
+
+    #[test]
+    fn gateway_policy_options_accept_exact_v1_labels() {
+        let mut config = OrchestratorConfig::default();
+        let mut opts = empty_gateway_options();
+        opts.rollout_phase = Some("default".to_string());
+        opts.transport_policy = Some("direct-only".to_string());
+        opts.anonymity_policy = Some("anon-strict-pq".to_string());
+        opts.write_mode = Some("read-only".to_string());
+
+        apply_gateway_options(&mut config, &opts).expect("apply exact V1 policy labels");
+
+        assert_eq!(config.rollout_phase, RolloutPhase::Default);
+        assert_eq!(config.transport_policy, TransportPolicy::DirectOnly);
+        assert_eq!(config.anonymity_policy, AnonymityPolicy::StrictPq);
+        assert_eq!(
+            config.anonymity_policy_override,
+            Some(AnonymityPolicy::StrictPq)
+        );
+        assert_eq!(config.write_mode, WriteModeHint::ReadOnly);
+    }
+
+    #[test]
+    fn gateway_policy_options_reject_all_noncanonical_labels() {
+        for alias in [
+            "stage_a", "stage-a", "stagea", "stage_b", "stage-b", "stageb", "stage_c", "stage-c",
+            "stagec", "ga", "CANARY", "Ramp", "DEFAULT", " canary", "canary ", "", "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.rollout_phase = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("rollout aliases must fail closed");
+            assert!(
+                error.to_string().contains("rolloutPhase must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "soranet_first",
+            "soranet_strict",
+            "soranet_only",
+            "soranet-only",
+            "direct_only",
+            "SORANET-FIRST",
+            "Soranet-Strict",
+            "DIRECT-ONLY",
+            " soranet-first",
+            "soranet-first ",
+            "",
+            "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.transport_policy = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("transport aliases must fail closed");
+            assert!(
+                error.to_string().contains("transportPolicy must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "anon_guard_pq",
+            "anon_majority_pq",
+            "anon_strict_pq",
+            "stage_a",
+            "stage-a",
+            "stagea",
+            "stage_b",
+            "stage-b",
+            "stageb",
+            "stage_c",
+            "stage-c",
+            "stagec",
+            "ANON-GUARD-PQ",
+            "Anon-Majority-Pq",
+            "ANON-STRICT-PQ",
+            " anon-guard-pq",
+            "anon-guard-pq ",
+            "",
+            "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.anonymity_policy = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("anonymity aliases must fail closed");
+            assert!(
+                error.to_string().contains("anonymityPolicy must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
+        for alias in [
+            "read_only",
+            "upload_pq_only",
+            "READ-ONLY",
+            "Upload-Pq-Only",
+            " read-only",
+            "read-only ",
+            "",
+            "unknown",
+        ] {
+            let mut config = OrchestratorConfig::default();
+            let mut opts = empty_gateway_options();
+            opts.write_mode = Some(alias.to_string());
+            let error = apply_gateway_options(&mut config, &opts)
+                .expect_err("write-mode aliases must fail closed");
+            assert!(
+                error.to_string().contains("writeMode must be one of"),
+                "unexpected rejection for {alias:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -16409,7 +16502,7 @@ seiyaku Privacy {
 
             let car_verification = GatewayCarVerification {
                 manifest_digest: manifest_digest_copy,
-                manifest_payload_digest: car_stats_clone.car_payload_digest,
+                manifest_payload_digest: plan_override.payload_digest,
                 manifest_content_length: plan_override.content_length,
                 manifest_chunk_count: u64::try_from(chunk_specs.len())
                     .expect("chunk count fits in u64"),
@@ -16496,6 +16589,10 @@ seiyaku Privacy {
         assert_eq!(
             verification.manifest_digest_hex,
             hex::encode_upper(manifest_digest.as_bytes())
+        );
+        assert_eq!(
+            verification.manifest_payload_digest_hex,
+            hex::encode_upper(plan.payload_digest.as_bytes())
         );
         assert_eq!(verification.manifest_content_length.0, plan.content_length);
         assert_eq!(
@@ -18384,12 +18481,10 @@ seiyaku Privacy {
         let owner = sample_account("wonderland");
         let wide = "340282366920938463463374607431768211456.25";
         for amount in ["1.25", wide] {
-            let instruction = value_to_instruction(norito_json!({
-                "RegisterCitizen": norito_json!({
-                    "owner": account_json_literal(&owner),
-                    "amount": amount,
-                })
-            }))
+            let instruction = value_to_instruction(register_citizen_json(
+                &owner,
+                json::Value::String(amount.to_owned()),
+            ))
             .expect("canonical citizen-bond Quantity must deserialize");
             let register = instruction
                 .as_any()
@@ -18423,13 +18518,8 @@ seiyaku Privacy {
             ("object", json::Value::Object(json::Map::new())),
         ];
         for (case, amount) in invalid {
-            let error = value_to_instruction(norito_json!({
-                "RegisterCitizen": norito_json!({
-                    "owner": account_json_literal(&owner),
-                    "amount": amount,
-                })
-            }))
-            .expect_err("invalid citizen-bond Quantity must be rejected");
+            let error = value_to_instruction(register_citizen_json(&owner, amount))
+                .expect_err("invalid citizen-bond Quantity must be rejected");
             assert!(
                 error.reason.contains("RegisterCitizen.amount"),
                 "unexpected {case} rejection: {}",
@@ -18492,9 +18582,6 @@ seiyaku Privacy {
             epoch: 10,
             members: vec![member.clone()],
             alternates: vec![member.clone()],
-            verified: 2,
-            candidates_count: 5,
-            derived_by: CouncilDerivationKind::Fallback,
         })
         .into_instruction_box();
 
@@ -18510,15 +18597,6 @@ seiyaku Privacy {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize PersistCouncilForEpoch");
         assert_eq!(reconstructed, instruction);
-
-        let derived = json_value
-            .as_object()
-            .unwrap()
-            .get("PersistCouncilForEpoch")
-            .and_then(|value| value.get("derived_by"))
-            .and_then(|value| value.as_str())
-            .expect("derived_by string present");
-        assert_eq!(derived, "Fallback");
 
         let member_json = json_value
             .as_object()

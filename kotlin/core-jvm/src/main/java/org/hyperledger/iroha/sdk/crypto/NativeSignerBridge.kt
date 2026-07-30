@@ -14,6 +14,7 @@ class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
         const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 1
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
@@ -230,7 +231,8 @@ class NativeSignerBridge private constructor() {
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
-                nativeBridgeAbiVersion() >= REQUIRED_BRIDGE_ABI_VERSION
+                nativeBridgeAbiVersion() == REQUIRED_BRIDGE_ABI_VERSION &&
+                    nativeSignerContractRevision() == REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
@@ -287,6 +289,9 @@ class NativeSignerBridge private constructor() {
 
         @JvmStatic
         private external fun nativeBridgeAbiVersion(): Int
+
+        @JvmStatic
+        private external fun nativeSignerContractRevision(): Int
 
         @JvmStatic
         private external fun nativePublicKeyFromPrivate(

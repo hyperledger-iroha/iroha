@@ -37,7 +37,7 @@ Prossiga seu negócio, consulte o arquiteto RFC SoraFS e разбивает
 ##Process допуска
 
 1. **Создание предложения**
-   - CLI: download `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
+   - CLI: download `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      formulário `ProviderAdmissionProposalV1` + certificado de banda.
    - Validação: убедиться в наличии обязательных полей, aposta> 0, канонического chunker handle em `profile_id`.
 2. **Governança de Governança**
@@ -64,7 +64,7 @@ Por favor, instale `--council-signature-public-key` com `--council-signature-fil
 
 ### Справочник CLI
 
-Execute o comando `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
+Execute o comando `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Bandeiras de identificação: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, e como mínimo `--endpoint=<kind:host>`.
@@ -109,7 +109,7 @@ Execute o comando `cargo run -p sorafs_manifest --bin sorafs_manifest_builder --
    увеличив `--retention-epoch` e обновив estaca/эндпоинты по необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -130,7 +130,7 @@ Execute o comando `cargo run -p sorafs_manifest --bin sorafs_manifest_builder --
 #### Аварийный отзыв
 1. Abra o envelope e verifique-o:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
+   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

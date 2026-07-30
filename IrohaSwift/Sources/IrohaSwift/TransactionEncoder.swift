@@ -22,7 +22,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyChainId:
             return "Chain id must not be empty."
         case let .invalidChainId(value):
-            return "Chain id must not contain whitespace characters (received '\(value)')."
+            return "Chain id must be 1...128 ASCII bytes, begin and end with an alphanumeric character, and contain only alphanumeric characters, '.', '_', ':' or '-' (received '\(value)')."
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
@@ -89,10 +89,26 @@ struct TransactionInputValidator {
             empty: .emptyChainId,
             invalid: { .invalidChainId($0) }
         )
-        if checked.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        let bytes = Array(checked.utf8)
+        guard bytes.count <= 128,
+              let first = bytes.first,
+              let last = bytes.last,
+              isAsciiAlphanumeric(first),
+              isAsciiAlphanumeric(last),
+              bytes.allSatisfy(isChainIdByte) else {
             throw TransactionInputError.invalidChainId(checked)
         }
         return checked
+    }
+
+    private static func isAsciiAlphanumeric(_ byte: UInt8) -> Bool {
+        (byte >= 48 && byte <= 57) ||
+            (byte >= 65 && byte <= 90) ||
+            (byte >= 97 && byte <= 122)
+    }
+
+    private static func isChainIdByte(_ byte: UInt8) -> Bool {
+        isAsciiAlphanumeric(byte) || byte == 46 || byte == 95 || byte == 58 || byte == 45
     }
 
     static func sanitizeAccountId(_ accountId: String, field: String) throws -> String {
@@ -467,7 +483,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         guard !entries.isEmpty else {
             throw ExecutableBatchInputError.emptyBatch
         }
-        guard ttlMs != 0 else {
+        let resolvedTtlMs = ttlMs ?? 100_000
+        guard resolvedTtlMs != 0 else {
             throw ExecutableBatchInputError.zeroTimeToLive
         }
         guard nonce != 0 else {
@@ -490,13 +507,14 @@ enum SingleInstructionSwiftNoritoEncoder {
         transactionPayload.writeField(CanonicalNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executable)
         transactionPayload.writeField(
-            try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64)
+            try CanonicalNorito.encodeOption(resolvedTtlMs, encode: CanonicalNorito.encodeUInt64)
         )
         transactionPayload.writeField(
             try CanonicalNorito.encodeOption(nonce, encode: CanonicalNorito.encodeUInt32)
         )
         transactionPayload.writeField(try feePayment.canonicalNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(encodeNoneOption())
 
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload.data))
         let signed = encodeSignedTransaction(
@@ -507,7 +525,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             norito: encodeVersionedSignedTransaction(signed),
             signedTransaction: signed,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signed))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload.data))
         )
     }
 
@@ -538,7 +556,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         let signed = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
         return SignedTransactionEnvelope(
             norito: encodeVersionedSignedTransaction(signed), signedTransaction: signed,
-            payload: nil, transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signed))
+            payload: nil,
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         )
     }
 
@@ -588,7 +607,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             norito: encodeVersionedSignedTransaction(signedTransaction),
             signedTransaction: signedTransaction,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         )
     }
 
@@ -636,7 +655,7 @@ enum SingleInstructionSwiftNoritoEncoder {
             norito: encodeVersionedSignedTransaction(signedTransaction),
             signedTransaction: signedTransaction,
             payload: nil,
-            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+            transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(transactionPayload))
         )
     }
 
@@ -662,16 +681,21 @@ enum SingleInstructionSwiftNoritoEncoder {
                                                  ttlMs: UInt64?,
                                                  feePayment: FeePaymentIntent,
                                                  instructionPayloads: [Data]) throws -> Data {
+        let resolvedTtlMs = ttlMs ?? 100_000
+        guard resolvedTtlMs != 0 else {
+            throw ExecutableBatchInputError.zeroTimeToLive
+        }
         let executablePayload = encodeExecutable(instructionPayloads: instructionPayloads)
         var transactionPayload = CanonicalNoritoWriter()
         transactionPayload.writeField(CanonicalNorito.encodeString(chainId))
         transactionPayload.writeField(CanonicalNorito.encodeString(authority))
         transactionPayload.writeField(CanonicalNorito.encodeUInt64(creationTimeMs))
         transactionPayload.writeField(executablePayload)
-        transactionPayload.writeField(try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64))
+        transactionPayload.writeField(try CanonicalNorito.encodeOption(resolvedTtlMs, encode: CanonicalNorito.encodeUInt64))
         transactionPayload.writeField(encodeNoneOption())
         transactionPayload.writeField(try feePayment.canonicalNorito())
         transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(encodeNoneOption())
         return transactionPayload.data
     }
 
@@ -729,14 +753,13 @@ enum SingleInstructionSwiftNoritoEncoder {
         signedTransaction.writeField(CanonicalNorito.encodeConstVec(signature))
         signedTransaction.writeField(transactionPayload)
         signedTransaction.writeField(encodeNoneOption())
-        signedTransaction.writeField(encodeNoneOption())
         return signedTransaction.data
     }
 
-    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+    private static func encodeTransactionEntrypoint(_ transactionPayload: Data) -> Data {
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedTransaction)
+        entrypoint.writeField(transactionPayload)
         return entrypoint.data
     }
 
@@ -1566,8 +1589,6 @@ struct SwiftTransactionEncoder {
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
                 epoch: request.epoch,
-                candidatesCount: request.candidatesCount,
-                derivedBy: request.derivedBy.rawValue,
                 membersJson: membersJson,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,

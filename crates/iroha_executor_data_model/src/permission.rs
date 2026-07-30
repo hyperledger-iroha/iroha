@@ -1,4 +1,8 @@
-//! Definition of Iroha default permission tokens
+//! Definition of Iroha default permission tokens.
+//!
+//! An exact token is a delegable capability unless its type is a genesis-only bootstrap root.
+//! Resource-scoped tokens may also define a native use-time ownership root or an explicit wider
+//! parent token; ownership of an adjacent component of the scope is never sufficient.
 #![allow(clippy::missing_errors_doc)]
 
 use std::{format, string::String, vec::Vec};
@@ -225,8 +229,8 @@ pub mod account {
         ///
         /// Only the corresponding alias, domain, or dataspace-alias owner may grant or
         /// revoke this delegation token. Holding it authorizes delegation of
-        /// [`CanResolveAccountAlias`] for the exact same scope; it never
-        /// authorizes alias mutation or further delegation of this token.
+        /// [`CanResolveAccountAlias`] and further delegation of this token for the exact same
+        /// scope; it never authorizes alias mutation or delegation to a wider scope.
         pub struct CanDelegateAccountAliasResolution {
             /// Exact alias scope whose resolution access may be delegated.
             pub scope: AccountAliasPermissionScope,
@@ -433,14 +437,12 @@ pub mod asset {
     }
 
     permission! {
-        /// Permission to set or clear transfer-freeze state for one asset definition.
-        pub struct CanSetAssetTransferFreeze {
-            /// Asset definition whose account freeze state may be managed.
+        /// Permission to set directional transfer availability for one exact account and asset.
+        pub struct CanSetAssetTransferAvailability {
+            /// Exact account whose transfer availability may be managed.
+            pub account: AccountId,
+            /// Exact asset definition whose availability state may be managed.
             pub asset_definition: AssetDefinitionId,
-            /// Canonical on-chain alias domain of accounts whose freeze state may be managed.
-            pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
-            /// Exact dataspace containing the canonical on-chain account alias.
-            pub account_dataspace: iroha_data_model::nexus::DataSpaceId,
         }
     }
 
@@ -453,6 +455,16 @@ pub mod asset {
             pub account_domain: iroha_data_model::account::rekey::AccountAliasDomain,
             /// Exact dataspace containing the canonical on-chain account alias.
             pub account_dataspace: iroha_data_model::nexus::DataSpaceId,
+        }
+    }
+
+    permission! {
+        /// Permission to set a native holding limit for one exact account and asset.
+        pub struct CanSetAssetHoldingLimit {
+            /// Exact account whose holding limit may be managed.
+            pub account: AccountId,
+            /// Exact asset definition whose holding limit may be managed.
+            pub asset_definition: AssetDefinitionId,
         }
     }
 }
@@ -647,6 +659,25 @@ pub mod smart_contract {
 /// Permission tokens governing native FX corridors.
 pub mod settlement {
     use super::*;
+    use iroha_data_model::isi::SettlementId;
+
+    permission! {
+        /// Exact consent from a debited counterparty for one bilateral settlement intent.
+        ///
+        /// Only the account named by `debited_asset` may delegate or revoke this
+        /// token. The intent hash commits to the complete domain-separated DvP,
+        /// PvP, or repo phase, so changing any economic term or the settlement
+        /// identifier requires fresh consent. Repo initiation requires distinct
+        /// cash-debit and maturity-collateral consents before any asset moves.
+        pub struct CanExecuteSettlement {
+            /// Exact balance bucket the authorized settlement may debit.
+            pub debited_asset: AssetId,
+            /// One-shot settlement identifier bound by the consent.
+            pub settlement_id: SettlementId,
+            /// Domain-separated commitment to the complete settlement instruction.
+            pub intent_hash: Hash,
+        }
+    }
 
     permission! {
         /// Root permission for delegating native FX corridor governance.
@@ -913,7 +944,7 @@ pub mod sorafs {
     }
 
     permission! {
-        /// Permission to submit policy-authorized PoR or stream-token reputation entries.
+        /// Permission to submit policy-authorized `PoR` or stream-token reputation entries.
         #[derive(Copy)]
         pub struct CanRecordSorafsReputationJournal;
     }
@@ -1007,16 +1038,20 @@ pub mod oracle {
 #[cfg(test)]
 mod tests {
     use super::account::CanRegisterAccount;
-    use super::asset::{CanSetAssetTransferDailyLimit, CanSetAssetTransferFreeze};
+    use super::asset::{
+        CanSetAssetHoldingLimit, CanSetAssetTransferAvailability, CanSetAssetTransferDailyLimit,
+    };
     use super::escrow::CanResolveEscrowDispute;
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
     use super::query::CanReadRestrictedDataspace;
     use crate::permission::Permission as _;
+    use iroha_crypto::KeyPair;
     use iroha_data_model::oracle::OracleChangeStage;
     use iroha_data_model::{
-        DomainId, account::rekey::AccountAliasDomain, asset::AssetDefinitionId, nexus::DataSpaceId,
+        AccountId, DomainId, account::rekey::AccountAliasDomain, asset::AssetDefinitionId,
+        nexus::DataSpaceId,
     };
 
     #[test]
@@ -1038,17 +1073,21 @@ mod tests {
     }
 
     #[test]
-    fn transfer_control_permissions_require_exact_domain_and_dataspace() {
+    fn transfer_control_permissions_use_exact_availability_target_and_scoped_daily_limit() {
         let asset_definition = AssetDefinitionId::new(
             DomainId::try_new("currency", "sbp").expect("asset domain"),
             "pkr".parse().expect("asset name"),
         );
+        let account = AccountId::new(KeyPair::random().public_key().clone());
         let account_domain = AccountAliasDomain::new("hbl".parse().expect("account domain"));
         let account_dataspace = DataSpaceId::new(10);
-        let freeze = CanSetAssetTransferFreeze {
+        let availability = CanSetAssetTransferAvailability {
+            account: account.clone(),
             asset_definition: asset_definition.clone(),
-            account_domain: account_domain.clone(),
-            account_dataspace,
+        };
+        let holding_limit = CanSetAssetHoldingLimit {
+            account: account.clone(),
+            asset_definition: asset_definition.clone(),
         };
         let daily_limit = CanSetAssetTransferDailyLimit {
             asset_definition,
@@ -1056,36 +1095,64 @@ mod tests {
             account_dataspace,
         };
 
-        for value in [
-            norito::json::to_value(&freeze).expect("freeze permission JSON"),
-            norito::json::to_value(&daily_limit).expect("daily-limit permission JSON"),
-        ] {
-            let object = value.as_object().expect("permission payload object");
-            assert_eq!(
-                object.len(),
-                3,
-                "permission payload must have no hidden fields"
-            );
-            assert_eq!(object["account_domain"].as_str(), Some("hbl"));
-            assert_eq!(object["account_dataspace"].as_u64(), Some(10));
-        }
-
-        let missing_dataspace = norito::json!({
-            "asset_definition": (freeze.asset_definition.to_string()),
-            "account_domain": "hbl",
-        });
-        assert!(
-            norito::json::from_value::<CanSetAssetTransferFreeze>(missing_dataspace).is_err(),
-            "first-release permission decoding must not accept domain-only legacy payloads",
+        let availability_value =
+            norito::json::to_value(&availability).expect("availability permission JSON");
+        let availability_object = availability_value
+            .as_object()
+            .expect("availability permission object");
+        assert_eq!(
+            availability_object.len(),
+            2,
+            "availability permission must bind only its two exact identifiers"
         );
-        let alias_string_dataspace = norito::json!({
-            "asset_definition": (freeze.asset_definition.to_string()),
+        let account_literal = account.to_string();
+        assert_eq!(
+            availability_object["account"].as_str(),
+            Some(account_literal.as_str())
+        );
+        let holding_value =
+            norito::json::to_value(&holding_limit).expect("holding-limit permission JSON");
+        let holding_object = holding_value
+            .as_object()
+            .expect("holding-limit permission object");
+        assert_eq!(holding_object.len(), 2);
+        assert_eq!(
+            holding_object["account"].as_str(),
+            Some(account_literal.as_str())
+        );
+
+        let daily_limit_value =
+            norito::json::to_value(&daily_limit).expect("daily-limit permission JSON");
+        let daily_limit_object = daily_limit_value
+            .as_object()
+            .expect("daily-limit permission object");
+        assert_eq!(daily_limit_object.len(), 3);
+        assert_eq!(daily_limit_object["account_domain"].as_str(), Some("hbl"));
+        assert_eq!(daily_limit_object["account_dataspace"].as_u64(), Some(10));
+
+        let broad_legacy_scope = norito::json!({
+            "asset_definition": (availability.asset_definition.to_string()),
             "account_domain": "hbl",
-            "account_dataspace": "sbp",
+            "account_dataspace": 10,
         });
         assert!(
-            norito::json::from_value::<CanSetAssetTransferFreeze>(alias_string_dataspace).is_err(),
-            "typed permission must require numeric DataSpaceId, not a browser alias",
+            norito::json::from_value::<CanSetAssetTransferAvailability>(broad_legacy_scope)
+                .is_err(),
+            "availability permission must not accept a broad domain/dataspace scope",
+        );
+        let missing_account = norito::json!({
+            "asset_definition": (availability.asset_definition.to_string()),
+        });
+        assert!(
+            norito::json::from_value::<CanSetAssetTransferAvailability>(missing_account).is_err(),
+            "availability permission must require an exact account",
+        );
+        assert!(
+            norito::json::from_value::<CanSetAssetHoldingLimit>(norito::json!({
+                "asset_definition": (holding_limit.asset_definition.to_string()),
+            }))
+            .is_err(),
+            "holding-limit permission must require an exact account",
         );
     }
 
