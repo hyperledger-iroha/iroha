@@ -5,19 +5,26 @@ use std::{format, string::String, vec::Vec};
 use super::*;
 use crate::{
     account::AccountId,
-    asset::{AssetDefinitionId, AssetTransferLimit},
+    asset::{AssetDefinitionId, AssetTransferAvailability, AssetTransferLimit},
 };
 
 isi! {
-    /// Freeze or unfreeze outbound transfers for an account on one asset definition.
-    pub struct SetAssetTransferFreeze {
+    /// Atomically update incoming and outgoing account-to-account transfer availability.
+    ///
+    /// Supply operations such as mint and burn are deliberately outside this
+    /// transfer policy. Use a holding limit to constrain all native credits.
+    pub struct SetAssetTransferAvailability {
         /// Controlled account.
         pub account_id: AccountId,
         /// Controlled asset definition.
         pub asset_definition_id: AssetDefinitionId,
-        /// Desired outbound-freeze state.
-        pub outgoing_frozen: bool,
-        /// Optional operator reason attached to the proposal intent.
+        /// Availability revision that must currently be stored.
+        pub expected_revision: u64,
+        /// Desired incoming-movement state.
+        pub incoming: AssetTransferAvailability,
+        /// Desired outgoing-movement state.
+        pub outgoing: AssetTransferAvailability,
+        /// Optional operator reason persisted with this transition.
         #[norito(default)]
         pub reason: Option<String>,
     }
@@ -69,22 +76,26 @@ isi! {
     }
 }
 
-impl SetAssetTransferFreeze {
+impl SetAssetTransferAvailability {
     /// Stable wire identifier.
-    pub const WIRE_ID: &'static str = "iroha.asset.transfer.freeze.set";
+    pub const WIRE_ID: &'static str = "iroha.asset.transfer.availability.set";
 
     /// Convenience constructor.
     #[must_use]
     pub fn new(
         account_id: AccountId,
         asset_definition_id: AssetDefinitionId,
-        outgoing_frozen: bool,
+        expected_revision: u64,
+        incoming: AssetTransferAvailability,
+        outgoing: AssetTransferAvailability,
         reason: Option<String>,
     ) -> Self {
         Self {
             account_id,
             asset_definition_id,
-            outgoing_frozen,
+            expected_revision,
+            incoming,
+            outgoing,
             reason,
         }
     }
@@ -147,12 +158,12 @@ impl SetAssetTransferControl {
     }
 }
 
-impl crate::seal::Instruction for SetAssetTransferFreeze {}
+impl crate::seal::Instruction for SetAssetTransferAvailability {}
 impl crate::seal::Instruction for SetAssetHoldingLimit {}
 impl crate::seal::Instruction for SetAssetTransferBlacklist {}
 impl crate::seal::Instruction for SetAssetTransferControl {}
 
-impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetTransferFreeze {
+impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetTransferAvailability {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
             .unwrap_or_else(norito::core::default_encode_flags);
@@ -169,18 +180,22 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetTransferFreeze {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let outgoing_frozen = super::decode_aos_canonical_field::<bool>(
+        let expected_revision = super::decode_aos_canonical_field::<u64>(
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
-        let reason = if offset < bytes.len() {
-            super::decode_aos_canonical_field::<Option<String>>(
-                super::read_aos_field(bytes, &mut offset, flags)?,
-                flags,
-            )?
-        } else {
-            None
-        };
+        let incoming = super::decode_aos_canonical_field::<AssetTransferAvailability>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let outgoing = super::decode_aos_canonical_field::<AssetTransferAvailability>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let reason = super::decode_aos_canonical_field::<Option<String>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -189,7 +204,9 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SetAssetTransferFreeze {
             Self {
                 account_id,
                 asset_definition_id,
-                outgoing_frozen,
+                expected_revision,
+                incoming,
+                outgoing,
                 reason,
             },
             offset,
@@ -365,10 +382,12 @@ mod tests {
         let account_id = account(0x91);
         let asset_definition_id = asset_definition();
 
-        assert_slice_roundtrip(SetAssetTransferFreeze::new(
+        assert_slice_roundtrip(SetAssetTransferAvailability::new(
             account_id.clone(),
             asset_definition_id.clone(),
-            true,
+            4,
+            AssetTransferAvailability::Disabled,
+            AssetTransferAvailability::Enabled,
             Some("court order".to_owned()),
         ));
         assert_slice_roundtrip(SetAssetTransferBlacklist::new(
@@ -394,7 +413,9 @@ mod tests {
     #[test]
     fn asset_transfer_control_registry_decodes_stable_ids() {
         let registry = crate::isi::InstructionRegistry::new()
-            .register_with_id_slice::<SetAssetTransferFreeze>(SetAssetTransferFreeze::WIRE_ID)
+            .register_with_id_slice::<SetAssetTransferAvailability>(
+                SetAssetTransferAvailability::WIRE_ID,
+            )
             .register_with_id_slice::<SetAssetTransferBlacklist>(SetAssetTransferBlacklist::WIRE_ID)
             .register_with_id_slice::<SetAssetTransferControl>(SetAssetTransferControl::WIRE_ID)
             .register_with_id_slice::<SetAssetHoldingLimit>(SetAssetHoldingLimit::WIRE_ID);
@@ -403,11 +424,13 @@ mod tests {
 
         assert_registry_decodes(
             &registry,
-            SetAssetTransferFreeze::WIRE_ID,
-            SetAssetTransferFreeze::new(
+            SetAssetTransferAvailability::WIRE_ID,
+            SetAssetTransferAvailability::new(
                 account_id.clone(),
                 asset_definition_id.clone(),
-                false,
+                0,
+                AssetTransferAvailability::Disabled,
+                AssetTransferAvailability::Disabled,
                 None,
             ),
         );
@@ -433,6 +456,43 @@ mod tests {
             SetAssetHoldingLimit::WIRE_ID,
             SetAssetHoldingLimit::new(account(0x94), asset_definition(), Some(25_u32.into())),
         );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn structured_json_availability_decodes_exact_cas_instruction() {
+        use crate::isi::{Instruction as _, InstructionBox};
+
+        let account_id = account(0x96);
+        let asset_definition_id = asset_definition();
+        let payload = format!(
+            r#"{{"name":"SetAssetTransferAvailability","params":{{"account_id":"{account_id}","asset_definition_id":"{asset_definition_id}","expected_revision":7,"incoming":"Disabled","outgoing":"Enabled","reason":"operator review"}}}}"#
+        );
+
+        let decoded =
+            norito::json::from_str::<InstructionBox>(&payload).expect("decode structured ISI JSON");
+        let instruction = decoded
+            .as_any()
+            .downcast_ref::<SetAssetTransferAvailability>()
+            .expect("native availability instruction");
+        assert_eq!(instruction.account_id, account_id);
+        assert_eq!(instruction.asset_definition_id, asset_definition_id);
+        assert_eq!(instruction.expected_revision, 7);
+        assert_eq!(instruction.incoming, AssetTransferAvailability::Disabled);
+        assert_eq!(instruction.outgoing, AssetTransferAvailability::Enabled);
+        assert_eq!(instruction.reason.as_deref(), Some("operator review"));
+
+        for invalid_params in [
+            r#""expected_revision":7,"incoming":"disabled","outgoing":"Enabled""#,
+            r#""expected_revision":7,"incoming":"Disabled","outgoing":"Enabled","reason":" padded""#,
+            r#""expected_revision":7,"incoming":"Disabled","outgoing":"Enabled","legacy":true"#,
+        ] {
+            let invalid = format!(
+                r#"{{"name":"SetAssetTransferAvailability","params":{{"account_id":"{account_id}","asset_definition_id":"{asset_definition_id}",{invalid_params}}}}}"#
+            );
+            norito::json::from_str::<InstructionBox>(&invalid)
+                .expect_err("non-canonical availability JSON must be rejected");
+        }
     }
 
     #[cfg(feature = "json")]

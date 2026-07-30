@@ -17,6 +17,17 @@ Completed history lives in [`status.md`](./status.md).
   verifier keys/backends, serializable witness/public-input types, or direct
   ZK-ACE instruction wires.
 
+## JavaScript governance private-file release closure
+
+The cross-platform ABI v1 implementation, fail-closed publication probe,
+macOS execution tests, and Windows cross-target compile checks are complete.
+Release closure still requires executing the secure-storage tests on the
+Windows packaging runner, creating the authoritative clean signed source commit
+and signed parent, regenerating its exact sealed lock and source-tree digest,
+and rebuilding the wallet's signed native artifacts from that one provenance
+set. Cross-compilation evidence must not be promoted as Windows runtime
+evidence.
+
 ## Sumeragi V2 production multilane release closure
 
 The production source now contains the Native evidence, autonomous execution,
@@ -335,8 +346,13 @@ cutover work.
   least 24 GiB of installed memory, then run that binary's `generate-candidate`
   command through `scripts/run_kagemusha_v4_generation.py` and retain the
   generation JSONL/summary beside the published candidate and sealed-build
-  report. Keep the non-raiseable 256 MiB guard, file-backed proving-key
-  serialization, and checked 232 MiB static admission estimate unchanged. A
+  report. Keep the non-raiseable 16 GiB guard, file-backed proving-key
+  serialization, and the 12 GiB reviewed exact-profile preflight around the
+  checked 9,747,562,496-byte static admission estimate. The corrected k16
+  `[443]` advice / `[47, 0, 0]` lookup-advice shape has
+  exact per-parity ParamsIPA/VK/PK lengths of
+  4,194,372 / 35,018 / 4,594,903,830 bytes and remains inside the fixed 5 GiB
+  per-artifact corridor. A
   non-shipping memory-benchmark report is diagnostic calibration, not candidate
   or release evidence. Do not restore high-degree generation or a release-sized
   proving-key `Vec`.
@@ -497,10 +513,10 @@ The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 pro
 7,328-byte augmented proofs even before full confidential/output-membership
 composition; it is not the current artifact/readiness contract. V4's
 authenticated profiles pin measured per-parity proof bounds and its manifest
-pins the pair bound, with defensive ceilings of 8 KiB per step and exactly
-21,764 bytes per canonical pair. Those ceilings are not availability signals;
-promotion must pin measured values and pass independent review and device
-evidence.
+pins the pair bound. The reviewed `[443]` advice / `[47, 0, 0]` lookup profile retains
+defensive ceilings of 128 KiB per step and 256 KiB per canonical pair. Those
+ceilings are not availability signals; promotion must pin the candidate's
+measured exact values and pass independent review and device evidence.
 
 ## SORA Economic Constitution
 
@@ -1166,7 +1182,7 @@ retired direct fixed-window `lineage-key-artifacts` experiment failed before
 Halo2 keygen when its old column-heavy verifier slice could not fit the bounded
 domain. Its conclusion that degree 16 was unacceptable applied only to that
 pre-compact shape. The current nested compact V5 profile instead fixes degree
-16 with `[8]` advice and `[1]` lookup-advice columns and remains fail-closed
+16 with `[443]` advice and `[47, 0, 0]` lookup-advice columns and remains fail-closed
 behind the generation and physical-evidence gates listed above; the retired
 shape is not a fallback.
 

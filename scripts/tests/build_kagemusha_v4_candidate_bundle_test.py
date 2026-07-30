@@ -427,6 +427,19 @@ class SealedCandidateBuildTests(unittest.TestCase):
         self.assertIn("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", build_rs)
         self.assertIn("kagemusha_source_tree_seal.py", build_rs)
 
+    def test_builder_disables_python_bytecode_before_local_imports(self) -> None:
+        source = (
+            Path(__file__).parents[2]
+            / "scripts"
+            / "build_kagemusha_v4_candidate_bundle.py"
+        ).read_text(encoding="utf-8")
+
+        disable = source.index("sys.dont_write_bytecode = True")
+        local_import = source.index(
+            "from scripts import kagemusha_source_tree_seal as source_seal"
+        )
+        self.assertLess(disable, local_import)
+
 
 if __name__ == "__main__":
     unittest.main()

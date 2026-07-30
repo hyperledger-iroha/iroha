@@ -785,6 +785,50 @@ pub enum ProviderIngestCompletionSignerErrorV1 {
     Rejected,
 }
 
+/// Exact finalized authorization independently pinned while resolving a signer.
+///
+/// The context is carried separately from the transaction payload so an
+/// isolated signer can reject payloads whose owner, signer policy, assignment
+/// revision, or finalized anchor was substituted after resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIngestCompletionSignerResolutionContextV1 {
+    /// Exact finalized provider owner authorized to sign.
+    pub provider_owner: AccountId,
+    /// Exact finalized signer-policy identity and digest lineage.
+    pub signer_policy: ProviderIngestCompletionSignerPolicyV1,
+    /// Exact non-zero order-scoped assignment revision.
+    pub expected_assignment_revision: u64,
+    /// Exact finalized baseline whose anchor must appear in the completion.
+    pub finalized_cursor: ProviderIngestFinalizedCursorV1,
+}
+
+impl ProviderIngestCompletionSignerResolutionContextV1 {
+    /// Construct one exact signer-resolution context.
+    #[must_use]
+    pub fn new(
+        provider_owner: AccountId,
+        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        expected_assignment_revision: u64,
+        finalized_cursor: ProviderIngestFinalizedCursorV1,
+    ) -> Self {
+        Self {
+            provider_owner,
+            signer_policy,
+            expected_assignment_revision,
+            finalized_cursor,
+        }
+    }
+
+    /// Return whether every independently pinned field is production-shaped.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.signer_policy.is_valid()
+            && self.expected_assignment_revision != 0
+            && self.finalized_cursor.height != 0
+            && self.finalized_cursor.block_hash != [0; 32]
+    }
+}
+
 /// Payload-free public qualification of one provider-ingest completion signer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderIngestCompletionSignerQualificationV1 {
@@ -986,16 +1030,19 @@ pub enum ProviderIngestCompletionSignerResolverErrorV1 {
     Rejected,
 }
 
-/// Resolves the signer for the exact current finalized provider owner.
+/// Resolves the signer for one exact finalized completion authorization.
+///
+/// Implementations must authenticate every field in the resolution context
+/// independently of the transaction payload and bind the returned signer to
+/// that context for the lifetime of the signing operation.
 pub trait ProviderIngestCompletionSignerResolverV1: Send + Sync + 'static {
     /// Isolated signer implementation.
     type Signer: ProviderIngestCompletionSignerV1;
 
-    /// Resolve an eligible signer for `provider_owner` at `finalized_cursor`.
+    /// Resolve an eligible signer for one exact finalized authorization.
     fn resolve<'a>(
         &'a self,
-        provider_owner: AccountId,
-        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        context: ProviderIngestCompletionSignerResolutionContextV1,
     ) -> ProviderIngestFutureV1<
         'a,
         Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
@@ -1855,7 +1902,14 @@ where
                 };
                 let signer_policy_observation = match tokio::time::timeout(
                     Duration::from_millis(self.policy.signer_timeout_ms),
-                    self.signer_resolver.resolve(provider_owner.clone(), cursor),
+                    self.signer_resolver.resolve(
+                        ProviderIngestCompletionSignerResolutionContextV1::new(
+                            provider_owner.clone(),
+                            expected_policy,
+                            row.order.assignment_revision,
+                            cursor,
+                        ),
+                    ),
                 )
                 .await
                 {
@@ -1949,7 +2003,14 @@ where
                 }
                 let signer = match tokio::time::timeout(
                     Duration::from_millis(self.policy.signer_timeout_ms),
-                    self.signer_resolver.resolve(provider_owner.clone(), cursor),
+                    self.signer_resolver.resolve(
+                        ProviderIngestCompletionSignerResolutionContextV1::new(
+                            provider_owner.clone(),
+                            completion_authority.signer_policy,
+                            row.order.assignment_revision,
+                            cursor,
+                        ),
+                    ),
                 )
                 .await
                 {
@@ -2167,8 +2228,15 @@ where
                     ..
                 } = status.state
                 {
-                    self.submit_signed(job_id, &provider_owner, signer_policy, cursor, outcome)
-                        .await?;
+                    self.submit_signed(
+                        job_id,
+                        &provider_owner,
+                        signer_policy,
+                        row.order.assignment_revision,
+                        cursor,
+                        outcome,
+                    )
+                    .await?;
                 }
             }
             ProviderIngestCompletionStateV1::Signing { .. } => {}
@@ -2179,8 +2247,15 @@ where
                     let Some((provider_owner, signer_policy)) = submission_authority else {
                         return Ok(());
                     };
-                    self.submit_signed(job_id, &provider_owner, signer_policy, cursor, outcome)
-                        .await?;
+                    self.submit_signed(
+                        job_id,
+                        &provider_owner,
+                        signer_policy,
+                        row.order.assignment_revision,
+                        cursor,
+                        outcome,
+                    )
+                    .await?;
                 }
             }
             ProviderIngestCompletionStateV1::Ambiguous {
@@ -2220,14 +2295,15 @@ where
         &self,
         job_id: [u8; 32],
         provider_owner: &AccountId,
-        signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        expected_signer_policy: ProviderIngestCompletionSignerPolicyV1,
+        expected_assignment_revision: u64,
         cursor: ProviderIngestFinalizedCursorV1,
         outcome: &mut ProviderIngestTickOutcomeV1,
     ) -> Result<(), ProviderIngestRuntimeErrorV1> {
         let exact = match self.outbox.completion_transaction_for_authorized_preflight(
             job_id,
             provider_owner,
-            signer_policy,
+            expected_signer_policy,
             cursor,
             self.clock.now_ms(),
         ) {
@@ -2269,7 +2345,13 @@ where
         };
         let signer = match tokio::time::timeout(
             Duration::from_millis(self.policy.signer_timeout_ms),
-            self.signer_resolver.resolve(provider_owner.clone(), cursor),
+            self.signer_resolver
+                .resolve(ProviderIngestCompletionSignerResolutionContextV1::new(
+                    provider_owner.clone(),
+                    expected_signer_policy,
+                    expected_assignment_revision,
+                    cursor,
+                )),
         )
         .await
         {
@@ -2305,6 +2387,16 @@ where
                 return Err(ProviderIngestRuntimeErrorV1::SignerProtocolViolation);
             }
         };
+        if signer_policy != expected_signer_policy {
+            self.outbox.invalidate_stale_completion_authority(
+                job_id,
+                Some(provider_owner),
+                ProviderIngestSignerPolicyObservationV1::Active(signer_policy),
+                self.clock.now_ms(),
+                cursor,
+            )?;
+            return Ok(());
+        }
         self.outbox.invalidate_stale_completion_authority(
             job_id,
             Some(provider_owner),
@@ -3671,8 +3763,7 @@ mod tests {
 
         fn resolve<'a>(
             &'a self,
-            _provider_owner: AccountId,
-            _finalized_cursor: ProviderIngestFinalizedCursorV1,
+            _context: ProviderIngestCompletionSignerResolutionContextV1,
         ) -> ProviderIngestFutureV1<
             'a,
             Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,

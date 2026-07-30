@@ -129,6 +129,11 @@ candidate and scenario binaries directly, hashes them before and after use, and
 records both binary hashes plus Cargo/rustc identities. Wrapper, runner, target,
 linker, preload, compiler-flag, Git, and Python environment injection is
 removed; the source seal runs with isolated Python mode.
+The scenario authority receives the account chain discriminant as an explicit
+required CLI value; this Taira-only staging path pins it to `369`. Parsing and
+canonical AccountId re-encoding occur under that same scoped discriminant, so
+the process default (`753` for SORA) cannot rewrite or reject a valid Taira
+recipient.
 
 The candidate authority canonically decodes `CandidateV4`, extracts and
 serializes its embedded manifest, validates the exact inventory and each
@@ -179,7 +184,10 @@ compile fixture. The Gradle property used by that check admits exactly
 staging, installation, instrumentation, and evidence export are rejected. The
 physical-evidence runner never enables this property. This check catches Kotlin
 or Android plugin integration failures without pretending to be device
-evidence.
+evidence. Generated candidate assets and JNI inputs are registered through the
+AGP Variant API. The check clones the warmed `modules-2` dependency cache into
+an owner-private read-only snapshot, while Gradle keeps all writable state in a
+fresh fixture-local user home; it never symlinks a live Gradle cache.
 
 ## Physical-device sequence and authority inputs
 
@@ -196,12 +204,50 @@ scripts/run_kagemusha_candidate_android_lab.sh --build-only \
 
 This builds offline with bounded workers, retains separately signed main and
 `androidTest` APKs, verifies their v2/v3 signing certificate and bytes, and
-prints the exact 32-byte candidate-stage challenge. Collect a fresh hardware
+prints the exact 32-byte candidate-stage challenge. The APKs contain the small
+candidate, stage, and scenario bindings but never the eight KRV4 files. This
+keeps both APKs in the ordinary non-ZIP64 Android installation corridor even
+when each proving key is about 3.86 GB. Collect a fresh hardware
 StrongBox/KeyMint attestation for those challenge bytes. The authorized
 external device-lab capture must then execute and export the complete canonical
 lifecycle with those exact APKs and produce a complete candidate-bound slot;
 the lab evidence authority signs that complete slot. An attestation-only or
 partially populated slot is not a valid input to the next command.
+
+Immediately after installing the two APKs and clearing only the candidate lab
+package data, the capture authority stages the external set before launching
+the lifecycle process:
+
+```sh
+python3 -I scripts/stage_kagemusha_candidate_android_artifacts.py \
+  --adb "$ADB_BINARY" \
+  --evidence-root "$EVIDENCE_ROOT" \
+  --candidate-sha256 "$CANDIDATE_SHA256" \
+  --stage-sha256 "$STAGE_SHA256" \
+  --source-commit "$SOURCE_COMMIT" \
+  --source-tree-sha256 "$SOURCE_TREE_SHA256"
+```
+
+Add `--serial "$SERIAL"` when a serial is selected. The helper validates the
+canonical stage catalog without buffering an artifact, securely opens each
+owner-private source, hashes it while streaming through non-PTY
+`adb shell -T run-as`, and publishes the set by one final app-private directory
+rename. Before the first transfer it requires free app-data capacity for the
+external set, a second complete native spool, and 1 GiB of reserve. It measures
+each on-device file with `stat` and `sha256sum` in one exact-inventory pass
+immediately before the final rename. Pre-existing app-private parents are
+accepted only when they are real app-owned mode-`0700` directories; symlinks,
+unsafe modes, dangling destinations, and path traversal fail closed. Failure
+cleanup unlinks only the eight known final/temporary names and the binding
+final/temporary names, then removes the empty incoming directory; it never uses
+recursive deletion. The harness independently requires the exact
+candidate/stage/count binding, an exact eight-file inventory, app ownership,
+directory mode `0700`, file mode `0600`, single file links, and the catalog size
+and SHA-256 for every byte while forwarding it to native authentication. Missing
+or stale external files fail closed; there is no APK asset compatibility path.
+Device free space after staging must also cover one additional complete artifact
+spool plus 1 GiB of working reserve. The Gradle staging tasks open both final
+APKs, reject every one of the eight KRV4 basenames, and enforce a 64 MiB APK cap.
 
 The full phase requires explicit, offline authority material. Paths must be
 canonical absolute regular files and every digest is supplied by the caller:
@@ -247,8 +293,9 @@ fails before receipt publication unless the machine report is successful and
 its paths, sizes, hashes, authority projection, and comparison policy all
 match the retained files.
 
-Instrumentation then verifies the installed base APK hashes before and after
-each lifecycle/export process. The exported transcript contains the exact
+The full runner performs that same staging step automatically after its package
+clear. Instrumentation then verifies the installed base APK hashes before and
+after each lifecycle/export process. The exported transcript contains the exact
 28-operation causal sequence across the process restart, including digest
 links between built requests, native results, restored branches, proof checks,
 the observed-branch duplicate rejection, and three redemptions. Cleanup is
@@ -256,6 +303,7 @@ scoped to the two non-shipping lab packages; it never signals unrelated apps,
 builds, shells, or Codex processes.
 
 The immutable build-only/full receipts bind source seals, tool identities,
-authority digest projections, canonical four-command templates, and the exact
-lifecycle/export argv arrays. Existing different receipts or toolchain audits
-are never overwritten.
+authority digest projections, canonical four-command templates (the lifecycle
+template includes external staging), the exact artifact-stage invocation, and
+the exact lifecycle/export argv arrays. Existing different receipts or
+toolchain audits are never overwritten.

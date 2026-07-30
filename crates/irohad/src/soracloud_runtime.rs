@@ -11897,6 +11897,7 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::NumericFault(_) => "numeric_fault",
         VMError::PointerAbiFault(_) => "pointer_abi_fault",
         VMError::AssertionFailed => "assertion_failed",
+        VMError::ContractAbort { .. } => "contract_abort",
         VMError::ExceededMaxCycles => "exceeded_max_cycles",
         VMError::InvalidMetadata => "invalid_metadata",
         VMError::UnsupportedProgramVersion { .. } => "unsupported_program_version",

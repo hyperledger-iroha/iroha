@@ -29,6 +29,7 @@ import {
   recoverNativeBindingPublication,
   REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   REQUIRED_NATIVE_EXPORTS,
+  REQUIRED_NATIVE_EXPORT_RESULTS,
 } from "../scripts/copy-native.mjs";
 import { verifyNativeBinding } from "../src/native.js";
 
@@ -1520,14 +1521,26 @@ test("required-export probe accepts a complete module and rejects missing symbol
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const complete = path.join(root, "complete.cjs");
   const incomplete = path.join(root, "incomplete.cjs");
+  const wrongAbi = path.join(root, "wrong-abi.cjs");
+  const completeSource =
+    `module.exports = { ${REQUIRED_NATIVE_EXPORTS.map((name) => {
+      const result = REQUIRED_NATIVE_EXPORT_RESULTS[name];
+      return `${name}() {${
+        result === undefined ? "" : ` return ${JSON.stringify(result)};`
+      }}`;
+    }).join(", ")} };\n`;
   writeFileSync(
     complete,
-    `module.exports = { ${REQUIRED_NATIVE_EXPORTS.map((name) =>
-      name === "connectNoritoBridgeAbiVersion"
-        ? `${name}() { return ${REQUIRED_NATIVE_BRIDGE_ABI_VERSION}; }`
-        : `${name}() {}`).join(", ")} };\n`,
+    completeSource,
   );
   writeFileSync(incomplete, "module.exports = { noritoEncodeInstruction() {} };\n");
+  writeFileSync(
+    wrongAbi,
+    completeSource.replace(
+      "securePrivateFileAbiVersion() { return 1;}",
+      "securePrivateFileAbiVersion() { return 2;}",
+    ),
+  );
 
   assert.equal(
     probeNativeBindingExports(complete),
@@ -1536,6 +1549,10 @@ test("required-export probe accepts a complete module and rejects missing symbol
   assert.throws(
     () => probeNativeBindingExports(incomplete),
     /missing required native exports.*noritoDecodeInstruction.*compileKotodama/u,
+  );
+  assert.throws(
+    () => probeNativeBindingExports(wrongAbi),
+    /invalid required native export results.*securePrivateFileAbiVersion expected 1 but found 2/u,
   );
   assert.throws(
     () => probeNativeBindingExports(complete, ["not-valid!"]),

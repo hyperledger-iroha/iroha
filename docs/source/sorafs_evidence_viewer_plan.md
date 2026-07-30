@@ -312,12 +312,14 @@ events to `/v1/evidence/log/{session_id_hex}`.
 
 ## Remaining Production Blockers
 
-- Package and operate the stock local runtime-provider broker service. Its
-  bounded canonical client/server protocol now covers all six viewer slots
-  (22–26 and 47), including exact public qualification metadata, replay-safe
-  operation identities, ambiguity typing, signed readback, and authoritative
-  CAS/archive verification; it does not itself supply deployment credentials
-  or vendor backends.
+- Package and operate a deployment-owned executable around the in-tree
+  `serve_runtime_provider_broker_v1` injected server-library boundary. No
+  checked-in executable calls it, and no credential loader, HSM/KMS/sealed-store
+  implementation, or vendor backend is packaged. Its bounded canonical
+  client/server protocol covers all six viewer slots (22–26 and 47), including
+  exact public qualification metadata, replay-safe operation identities,
+  ambiguity typing, signed readback, and authoritative CAS/archive
+  verification.
 - Construct and inject deployment-owned WebAuthn, rotating-grant, PKCS#11/HSM
   receipt-signer, KMS/erasure, linearizable sealed-CAS checkpoint-store, and
   immutable object-lock/archive implementations that satisfy the shipped

@@ -13,7 +13,7 @@
 chain = "fc56984b-2be7-431d-840e-21514d1883f0"
 
 [account]
-domain = "wonderland.universal"
+domain = "universal"
 profile = "taira"
 public_key = "REPLACE_WITH_CANARY_PUBLIC_KEY"
 private_key = "REPLACE_WITH_CANARY_PRIVATE_KEY"

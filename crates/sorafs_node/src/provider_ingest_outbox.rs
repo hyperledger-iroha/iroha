@@ -5461,6 +5461,8 @@ fn validate_completion_transaction(
     if transaction.payload() != &context.expected_payload
         || transaction.chain() != &context.chain_id
         || transaction.authority() != &context.provider_owner
+        || transaction.attachments().is_some()
+        || transaction.multisig_signatures().is_some()
         || transaction.verify_signature().is_err()
     {
         return Err(ProviderIngestOutboxError::InvalidSignedTransaction);
@@ -6341,11 +6343,12 @@ mod tests {
         ChainId,
         account::AccountId,
         isi::InstructionBox,
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         sorafs::{
             capacity::ProviderId,
             pin_registry::{ManifestDigest, ReplicationOrderId},
         },
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
     use tempfile::{TempDir, tempdir};
 
@@ -8637,6 +8640,39 @@ mod tests {
             signed_completion_for(authorization.provider_id(), authorization.order_id(), 9, 8);
         assert_eq!(
             outbox.store_completion_transaction(&signing_claim, wrong_epoch),
+            Err(ProviderIngestOutboxError::InvalidSignedTransaction)
+        );
+    }
+
+    #[test]
+    fn completion_transaction_rejects_envelope_sidecars() {
+        let authorization = authorization(0x57, 7);
+        let expected = signed_completion(&authorization, 8, 8);
+        let context = completion_context(&expected, 8, cursor(8));
+        assert!(
+            validate_completion_transaction(&authorization, &context, &expected, policy()).is_ok()
+        );
+
+        let key = KeyPair::try_from_seed(vec![8; 32], Algorithm::Ed25519).expect("key");
+        let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "vk_1"),
+        )]);
+        let attached = TransactionBuilder::from_payload(expected.payload().clone())
+            .expect("rebuild completion payload")
+            .with_attachments(attachments)
+            .try_sign(key.private_key())
+            .expect("sign attached completion");
+        assert_eq!(
+            validate_completion_transaction(&authorization, &context, &attached, policy()),
+            Err(ProviderIngestOutboxError::InvalidSignedTransaction)
+        );
+
+        let mut multisig = expected.clone();
+        multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
+        assert_eq!(
+            validate_completion_transaction(&authorization, &context, &multisig, policy()),
             Err(ProviderIngestOutboxError::InvalidSignedTransaction)
         );
     }

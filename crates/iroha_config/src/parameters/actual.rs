@@ -2579,6 +2579,8 @@ pub struct Concurrency {
     pub scheduler_max_threads: usize,
     /// Global Rayon thread pool size (0 = auto/physical cores)
     pub rayon_global_threads: usize,
+    /// Stack size (bytes) for Tokio runtime and blocking threads.
+    pub tokio_stack_bytes: usize,
     /// Stack size (bytes) for scheduler worker threads.
     pub scheduler_stack_bytes: usize,
     /// Stack size (bytes) for prover worker threads.
@@ -2599,6 +2601,7 @@ impl Concurrency {
             scheduler_min_threads: defaults::concurrency::SCHEDULER_MIN,
             scheduler_max_threads: defaults::concurrency::SCHEDULER_MAX,
             rayon_global_threads: defaults::concurrency::RAYON_GLOBAL,
+            tokio_stack_bytes: defaults::concurrency::TOKIO_STACK_BYTES,
             scheduler_stack_bytes: defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: defaults::concurrency::PROVER_STACK_BYTES,
             sumeragi_stack_bytes: defaults::concurrency::SUMERAGI_STACK_BYTES,
@@ -2615,6 +2618,18 @@ impl Concurrency {
                 Report::new(ParseError::InvalidConcurrencyConfig).attach(format!(
                     "guest_stack_bytes must be in [1, {}], got {}",
                     max_guest, self.guest_stack_bytes
+                )),
+            );
+        }
+        if self.tokio_stack_bytes < defaults::concurrency::TOKIO_STACK_BYTES_MIN
+            || self.tokio_stack_bytes > defaults::concurrency::TOKIO_STACK_BYTES_MAX
+        {
+            return Err(
+                Report::new(ParseError::InvalidConcurrencyConfig).attach(format!(
+                    "tokio_stack_bytes must be in [{}, {}], got {}",
+                    defaults::concurrency::TOKIO_STACK_BYTES_MIN,
+                    defaults::concurrency::TOKIO_STACK_BYTES_MAX,
+                    self.tokio_stack_bytes
                 )),
             );
         }
@@ -11502,6 +11517,8 @@ pub struct Offline {
     pub kagemusha_release_policy_path: Option<PathBuf>,
     /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
     pub kagemusha_artifact_dir: Option<PathBuf>,
+    /// Root-trusted canonical seal for a fully qualified Kagemusha catalog.
+    pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
     /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
     pub kagemusha_max_decoded_bytes: u64,
 }
@@ -11515,6 +11532,8 @@ impl Default for Offline {
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
+            kagemusha_catalog_qualification_seal_path:
+                defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
             kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
     }
@@ -11989,6 +12008,45 @@ mod tests_npos_timeouts {
         cfg.scheduler_stack_bytes = 0;
 
         let err = cfg.validate().expect_err("zero stack should be invalid");
+        assert!(matches!(
+            err.current_context(),
+            ParseError::InvalidConcurrencyConfig
+        ));
+    }
+
+    #[test]
+    fn concurrency_defaults_to_safe_tokio_stack() {
+        let cfg = Concurrency::from_defaults();
+
+        assert_eq!(
+            cfg.tokio_stack_bytes,
+            defaults::concurrency::TOKIO_STACK_BYTES
+        );
+        cfg.validate().expect("default Tokio stack must be valid");
+    }
+
+    #[test]
+    fn concurrency_validate_rejects_tokio_stack_below_minimum() {
+        let mut cfg = Concurrency::from_defaults();
+        cfg.tokio_stack_bytes = defaults::concurrency::TOKIO_STACK_BYTES_MIN - 1;
+
+        let err = cfg
+            .validate()
+            .expect_err("Tokio stack below minimum must fail");
+        assert!(matches!(
+            err.current_context(),
+            ParseError::InvalidConcurrencyConfig
+        ));
+    }
+
+    #[test]
+    fn concurrency_validate_rejects_tokio_stack_above_maximum() {
+        let mut cfg = Concurrency::from_defaults();
+        cfg.tokio_stack_bytes = defaults::concurrency::TOKIO_STACK_BYTES_MAX + 1;
+
+        let err = cfg
+            .validate()
+            .expect_err("Tokio stack above maximum must fail");
         assert!(matches!(
             err.current_context(),
             ParseError::InvalidConcurrencyConfig
@@ -13018,6 +13076,7 @@ mod tests {
         assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
+        assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
         assert_eq!(
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES

@@ -2077,10 +2077,12 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("policy registration succeeds");
-        SetAssetTransferFreeze::new(
+        SetAssetTransferAvailability::new(
             policy.destination_reserve.clone(),
             policy.destination_asset_definition_id.clone(),
-            true,
+            0,
+            AssetTransferAvailability::Enabled,
+            AssetTransferAvailability::Disabled,
             Some("reserve safety hold".to_owned()),
         )
         .execute(&ALICE_ID, &mut stx)

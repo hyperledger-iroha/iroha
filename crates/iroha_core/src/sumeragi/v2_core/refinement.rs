@@ -14,7 +14,10 @@
 // create a second, unverified calling relation solely to silence this lint.
 #![allow(clippy::large_types_passed_by_value)]
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fmt,
+};
 
 use super::{
     ConsensusMessageV2, ContextId, Digest, DurableState, HeightContext, Reducer, Round,
@@ -1182,7 +1185,6 @@ macro_rules! production_historical_body_pipeline_trace_body {
                 $projection.authenticated_request_hash
             )
             && $projection.fetch_tag.height == $projection.context_height
-            && $projection.fetch_tag.generation > 0u64
             && canonical_identity_equal_body!($projection.round_context_id, $projection.context_id)
             && $projection.round_height == $projection.context_height
             && canonical_identity_is_typed_body!(
@@ -1285,12 +1287,18 @@ macro_rules! exact_body_owner_binding_body {
     }};
 }
 
+macro_rules! tag_projection_strictly_advances_body {
+    ($later:expr, $previous:expr) => {{
+        $later.height == $previous.height
+            && ($later.view > $previous.view
+                || ($later.view == $previous.view && $later.generation > $previous.generation))
+    }};
+}
+
 macro_rules! exact_body_owner_rebind_body {
     ($current:expr, $previous:expr, $rebound_tag:expr, $owner_type:ident) => {{
         if !exact_body_owner_equal_body!($current, $previous)
-            || $previous.tag.height != $rebound_tag.height
-            || $previous.tag.view > $rebound_tag.view
-            || $previous.tag.generation >= $rebound_tag.generation
+            || !tag_projection_strictly_advances_body!($rebound_tag, $previous.tag)
         {
             None
         } else {
@@ -1639,11 +1647,13 @@ macro_rules! pending_round_can_acknowledge_body {
             $pending.height == $owner_before.height
                 && $pending.height == $owner_after.height
                 && $pending.view < u64::MAX
-                && ($owner_before.view <= $pending.view
-                    || $pending.view + 1u64 == $owner_before.view)
                 && $owner_after.view == $pending.view + 1u64
-                && $owner_before.generation < u64::MAX
-                && $owner_after.generation == $owner_before.generation + 1u64
+                && (if $pending.view + 1u64 == $owner_before.view {
+                    $owner_before.generation < u64::MAX
+                        && $owner_after.generation == $owner_before.generation + 1u64
+                } else {
+                    $pending.view >= $owner_before.view && $owner_after.generation == 0u64
+                })
         } else {
             tag_projection_equal_body!($owner_before, $owner_after)
                 && pending_round_can_begin_body!($pending, $owner_after)
@@ -2092,12 +2102,10 @@ macro_rules! production_durable_intent_trace_body {
                     && (if $projection.boundary_claimed.record_kind
                         == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
                     {
-                        $projection.owner_tag_after.height == $projection.owner_tag_before.height
-                            && $projection.owner_tag_after.view
-                                == $projection.pending_before.view + 1u64
-                            && $projection.owner_tag_before.generation < u64::MAX
-                            && $projection.owner_tag_after.generation
-                                == $projection.owner_tag_before.generation + 1u64
+                        tag_projection_strictly_advances_body!(
+                            $projection.owner_tag_after,
+                            $projection.owner_tag_before
+                        )
                     } else {
                         tag_projection_equal_body!(
                             $projection.owner_tag_before,
@@ -3291,9 +3299,10 @@ where
 /// Rebind one exact body-pipeline consumer to a strictly newer incarnation.
 ///
 /// The height, round/subject key, and manifest identity remain immutable;
-/// the view cannot regress and the generation must strictly advance. This is
-/// only a safety transition. It does not claim the asynchronous rebind will be
-/// scheduled.
+/// `(view, generation)` must advance lexicographically: a later view may reset
+/// generation to zero, while a same-view lock upgrade must strictly increment
+/// it. This is only a safety transition. It does not claim the asynchronous
+/// rebind will be scheduled.
 #[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
 pub fn plan_exact_body_owner_rebind<K, M>(
     current: ExactBodyOwnerProjection<K, M>,
@@ -5256,8 +5265,17 @@ macro_rules! enter_view_projection_gate_body {
                 // checks only the resulting monotonic view, never a second
                 // transcription of the admission predicate.
                 && $projection.before_tag.view <= $projection.after_tag.view
-                && $projection.before_tag.generation < u64::MAX
-                && $projection.after_tag.generation == $projection.before_tag.generation + 1u64
+                && tag_projection_strictly_advances_body!(
+                    $projection.after_tag,
+                    $projection.before_tag
+                )
+                && (if $projection.after_tag.view == $projection.before_tag.view {
+                    $projection.before_tag.generation < u64::MAX
+                        && $projection.after_tag.generation
+                            == $projection.before_tag.generation + 1u64
+                } else {
+                    $projection.after_tag.generation == 0u64
+                })
                 && prepare_identity_in_context_body!(
                     local,
                     $projection.context_id,
@@ -5761,7 +5779,7 @@ macro_rules! transition_branch_constraints_body {
                             && $enter_count == 0u64
                     }
                     2 => {
-                        !$facts.generation_unchanged
+                        (!$facts.install_view_unchanged || !$facts.generation_unchanged)
                             && $enter_count == 1u64
                             && $apply_count == 0u64
                             && !$facts.volatile_after.candidate_present
@@ -6400,6 +6418,114 @@ fn transition_facts(projection: TransitionProjection<'_>) -> TransitionFacts {
         TransitionClassificationFacts,
         TransitionDeltaFacts,
     )
+}
+
+/// Predicate-level evidence for a transition rejected by [`accepts`].
+///
+/// This is diagnostic-only: every field is derived from the same primitive
+/// projection and production predicates as the commit gate. It neither grants
+/// capabilities nor participates in acceptance.
+#[derive(Clone, Copy)]
+pub(crate) struct TransitionDiagnostic {
+    facts: TransitionFacts,
+    safety_before: SafetyProjection,
+    safety_after: SafetyProjection,
+    volatile_before_well_formed: bool,
+    volatile_after_well_formed: bool,
+    signed_message_class_valid: bool,
+    selected_action_valid: bool,
+    effect_slots_authorized: bool,
+    effect_order_valid: bool,
+    transition_branch_valid: bool,
+    enter_view_effective_lock_valid: bool,
+}
+
+impl fmt::Debug for TransitionDiagnostic {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransitionDiagnostic")
+            .field("facts", &self.facts)
+            .field("safety_before", &self.safety_before)
+            .field("safety_after", &self.safety_after)
+            .field(
+                "volatile_before_well_formed",
+                &self.volatile_before_well_formed,
+            )
+            .field(
+                "volatile_after_well_formed",
+                &self.volatile_after_well_formed,
+            )
+            .field(
+                "signed_message_class_valid",
+                &self.signed_message_class_valid,
+            )
+            .field("selected_action_valid", &self.selected_action_valid)
+            .field("effect_slots_authorized", &self.effect_slots_authorized)
+            .field("effect_order_valid", &self.effect_order_valid)
+            .field("transition_branch_valid", &self.transition_branch_valid)
+            .field(
+                "enter_view_effective_lock_valid",
+                &self.enter_view_effective_lock_valid,
+            )
+            .finish()
+    }
+}
+
+/// Derive predicate-level diagnostics without weakening the production gate.
+#[must_use]
+pub(crate) fn diagnose(projection: TransitionProjection<'_>) -> TransitionDiagnostic {
+    let facts = transition_facts(projection);
+    let enter_view_effective_lock_valid = if projection.enter_view.active {
+        let enter_view = projection.enter_view;
+        let protected_after = u64::from(enter_view.durable_lock_after.present);
+        let ownership_after = u64::from(enter_view.following_fetch_lock.present);
+        let trace = EffectiveLockTraceProjection {
+            kind: EFFECTIVE_LOCK_TRACE_ENTER_VIEW,
+            relation_exact: enter_view_projection_gate_body!(enter_view)
+                && enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+                && enter_view.fetch_count == effect_count_body!(projection.effects, 2u8),
+            protected_before: protected_after,
+            protected_after: u64::from(enter_view.effect_protected_lock.present),
+            owner_before: enter_view.fetch_count,
+            owner_after: ownership_after,
+            owner_reused: false,
+            ready_before: 0,
+            retired_retained: 0,
+            retired_ready: 0,
+            ready_after: 0,
+            store_before: 0,
+            retired_store: 0,
+            store_after: 0,
+            cursor_before: 0,
+            completion_ready: false,
+            progress_ready: false,
+            normal_ready: false,
+            selected: 0,
+            cursor_after: 0,
+        };
+        production_enter_view_uses_post_install_effective_lock_kernel(trace, enter_view)
+    } else {
+        true
+    };
+    TransitionDiagnostic {
+        facts,
+        safety_before: projection.safety_before,
+        safety_after: projection.safety_after,
+        volatile_before_well_formed: volatile_summary_is_well_formed(
+            facts.volatile_before,
+            facts.validator_count,
+        ),
+        volatile_after_well_formed: volatile_summary_is_well_formed(
+            facts.volatile_after,
+            facts.validator_count,
+        ),
+        signed_message_class_valid: signed_message_class_is_valid(facts),
+        selected_action_valid: action_kind_is_valid(facts),
+        effect_slots_authorized: effect_slots_are_authorized(facts.effects),
+        effect_order_valid: effect_order_is_valid(facts.effects, facts.event_kind),
+        transition_branch_valid: transition_branch_accepts(facts),
+        enter_view_effective_lock_valid,
+    }
 }
 
 /// Execute the verified transition kernel used as the production commit gate.
@@ -8058,7 +8184,7 @@ mod tests {
         let successor = TagProjection {
             height: begin.owner_tag_before.height,
             view: begin.pending_after.view + 1,
-            generation: begin.owner_tag_before.generation + 1,
+            generation: 0,
         };
         let mut acknowledge_boundary = begin.boundary_claimed;
         acknowledge_boundary.kind = BOUNDARY_ACKNOWLEDGE_WAL;
@@ -9440,10 +9566,10 @@ mod tests {
             TagProjection {
                 height: 9,
                 view: 5,
-                generation: 8,
+                generation: 0,
             },
         )
-        .expect("strict later-view rebind is accepted");
+        .expect("later-view generation reset is accepted");
         assert_eq!(rebound.key, previous.key);
         assert_eq!(rebound.manifest_hash, previous.manifest_hash);
 
@@ -9464,7 +9590,7 @@ mod tests {
             TagProjection {
                 height: 10,
                 view: 5,
-                generation: 8,
+                generation: 0,
             },
             TagProjection {
                 height: 9,
@@ -9473,7 +9599,7 @@ mod tests {
             },
             TagProjection {
                 height: 9,
-                view: 5,
+                view: 4,
                 generation: 7,
             },
         ] {
@@ -9486,7 +9612,7 @@ mod tests {
                 TagProjection {
                     height: 9,
                     view: 5,
-                    generation: 8,
+                    generation: 0,
                 },
             )
             .is_none(),
@@ -9499,7 +9625,7 @@ mod tests {
                 TagProjection {
                     height: 9,
                     view: 5,
-                    generation: 8,
+                    generation: 0,
                 },
             )
             .is_none(),
@@ -9512,7 +9638,7 @@ mod tests {
                 TagProjection {
                     height: 9,
                     view: 5,
-                    generation: 8,
+                    generation: 0,
                 },
             )
             .is_none(),

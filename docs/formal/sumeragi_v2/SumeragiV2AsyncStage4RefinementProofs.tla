@@ -56,9 +56,29 @@ Stage4CapacityProgress(candidate, position, rank) ==
 Stage4CapacityStrictResult(candidate, position, rank) ==
   Stage4CapacityProgress(candidate, position, rank)'
 
+Stage4CapacityServeEpisodeResidual(candidate, position, rank) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ ProtectedStage4Pending(candidate, position)
+  /\ ~Stage4CapacityProgress(candidate, position, rank)
+  /\ AsyncServeIngressLifecycleOwnerIdentities(candidate.node) # {}
+  /\ asyncRunnerPhase[candidate.node] = "Ingress"
+
+Stage4CapacityFiniteServeEpisodeResidualProperty(specification) ==
+  specification
+    => \A candidate, position:
+         \A rank \in Stage4CapacityCarrier:
+           Stage4CapacityServeEpisodeResidual(candidate, position, rank)
+             ~> Stage4CapacityProgress(candidate, position, rank)
+
+Stage4RefinementFiniteServeEpisodeResidualProperty(specification) ==
+  /\ Stage4FiniteServeEpisodeResidualProperty(specification)
+  /\ Stage4CapacityFiniteServeEpisodeResidualProperty(specification)
+
 Stage4CapacityStepResult(candidate, position, rank) ==
   \/ Stage4CapacityStrictResult(candidate, position, rank)
   \/ Stage4CapacityBlockedAtRank(candidate, position, rank)'
+  \/ Stage4CapacityServeEpisodeResidual(candidate, position, rank)'
 
 THEOREM Stage4CapacityBlockedCoreFacts ==
   \A candidate, position, rank:
@@ -122,14 +142,14 @@ PROOF
 THEOREM SerializedRuntimeReturnsToLocalWithBudget ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => /\ asyncRunnerPhase'[node] = "Local"
        /\ asyncRunnerBudget'[node] = AsyncQueueCapacity
        /\ AsyncQueueCapacity > 0
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
-                SerializedRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node)
          PROVE /\ asyncRunnerPhase'[node] = "Local"
                /\ asyncRunnerBudget'[node] = AsyncQueueCapacity
                /\ AsyncQueueCapacity > 0
@@ -146,7 +166,9 @@ PROOF
            /\ asyncRunnerBudget' =
                  [asyncRunnerBudget EXCEPT
                     ![node] = AsyncQueueCapacity]
-      BY <1>1 DEF SerializedRuntimeStep
+      BY <1>1
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep
     <2>4. asyncRunnerPhase'[node] = "Local"
       BY <1>1, <2>2, <2>3, FunctionalReplaceUpdateAtKey
     <2>5. asyncRunnerBudget'[node] = AsyncQueueCapacity
@@ -158,13 +180,13 @@ THEOREM SerializedRuntimeStage4CapacityRankInCarrier ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ AsyncStrongTypeInvariant'
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => Stage4CapacityRank(node)' \in Stage4CapacityCarrier
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 AsyncStrongTypeInvariant',
-                SerializedRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node)
          PROVE Stage4CapacityRank(node)' \in Stage4CapacityCarrier
     <2>1. AsyncTypeInvariant'
       BY <1>1 DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
@@ -358,14 +380,14 @@ THEOREM SerializedRuntimeKeepsStage4PendingUnlessProgress ==
   \A candidate, position, rank:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ ~ProtectedRankProgressExit(candidate, <<4, position>>)'
     => ProtectedStage4Pending(candidate, position)'
 PROOF
   <1>1. ASSUME NEW candidate, NEW position, NEW rank,
                 Stage4CapacityBlockedAtRank(candidate, position, rank),
                 [AsyncNext]_AsyncAllVars,
-                SerializedRuntimeStep(candidate.node),
+                SerializedRunnerRuntimeStep(candidate.node),
                 ~ProtectedRankProgressExit(
                    candidate, <<4, position>>)'
          PROVE ProtectedStage4Pending(candidate, position)'
@@ -395,7 +417,9 @@ PROOF
            /\ asyncCausalAdmissionOwed'
                 = asyncCausalAdmissionOwed
            /\ asyncNextLocalSource' = asyncNextLocalSource
-      BY <1>1 DEF SerializedRuntimeStep,
+      BY <1>1 DEF SerializedRunnerRuntimeStep,
+                    SerializedRuntimeStep,
+                    SerializedRuntimePrecedesServeIngressStep,
                     AsyncIoVars, AsyncLocalAdmissionVars
     <2>6. /\ CandidateInReadyQueue(candidate)'
            /\ ReadyCandidatePosition(candidate)' = position
@@ -405,7 +429,9 @@ PROOF
              SelectedCompletionSource, LocalSourceDistance,
              PreferredLocalSource, SequenceSet
     <2>7. asyncOutstandingWork' = asyncOutstandingWork
-      BY <1>1 DEF SerializedRuntimeStep, AsyncIoVars
+      BY <1>1
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep, AsyncIoVars
     <2>8. candidate \in asyncOutstandingWork'[candidate.node]
       BY <2>1, <2>7
     <2>9. candidate \in TrackedWorkCandidates'
@@ -462,6 +488,43 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        AsyncLogicalCandidateOwnershipInvariant,
        AsyncOutstandingCarrierInvariant, AsyncAllVars
 
+THEOREM Stage4CapacityLocalPredecessorStrictlyProgresses ==
+  \A candidate, position:
+    \A rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ SerializedLocalPrecedesServeIngressStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance, LocalAdmissionCanAdvance,
+       ProducerCompletionCanAdvance, ProducerCompletionCanAdmit,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
+       NodeQueueNonempty, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
 THEOREM Stage4CapacityIngressStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
@@ -502,7 +565,7 @@ THEOREM Stage4CapacityDeferredDrainStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ DeferredDrainStep(candidate.node)
     => Stage4CapacityStrictResult(candidate, position, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
@@ -526,7 +589,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyRunInnerOrdering, ReadyRunInnerCarrier,
        ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-       SerializedRuntimeStep, DeferredDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep, DeferredDrainStep,
        RemoveNextDeferredCommand, DiscardCommand,
        AdvanceNextDeferredClass, DeferredQueueNonempty,
        AppendCausalSuccessors, FreshCommandSuccessors,
@@ -541,7 +605,7 @@ THEOREM Stage4CapacityDeferredTagStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ DeferredTagStep(candidate.node)
     => Stage4CapacityStrictResult(candidate, position, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
@@ -565,7 +629,8 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyRunInnerOrdering, ReadyRunInnerCarrier,
        ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-       SerializedRuntimeStep, DeferredTagStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep, DeferredTagStep,
        DeferredTimeoutStep, DeferredRetransmitStep,
        AppendCausalSuccessors, FreshCommandSuccessors,
        CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
@@ -579,7 +644,7 @@ THEOREM Stage4CapacityDirectTimeoutStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ DirectTimeoutStep(candidate.node)
     => Stage4CapacityStrictResult(candidate, position, rank)
 BY AsyncBracketNextPreservesStrongTypeInvariant,
@@ -603,7 +668,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyRunInnerOrdering, ReadyRunInnerCarrier,
        ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-       SerializedRuntimeStep, DirectTimeoutStep, TimeoutDue,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       DirectTimeoutStep, TimeoutDue,
        AppendCausalSuccessors, FreshCommandSuccessors,
        CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
        CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
@@ -675,13 +742,13 @@ PROOF
 THEOREM SerializedFifoRemovesOneCommand ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
-                SerializedRuntimeStep(node),
+                SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
          PROVE AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
     <2> DEFINE Queue == asyncCommandQueues[node]
@@ -901,7 +968,7 @@ THEOREM SerializedFifoRetainsExistingCausalHead ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ CausalQueueNonempty(node)
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => /\ CausalQueueNonempty(node)'
        /\ HeadCausalCandidate(node)' = HeadCausalCandidate(node)
@@ -909,7 +976,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 CausalQueueNonempty(node),
-                SerializedRuntimeStep(node),
+                SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
          PROVE /\ CausalQueueNonempty(node)'
                /\ HeadCausalCandidate(node)'
@@ -1035,7 +1102,7 @@ THEOREM SerializedFifoRetainsNonCompletionCausalDebt ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ NonCompletionCausalAdmissionDebt(node)
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => /\ NonCompletionCausalAdmissionDebt(node)'
        /\ CausalHeadCommandLimit(node)'
@@ -1044,7 +1111,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 NonCompletionCausalAdmissionDebt(node),
-                SerializedRuntimeStep(node),
+                SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
          PROVE /\ NonCompletionCausalAdmissionDebt(node)'
                /\ CausalHeadCommandLimit(node)'
@@ -1059,7 +1126,10 @@ PROOF
                 = HeadCausalCandidate(node)
       BY <1>1, <2>1, SerializedFifoRetainsExistingCausalHead
     <2>3. asyncCausalAdmissionOwed' = asyncCausalAdmissionOwed
-      BY <1>1 DEF SerializedRuntimeStep, AsyncLocalAdmissionVars
+      BY <1>1
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncLocalAdmissionVars
     <2> QED BY <2>1, <2>2, <2>3, Isa
          DEF NonCompletionCausalAdmissionDebt,
              CausalAdmissionDebtActive, CausalHeadCommandLimit
@@ -1078,7 +1148,7 @@ THEOREM NonCompletionDebtFifoCapacityProgress ==
     /\ AsyncTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ NonCompletionCausalAdmissionDebt(node)
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => \/ CausalHeadCanAdvance(node)'
        \/ CausalCommandCapacityDebt(node)'
@@ -1088,7 +1158,7 @@ PROOF
                 AsyncTypeInvariant,
                 AsyncProgressOwnershipInvariant,
                 NonCompletionCausalAdmissionDebt(node),
-                SerializedRuntimeStep(node),
+                SerializedRunnerRuntimeStep(node),
                 FifoRuntimeStep(node)
          PROVE \/ CausalHeadCanAdvance(node)'
                \/ CausalCommandCapacityDebt(node)'
@@ -1169,7 +1239,7 @@ THEOREM Stage4CapacityFifoStrictlyProgresses ==
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
     /\ [AsyncNext]_AsyncAllVars
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ FifoRuntimeStep(candidate.node)
     => Stage4CapacityStrictResult(candidate, position, rank)
 PROOF
@@ -1178,7 +1248,7 @@ PROOF
                 NEW rank \in Stage4CapacityCarrier,
                 Stage4CapacityBlockedAtRank(candidate, position, rank),
                 [AsyncNext]_AsyncAllVars,
-                SerializedRuntimeStep(candidate.node),
+                SerializedRunnerRuntimeStep(candidate.node),
                 FifoRuntimeStep(candidate.node)
          PROVE Stage4CapacityStrictResult(candidate, position, rank)
     <2>1. /\ candidate.node \in ValidatorIds
@@ -1199,7 +1269,8 @@ PROOF
         BY <1>1, <2>1, <2>4,
            SerializedRuntimeReturnsToLocalWithBudget, Isa
            DEF ReadyStage4Actionable, LocalAdmissionCanAdvance,
-               SerializedRuntimeStep
+               SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep
       <3> QED BY <3>1
            DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
                Stage4CapacityGoal
@@ -1260,7 +1331,7 @@ THEOREM Stage4CapacityRetransmitStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     /\ DirectRetransmitStep(candidate.node)
     /\ ~(NodeQueueNonempty(candidate.node)
            /\ asyncFifoOwed[candidate.node])
@@ -1286,7 +1357,9 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ReadyRunInnerOrdering, ReadyRunInnerCarrier,
        ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
        ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
-       SerializedRuntimeStep, DirectRetransmitStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       DirectRetransmitStep,
        CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
        CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
        NodeQueueNonempty, SequenceSet,
@@ -1317,17 +1390,21 @@ THEOREM Stage4CapacitySerializedRuntimeStrictlyProgresses ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
-    /\ SerializedRuntimeStep(candidate.node)
+    /\ SerializedRunnerRuntimeStep(candidate.node)
     => Stage4CapacityStrictResult(candidate, position, rank)
 PROOF
   <1>1. ASSUME NEW candidate,
                 NEW position,
                 NEW rank \in Stage4CapacityCarrier,
                 Stage4CapacityBlockedAtRank(candidate, position, rank),
-                SerializedRuntimeStep(candidate.node)
+                SerializedRunnerRuntimeStep(candidate.node)
          PROVE Stage4CapacityStrictResult(candidate, position, rank)
     <2>1. RuntimeStep(candidate.node)
-      BY <1>1 DEF SerializedRuntimeStep
+      BY <1>1
+         DEF SerializedRunnerRuntimeStep,
+             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             SerializedRuntimePrecedesServeIngressStep
     <2>2. CASE DeferredDrainStep(candidate.node)
       BY <1>1, <2>2, Stage4CapacityDeferredDrainStrictlyProgresses
     <2>3. CASE DeferredTagStep(candidate.node)
@@ -1347,29 +1424,78 @@ PROOF
          DEF RuntimeStep
   <1> QED BY <1>1
 
-THEOREM Stage4CapacitySameNodeRunStrictlyProgresses ==
+THEOREM Stage4CapacityTargetOnlyCreatesServeEpisodeOutcome ==
   \A candidate, position:
     \A rank \in Stage4CapacityCarrier:
     /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
     /\ PostGstRunNode(candidate.node)
-    => Stage4CapacityStrictResult(candidate, position, rank)
+    /\ AsyncServeIngressTargetOnlyTurn(candidate.node)
+    => \/ Stage4CapacityStrictResult(candidate, position, rank)
+       \/ Stage4CapacityServeEpisodeResidual(candidate, position, rank)'
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   Stage4CapacityRankInCarrier, IsaT(300)
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityServeEpisodeResidual,
+       Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       Stage4CapacityOrdering, Stage4CapacityCarrier,
+       Stage4CapacityGoal, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       PostGstRunNode, RunNode,
+       AsyncServeIngressTargetOnlyTurn,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       CausalHeadCanAdvance, CandidateInReadyQueue,
+       CandidateScheduled, CandidateInFlight, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacitySameNodeRunProducesOutcome ==
+  \A candidate, position:
+    \A rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ PostGstRunNode(candidate.node)
+    => \/ Stage4CapacityStrictResult(candidate, position, rank)
+       \/ Stage4CapacityServeEpisodeResidual(candidate, position, rank)'
 PROOF
   <1>1. ASSUME NEW candidate,
                 NEW position,
                 NEW rank \in Stage4CapacityCarrier,
                 Stage4CapacityBlockedAtRank(candidate, position, rank),
                 PostGstRunNode(candidate.node)
-         PROVE Stage4CapacityStrictResult(candidate, position, rank)
+         PROVE \/ Stage4CapacityStrictResult(candidate, position, rank)
+               \/ Stage4CapacityServeEpisodeResidual(
+                    candidate, position, rank)'
     <2>1. RunNode(candidate.node)
       BY <1>1 DEF PostGstRunNode
     <2>2. CASE LocalAdmissionStep(candidate.node)
       BY <1>1, <2>2, Stage4CapacityLocalAdmissionStrictlyProgresses
     <2>3. CASE IngressDrainStep(candidate.node)
       BY <1>1, <2>3, Stage4CapacityIngressStrictlyProgresses
-    <2>4. CASE SerializedRuntimeStep(candidate.node)
+    <2>4. CASE SerializedRunnerRuntimeStep(candidate.node)
       BY <1>1, <2>4,
          Stage4CapacitySerializedRuntimeStrictlyProgresses
-    <2> QED BY <2>1, <2>2, <2>3, <2>4 DEF RunNode
+    <2>5. CASE AsyncServeIngressTargetOnlyTurn(candidate.node)
+      BY <1>1, <2>5,
+         Stage4CapacityTargetOnlyCreatesServeEpisodeOutcome
+    <2>6. CASE SerializedLocalPrecedesServeIngressStep(candidate.node)
+      BY <1>1, <2>6,
+         Stage4CapacityLocalPredecessorStrictlyProgresses
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         RunNodeWorkConcreteActionCaseSplit
+         DEF RunNode
   <1> QED BY <1>1
 
 THEOREM Stage4CapacityOtherRunnerPreservesOrProgresses ==
@@ -1398,6 +1524,11 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        CausalHeadCommandLimit, ReadyRunAuxRank,
        ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
        RunNode, RunHistoricalRecoveryNode, RunNodeWork,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RunHistoricalServer, CandidateInReadyQueue,
        CandidateScheduled, CandidateInFlight, SequenceSet,
        AsyncProgressOwnershipInvariant,
@@ -1578,7 +1709,7 @@ PROOF
                     RunNode(node)
         <4>1. CASE RunNode(candidate.node)
           BY <1>1, <2>2, <3>1, <4>1,
-             Stage4CapacitySameNodeRunStrictlyProgresses
+             Stage4CapacitySameNodeRunProducesOutcome
              DEF Stage4CapacityStepResult, PostGstRunNode,
                  Stage4CapacityBlockedAtRank,
                  ReadyStage4CausalCapacityBlocked,
@@ -1595,7 +1726,7 @@ PROOF
                     RunHistoricalRecoveryNode(node)
         <4>1. CASE RunNode(candidate.node)
           BY <1>1, <2>2, <3>3, <4>1,
-             Stage4CapacitySameNodeRunStrictlyProgresses
+             Stage4CapacitySameNodeRunProducesOutcome
              DEF Stage4CapacityStepResult, PostGstRunNode,
                  Stage4CapacityBlockedAtRank,
                  ReadyStage4CausalCapacityBlocked,
@@ -1635,6 +1766,7 @@ PROOF
         BY <1>1, <3>9
            DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
                Stage4CapacityProgress, Stage4CapacityGoal,
+               Stage4CapacityServeEpisodeResidual,
                Stage4CapacityBlockedAtRank,
                ReadyStage4CausalCapacityBlocked,
                ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
@@ -1657,14 +1789,18 @@ PROOF
 THEOREM FairStage4CapacityOneStep ==
   \A initialContext, candidate, position:
     \A rank \in Stage4CapacityCarrier:
-      AsyncSpecAt(initialContext)
-        => (Stage4CapacityBlockedAtRank(candidate, position, rank)
-              ~> Stage4CapacityProgress(candidate, position, rank))
+      Stage4CapacityFiniteServeEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (Stage4CapacityBlockedAtRank(candidate, position, rank)
+                    ~> Stage4CapacityProgress(candidate, position, rank)))
 PROOF
   <1>1. ASSUME NEW initialContext,
                 NEW candidate,
                 NEW position,
-                NEW rank \in Stage4CapacityCarrier
+                NEW rank \in Stage4CapacityCarrier,
+                Stage4CapacityFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (Stage4CapacityBlockedAtRank(
                        candidate, position, rank)
@@ -1681,7 +1817,9 @@ PROOF
       BY AsyncSpecAlwaysUsesFixedResponsiveVoters
     <2>3. /\ Stage4CapacityBlockedAtRank(
                   candidate, position, rank)
-             /\ ~Stage4CapacityProgress(candidate, position, rank)
+             /\ ~(Stage4CapacityProgress(candidate, position, rank)
+                    \/ Stage4CapacityServeEpisodeResidual(
+                         candidate, position, rank))
             => ENABLED
                  <<PostGstRunNode(candidate.node)>>_AsyncAllVars
       BY ProtectedOwnedCandidateEnablesFairRunNode
@@ -1691,17 +1829,23 @@ PROOF
              Stage4CapacityProgress, Stage4CapacityGoal
     <2>4. /\ Stage4CapacityBlockedAtRank(
                   candidate, position, rank)
-             /\ ~Stage4CapacityProgress(candidate, position, rank)
+             /\ ~(Stage4CapacityProgress(candidate, position, rank)
+                    \/ Stage4CapacityServeEpisodeResidual(
+                         candidate, position, rank))
              /\ <<PostGstRunNode(
                     candidate.node)>>_AsyncAllVars
-            => Stage4CapacityProgress(candidate, position, rank)'
-      BY Stage4CapacitySameNodeRunStrictlyProgresses
+            => \/ Stage4CapacityProgress(candidate, position, rank)'
+               \/ Stage4CapacityServeEpisodeResidual(
+                    candidate, position, rank)'
+      BY Stage4CapacitySameNodeRunProducesOutcome
          DEF Stage4CapacityStrictResult
     <2>5. Stage4CapacityBlockedAtRank(candidate, position, rank)
               /\ [AsyncNext]_AsyncAllVars
             => Stage4CapacityBlockedAtRank(
                  candidate, position, rank)'
                  \/ Stage4CapacityProgress(candidate, position, rank)'
+                 \/ Stage4CapacityServeEpisodeResidual(
+                      candidate, position, rank)'
       BY Stage4CapacityBlockedStep
          DEF Stage4CapacityStepResult, Stage4CapacityStrictResult
     <2>6. CASE candidate.node \in AsyncVotersAt(initialContext)
@@ -1712,10 +1856,25 @@ PROOF
       <3>2. AsyncSpecAt(initialContext)
                => (Stage4CapacityBlockedAtRank(
                      candidate, position, rank)
+                     ~> (Stage4CapacityProgress(
+                           candidate, position, rank)
+                          \/ Stage4CapacityServeEpisodeResidual(
+                               candidate, position, rank)))
+        BY <2>3, <2>4, <2>5, <3>1, PTL DEF AsyncSpecAt
+      <3>3. AsyncSpecAt(initialContext)
+               => (Stage4CapacityServeEpisodeResidual(
+                     candidate, position, rank)
                      ~> Stage4CapacityProgress(
                           candidate, position, rank))
-        BY <2>3, <2>4, <2>5, <3>1, PTL DEF AsyncSpecAt
-      <3> QED BY <3>2
+        BY <1>1
+           DEF Stage4CapacityFiniteServeEpisodeResidualProperty
+      <3>4. AsyncSpecAt(initialContext)
+               => (Stage4CapacityBlockedAtRank(
+                     candidate, position, rank)
+                     ~> Stage4CapacityProgress(
+                          candidate, position, rank))
+        BY <3>2, <3>3, PTL
+      <3> QED BY <3>4
     <2>7. CASE candidate.node \notin AsyncVotersAt(initialContext)
       <3>1. AsyncSpecAt(initialContext)
                => []~Stage4CapacityBlockedAtRank(
@@ -1737,12 +1896,16 @@ PROOF
 
 THEOREM FairStage4CapacityRankDescent ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => \A rank \in Stage4CapacityCarrier:
-           Stage4CapacityBlockedAtRank(candidate, position, rank)
-             ~> Stage4CapacityGoal(candidate, position)
+    Stage4CapacityFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => \A rank \in Stage4CapacityCarrier:
+                 Stage4CapacityBlockedAtRank(candidate, position, rank)
+                   ~> Stage4CapacityGoal(candidate, position))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage4CapacityFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => \A rank \in Stage4CapacityCarrier:
                       Stage4CapacityBlockedAtRank(
@@ -1783,11 +1946,15 @@ PROOF
 
 THEOREM FairNonCompletionCausalCapacityOpens ==
   \A initialContext, candidate, position:
-    AsyncSpecAt(initialContext)
-      => (ReadyStage4CausalCapacityBlocked(candidate, position)
-            ~> Stage4CapacityGoal(candidate, position))
+    Stage4CapacityFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => (AsyncSpecAt(initialContext)
+            => (ReadyStage4CausalCapacityBlocked(candidate, position)
+                  ~> Stage4CapacityGoal(candidate, position)))
 PROOF
-  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position,
+                Stage4CapacityFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (ReadyStage4CausalCapacityBlocked(
                        candidate, position)
@@ -1840,7 +2007,11 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
        CandidateServiceRank, CandidateInReadyQueue,
        LocalAdmissionCanAdvance, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, RunHistoricalServer,
+       RunNodeWork, SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RunHistoricalServer,
        AsyncProgressOwnershipInvariant,
        AsyncOutstandingCarrierInvariant, AsyncAllVars
 
@@ -2095,7 +2266,8 @@ PROOF
         BY <1>1, <3>1, <3>2, Stage4BlockedAuxStep
       <3> QED BY <3>3, Isa
            DEF Stage4AuxStepResult, Stage4AuxStrictResult,
-               Stage4AuxProgress, ReadyBlockedAtAux,
+               Stage4AuxProgress, Stage4ServeEpisodeResidual,
+               ReadyBlockedAtAux,
                ReadyStage4CausalCapacityBlocked,
                ProtectedStage4Actionable
     <2> QED BY <2>2, <2>3, <2>4
@@ -2166,13 +2338,18 @@ PROOF
 THEOREM FairProtectedStage4RankDescent ==
   \A initialContext, candidate:
     \A position \in Nat:
-      AsyncSpecAt(initialContext)
-        => (ProtectedOwnedAtServiceRank(candidate, <<4, position>>)
-              ~> ProtectedRankProgressExit(candidate, <<4, position>>))
+      Stage4RefinementFiniteServeEpisodeResidualProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => (ProtectedOwnedAtServiceRank(candidate, <<4, position>>)
+                    ~> ProtectedRankProgressExit(
+                         candidate, <<4, position>>)))
 PROOF
   <1>1. ASSUME NEW initialContext,
                 NEW candidate,
-                NEW position \in Nat
+                NEW position \in Nat,
+                Stage4RefinementFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => (ProtectedOwnedAtServiceRank(
                        candidate, <<4, position>>)
@@ -2198,13 +2375,14 @@ PROOF
                           \/ \E rank \in ReadyRunAuxCarrier:
                                ReadyBlockedAtAux(
                                  candidate, position, rank)))
-        BY <2>1, ReadyRunAuxRankInCarrier, PTL
+      BY <2>1, ReadyRunAuxRankInCarrier, PTL
            DEF ReadyBlockedAtAux
       <3>2. AsyncSpecAt(initialContext)
                => \A rank \in ReadyRunAuxCarrier:
                     ReadyBlockedAtAux(candidate, position, rank)
                       ~> Stage4AuxGoal(candidate, position)
         BY FairStage4AuxRankDescent
+           DEF Stage4RefinementFiniteServeEpisodeResidualProperty
       <3> QED BY <3>1, <3>2, PTL DEF Stage4AuxGoal
     <2>3. AsyncSpecAt(initialContext)
              => (ReadyStage4CausalCapacityBlocked(candidate, position)
@@ -2212,7 +2390,8 @@ PROOF
                          candidate, <<4, position>>)
                         \/ ReadyStage4Actionable(candidate)))
       BY FairNonCompletionCausalCapacityOpens
-         DEF Stage4CapacityGoal
+         DEF Stage4CapacityGoal,
+             Stage4RefinementFiniteServeEpisodeResidualProperty
     <2>4. AsyncSpecAt(initialContext)
              => (ProtectedStage4Actionable(candidate, position)
                    ~> ProtectedRankProgressExit(
@@ -2850,8 +3029,6 @@ PROOF
          PROVE OneHeightCompletionLiveness(initialContext)
     <2>0. AsyncSpecAt(initialContext)
       BY <1>1, AsyncLiveSpecProjectsAsyncSpec
-    <2>1. AsyncSpecAt(initialContext) => <>gst
-      BY AsyncGstEventually
     <2>2. AsyncSpecAt(initialContext) => [](gst => []gst)
       BY AsyncSpecKeepsGstOnceSet
     <2>3. []OneHeightFrameAt(initialContext)
@@ -3021,9 +3198,14 @@ PROOF
 
 THEOREM ProtectedStage4RankProgressFromFairScheduler ==
   \A initialContext:
-    ProtectedStage4RankProgressProperty(AsyncSpecAt(initialContext))
+    Stage4RefinementFiniteServeEpisodeResidualProperty(
+      AsyncSpecAt(initialContext))
+      => ProtectedStage4RankProgressProperty(
+           AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                Stage4RefinementFiniteServeEpisodeResidualProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ProtectedStage4RankProgressProperty(
                  AsyncSpecAt(initialContext))
     <2>1. ASSUME NEW candidate \in AsyncCandidateSet,

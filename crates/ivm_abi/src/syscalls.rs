@@ -30,6 +30,8 @@ pub const SYSCALL_EXIT: u32 = 0x01;
 pub const SYSCALL_ABORT: u32 = 0x02;
 /// Output a debug message (development only).
 pub const SYSCALL_DEBUG_LOG: u32 = 0x03;
+/// Abort execution with a declared application error code in `r10`.
+pub const SYSCALL_CONTRACT_ABORT: u32 = 0x04;
 
 /// Helper syscalls for inputs/outputs; part of the ABI v1 surface.
 /// Retrieve a piece of public input provided by the host.
@@ -585,14 +587,22 @@ pub const SYSCALL_CALL_CONTRACT_QUANTITY2: u32 = 0x01_0029;
 /// scalar bits, or validated pointer-ABI addresses.
 pub const SYSCALL_DECODE_ARGUMENT_RECORD: u32 = 0x01_0026;
 
-/// Set or clear native outbound-transfer freeze state for one account/asset pair.
+/// Atomically set native incoming/outgoing availability for one account/asset pair.
 ///
-/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = bool`.
-pub const SYSCALL_SET_ASSET_TRANSFER_FREEZE: u32 = 0x01_0200;
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = expected revision`,
+/// `r13 = availability flags` (bit 0 incoming, bit 1 outgoing; reserved bits zero),
+/// `r14 = &Option<string>`.
+pub const SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY: u32 = 0x01_0200;
 /// Set the native UTC daily outbound-transfer cap for one account/asset pair.
 ///
-/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`, `r12 = &Quantity`.
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`,
+/// `r12 = &Option<Quantity>`.
 pub const SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT: u32 = 0x01_0201;
+/// Set the native post-credit holding limit for one account/asset pair.
+///
+/// Args: `r10 = &AccountId`, `r11 = &AssetDefinitionId`,
+/// `r12 = &Option<Quantity>`.
+pub const SYSCALL_SET_ASSET_HOLDING_LIMIT: u32 = 0x01_0202;
 /// Propose native alias-based account recovery with a replacement controller.
 ///
 /// Args: `r10 = &Blob(alias literal)`, `r11 = &AccountId(replacement controller)`.
@@ -1019,8 +1029,9 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE
             | SYSCALL_SORACLOUD_APPEND_JOURNAL
             | SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT
-            | SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY
             | SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | SYSCALL_SET_ASSET_HOLDING_LIMIT
             | SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | SYSCALL_ACCOUNT_RECOVERY_CANCEL
@@ -1043,6 +1054,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
         number,
         SYSCALL_EXIT
             | SYSCALL_ABORT
+            | SYSCALL_CONTRACT_ABORT
             | SYSCALL_DEBUG_PRINT
             | SYSCALL_DEBUG_LOG
             | SYSCALL_ALLOC
@@ -1161,6 +1173,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_EXIT,
             SYSCALL_ABORT,
             SYSCALL_DEBUG_LOG,
+            SYSCALL_CONTRACT_ABORT,
             // Heaps and IO
             SYSCALL_ALLOC,
             SYSCALL_GROW_HEAP,
@@ -1392,8 +1405,9 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
-            SYSCALL_SET_ASSET_TRANSFER_FREEZE,
+            SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
             SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT,
+            SYSCALL_SET_ASSET_HOLDING_LIMIT,
             SYSCALL_ACCOUNT_RECOVERY_PROPOSE,
             SYSCALL_ACCOUNT_RECOVERY_APPROVE,
             SYSCALL_ACCOUNT_RECOVERY_CANCEL,
@@ -1464,6 +1478,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_EXIT => "EXIT",
         SYSCALL_ABORT => "ABORT",
         SYSCALL_DEBUG_LOG => "DEBUG_LOG",
+        SYSCALL_CONTRACT_ABORT => "CONTRACT_ABORT",
         // Heaps and IO
         SYSCALL_ALLOC => "ALLOC",
         SYSCALL_GROW_HEAP => "GROW_HEAP",
@@ -1678,8 +1693,9 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",
         SYSCALL_RESOLVE_ACCOUNT_ALIAS => "RESOLVE_ACCOUNT_ALIAS",
-        SYSCALL_SET_ASSET_TRANSFER_FREEZE => "SET_ASSET_TRANSFER_FREEZE",
+        SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY => "SET_ASSET_TRANSFER_AVAILABILITY",
         SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT => "SET_ASSET_TRANSFER_DAILY_LIMIT",
+        SYSCALL_SET_ASSET_HOLDING_LIMIT => "SET_ASSET_HOLDING_LIMIT",
         SYSCALL_ACCOUNT_RECOVERY_PROPOSE => "ACCOUNT_RECOVERY_PROPOSE",
         SYSCALL_ACCOUNT_RECOVERY_APPROVE => "ACCOUNT_RECOVERY_APPROVE",
         SYSCALL_ACCOUNT_RECOVERY_CANCEL => "ACCOUNT_RECOVERY_CANCEL",

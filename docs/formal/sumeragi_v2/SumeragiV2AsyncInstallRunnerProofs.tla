@@ -130,13 +130,11 @@ PROOF
              MaximalTimeoutVotes, EmptyTimeoutHigh,
              TypeInvariant, AsyncCandidateTyped
     <2>6. /\ context \in ContextRecords
-           /\ generation[command.node] \in Generations
-           /\ generation[command.node] < MaxGeneration
-           /\ generation[command.node] + 1 \in Generations
+           /\ InstallGenerationAfter(command) \in Generations
            /\ command.evidence \in AsyncEvidenceSet
       BY <1>1, <2>1, <2>3, SMT
          DEF PersistInstallTC, TypeInvariant, AsyncCandidateTyped,
-             Generations
+             InstallGenerationAfter, InstallRequests, Generations
     <2>7. /\ DOMAIN Successor = AsyncCandidateDomain
            /\ Successor.class \in AsyncCommandClasses
            /\ Successor.kind \in AsyncWorkKinds
@@ -200,7 +198,7 @@ PROOF
     <2>3. /\ context' = context
            /\ nodeView'[command.node] = command.view + 1
            /\ generation'[command.node] =
-                generation[command.node] + 1
+                InstallGenerationAfter(command)
            /\ highestRank'[command.node] =
                 IF TcHighRank(request.tc) > highestRank[command.node]
                 THEN TcHighRank(request.tc)
@@ -209,7 +207,8 @@ PROOF
                 IF TcHighRank(request.tc) > highestRank[command.node]
                 THEN TcHighSubject(request.tc)
                 ELSE highestSubject[command.node]
-      BY <2>1, Isa DEF PersistInstallTC
+      BY <2>1, <2>2, Isa
+         DEF PersistInstallTC, InstallGenerationAfter, InstallRequests
     <2>4. InstallProposalSubject(command) =
              IF highestRank'[command.node] = NoRank
              THEN AsyncHeartbeatSubject
@@ -833,17 +832,126 @@ PROOF
              SequenceSet
   <1> QED BY <1>1
 
+(***************************************************************************
+The exact-Serve corridor has two serialized-runtime surfaces.  The ordinary
+surface is enabled only without a ticket.  The predecessor interleave uses
+the same Runtime body for one strictly older lifecycle while freezing the
+ticket and every I/O owner.  This union is an action-shape helper only: it
+does not classify the interleave as protocol progress and carries no fairness
+assumption.
+***************************************************************************)
+SerializedRunnerRuntimeStep(node) ==
+  \/ SerializedRuntimeStep(node)
+  \/ SerializedRuntimePrecedesServeIngressStep(node)
+
+THEOREM SerializedRuntimePrecedesServeIngressExactFrame ==
+  \A node \in ValidatorIds:
+    SerializedRuntimePrecedesServeIngressStep(node)
+      => /\ asyncRunnerPhase[node] = "Runtime"
+         /\ asyncRunnerPhase'[node] = "Local"
+         /\ RuntimeStep(node)
+         /\ asyncIoQueues' = asyncIoQueues
+         /\ asyncNextServeAdmissionOrdinal' =
+              asyncNextServeAdmissionOrdinal
+         /\ asyncNextServeIngressOrdinal' =
+              asyncNextServeIngressOrdinal
+         /\ asyncServeIngressAdmissions' =
+              asyncServeIngressAdmissions
+         /\ AsyncServeEarliestIngressSchedulerOrdinal(node)' =
+              AsyncServeEarliestIngressSchedulerOrdinal(node)
+         /\ AsyncServeIngressLifecycleOwnerIdentities(node)' =
+              AsyncServeIngressLifecycleOwnerIdentities(node)
+         /\ AsyncServeIngressLifecycleOwnerIdentities(node)' # {}
+         /\ asyncServeAdmissions' = asyncServeAdmissions
+         /\ asyncServeReservations' = asyncServeReservations
+         /\ asyncServeTombstones' = asyncServeTombstones
+BY Isa
+   DEF SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeEarliestIngressSchedulerOrdinal,
+       AsyncServeIngressLifecycleOwnerIdentities,
+       AsyncIoVars, AsyncServeLifecycleVars,
+       AsyncServeIngressAdmissionVars
+
+THEOREM SerializedRuntimePrecedesServeIngressRefinesCoreBracketNext ==
+  TypeInvariant =>
+    \A node \in ValidatorIds:
+      SerializedRuntimePrecedesServeIngressStep(node) => [Next]_vars
+BY RuntimeStepRefinesCoreBracketNext
+   DEF SerializedRuntimePrecedesServeIngressStep
+
+THEOREM SerializedRunnerRuntimeRefinesCoreBracketNext ==
+  TypeInvariant =>
+    \A node \in ValidatorIds:
+      SerializedRunnerRuntimeStep(node) => [Next]_vars
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE \A node \in ValidatorIds:
+                 SerializedRunnerRuntimeStep(node) => [Next]_vars
+    <2>1. ASSUME NEW node \in ValidatorIds,
+                  SerializedRunnerRuntimeStep(node)
+           PROVE [Next]_vars
+      <3>1. CASE SerializedRuntimeStep(node)
+        BY <1>1, <2>1, <3>1,
+           SerializedRuntimeStepRefinesCoreBracketNext
+      <3>2. CASE SerializedRuntimePrecedesServeIngressStep(node)
+        BY <1>1, <2>1, <3>2,
+           SerializedRuntimePrecedesServeIngressRefinesCoreBracketNext
+      <3> QED BY <2>1, <3>1, <3>2
+           DEF SerializedRunnerRuntimeStep
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM SerializedLocalPrecedesServeIngressRefinesCoreBracketNext ==
+  \A node:
+    SerializedLocalPrecedesServeIngressStep(node) => [Next]_vars
+BY CoreStutterRefinesBracketNext, Isa
+   DEF SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead
+
+THEOREM AsyncServeIngressTargetOnlyRefinesCoreBracketNext ==
+  \A node:
+    AsyncServeIngressTargetOnlyTurn(node) => [Next]_vars
+BY CoreStutterRefinesBracketNext, Isa
+   DEF AsyncServeIngressTargetOnlyTurn
+
+(***************************************************************************
+`AsyncIoVars` freezes the complete logical/physical Serve ticket.  Candidate
+and timeout lifecycle bookkeeping is updated by the outer control-service
+transition, however, and shares the same scheduler ordinal source.  Monotone
+high-watermark allocation is therefore part of the type frame rather than an
+implicit I/O stutter premise.
+***************************************************************************)
+THEOREM FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType ==
+  /\ AsyncSharedSchedulerOrdinalInjectionInvariant
+  /\ AsyncServeOrdinalInvariant
+  /\ AsyncControlServiceStateTypeInvariant
+  /\ AsyncControlServiceSlotTransition
+  /\ UNCHANGED <<AsyncServeLifecycleVars,
+                  AsyncServeIngressAdmissionVars>>
+  => /\ AsyncSharedSchedulerOrdinalInjectionInvariant'
+     /\ AsyncServeOrdinalInvariant'
+BY AsyncSharedSchedulerHighWatermarkIsMonotone, IsaT(900)
+   DEF AsyncSharedSchedulerOrdinalInjectionInvariant,
+       AsyncServeOrdinalInvariant,
+       AsyncControlServiceSlotTransition,
+       AsyncNextCandidateLifecycleOrdinal,
+       AsyncCandidateLifecycleAdmissions,
+       AsyncTimeoutLifecycleOwned, AsyncTimeoutLifecycleOrdinal,
+       AsyncServeLifecycleVars,
+       AsyncServeIngressAdmissionVars
+
 THEOREM SerializedRuntimePreservesScalarType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ RunNodeWork(node)
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncRuntimeScalarTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 RunNodeWork(node),
-                SerializedRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node)
          PROVE AsyncRuntimeScalarTypeInvariant'
     <2>1. node \in ValidatorIds
       BY <1>1
@@ -877,7 +985,8 @@ PROOF
                   0..(AsyncQueueCapacity + AsyncIngressCapacity)]
       BY <1>1, <2>1, <2>2, <2>3,
          FunctionalUpdatePreservesType
-         DEF SerializedRuntimeStep
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep
     <2>5. \/ /\ asyncCommandQueues' = asyncCommandQueues
                  /\ asyncNextCommandClass' = asyncNextCommandClass
            \/ /\ NodeQueueNonempty(node)
@@ -890,7 +999,9 @@ PROOF
                          ![node] = NextCommandClass(
                            SelectedCommandClass(node))]
       BY <1>1, Isa
-         DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             RuntimeStep, DeferredDrainStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, FifoRuntimeStep, IdleRuntimeStep,
@@ -969,7 +1080,9 @@ PROOF
            /\ asyncTimeoutEmitted' \in [ValidatorIds -> BOOLEAN]
       BY <1>1, <2>1, <2>2,
          FunctionalUpdatePreservesType, SMTT(120)
-         DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             RuntimeStep, DeferredDrainStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, FifoRuntimeStep, IdleRuntimeStep,
@@ -980,7 +1093,10 @@ PROOF
            /\ asyncNextLocalSource'
                 \in [ValidatorIds -> AsyncLocalSources]
       BY <1>1, <2>2, Isa
-         DEF RunNodeWork, SerializedRuntimeStep, AsyncLocalAdmissionVars,
+         DEF RunNodeWork, SerializedRunnerRuntimeStep,
+             SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncLocalAdmissionVars,
              AsyncRuntimeScalarTypeInvariant
     <2> QED BY <2>2, <2>4, <2>6, <2>7, <2>8, <2>9
          DEF AsyncRuntimeScalarTypeInvariant
@@ -1718,10 +1834,13 @@ PROOF
 THEOREM FifoRuntimePreservesIoType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ SerializedRunnerRuntimeStep(node)
     /\ FifoRuntimeStep(node)
     => AsyncIoTypeInvariant'
 BY RuntimeSelectedCommandsAreTyped, NextNodeCommandIndexFacts,
+   FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
    CompletionCountAfterTypedQueueRemoval,
    TypedOwnedSequenceWithoutIndexFacts, SequenceSetAfterAppend,
    CompletionAppendCountIncreasesByOne,
@@ -1734,7 +1853,9 @@ BY RuntimeSelectedCommandsAreTyped, NextNodeCommandIndexFacts,
        AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
        AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
        AsyncIoWorkContentTypeInvariant, AsyncIoCapacityTypeInvariant,
-       SerializedRuntimeStep, FifoRuntimeStep, NodeQueueNonempty,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       FifoRuntimeStep, NodeQueueNonempty,
        NextNodeCommand, NextNodeCommandIndex,
        RemoveNextNodeCommand, SequenceWithoutIndex,
        DeferCommand, DiscardCommand,
@@ -1748,10 +1869,13 @@ BY RuntimeSelectedCommandsAreTyped, NextNodeCommandIndexFacts,
 THEOREM DeferredDrainRuntimePreservesIoType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ SerializedRunnerRuntimeStep(node)
     /\ DeferredDrainStep(node)
     => AsyncIoTypeInvariant'
 BY RuntimeSelectedCommandsAreTyped, TypedQueueTailFacts,
+   FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
    FunctionalTailUpdateAtKey, FunctionalUpdateAwayFromKey,
    FS_Interval, FS_Subset, FS_CardinalityType,
    SMTT(120)
@@ -1760,7 +1884,9 @@ BY RuntimeSelectedCommandsAreTyped, TypedQueueTailFacts,
        AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
        AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
        AsyncIoWorkContentTypeInvariant, AsyncIoCapacityTypeInvariant,
-       SerializedRuntimeStep, DeferredDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       DeferredDrainStep,
        DeferredQueueNonempty, NextDeferredCommand,
        RemoveNextDeferredCommand, DiscardCommand,
        AsyncIoVars, AsyncQueueDepth, AsyncIoQueueDepth,
@@ -1772,14 +1898,19 @@ BY RuntimeSelectedCommandsAreTyped, TypedQueueTailFacts,
 THEOREM NonQueueRuntimeBranchPreservesIoType ==
   \A node \in ValidatorIds:
     /\ AsyncIoTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ SerializedRunnerRuntimeStep(node)
     /\ (DeferredTagStep(node)
           \/ DirectTimeoutStep(node)
           \/ DirectRetransmitStep(node)
           \/ IdleRuntimeStep(node))
     => AsyncIoTypeInvariant'
-BY SchedulerIoStutterPreservesIoType, Isa
-   DEF SerializedRuntimeStep,
+BY SchedulerIoStutterPreservesIoType,
+   FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
+   Isa
+   DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
        DeferredTagStep,
        DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
@@ -1789,12 +1920,16 @@ BY SchedulerIoStutterPreservesIoType, Isa
 THEOREM SerializedRuntimePreservesIoType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncIoTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
-                SerializedRuntimeStep(node)
+                AsyncControlServiceStateTypeInvariant,
+                AsyncControlServiceSlotTransition,
+                SerializedRunnerRuntimeStep(node)
          PROVE AsyncIoTypeInvariant'
     <2>1. node \in ValidatorIds
       BY <1>1
@@ -1807,14 +1942,15 @@ PROOF
                    \/ DirectRetransmitStep(node)
                    \/ IdleRuntimeStep(node)
       BY <1>1, <2>1, <2>4, NonQueueRuntimeBranchPreservesIoType
-    <2> QED BY <1>1, <2>2, <2>3, <2>4 DEF SerializedRuntimeStep,
-         RuntimeStep
+    <2> QED BY <1>1, <2>2, <2>3, <2>4
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep, RuntimeStep
   <1> QED BY <1>1
 
 THEOREM SerializedRuntimeCausalFrame ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => \/ LeaveCausalQueues
        \/ AppendCausalSuccessors(TimeoutCausalCommand(node))
        \/ \E command:
@@ -1822,7 +1958,9 @@ THEOREM SerializedRuntimeCausalFrame ==
             /\ ExecuteCommand(command)
             /\ AppendCausalSuccessors(command)
 BY RuntimeSelectedCommandsAreTyped, SMTT(120)
-   DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+   DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       RuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, NodeQueueNonempty, DeferredQueueNonempty,
@@ -1832,13 +1970,13 @@ THEOREM SerializedRuntimePreservesCausalType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncCausalTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
-                SerializedRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node)
          PROVE AsyncCausalTypeInvariant'
     <2>1. /\ node \in ValidatorIds
            /\ AsyncCausalTypeInvariant
@@ -1938,22 +2076,26 @@ BY ExecuteCommandOnlyRetiresCertifiedResponseClaim,
 
 THEOREM SerializedRuntimeLeavesIngress ==
   \A node \in ValidatorIds:
-    SerializedRuntimeStep(node)
+    SerializedRunnerRuntimeStep(node)
       => UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
 BY ExecuteCommandLeavesIngress, Isa
-   DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+   DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       RuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, DeferCommand, DiscardCommand, AsyncAuxVars, vars
 
 THEOREM SerializedRuntimeOnlyRetiresCertifiedResponseClaim ==
   \A node \in ValidatorIds:
-    SerializedRuntimeStep(node)
+    SerializedRunnerRuntimeStep(node)
       => asyncCertifiedResponseClaim'
            \subseteq asyncCertifiedResponseClaim
 BY ExecuteCommandOnlyRetiresCertifiedResponseClaim,
    SMTT(120), Isa
-   DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+   DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       RuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, DeferCommand, DiscardCommand,
@@ -1962,7 +2104,7 @@ BY ExecuteCommandOnlyRetiresCertifiedResponseClaim,
 THEOREM SerializedRuntimePreservesClaimIngressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
 BY SerializedRuntimeLeavesIngress,
    SerializedRuntimeOnlyRetiresCertifiedResponseClaim,
@@ -1971,25 +2113,31 @@ BY SerializedRuntimeLeavesIngress,
 THEOREM SerializedRuntimePreservesIngressType ==
   \A node \in ValidatorIds:
     /\ AsyncIngressTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncIngressTypeInvariant'
 BY SerializedRuntimeLeavesIngress,
    AsyncIngressTopologyTypeStutter,
    AsyncIngressCapacityTypeStutter,
-   AsyncIngressContentTypeStutter
-   DEF AsyncIngressTypeInvariant, AsyncIngressTopologyTypeVars
+   AsyncIngressContentTypeStutter, Isa
+   DEF AsyncIngressTypeInvariant, AsyncIngressTopologyTypeVars,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncIoVars, AsyncServeLifecycleVars,
+       AsyncServeIngressAdmissionVars
 
 THEOREM SerializedRuntimePreservesTransportClockType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ RunNodeWork(node)
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncTransportClockTypeInvariant'
 BY FunctionalUpdatePreservesType, RunnerServiceFramePreservesClockType,
    SMTT(120)
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant, AsyncTransportClockTypeInvariant,
-       RunNodeWork, RunnerServiceFrame, SerializedRuntimeStep, RuntimeStep,
+       RunNodeWork, RunnerServiceFrame,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep, RuntimeStep,
        DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
@@ -2005,7 +2153,7 @@ BY FunctionalUpdatePreservesType, RunnerServiceFramePreservesClockType,
 THEOREM SerializedRuntimePreservesDeferredType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncDeferredTypeInvariant'
 BY RuntimeSelectedCommandsAreTyped,
    DeferTypedOwnedCommandPreservesDeferredContentType,
@@ -2018,7 +2166,8 @@ BY RuntimeSelectedCommandsAreTyped,
    SMTT(120)
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncDeferredTypeInvariant, AsyncDeferredTopologyTypeInvariant,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep, RuntimeStep,
        DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
@@ -4723,9 +4872,10 @@ GST remains a genuine weak-fairness consequence across finitely many
 responsive-process generations.  Restart reconstructs an optional exact
 locked-body Fetch prefix together with the current signature owner.  The normal
 serialized runner drains that ordered replay, and only then may recovery install
-the next durable signature from the retained tail.  The generation budget makes
-the number of pre-GST rearm/crash cycles finite, after which SetGST is
-continuously enabled.
+the next durable signature from the retained tail.  Strict restart-generation
+increase in the finite model makes the number of pre-GST rearm/crash cycles
+finite, after which SetGST is continuously enabled.  This does not assume the
+diagnostic pending-install generation predicate.
 ***************************************************************************)
 
 AsyncRecoveryEligibleReady ==
@@ -4773,48 +4923,6 @@ ReplayCommitCarrierFrame ==
              => (ReplayCommitIntentReady(asyncRecoveryNode, vote))')
        /\ (ReplayLockedCommitCandidate(asyncRecoveryNode, vote))' =
             ReplayLockedCommitCandidate(asyncRecoveryNode, vote)
-
-RecoveryGenerationSlots ==
-  {slot \in Responsive \X Generations:
-     generation[slot[1]] < slot[2]}
-
-RecoveryGenerationBudget == Cardinality(RecoveryGenerationSlots)
-
-AsyncRecoveryCycleState ==
-  \/ AsyncRecoveryEligibleReady
-  \/ AsyncRecoveryRequiredPending
-  \/ AsyncRecoveryReplayPending
-  \/ AsyncRecoveryReplayingPending
-  \/ AsyncRecoveryRecoveredReady
-
-AsyncRecoveryCycleAtBudget(budget) ==
-  /\ AsyncRecoveryCycleState
-  /\ RecoveryGenerationBudget = budget
-
-AsyncRecoveryEligibleAtBudget(budget) ==
-  /\ AsyncRecoveryEligibleReady
-  /\ RecoveryGenerationBudget = budget
-
-AsyncRecoveryRequiredAtBudget(budget) ==
-  /\ AsyncRecoveryRequiredPending
-  /\ RecoveryGenerationBudget = budget
-
-AsyncRecoveryReplayAtBudget(budget) ==
-  /\ AsyncRecoveryReplayPending
-  /\ RecoveryGenerationBudget = budget
-
-AsyncRecoveryReplayingAtBudget(budget) ==
-  /\ AsyncRecoveryReplayingPending
-  /\ RecoveryGenerationBudget = budget
-
-AsyncRecoveryRecoveredAtBudget(budget) ==
-  /\ AsyncRecoveryRecoveredReady
-  /\ RecoveryGenerationBudget = budget
-
-LowerAsyncRecoveryCycle(budget) ==
-  \E lower \in SetLessThan(
-                  budget, OpToRel(<, Nat), Nat):
-    AsyncRecoveryCycleAtBudget(lower)
 
 THEOREM InitAtSetsAllValidatorsUp ==
   \A initialContext:
@@ -4933,13 +5041,13 @@ THEOREM SerializedRuntimePreservesTransportContentType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
-                SerializedRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node)
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. node \in ValidatorIds
       BY <1>1
@@ -4962,22 +5070,52 @@ PROOF
       BY <1>1, <2>1, <2>7,
          IdleRuntimePreservesTransportContentType
     <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
-         DEF SerializedRuntimeStep, RuntimeStep
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep, RuntimeStep
+  <1> QED BY <1>1
+
+THEOREM SerializedRunnerRuntimePreservesHistoricalRecoveryType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRunnerRuntimeStep(node)
+    => AsyncHistoricalRecoveryTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                SerializedRunnerRuntimeStep(node)
+         PROVE AsyncHistoricalRecoveryTypeInvariant'
+    <2>1. CASE DeferredDrainStep(node)
+      BY <1>1, <2>1, DeferredDrainPreservesHistoricalRecoveryType
+    <2>2. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>2, FifoRuntimePreservesHistoricalRecoveryType
+    <2>3. CASE DeferredTagStep(node)
+                   \/ DirectTimeoutStep(node)
+                   \/ DirectRetransmitStep(node)
+                   \/ IdleRuntimeStep(node)
+      BY <1>1, <2>3,
+         NonCommandRuntimeLeafPreservesHistoricalRecoveryType
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep, RuntimeStep
   <1> QED BY <1>1
 
 THEOREM SerializedRuntimePreservesSchedulerType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
     /\ RunNodeWork(node)
-    /\ SerializedRuntimeStep(node)
+    /\ SerializedRunnerRuntimeStep(node)
     => AsyncSchedulerTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
+                AsyncControlServiceSlotTransition,
                 RunNodeWork(node),
-                SerializedRuntimeStep(node)
+                SerializedRunnerRuntimeStep(node)
          PROVE AsyncSchedulerTypeInvariant'
     <2>1. node \in ValidatorIds
       BY <1>1
@@ -5000,31 +5138,114 @@ PROOF
       BY <1>1, <2>1, <2>8,
          SerializedRuntimePreservesIngressType
     <2>10. AsyncHistoricalRecoveryTypeInvariant'
-      BY <1>1, SerializedRuntimePreservesHistoricalRecoveryType
+      BY <1>1, SerializedRunnerRuntimePreservesHistoricalRecoveryType
     <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>9, <2>10
          DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
              AsyncTransportTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncServeIngressTargetOnlyPreservesSchedulerType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
+    /\ RunNodeWork(node)
+    /\ AsyncServeIngressTargetOnlyTurn(node)
+    => AsyncSchedulerTypeInvariant'
+BY FrozenServeStateAndSharedSchedulerTransitionPreservesServeOrdinalType,
+   AsyncCausalTypeStutter,
+   AsyncIoTopologyTypeStutter, AsyncIoContentTypeStutter,
+   AsyncIoCapacityTypeStutter,
+   AsyncDeferredTopologyTypeStutter, AsyncDeferredContentTypeStutter,
+   RunnerServiceFramePreservesClockType,
+   AsyncTransportContentTypeStutter,
+   AsyncIngressTopologyTypeStutter,
+   AsyncIngressCapacityTypeStutter, AsyncIngressContentTypeStutter,
+   HistoricalRecoveryFramePreservesType,
+   FunctionalUpdatePreservesType, IsaT(300)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
+       AsyncTransportTypeInvariant, AsyncIngressTypeInvariant,
+       AsyncServeIngressTargetOnlyTurn,
+       RunNodeWork, RunnerServiceFrame,
+       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
+       AsyncIoCapacityTypeVars, AsyncDeferredTopologyTypeVars,
+       AsyncTransportContentTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars,
+       AsyncIngressTopologyTypeVars,
+       AsyncHistoricalRecoveryFrameVars,
+       AsyncConfiguration, vars
+
+THEOREM RunNodeWorkConcreteActionCaseSplit ==
+  \A node:
+    RunNodeWork(node)
+      => \/ LocalAdmissionStep(node)
+         \/ IngressDrainStep(node)
+         \/ SerializedRunnerRuntimeStep(node)
+         \/ SerializedLocalPrecedesServeIngressStep(node)
+         \/ AsyncServeIngressTargetOnlyTurn(node)
+BY Isa
+   DEF RunNodeWork, SerializedRunnerRuntimeStep
+
+THEOREM InstallRunnerRunNodeWorkRefinesCoreBracketNext ==
+  TypeInvariant =>
+    \A node \in ValidatorIds:
+      RunNodeWork(node) => [Next]_vars
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE \A node \in ValidatorIds:
+                 RunNodeWork(node) => [Next]_vars
+    <2>1. ASSUME NEW node \in ValidatorIds, RunNodeWork(node)
+           PROVE [Next]_vars
+      <3>1. CASE LocalAdmissionStep(node)
+        BY <3>1, LocalAdmissionStepRefinesCoreBracketNext
+      <3>2. CASE IngressDrainStep(node)
+        BY <3>2, IngressDrainStepRefinesCoreBracketNext
+      <3>3. CASE SerializedRunnerRuntimeStep(node)
+        BY <1>1, <2>1, <3>3,
+           SerializedRunnerRuntimeRefinesCoreBracketNext
+      <3>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+        BY <3>4, AsyncServeIngressTargetOnlyRefinesCoreBracketNext
+      <3>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+        BY <3>5,
+           SerializedLocalPrecedesServeIngressRefinesCoreBracketNext
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5,
+           RunNodeWorkConcreteActionCaseSplit
+    <2> QED BY <2>1
   <1> QED BY <1>1
 
 THEOREM RunNodeWorkPreservesSchedulerType ==
   \A node \in ValidatorIds:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
+    /\ AsyncControlServiceStateTypeInvariant
+    /\ AsyncControlServiceSlotTransition
     /\ RunNodeWork(node)
     => AsyncSchedulerTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 StrongInductiveInvariant,
                 AsyncTypeInvariant,
+                AsyncControlServiceStateTypeInvariant,
+                AsyncControlServiceSlotTransition,
                 RunNodeWork(node)
          PROVE AsyncSchedulerTypeInvariant'
     <2>1. CASE LocalAdmissionStep(node)
       BY <1>1, <2>1, LocalAdmissionRunnerPreservesSchedulerType
     <2>2. CASE IngressDrainStep(node)
       BY <1>1, <2>2, IngressAdmissionRunnerPreservesSchedulerType
-    <2>3. CASE SerializedRuntimeStep(node)
+    <2>3. CASE SerializedRunnerRuntimeStep(node)
       BY <1>1, <2>3, SerializedRuntimePreservesSchedulerType
-    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, <2>4,
+         AsyncServeIngressTargetOnlyPreservesSchedulerType
+    <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <1>1, <2>5,
+         SerializedLocalPrecedesServeIngressPreservesSchedulerType
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
+         RunNodeWorkConcreteActionCaseSplit
   <1> QED BY <1>1
 
 THEOREM LocalAdmissionStepPreservesClaimIngressOwnership ==
@@ -5094,6 +5315,25 @@ PROOF
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
+THEOREM AsyncServeIngressTargetOnlyPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ AsyncServeIngressTargetOnlyTurn(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY CertifiedResponseClaimIngressOwnershipStutter, Isa
+   DEF AsyncServeIngressTargetOnlyTurn
+
+THEOREM SerializedLocalPrecedesServeIngressPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY CertifiedResponseClaimIngressOwnershipStutter, Isa
+   DEF SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
+       EnqueueCandidate, AsyncIoVars, AsyncDeferredVars, vars
+
 THEOREM RunNodeWorkPreservesClaimIngressOwnership ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
@@ -5112,10 +5352,17 @@ PROOF
     <2>2. CASE IngressDrainStep(node)
       BY <1>1, <2>2,
          IngressDrainStepPreservesClaimIngressOwnership
-    <2>3. CASE SerializedRuntimeStep(node)
+    <2>3. CASE SerializedRunnerRuntimeStep(node)
       BY <1>1, <2>3,
          SerializedRuntimePreservesClaimIngressOwnership
-    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, <2>4,
+         AsyncServeIngressTargetOnlyPreservesClaimIngressOwnership
+    <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <1>1, <2>5,
+         SerializedLocalPrecedesServeIngressPreservesClaimIngressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
+         RunNodeWorkConcreteActionCaseSplit
   <1> QED BY <1>1
 
 THEOREM AsyncRunnerStepPreservesClaimIngressOwnership ==
@@ -5163,17 +5410,23 @@ PROOF
 
 (***************************************************************************
 The runner theorem composes only concrete phase actions.  In particular, the
-serialized-runtime leaf above follows the exact command and transport
-updates; no abstract scheduler step is introduced at this boundary.
+ordinary and exact-Serve-predecessor serialized leaves follow the same exact
+command and transport updates, while the target-only leaf is a concrete
+phase stutter.  None is promoted to an abstract progress or fairness action at
+this boundary.
 ***************************************************************************)
 THEOREM AsyncRunnerStepPreservesSchedulerType ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
+  /\ AsyncControlServiceStateTypeInvariant
+  /\ AsyncControlServiceSlotTransition
   /\ AsyncRunnerStep
   => AsyncSchedulerTypeInvariant'
 PROOF
   <1>1. ASSUME StrongInductiveInvariant,
               AsyncTypeInvariant,
+              AsyncControlServiceStateTypeInvariant,
+              AsyncControlServiceSlotTransition,
               AsyncRunnerStep
          PROVE AsyncSchedulerTypeInvariant'
     <2>1. CASE \E node \in AsyncCurrentResponsiveVoters:

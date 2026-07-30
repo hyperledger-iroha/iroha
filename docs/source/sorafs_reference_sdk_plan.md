@@ -453,8 +453,11 @@ convert decoded or raw Norito payloads into the shared validation functions.
   bridge or required symbols are absent; a source-contract regression gate pins
   those fail-closed markers, and the Python lane additionally rejects any
   skipped reference test.
-  None of those source contracts substitutes for rerunning against clean
-  rebuilt artifacts.
+  These are source and workflow contracts, not freshness evidence. The
+  available Node, Python, C/JNI, Swift, and C# outputs are stale or mixed, so no
+  native-dependent suite is qualified. Qualification requires one clean
+  pinned-commit ABI-21 rebuild and skip-free parity replay across the five
+  native release targets.
 - **Release packaging:** `scripts/package_sorafs_validate_release.sh` builds or
   packages `sorafs-validate`, stages `include/sorafs_reference.h`, runs fixture
   smoke checks, records per-file, binary, FFI-header, archive, and manifest

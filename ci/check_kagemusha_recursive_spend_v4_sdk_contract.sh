@@ -923,6 +923,10 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_sorafs_reference_validate_bundle_json",
+    "connect_norito_sorafs_reference_validate_governance_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_block_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_validation_fee_current_policy_proof_request_v1",
     "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_sorafs_reference_validate_appeal_finance_cancel_asset_lock_json",
@@ -1295,7 +1299,7 @@ if mode == "--self-test":
             '    "connect_norito_chain_discriminant_scope_exit",\n'
             '    "connect_norito_chain_discriminant_scope_enter",',
         ),
-        "exact ordered 62-symbol required bridge inventory mismatch",
+        f"exact ordered {len(required_bridge_symbols)}-symbol required bridge inventory mismatch",
     )
 
     def inject_lineage_v1_compatibility_export(fixture: Path) -> None:

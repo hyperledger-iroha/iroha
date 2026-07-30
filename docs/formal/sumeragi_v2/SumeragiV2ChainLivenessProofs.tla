@@ -770,8 +770,8 @@ Release-facing declaration.
 This remains proofless until the chain composition proves eventual recovery
 eligibility and the Async application-liveness work proves both
 target-to-Decision and responsive Decision-to-application for the exact
-indexed product. The live chain premise also keeps the finite install-
-generation budget explicit rather than treating it as a safety invariant.
+indexed product. The live chain premise is exactly the indexed product and
+does not assume away checked install-generation exhaustion.
 Keeping the declaration here makes those debts visible without adding a
 synthetic ledger entry or pretending the production safety/refinement seam is
 a temporal theorem.

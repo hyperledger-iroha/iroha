@@ -5858,6 +5858,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Self::decode_quantity(vm, amount_ptr).map(Some)
     }
 
+    fn decode_optional_string(vm: &IVM, ptr: u64) -> Result<Option<String>, ivm::VMError> {
+        let layout = ivm::sum::SumLayoutV1::option(1).map_err(|_| ivm::VMError::DecodeError)?;
+        let (is_some, payload) = ivm::sum::read_words(vm, ptr, layout)?;
+        if !is_some {
+            return Ok(None);
+        }
+        let string_ptr = payload.first().copied().ok_or(ivm::VMError::DecodeError)?;
+        let bytes = Self::decode_tlv_blob(vm, string_ptr)?;
+        String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| ivm::VMError::DecodeError)
+    }
+
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
         T: norito::codec::Decode + norito::codec::Encode,
@@ -10185,6 +10198,7 @@ impl<QS> CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_DEBUG_PRINT
                 | ivm::syscalls::SYSCALL_EXIT
                 | ivm::syscalls::SYSCALL_ABORT
+                | ivm::syscalls::SYSCALL_CONTRACT_ABORT
                 | ivm::syscalls::SYSCALL_DEBUG_LOG
                 | ivm::syscalls::SYSCALL_ALLOC
                 | ivm::syscalls::SYSCALL_GROW_HEAP
@@ -10396,8 +10410,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
             ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
-            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE
+            | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY
             | ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_DAILY_LIMIT
+            | ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_PROPOSE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_APPROVE
             | ivm::syscalls::SYSCALL_ACCOUNT_RECOVERY_CANCEL
@@ -10691,21 +10706,33 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let instr = InstructionBox::from(TransferBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
-            ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_FREEZE => {
+            ivm::syscalls::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY => {
                 let account: AccountId =
                     Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
                 let asset_definition: AssetDefinitionId =
                     Self::decode_tlv_typed(vm, vm.register(11), PointerType::AssetDefinitionId)?;
-                let frozen = match vm.register(12) {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(ivm::VMError::DecodeError),
+                let expected_revision = vm.register(12);
+                let availability_flags = vm.register(13);
+                if availability_flags & !0b11 != 0 {
+                    return Err(ivm::VMError::DecodeError);
+                }
+                let availability = |mask| {
+                    if availability_flags & mask == 0 {
+                        iroha_data_model::asset::AssetTransferAvailability::Disabled
+                    } else {
+                        iroha_data_model::asset::AssetTransferAvailability::Enabled
+                    }
                 };
-                let instruction = iroha_data_model::isi::SetAssetTransferFreeze::new(
+                let incoming = availability(0b01);
+                let outgoing = availability(0b10);
+                let reason = Self::decode_optional_string(vm, vm.register(14))?;
+                let instruction = iroha_data_model::isi::SetAssetTransferAvailability::new(
                     account,
                     asset_definition,
-                    frozen,
-                    None,
+                    expected_revision,
+                    incoming,
+                    outgoing,
+                    reason,
                 );
                 self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
             }
@@ -10722,6 +10749,19 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         window: iroha_data_model::asset::AssetTransferControlWindow::Day,
                         cap_amount: cap,
                     }],
+                );
+                self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
+            }
+            ivm::syscalls::SYSCALL_SET_ASSET_HOLDING_LIMIT => {
+                let account: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                let asset_definition: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, vm.register(11), PointerType::AssetDefinitionId)?;
+                let limit = Self::decode_optional_amount(vm, vm.register(12))?;
+                let instruction = iroha_data_model::isi::SetAssetHoldingLimit::new(
+                    account,
+                    asset_definition,
+                    limit,
                 );
                 self.queue_instruction_after_preflight(vm, InstructionBox::from(instruction))
             }
@@ -31589,6 +31629,92 @@ seiyaku PreparedBoundaryArguments {
     }
 
     #[test]
+    fn pointer_abi_transfer_availability_packs_flags_and_preserves_reason() {
+        use iroha_data_model::asset::AssetTransferAvailability::{Disabled, Enabled};
+
+        let account = fixture_account("alice");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+
+        for (flags, incoming, outgoing, reason) in [
+            (0b00, Disabled, Disabled, None),
+            (0b01, Enabled, Disabled, Some("incoming only".to_owned())),
+            (0b10, Disabled, Enabled, Some("outgoing only".to_owned())),
+            (0b11, Enabled, Enabled, None),
+        ] {
+            let mut vm = IVM::new(10_000);
+            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+            let asset_ptr = store_tlv(
+                &mut vm,
+                PointerType::AssetDefinitionId,
+                &norito_blob(&asset_definition),
+            );
+            let layout = ivm::sum::SumLayoutV1::option(1).expect("reason option layout");
+            let reason_ptr = match &reason {
+                Some(reason) => {
+                    let string_ptr = store_tlv(&mut vm, PointerType::Blob, reason.as_bytes());
+                    ivm::sum::allocate_words(&mut vm, layout, 1, &[string_ptr])
+                        .expect("Option::some reason")
+                }
+                None => {
+                    ivm::sum::allocate_words(&mut vm, layout, 0, &[]).expect("Option::none reason")
+                }
+            };
+            vm.set_register(10, account_ptr);
+            vm.set_register(11, asset_ptr);
+            vm.set_register(12, 7);
+            vm.set_register(13, flags);
+            vm.set_register(14, reason_ptr);
+
+            let mut host = CoreHost::new(account.clone());
+            host.syscall(ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY, &mut vm)
+                .expect("queue transfer-availability instruction");
+            let queued = host.drain_instructions();
+            assert_eq!(queued.len(), 1);
+            let instruction = queued[0]
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetAssetTransferAvailability>()
+                .expect("typed transfer-availability instruction");
+            assert_eq!(instruction.account_id, account);
+            assert_eq!(instruction.asset_definition_id, asset_definition);
+            assert_eq!(instruction.expected_revision, 7);
+            assert_eq!(instruction.incoming, incoming);
+            assert_eq!(instruction.outgoing, outgoing);
+            assert_eq!(instruction.reason, reason);
+        }
+
+        let mut invalid_vm = IVM::new(10_000);
+        let account_ptr = store_tlv(
+            &mut invalid_vm,
+            PointerType::AccountId,
+            &norito_blob(&account),
+        );
+        let asset_ptr = store_tlv(
+            &mut invalid_vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_definition),
+        );
+        let layout = ivm::sum::SumLayoutV1::option(1).expect("reason option layout");
+        let reason_ptr =
+            ivm::sum::allocate_words(&mut invalid_vm, layout, 0, &[]).expect("absent reason");
+        invalid_vm.set_register(10, account_ptr);
+        invalid_vm.set_register(11, asset_ptr);
+        invalid_vm.set_register(12, 0);
+        invalid_vm.set_register(13, 0b100);
+        invalid_vm.set_register(14, reason_ptr);
+        let mut host = CoreHost::new(account);
+        assert_eq!(
+            host.syscall(
+                ivm_sys::SYSCALL_SET_ASSET_TRANSFER_AVAILABILITY,
+                &mut invalid_vm,
+            ),
+            Err(ivm::VMError::DecodeError)
+        );
+    }
+
+    #[test]
     fn pointer_abi_daily_limit_preserves_some_and_none() {
         let account = fixture_account("alice");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
@@ -31636,6 +31762,52 @@ seiyaku PreparedBoundaryArguments {
                 iroha_data_model::asset::AssetTransferControlWindow::Day
             );
             assert_eq!(instruction.limits[0].cap_amount, expected);
+        }
+    }
+
+    #[test]
+    fn pointer_abi_holding_limit_preserves_some_and_none() {
+        let account = fixture_account("alice");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+
+        for expected in [Some(Quantity::from(2_500_u64)), None] {
+            let mut vm = IVM::new(10_000);
+            let account_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&account));
+            let asset_ptr = store_tlv(
+                &mut vm,
+                PointerType::AssetDefinitionId,
+                &norito_blob(&asset_definition),
+            );
+            let layout = ivm::sum::SumLayoutV1::option(1).expect("quantity option layout");
+            let limit_ptr = match &expected {
+                Some(amount) => {
+                    let amount_ptr =
+                        store_tlv(&mut vm, PointerType::Quantity, &quantity_frame(amount));
+                    ivm::sum::allocate_words(&mut vm, layout, 1, &[amount_ptr])
+                        .expect("Option::some quantity")
+                }
+                None => ivm::sum::allocate_words(&mut vm, layout, 0, &[])
+                    .expect("Option::none quantity"),
+            };
+            vm.set_register(10, account_ptr);
+            vm.set_register(11, asset_ptr);
+            vm.set_register(12, limit_ptr);
+
+            let mut host = CoreHost::new(account.clone());
+            host.syscall(ivm_sys::SYSCALL_SET_ASSET_HOLDING_LIMIT, &mut vm)
+                .expect("queue holding-limit instruction");
+            let queued = host.drain_instructions();
+            assert_eq!(queued.len(), 1);
+            let instruction = queued[0]
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetAssetHoldingLimit>()
+                .expect("typed holding-limit instruction");
+            assert_eq!(instruction.account_id, account);
+            assert_eq!(instruction.asset_definition_id, asset_definition);
+            assert_eq!(instruction.holding_limit, expected);
         }
     }
 

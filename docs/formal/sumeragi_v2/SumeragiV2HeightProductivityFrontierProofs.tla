@@ -217,11 +217,21 @@ PROOF
          GstExcludesResponsiveReplayQuarantine
          DEF PostGstRunNode, RunNode, AsyncStrongTypeInvariant
     <2>2. CASE asyncRunnerPhase[node] = "Local"
-      <3>1. LocalAdmissionStep(node)
+      <3>1. \/ LocalAdmissionStep(node)
+             \/ SerializedLocalPrecedesServeIngressStep(node)
+             \/ AsyncServeIngressTargetOnlyTurn(node)
         BY <1>1, <2>1, <2>2, Isa DEF RunNodeWork
-      <3>2. RuntimeReachRank(node)' < RuntimeReachRank(node)
-        BY <2>1, <3>1, LocalAdmissionStrictlyDecreasesRuntimeReach
-      <3> QED BY <1>1, <3>2
+      <3>2. CASE LocalAdmissionStep(node)
+        BY <2>1, <3>2, LocalAdmissionStrictlyDecreasesRuntimeReach
+      <3>3. CASE SerializedLocalPrecedesServeIngressStep(node)
+        BY <2>1, <3>3,
+           SerializedLocalPredecessorStrictlyDecreasesRuntimeReach
+      <3>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+        BY <2>1, <2>2, <3>4,
+           LocalTargetOnlyTurnStrictlyDecreasesRuntimeReach
+      <3>5. RuntimeReachRank(node)' < RuntimeReachRank(node)
+        BY <3>1, <3>2, <3>3, <3>4
+      <3> QED BY <1>1, <3>5
            DEF PostGstRuntimeReachDecreases,
                PostGstServiceNodes, AsyncTimedServiceNodes,
                AsyncArchiveIoServiceNodes

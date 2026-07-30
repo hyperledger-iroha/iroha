@@ -62,21 +62,28 @@ provider credentials, API tokens, or private evidence. Registry selection is a
 compile-time/launcher decision; the standard launcher has no environment or
 config selector that dynamically loads executable provider code.
 
-The stock `iroha2d`, `iroha3d`, and `irohad` binaries intentionally provide no
-deployment registry. They are adapter-disabled binaries, not
-production-provider launchers. They continue to work with the default disabled
-services, but fail before subsystem startup when runtime-provider bindings are
-configured.
+The stock `iroha2d`, `iroha3d`, and `irohad` binaries do not embed deployment
+providers. With the default empty binding catalog they start without external
+adapters. With a non-empty catalog they use the stock local-broker client and
+fail before subsystem startup if the broker or any exact requested role is
+missing, substituted, stale, or unsupported.
 
-A deployment-owned embedding binary is the only supported injection boundary.
-It statically links this crate and its reviewed registry implementation, keeps
-credentials inside the provider implementations, and calls
-`run_with_runtime_provider_registry` instead of `main_entry`. The borrowed
-registry remains available for the synchronous launcher call; there is no
+There are two supported injection boundaries. A deployment-owned embedding
+binary can statically link this crate, keep credentials inside reviewed
+provider implementations, and call `run_with_runtime_provider_registry`.
+Standard `irohad` startup instead projects the non-secret configured binding
+catalog and, when that catalog is non-empty, creates the stock authenticated
+local-broker client registry before starting Tokio or node-owned durable state.
+An explicitly injected registry remains authoritative. There is no
 process-global registry, plugin loader, environment selector, or executable
-provider selector in configuration. The checked-in binaries all call
-`main_entry`, so building this library does not make those binaries
-provider-capable.
+provider selector in configuration.
+
+The source tree provides `serve_runtime_provider_broker_v1` as an injected
+broker-server library boundary, but no checked-in executable calls it and no
+HSM, KMS, sealed-store, credential loader, or production backend is packaged.
+Deployments using the stock client must therefore supervise a separately
+owned broker process that injects every requested backend. Client wiring alone
+is not production-adapter or deployment qualification.
 
 Registry resolution itself validates the sanitized binding catalog and rejects
 missing or unrequested dependency objects. It cannot independently attest to a
@@ -99,8 +106,13 @@ qualification:
   checkpoint but before live State publication; an archive failure makes the
   committed transition restart-required.
 
-- The provider-ingest completion signer is checked against its configured
-  authority, key, revision, policy digest, and finalized owner/policy state.
+- The provider-ingest completion signer accepts only the configured session
+  chain and expected owner, an `Instructions` executable containing exactly one
+  non-zero `CompleteReplicationOrder`, and the exact retained signer-policy
+  lineage, assignment revision, and finalized anchor. Broker admission and
+  request/result validation, plus the durable outbox, reject alternate
+  executables, extra instructions, proof attachments, even-empty multisig
+  sidecars, invalid signatures, and any context substitution.
 
 - The central launcher converts the four configured proof-outcome, repair,
   reserve/rent, and orderbook identities into immutable Torii bindings, then

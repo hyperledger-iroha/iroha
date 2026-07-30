@@ -735,10 +735,29 @@ PROOF
              CommitCoreSourceProjection, ResponsiveCommitSignRequests,
              ResponsiveRetainedCommitItems, vars
     <2>3. CASE SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
       <3>1. RuntimeStep(node)
-        BY <2>3 DEF SerializedRuntimeStep
+        BY <2>3, Isa
+           DEF SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep
       <3> QED BY <3>1, RuntimeStepHasCommitSourceTransition
-    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <2>4, Isa
+         DEF AsyncServeIngressTargetOnlyTurn,
+             CommitCoreSourceProjection,
+             ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <2>5, Isa
+         DEF SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             AdmitProducerCompletion, AdmitCausalHead,
+             UpdateLocalAdmissionMetadata,
+             CommitCoreSourceProjection,
+             ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF RunNodeWork
   <1> QED BY <1>1
 
 THEOREM AsyncNextHasCommitSourceTransition ==
@@ -2728,6 +2747,8 @@ BY PersistDecisionRecoveryUsesBodyStateCompletion,
        AsyncOutstandingCarrierInvariant,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       AsyncEnterIndexedServiceActivation, AsyncActivateServiceNode,
+       AsyncServiceActivationFrameVars,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
@@ -2738,6 +2759,8 @@ BY PersistDecisionRecoveryUsesBodyStateCompletion,
        PreGstResponsiveReplay, DriveResponsiveReplayHead,
        FinishResponsiveReplay, RearmResponsiveRecovery,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        ExecuteCommand, ExecuteRegularCommand, ExecuteDecisionFetch,
        ExecutePersistDecision, ExecuteRequestCertifiedBody,
@@ -2864,6 +2887,8 @@ BY HistoricalLockedValidateExecutionHandsOff,
        AsyncOutstandingCarrierInvariant,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       AsyncEnterIndexedServiceActivation, AsyncActivateServiceNode,
+       AsyncServiceActivationFrameVars,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
@@ -2874,6 +2899,8 @@ BY HistoricalLockedValidateExecutionHandsOff,
        PreGstResponsiveReplay, DriveResponsiveReplayHead,
        FinishResponsiveReplay, RearmResponsiveRecovery,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        ExecuteCommand, ExecuteRegularCommand, ExecutePersistInstall,
        AppendCausalSuccessors, FreshCommandSuccessors,

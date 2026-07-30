@@ -988,6 +988,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             scheduler_min_threads: iroha_config::parameters::defaults::concurrency::SCHEDULER_MIN,
             scheduler_max_threads: iroha_config::parameters::defaults::concurrency::SCHEDULER_MAX,
             rayon_global_threads: iroha_config::parameters::defaults::concurrency::RAYON_GLOBAL,
+            tokio_stack_bytes:
+                iroha_config::parameters::defaults::concurrency::TOKIO_STACK_BYTES,
             scheduler_stack_bytes:
                 iroha_config::parameters::defaults::concurrency::SCHEDULER_STACK_BYTES,
             prover_stack_bytes: iroha_config::parameters::defaults::concurrency::PROVER_STACK_BYTES,

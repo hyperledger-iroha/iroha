@@ -1162,12 +1162,21 @@ fn startup_beep(enable_beep: bool) -> bool {
 }
 
 /// Iroha server CLI
-#[derive(clap::Args, Clone, Copy, Debug)]
+#[derive(clap::Args, Clone, Debug)]
 pub struct StartupArgs {
     /// Validate configuration and any locally available genesis, then exit
     /// without binding network or Torii sockets.
     #[arg(long)]
     pub check_config: bool,
+    /// Fully qualify the configured Kagemusha catalog and publish its canonical
+    /// cold-start seal at this root-owned path.
+    #[arg(
+        long,
+        value_name = "PATH",
+        value_hint(clap::ValueHint::FilePath),
+        requires = "check_config"
+    )]
+    pub write_kagemusha_catalog_qualification_seal: Option<PathBuf>,
     /// Enables trace logs of configuration reading & parsing.
     ///
     /// Might be useful for configuration troubleshooting.
@@ -9243,42 +9252,8 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
-        let kagemusha_release_catalog = if config.settlement.offline.enabled {
-            match (
-                config
-                    .settlement
-                    .offline
-                    .kagemusha_release_policy_path
-                    .as_deref(),
-                config.settlement.offline.kagemusha_artifact_dir.as_deref(),
-            ) {
-                (None, None) => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
-                    ));
-                }
-                (Some(policy_path), Some(artifact_dir)) => {
-                    iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
-                        policy_path,
-                        artifact_dir,
-                        config.settlement.offline.kagemusha_max_decoded_bytes,
-                    )
-                    .map_err(|error| {
-                        Report::new(StartError::InitKura).attach(format!(
-                            "failed to authenticate Kagemusha V4 release catalog: {error}"
-                        ))
-                    })?
-                }
-                _ => {
-                    return Err(Report::new(StartError::InitKura).attach(
-                        "Kagemusha V4 release policy and artifact directory must be configured together",
-                    ));
-                }
-            }
-        } else {
-            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
-        };
-        state.set_kagemusha_release_catalog(kagemusha_release_catalog);
+        install_configured_kagemusha_release_catalog(&mut state, &config)
+            .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
             // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no
@@ -9288,6 +9263,12 @@ impl Iroha {
         apply_state_runtime_config_before_snapshot_auth(&mut state, &config);
         if !provisional_imported_prefix {
             apply_state_geometry_config_before_kura_replay(&mut state, &config)?;
+            // Kura authenticates canonical replay evidence before State exists. Geometry setup
+            // above then publishes the configured lane directories, so refresh only that
+            // auxiliary metadata before planning. Otherwise the new lane paths invalidate the
+            // reusable inventory and force a second complete historical finality audit.
+            kura.refresh_v2_startup_replay_auxiliary_binding()
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
         }
 
         // Resolve the complete replay boundary before selecting any consensus trust source. A
@@ -9497,7 +9478,12 @@ impl Iroha {
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
-        {
+        // Only a genuinely empty local store can defer this gate to the
+        // disposable genesis overlay below. A restart with a pending durable
+        // v2 tip remains on the replayed-state gate and fails closed.
+        let fresh_genesis_staging_pending =
+            state.committed_height() == 0 && block_count.0 == 0 && stored_genesis_block.is_none();
+        if !fresh_genesis_staging_pending {
             iroha_torii::ensure_mandatory_offline_startup_readiness(
                 &state,
                 &config.common.chain,
@@ -10093,6 +10079,19 @@ impl Iroha {
                                 "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
                             )));
                         }
+                        iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
+                            &state_block,
+                            genesis_block.0.header(),
+                            &config.common.chain,
+                            &config.settlement.offline,
+                            config.torii.kagemusha_commands.as_ref(),
+                            &config.nexus.fees.fee_asset_id,
+                        )
+                        .map_err(|error| {
+                            Report::new(StartError::InitKura).attach(format!(
+                                "mandatory offline cash readiness failed in staged genesis: {error}"
+                            ))
+                        })?;
                         let (mode, signed_parameters) =
                             signed_v2_genesis_context_metadata(genesis_block)
                                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -12168,6 +12167,13 @@ pub enum ConfigError {
     NexusMultilaneDisabled,
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
+    #[cfg(not(feature = "embedded-soracloud-runtime"))]
+    /// Production Soracloud runtime was requested from a binary lacking support.
+    SoracloudRuntimeFeatureRequired,
+    /// Embedded SoraFS storage was enabled without governed gateway compliance.
+    SorafsStorageComplianceRequired,
+    /// SoraFS gateway automation was enabled while embedded storage was disabled.
+    SorafsGatewayRequiresStorage,
     /// Nexus auto-derived storage defaults require a writable config path.
     NexusStorageBudgetPersistenceRequired,
 }
@@ -12233,6 +12239,19 @@ impl core::fmt::Display for ConfigError {
                     "Sora Nexus features require `irohad --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
+            #[cfg(not(feature = "embedded-soracloud-runtime"))]
+            Self::SoracloudRuntimeFeatureRequired => write!(
+                f,
+                "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
+            ),
+            Self::SorafsStorageComplianceRequired => write!(
+                f,
+                "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
+            ),
+            Self::SorafsGatewayRequiresStorage => write!(
+                f,
+                "SoraFS gateway ACME/compliance configuration requires sorafs.storage.enabled"
+            ),
             Self::NexusStorageBudgetPersistenceRequired => write!(
                 f,
                 "Nexus auto-derived storage defaults require a writable configuration file path"
@@ -12344,6 +12363,10 @@ pub fn read_config_and_genesis(
             .change_context(ConfigError::ReadConfig)?;
     }
 
+    let sorafs_storage_enabled_is_explicit =
+        config.contains_toml_parameter(["sorafs", "storage", "enabled"]);
+    let sorafs_discovery_enabled_is_explicit =
+        config.contains_toml_parameter(["sorafs", "discovery", "discovery_enabled"]);
     let mut config = config
         .read_and_complete::<UserConfig>()
         .change_context(ConfigError::ReadConfig)?
@@ -12351,7 +12374,15 @@ pub fn read_config_and_genesis(
         .change_context(ConfigError::ParseConfig)?;
 
     if args.sora {
+        let configured_sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
+        let configured_sorafs_discovery_enabled = config.torii.sorafs_discovery.discovery_enabled;
         config.apply_sora_profile();
+        if sorafs_storage_enabled_is_explicit {
+            config.torii.sorafs_storage.enabled = configured_sorafs_storage_enabled;
+        }
+        if sorafs_discovery_enabled_is_explicit {
+            config.torii.sorafs_discovery.discovery_enabled = configured_sorafs_discovery_enabled;
+        }
     }
 
     let sorafs_enabled = config.torii.sorafs_storage.enabled
@@ -13684,6 +13715,40 @@ metadata = {}
     }
 
     #[test]
+    fn sora_flag_preserves_explicitly_disabled_sorafs_storage() {
+        let mut config_file = NamedTempFile::new().expect("create temp config");
+        let mut table = minimal_config_table();
+        iroha_config::base::toml::Writer::new(&mut table)
+            .write(["sorafs", "storage", "enabled"], false);
+        config_file
+            .write_all(
+                toml::to_string(&toml::Value::Table(table))
+                    .expect("render config")
+                    .as_bytes(),
+            )
+            .expect("write config");
+
+        let args = parse_args_from([
+            "irohad",
+            "--sora",
+            "--config",
+            config_file
+                .path()
+                .to_str()
+                .expect("temp config path to string"),
+        ]);
+
+        let (config, _) =
+            read_config_and_genesis(&args).expect("parse config with explicit storage opt-out");
+
+        assert!(config.nexus.enabled);
+        assert!(
+            !config.torii.sorafs_storage.enabled,
+            "--sora must not override an explicit operator storage opt-out"
+        );
+    }
+
+    #[test]
     fn single_lane_config_preserves_defaults_without_sora_flag() {
         let mut config_file = NamedTempFile::new().expect("create temp config");
         let toml_value = toml::Value::Table(minimal_config_table());
@@ -14180,6 +14245,22 @@ fn validate_config_static_io(emitter: &mut Emitter<ConfigError>, config: &Config
 }
 
 fn validate_config_runtime(emitter: &mut Emitter<ConfigError>, config: &Config) {
+    #[cfg(not(feature = "embedded-soracloud-runtime"))]
+    if config.soracloud_runtime.production_mode {
+        emitter.emit(Report::new(ConfigError::SoracloudRuntimeFeatureRequired));
+    }
+
+    let sorafs_storage_enabled = config.torii.sorafs_storage.enabled;
+    let sorafs_gateway_compliance_enabled = config.torii.sorafs_gateway.compliance.is_some();
+    if sorafs_storage_enabled && !sorafs_gateway_compliance_enabled {
+        emitter.emit(Report::new(ConfigError::SorafsStorageComplianceRequired));
+    }
+    if !sorafs_storage_enabled
+        && (config.torii.sorafs_gateway.acme.enabled || sorafs_gateway_compliance_enabled)
+    {
+        emitter.emit(Report::new(ConfigError::SorafsGatewayRequiresStorage));
+    }
+
     /// Warnings about unused configuration options are logged via the standard
     /// logger so that they are visible alongside other diagnostic messages.
     #[cfg(not(feature = "telemetry"))]
@@ -14634,7 +14715,38 @@ fn run_main(
 
     enforce_build_line(build_line, &mut config)?;
     if args.startup.check_config {
-        validate_config_for_check(&config, genesis.as_ref())?;
+        let qualification_seal_target = args
+            .startup
+            .write_kagemusha_catalog_qualification_seal
+            .as_deref()
+            .map(|path| QualificationSealPublicationTarget::prepare(&config, path))
+            .transpose()
+            .map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "invalid Kagemusha catalog qualification seal output: {error}"
+                ))
+            })?;
+        let qualification_seal = validate_config_for_check(
+            &config,
+            genesis.as_ref(),
+            qualification_seal_target.is_some(),
+        )?;
+        if let Some(target) = qualification_seal_target {
+            let seal = qualification_seal.ok_or_else(|| {
+                Report::new(MainError::Config)
+                    .attach("Kagemusha catalog qualification completed without producing a seal")
+            })?;
+            let output_path = target.path().to_owned();
+            target.publish_and_verify(&config, &seal).map_err(|error| {
+                Report::new(MainError::Config).attach(format!(
+                    "failed to publish Kagemusha catalog qualification seal: {error}"
+                ))
+            })?;
+            println!(
+                "Published: canonical Kagemusha catalog qualification seal at {}",
+                output_path.display()
+            );
+        }
         if genesis.is_some() {
             println!("Ready: configuration and available genesis are valid");
         } else {
@@ -14717,6 +14829,7 @@ fn run_main(
     let tokio_workers = budget.clamp(4, 16);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(tokio_workers)
+        .thread_stack_size(config.concurrency.tokio_stack_bytes)
         .enable_all()
         .build()
         .map_err(Report::from)
@@ -14727,16 +14840,764 @@ fn run_main(
     result
 }
 
+/// Pinned, validated destination for one root-owned catalog qualification seal.
+///
+/// Preparation happens before the expensive qualification pass and keeps the
+/// destination directory open until publication. The final name must not
+/// exist: qualification seals are immutable release artifacts and are never
+/// replaced in place.
+struct QualificationSealPublicationTarget {
+    path: PathBuf,
+    #[cfg(unix)]
+    parent: fs::File,
+    #[cfg(unix)]
+    file_name: OsString,
+    #[cfg(unix)]
+    expected_uid: u32,
+}
+
+#[cfg(target_os = "macos")]
+const QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES: usize = 64 * 1024;
+
+#[cfg(target_os = "macos")]
+fn run_bounded_macos_acl_command(
+    program: &str,
+    option: &str,
+    path: &Path,
+    label: &str,
+) -> Result<std::process::Output, String> {
+    let output = std::process::Command::new(program)
+        .arg(option)
+        .arg(path)
+        .env_clear()
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run macOS ACL command for {label} `{}`: {error}",
+                path.display()
+            )
+        })?;
+    if output.stdout.len() > QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES
+        || output.stderr.len() > QUALIFICATION_SEAL_MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES
+    {
+        return Err(format!(
+            "macOS ACL command output exceeded its bound for {label} `{}`",
+            path.display()
+        ));
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "macOS ACL command failed for {label} `{}`: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(output)
+}
+
+#[cfg(target_os = "macos")]
+fn require_no_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
+    let output = run_bounded_macos_acl_command("/bin/ls", "-ldeq", path, label)?;
+    let newline_count = output.stdout.iter().filter(|byte| **byte == b'\n').count();
+    if !output.stderr.is_empty() || !output.stdout.ends_with(b"\n") || newline_count != 1 {
+        return Err(format!(
+            "{label} `{}` must not have an extended ACL",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn clear_macos_extended_acl(path: &Path, label: &str) -> Result<(), String> {
+    let output = run_bounded_macos_acl_command("/bin/chmod", "-N", path, label)?;
+    if !output.stdout.is_empty() || !output.stderr.is_empty() {
+        return Err(format!(
+            "macOS ACL removal produced unexpected output for {label} `{}`",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn same_qualification_seal_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(target_os = "macos")]
+fn require_acl_free_pinned_path(opened: &fs::File, path: &Path, label: &str) -> Result<(), String> {
+    let opened_before = opened
+        .metadata()
+        .map_err(|error| format!("failed to inspect pinned {label}: {error}"))?;
+    let path_before = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {label} `{}`: {error}", path.display()))?;
+    if !same_qualification_seal_metadata(&opened_before, &path_before) {
+        return Err(format!(
+            "{label} `{}` no longer identifies the pinned inode",
+            path.display()
+        ));
+    }
+    require_no_macos_extended_acl(path, label)?;
+    let opened_after = opened
+        .metadata()
+        .map_err(|error| format!("failed to re-inspect pinned {label}: {error}"))?;
+    let path_after = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to re-inspect {label} `{}` after ACL validation: {error}",
+            path.display()
+        )
+    })?;
+    if !same_qualification_seal_metadata(&opened_before, &opened_after)
+        || !same_qualification_seal_metadata(&opened_after, &path_after)
+    {
+        return Err(format!(
+            "{label} `{}` changed during ACL validation",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+impl QualificationSealPublicationTarget {
+    fn prepare(config: &Config, requested_path: &Path) -> Result<Self, String> {
+        let configured_path = config
+            .settlement
+            .offline
+            .kagemusha_catalog_qualification_seal_path
+            .as_deref()
+            .ok_or_else(|| {
+                "`--write-kagemusha-catalog-qualification-seal` requires settlement.offline.kagemusha_catalog_qualification_seal_path"
+                    .to_owned()
+            })?;
+        validate_canonical_absolute_path(configured_path, "configured qualification seal path")?;
+        validate_canonical_absolute_path(requested_path, "requested qualification seal path")?;
+        if requested_path != configured_path {
+            return Err(format!(
+                "requested qualification seal path `{}` does not exactly match configured path `{}`",
+                requested_path.display(),
+                configured_path.display()
+            ));
+        }
+        validate_qualification_seal_directory_separation(config, requested_path)?;
+
+        #[cfg(unix)]
+        {
+            let effective_uid = rustix::process::geteuid().as_raw();
+            if effective_uid != 0 {
+                return Err(format!(
+                    "qualification seal publication requires effective uid 0, got {effective_uid}"
+                ));
+            }
+            Self::prepare_for_owner(requested_path, 0)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = requested_path;
+            Err(
+                "root-owned atomic qualification seal publication is unsupported on this platform"
+                    .to_owned(),
+            )
+        }
+    }
+
+    #[must_use]
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn publish_and_verify(
+        self,
+        config: &Config,
+        seal: &iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
+    ) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let canonical_bytes = seal.canonical_bytes()?;
+            self.publish_bytes_and_verify(&canonical_bytes, |final_path| {
+                if final_path
+                    != config
+                        .settlement
+                        .offline
+                        .kagemusha_catalog_qualification_seal_path
+                        .as_deref()
+                        .expect("publication target requires a configured seal path")
+                {
+                    return Err(
+                        "published qualification seal path no longer matches configuration"
+                            .to_owned(),
+                    );
+                }
+                load_configured_kagemusha_release_catalog(config).map(|_| ())
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (config, seal);
+            Err(
+                "root-owned atomic qualification seal publication is unsupported on this platform"
+                    .to_owned(),
+            )
+        }
+    }
+
+    #[cfg(unix)]
+    fn prepare_for_owner(path: &Path, expected_uid: u32) -> Result<Self, String> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        validate_canonical_absolute_path(path, "qualification seal path")?;
+        let file_name = path
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| "qualification seal path must end in a file name".to_owned())?
+            .to_owned();
+        let parent_path = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .ok_or_else(|| "qualification seal path must have an absolute parent".to_owned())?;
+
+        let mut ancestors = parent_path.ancestors().collect::<Vec<_>>();
+        ancestors.reverse();
+        for ancestor in ancestors {
+            let metadata = fs::symlink_metadata(ancestor).map_err(|error| {
+                format!(
+                    "failed to inspect qualification seal parent `{}`: {error}",
+                    ancestor.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "qualification seal parent chain contains a symlink or non-directory `{}`",
+                    ancestor.display()
+                ));
+            }
+            if metadata.uid() != 0 && metadata.uid() != expected_uid {
+                return Err(format!(
+                    "qualification seal parent `{}` is owned by untrusted uid {}",
+                    ancestor.display(),
+                    metadata.uid()
+                ));
+            }
+            if metadata.mode() & 0o022 != 0 {
+                return Err(format!(
+                    "qualification seal parent `{}` is group- or world-writable",
+                    ancestor.display()
+                ));
+            }
+            #[cfg(target_os = "macos")]
+            {
+                require_no_macos_extended_acl(ancestor, "qualification seal parent")?;
+                let after = fs::symlink_metadata(ancestor).map_err(|error| {
+                    format!(
+                        "failed to re-inspect qualification seal parent `{}` after ACL validation: {error}",
+                        ancestor.display()
+                    )
+                })?;
+                if !same_qualification_seal_metadata(&metadata, &after) {
+                    return Err(format!(
+                        "qualification seal parent `{}` changed during ACL validation",
+                        ancestor.display()
+                    ));
+                }
+            }
+        }
+
+        let direct_parent = fs::symlink_metadata(parent_path).map_err(|error| {
+            format!(
+                "failed to inspect qualification seal destination directory `{}`: {error}",
+                parent_path.display()
+            )
+        })?;
+        if direct_parent.uid() != expected_uid {
+            return Err(format!(
+                "qualification seal destination directory `{}` must be owned by uid {expected_uid}",
+                parent_path.display()
+            ));
+        }
+
+        let parent = fs::File::from(
+            rustix::fs::open(
+                parent_path,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to pin qualification seal destination directory `{}`: {error}",
+                    parent_path.display()
+                )
+            })?,
+        );
+        let opened = parent.metadata().map_err(|error| {
+            format!("failed to inspect pinned qualification seal destination directory: {error}")
+        })?;
+        let current = fs::symlink_metadata(parent_path).map_err(|error| {
+            format!("failed to re-inspect qualification seal destination directory: {error}")
+        })?;
+        if !opened.is_dir()
+            || opened.dev() != current.dev()
+            || opened.ino() != current.ino()
+            || opened.uid() != expected_uid
+            || opened.mode() & 0o022 != 0
+        {
+            return Err(
+                "qualification seal destination directory changed or became untrusted while opening"
+                    .to_owned(),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        require_acl_free_pinned_path(
+            &parent,
+            parent_path,
+            "qualification seal destination directory",
+        )?;
+        match rustix::fs::statat(&parent, &file_name, rustix::fs::AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(_) => {
+                return Err(format!(
+                    "qualification seal destination already exists and will not be replaced: {}",
+                    path.display()
+                ));
+            }
+            Err(error) if error == rustix::io::Errno::NOENT => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect qualification seal destination `{}`: {error}",
+                    path.display()
+                ));
+            }
+        }
+
+        Ok(Self {
+            path: path.to_owned(),
+            parent,
+            file_name,
+            expected_uid,
+        })
+    }
+
+    #[cfg(unix)]
+    #[allow(clippy::too_many_lines)]
+    fn publish_bytes_and_verify(
+        self,
+        canonical_bytes: &[u8],
+        verify_final: impl FnOnce(&Path) -> Result<(), String>,
+    ) -> Result<(), String> {
+        use std::{
+            io::{Read as _, Seek as _, SeekFrom, Write as _},
+            os::unix::fs::MetadataExt as _,
+        };
+
+        if canonical_bytes.is_empty() {
+            return Err("canonical qualification seal bytes must not be empty".to_owned());
+        }
+        self.verify_parent_identity()?;
+
+        let mut nonce = [0_u8; 16];
+        rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce).map_err(|error| {
+            format!(
+                "operating-system randomness unavailable for qualification seal staging: {error}"
+            )
+        })?;
+        let staging_name =
+            OsString::from(format!(".irohad-kagemusha-seal-{}.tmp", hex::encode(nonce)));
+        #[cfg(target_os = "macos")]
+        let staging_path = self
+            .path
+            .parent()
+            .expect("prepared qualification seal path has a parent")
+            .join(&staging_name);
+        let mut staging = fs::File::from(
+            rustix::fs::openat(
+                &self.parent,
+                &staging_name,
+                rustix::fs::OFlags::RDWR
+                    | rustix::fs::OFlags::CREATE
+                    | rustix::fs::OFlags::EXCL
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::from_raw_mode(0o600),
+            )
+            .map_err(|error| {
+                format!("failed to create exclusive qualification seal staging file: {error}")
+            })?,
+        );
+
+        let staged_result = (|| -> Result<(u64, u64), String> {
+            staging.write_all(canonical_bytes).map_err(|error| {
+                format!("failed to write qualification seal staging file: {error}")
+            })?;
+            staging.flush().map_err(|error| {
+                format!("failed to flush qualification seal staging file: {error}")
+            })?;
+            staging.sync_all().map_err(|error| {
+                format!("failed to sync qualification seal staging file: {error}")
+            })?;
+            rustix::fs::fchmod(&staging, rustix::fs::Mode::from_raw_mode(0o444)).map_err(
+                |error| {
+                    format!("failed to make qualification seal staging file immutable: {error}")
+                },
+            )?;
+            staging.sync_all().map_err(|error| {
+                format!("failed to sync immutable qualification seal staging file: {error}")
+            })?;
+
+            let before_acl_clear = staging.metadata().map_err(|error| {
+                format!("failed to inspect qualification seal staging file: {error}")
+            })?;
+            let named_before_acl_clear = rustix::fs::statat(
+                &self.parent,
+                &staging_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(|error| {
+                format!(
+                    "failed to bind qualification seal staging name before ACL removal: {error}"
+                )
+            })?;
+            if u64::try_from(named_before_acl_clear.st_dev).ok() != Some(before_acl_clear.dev())
+                || u64::try_from(named_before_acl_clear.st_ino).ok() != Some(before_acl_clear.ino())
+                || u64::try_from(named_before_acl_clear.st_nlink).ok() != Some(1)
+            {
+                return Err("qualification seal staging name changed before ACL removal".to_owned());
+            }
+            #[cfg(target_os = "macos")]
+            {
+                clear_macos_extended_acl(&staging_path, "qualification seal staging file")?;
+                require_acl_free_pinned_path(
+                    &staging,
+                    &staging_path,
+                    "qualification seal staging file",
+                )?;
+            }
+
+            let metadata = staging.metadata().map_err(|error| {
+                format!("failed to inspect ACL-free qualification seal staging file: {error}")
+            })?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != self.expected_uid
+                || metadata.mode() & 0o7777 != 0o444
+                || metadata.len()
+                    != u64::try_from(canonical_bytes.len())
+                        .map_err(|_| "qualification seal length does not fit u64".to_owned())?
+            {
+                return Err(
+                    "qualification seal staging file ownership, mode, links, or length is invalid"
+                        .to_owned(),
+                );
+            }
+            let named = rustix::fs::statat(
+                &self.parent,
+                &staging_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(|error| format!("failed to bind qualification seal staging name: {error}"))?;
+            if u64::try_from(named.st_dev).ok() != Some(metadata.dev())
+                || u64::try_from(named.st_ino).ok() != Some(metadata.ino())
+                || u64::try_from(named.st_nlink).ok() != Some(1)
+            {
+                return Err(
+                    "qualification seal staging name no longer identifies the opened file"
+                        .to_owned(),
+                );
+            }
+
+            staging.seek(SeekFrom::Start(0)).map_err(|error| {
+                format!("failed to rewind qualification seal staging file: {error}")
+            })?;
+            let mut readback = Vec::with_capacity(canonical_bytes.len());
+            staging.read_to_end(&mut readback).map_err(|error| {
+                format!("failed to read back qualification seal staging file: {error}")
+            })?;
+            if readback != canonical_bytes {
+                return Err(
+                    "qualification seal staging file did not round-trip canonical bytes".to_owned(),
+                );
+            }
+            self.verify_parent_identity()?;
+            self.parent.sync_all().map_err(|error| {
+                format!("failed to sync qualification seal destination before publication: {error}")
+            })?;
+            match rustix::fs::statat(
+                &self.parent,
+                &self.file_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Err(error) if error == rustix::io::Errno::NOENT => {}
+                Ok(_) => {
+                    return Err(format!(
+                        "qualification seal destination appeared during qualification and will not be replaced: {}",
+                        self.path.display()
+                    ));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "failed to recheck qualification seal destination: {error}"
+                    ));
+                }
+            }
+            Ok((metadata.dev(), metadata.ino()))
+        })();
+
+        let (staged_device, staged_inode) = match staged_result {
+            Ok(identity) => identity,
+            Err(error) => {
+                drop(staging);
+                let _ =
+                    rustix::fs::unlinkat(&self.parent, &staging_name, rustix::fs::AtFlags::empty());
+                let _ = self.parent.sync_all();
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = rustix::fs::renameat_with(
+            &self.parent,
+            &staging_name,
+            &self.parent,
+            &self.file_name,
+            rustix::fs::RenameFlags::NOREPLACE,
+        ) {
+            drop(staging);
+            let _ = rustix::fs::unlinkat(&self.parent, &staging_name, rustix::fs::AtFlags::empty());
+            let _ = self.parent.sync_all();
+            return Err(format!(
+                "failed to publish qualification seal without replacement: {error}"
+            ));
+        }
+
+        let final_result = (|| -> Result<(), String> {
+            let published = rustix::fs::statat(
+                &self.parent,
+                &self.file_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            )
+            .map_err(|error| format!("failed to inspect published qualification seal: {error}"))?;
+            if u64::try_from(published.st_dev).ok() != Some(staged_device)
+                || u64::try_from(published.st_ino).ok() != Some(staged_inode)
+                || u64::try_from(published.st_nlink).ok() != Some(1)
+                || u32::try_from(published.st_uid).ok() != Some(self.expected_uid)
+                || u32::try_from(published.st_mode).map_or(true, |mode| mode & 0o7777 != 0o444)
+            {
+                return Err(
+                    "published qualification seal does not match the staged immutable inode"
+                        .to_owned(),
+                );
+            }
+            #[cfg(target_os = "macos")]
+            require_acl_free_pinned_path(&staging, &self.path, "published qualification seal")?;
+            self.parent.sync_all().map_err(|error| {
+                format!("failed to sync qualification seal destination after publication: {error}")
+            })?;
+            verify_final(&self.path)?;
+            self.verify_parent_identity()
+        })();
+
+        if let Err(error) = final_result {
+            let cleanup = match rustix::fs::statat(
+                &self.parent,
+                &self.file_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(current)
+                    if u64::try_from(current.st_dev).ok() == Some(staged_device)
+                        && u64::try_from(current.st_ino).ok() == Some(staged_inode) =>
+                {
+                    rustix::fs::unlinkat(
+                        &self.parent,
+                        &self.file_name,
+                        rustix::fs::AtFlags::empty(),
+                    )
+                    .map(|()| true)
+                    .map_err(|cleanup_error| cleanup_error.to_string())
+                }
+                Ok(_) => Err(
+                    "refused to remove a final path that no longer identifies the published inode"
+                        .to_owned(),
+                ),
+                Err(cleanup_error) if cleanup_error == rustix::io::Errno::NOENT => Ok(false),
+                Err(cleanup_error) => Err(cleanup_error.to_string()),
+            };
+            let sync = self
+                .parent
+                .sync_all()
+                .map_err(|sync_error| sync_error.to_string());
+            return match (cleanup, sync) {
+                (Ok(true), Ok(())) => Err(format!(
+                    "{error}; removed the newly published seal because final verification failed"
+                )),
+                (Ok(false), Ok(())) => Err(format!(
+                    "{error}; the newly published seal was already absent after final verification failed"
+                )),
+                (cleanup, sync) => Err(format!(
+                    "{error}; failed to durably remove the newly published seal after verification failure (unlink={cleanup:?}, sync={sync:?})"
+                )),
+            };
+        }
+
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn verify_parent_identity(&self) -> Result<(), String> {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let parent_path = self
+            .path
+            .parent()
+            .expect("prepared qualification seal path has a parent");
+        let opened = self.parent.metadata().map_err(|error| {
+            format!("failed to inspect pinned qualification seal destination: {error}")
+        })?;
+        let current = fs::symlink_metadata(parent_path).map_err(|error| {
+            format!("failed to re-inspect qualification seal destination path: {error}")
+        })?;
+        if current.file_type().is_symlink()
+            || !current.is_dir()
+            || opened.dev() != current.dev()
+            || opened.ino() != current.ino()
+            || opened.uid() != self.expected_uid
+            || opened.mode() & 0o022 != 0
+        {
+            return Err(
+                "qualification seal destination directory changed identity or trust attributes"
+                    .to_owned(),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        require_acl_free_pinned_path(
+            &self.parent,
+            parent_path,
+            "qualification seal destination directory",
+        )?;
+        Ok(())
+    }
+}
+
+fn validate_canonical_absolute_path(path: &Path, label: &str) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err(format!("{label} must be absolute: {}", path.display()));
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) {
+        return Err(format!(
+            "{label} must not contain `.` or `..` components: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_qualification_seal_directory_separation(
+    config: &Config,
+    seal_path: &Path,
+) -> Result<(), String> {
+    let seal_parent = seal_path
+        .parent()
+        .ok_or_else(|| "qualification seal path must have a parent directory".to_owned())?;
+    let policy_parent = config
+        .settlement
+        .offline
+        .kagemusha_release_policy_path
+        .as_deref()
+        .and_then(Path::parent);
+    let artifact_dir = config.settlement.offline.kagemusha_artifact_dir.as_deref();
+    let executable_parent = env::current_exe()
+        .map_err(|error| format!("failed to resolve current executable path: {error}"))?
+        .parent()
+        .map(Path::to_owned)
+        .ok_or_else(|| "current executable has no parent directory".to_owned())?;
+    for (label, source_dir) in [
+        ("release-policy parent", policy_parent),
+        ("artifact directory", artifact_dir),
+        (
+            "current-executable parent",
+            Some(executable_parent.as_path()),
+        ),
+    ] {
+        let Some(source_dir) = source_dir else {
+            continue;
+        };
+        if seal_parent.starts_with(source_dir) || source_dir.starts_with(seal_parent) {
+            return Err(format!(
+                "qualification seal directory `{}` must be separate from the Kagemusha {label} `{}` because publication changes directory identity",
+                seal_parent.display(),
+                source_dir.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_config_for_check(
     config: &Config,
     genesis: Option<&GenesisBlock>,
-) -> ReportResult<(), MainError> {
+    build_kagemusha_qualification_seal: bool,
+) -> ReportResult<
+    Option<iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1>,
+    MainError,
+> {
     validate_config_offline(config).change_context(MainError::Config)?;
+    iroha_torii::ensure_mandatory_offline_configuration_for_chain(
+        &config.common.chain,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "mandatory offline cash configuration failed: {error}"
+        ))
+    })?;
+
+    if build_kagemusha_qualification_seal && genesis.is_none() {
+        return Err(Report::new(MainError::Config).attach(
+            "`--write-kagemusha-catalog-qualification-seal` requires locally available genesis so the seal is published only after full offline genesis validation",
+        ));
+    }
+
+    let (catalog, qualification_seal) = if build_kagemusha_qualification_seal {
+        let (catalog, seal) = load_and_build_configured_kagemusha_catalog_qualification_seal(
+            config,
+        )
+        .map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "failed to fully qualify the Kagemusha V4 release catalog: {error}"
+            ))
+        })?;
+        (catalog, Some(seal))
+    } else {
+        let catalog = load_configured_kagemusha_release_catalog(config).map_err(|error| {
+            Report::new(MainError::Config).attach(format!(
+                "failed to load the configured Kagemusha V4 release catalog: {error}"
+            ))
+        })?;
+        (catalog, None)
+    };
 
     let Some(genesis) = genesis else {
         // A joining node may obtain genesis from its trusted peers. Static
-        // validation is complete even though bootstrap readiness is pending.
-        return Ok(());
+        // validation and catalog authentication are complete even though
+        // bootstrap readiness is pending.
+        return Ok(None);
     };
 
     let configured_key = &config.genesis.public_key;
@@ -14791,8 +15652,124 @@ fn validate_config_for_check(
         signed_mode,
         signed_parameters,
         block_cadence_ms,
+        catalog,
     )?;
 
+    Ok(qualification_seal)
+}
+
+fn load_configured_kagemusha_release_catalog(
+    config: &Config,
+) -> Result<iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4, String> {
+    if !config.settlement.offline.enabled {
+        return Ok(iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty());
+    }
+    match (
+        config
+            .settlement
+            .offline
+            .kagemusha_release_policy_path
+            .as_deref(),
+        config
+            .settlement
+            .offline
+            .kagemusha_artifact_dir
+            .as_deref(),
+    ) {
+        (None, None) => Err(
+            "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory"
+                .to_owned(),
+        ),
+        (Some(policy_path), Some(artifact_dir)) => {
+            let budget = config.settlement.offline.kagemusha_max_decoded_bytes;
+            if let Some(seal_path) = config
+                .settlement
+                .offline
+                .kagemusha_catalog_qualification_seal_path
+                .as_deref()
+            {
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget_and_qualification_seal(
+                    policy_path,
+                    artifact_dir,
+                    budget,
+                    seal_path,
+                )
+                .map_err(|error| {
+                    format!(
+                        "failed to load sealed Kagemusha V4 release catalog without fallback: {error}"
+                    )
+                })
+            } else {
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
+                    policy_path,
+                    artifact_dir,
+                    budget,
+                )
+                .map_err(|error| {
+                    format!("failed to authenticate Kagemusha V4 release catalog: {error}")
+                })
+            }
+        }
+        _ => Err(
+            "Kagemusha V4 release policy and artifact directory must be configured together"
+                .to_owned(),
+        ),
+    }
+}
+
+fn load_and_build_configured_kagemusha_catalog_qualification_seal(
+    config: &Config,
+) -> Result<
+    (
+        iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+        iroha_core::smartcontracts::isi::offline::KagemushaCatalogQualificationSealV1,
+    ),
+    String,
+> {
+    if !config.settlement.offline.enabled {
+        return Err(
+            "cannot qualify a Kagemusha V4 release catalog while offline settlement is disabled"
+                .to_owned(),
+        );
+    }
+    match (
+        config
+            .settlement
+            .offline
+            .kagemusha_release_policy_path
+            .as_deref(),
+        config
+            .settlement
+            .offline
+            .kagemusha_artifact_dir
+            .as_deref(),
+    ) {
+        (Some(policy_path), Some(artifact_dir)) => {
+            iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_and_build_qualification_seal(
+                policy_path,
+                artifact_dir,
+                config.settlement.offline.kagemusha_max_decoded_bytes,
+            )
+            .map_err(|error| {
+                format!("failed to authenticate the complete Kagemusha V4 release catalog: {error}")
+            })
+        }
+        (None, None) => Err(
+            "cannot qualify a Kagemusha V4 catalog without a release policy and artifact directory"
+                .to_owned(),
+        ),
+        _ => Err(
+            "Kagemusha V4 release policy and artifact directory must be configured together"
+                .to_owned(),
+        ),
+    }
+}
+
+fn install_configured_kagemusha_release_catalog(
+    state: &mut State,
+    config: &Config,
+) -> Result<(), String> {
+    state.set_kagemusha_release_catalog(load_configured_kagemusha_release_catalog(config)?);
     Ok(())
 }
 
@@ -14893,6 +15870,7 @@ fn validate_genesis_execution_offline(
     signed_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
     signed_parameters: iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters,
     expected_block_cadence_ms: u64,
+    kagemusha_release_catalog: iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
 ) -> ReportResult<(), MainError> {
     let validation_root = DisposableValidationRoot::create().map_err(|error| {
         Report::new(MainError::Config).attach(format!(
@@ -14924,6 +15902,7 @@ fn validate_genesis_execution_offline(
             "failed to initialize disposable world state for genesis validation: {error}"
         ))
     })?;
+    state.set_kagemusha_release_catalog(kagemusha_release_catalog);
     install_zk_config_before_kura_replay(&mut state, config).change_context(MainError::Config)?;
     apply_state_runtime_config_before_snapshot_auth(&mut state, config);
     apply_state_geometry_config_before_kura_replay(&mut state, config)
@@ -14972,6 +15951,19 @@ fn validate_genesis_execution_offline(
             "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {expected_block_cadence_ms} ms"
         )));
     }
+    iroha_torii::ensure_mandatory_offline_staged_genesis_readiness(
+        &staged,
+        genesis.0.header(),
+        &config.common.chain,
+        &config.settlement.offline,
+        config.torii.kagemusha_commands.as_ref(),
+        &config.nexus.fees.fee_asset_id,
+    )
+    .map_err(|error| {
+        Report::new(MainError::Config).attach(format!(
+            "mandatory offline cash readiness failed in staged genesis: {error}"
+        ))
+    })?;
     iroha_core::sumeragi::freeze_staged_genesis_v2(
         genesis,
         &staged,
@@ -15806,6 +16798,40 @@ mod tests {
         storage.governance_dag_publisher_public_key_hex = Some(public_key_hex.clone());
         storage.governance_dag_service.publisher_public_key_hex = Some(public_key_hex);
         storage
+    }
+
+    #[cfg(target_os = "macos")]
+    struct MacosAclGuard {
+        path: PathBuf,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl Drop for MacosAclGuard {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/bin/chmod")
+                .arg("-N")
+                .arg(&self.path)
+                .status();
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn add_macos_acl(path: &Path, entry: &str) -> MacosAclGuard {
+        let output = std::process::Command::new("/bin/chmod")
+            .arg("+a")
+            .arg(entry)
+            .arg(path)
+            .output()
+            .expect("run macOS chmod");
+        assert!(
+            output.status.success(),
+            "chmod +a failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        MacosAclGuard {
+            path: path.to_path_buf(),
+        }
     }
 
     #[test]
@@ -19172,6 +20198,10 @@ mod tests {
             extra_instructions: impl IntoIterator<Item = InstructionBox>,
         ) -> OfflineSemanticGenesisFixture {
             let mut config = sample_config();
+            // These fixtures exercise generic staged-genesis semantics. The
+            // authenticated ABI-21/V4 catalog path has its own Torii readiness
+            // fixtures and cannot be represented by this minimal genesis.
+            config.settlement.offline.enabled = false;
             let chain_id = ChainId::from("offline-genesis-validation-test");
             let genesis_authority = iroha_crypto::KeyPair::try_from_seed(
                 b"offline-genesis-validation-authority".to_vec(),
@@ -19252,8 +20282,134 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                load_configured_kagemusha_release_catalog(&fixture.config)
+                    .expect("disabled offline settlement uses an empty catalog"),
             )
             .expect("valid genesis should execute in the disposable overlay");
+        }
+
+        #[test]
+        fn check_config_installs_offline_catalog_before_genesis_activation() {
+            let source = include_str!("main.rs");
+            let check_path = source
+                .split_once("fn validate_genesis_execution_offline(")
+                .expect("offline genesis validator")
+                .1
+                .split_once("fn enforce_build_line(")
+                .expect("end offline genesis validator")
+                .0;
+            let install = check_path
+                .find("state.set_kagemusha_release_catalog(kagemusha_release_catalog)")
+                .expect("check-config catalog installation");
+            let execute = check_path
+                .find("ValidBlock::validate_signed_genesis_keep_voting_block(")
+                .expect("offline genesis execution");
+            let readiness = check_path
+                .find("ensure_mandatory_offline_staged_genesis_readiness(")
+                .expect("staged offline readiness gate");
+            let freeze = check_path
+                .find("freeze_staged_genesis_v2(")
+                .expect("staged genesis freeze");
+            assert!(install < execute);
+            assert!(execute < readiness);
+            assert!(readiness < freeze);
+
+            let runtime_path = source
+                .split_once("pub async fn start_with_runtime_deps(")
+                .expect("runtime startup")
+                .1
+                .split_once("// Resolve the complete replay boundary")
+                .expect("end runtime catalog setup")
+                .0;
+            assert!(
+                runtime_path
+                    .contains("install_configured_kagemusha_release_catalog(&mut state, &config)")
+            );
+        }
+
+        #[test]
+        fn check_config_rejects_public_taira_without_offline_cash_before_genesis_bootstrap() {
+            let mut config = sample_config();
+            config.common.chain = ChainId::from("taira");
+            config.confidential.enabled = true;
+            config.confidential.assume_valid = false;
+            config.settlement.offline.enabled = false;
+
+            let error = validate_config_for_check(&config, None, false)
+                .expect_err("public Taira check-config must require offline cash");
+            let rendered = format!("{error:?}");
+            assert!(
+                rendered.contains("requires settlement.offline.enabled=true"),
+                "unexpected public Taira check-config error: {rendered}"
+            );
+        }
+
+        #[test]
+        fn configured_kagemusha_catalog_loader_requires_both_paths() {
+            let mut config = sample_config();
+            config.settlement.offline.enabled = false;
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
+                    .expect("disabled offline settlement uses an empty catalog")
+                    .is_empty()
+            );
+
+            config.settlement.offline.enabled = true;
+            config.settlement.offline.kagemusha_release_policy_path = None;
+            config.settlement.offline.kagemusha_artifact_dir = None;
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
+                    .err()
+                    .expect("mandatory offline settlement requires catalog paths")
+                    .contains("cannot start without")
+            );
+
+            config.settlement.offline.kagemusha_release_policy_path =
+                Some(PathBuf::from("/tmp/policy.norito"));
+            assert!(
+                load_configured_kagemusha_release_catalog(&config)
+                    .err()
+                    .expect("catalog paths must be configured together")
+                    .contains("configured together")
+            );
+        }
+
+        #[test]
+        fn configured_kagemusha_catalog_loader_uses_seal_without_fallback() {
+            let mut config = sample_config();
+            config.settlement.offline.enabled = true;
+            config.settlement.offline.kagemusha_release_policy_path =
+                Some(PathBuf::from("/missing/policy.norito"));
+            config.settlement.offline.kagemusha_artifact_dir =
+                Some(PathBuf::from("/missing/artifacts"));
+            config
+                .settlement
+                .offline
+                .kagemusha_catalog_qualification_seal_path =
+                Some(PathBuf::from("/missing/catalog-seal.norito"));
+
+            let error = load_configured_kagemusha_release_catalog(&config)
+                .err()
+                .expect("configured seal must select the fail-closed sealed loader");
+            assert!(
+                error.contains("sealed Kagemusha V4 release catalog without fallback"),
+                "unexpected sealed catalog error: {error}"
+            );
+        }
+
+        #[test]
+        fn qualification_seal_check_requires_local_genesis() {
+            let mut config = sample_config();
+            config.settlement.offline.enabled = false;
+
+            let error = validate_config_for_check(&config, None, true)
+                .err()
+                .expect("seal publication must wait for full offline genesis validation");
+            let rendered = format!("{error:?}");
+            assert!(
+                rendered.contains("requires locally available genesis"),
+                "unexpected missing-genesis error: {rendered}"
+            );
         }
 
         #[test]
@@ -19275,6 +20431,8 @@ mod tests {
                 fixture.mode,
                 fixture.parameters,
                 fixture.cadence_ms,
+                load_configured_kagemusha_release_catalog(&fixture.config)
+                    .expect("disabled offline settlement uses an empty catalog"),
             )
             .expect_err("duplicate genesis registration must fail semantic execution");
             let rendered = format!("{error:?}");
@@ -19534,6 +20692,7 @@ mod tests {
                 genesis_manifest_json: Some(manifest_path),
                 startup: StartupArgs {
                     check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
                 },
                 terminal_colors: false,
@@ -19655,6 +20814,7 @@ mod tests {
                 genesis_manifest_json: None,
                 startup: StartupArgs {
                     check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
                 },
                 terminal_colors: false,
@@ -19743,6 +20903,7 @@ mod tests {
                 genesis_manifest_json: None,
                 startup: StartupArgs {
                     check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
                 },
                 terminal_colors: false,
@@ -19847,6 +21008,7 @@ mod tests {
                 genesis_manifest_json: None,
                 startup: StartupArgs {
                     check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
                 },
                 terminal_colors: false,
@@ -20124,6 +21286,7 @@ mod tests {
                 genesis_manifest_json: None,
                 startup: StartupArgs {
                     check_config: false,
+                    write_kagemusha_catalog_qualification_seal: None,
                     trace_config: false,
                 },
                 terminal_colors: false,
@@ -20205,7 +21368,7 @@ mod tests {
                 iroha_p2p::MAX_ENCRYPTED_FRAME_BYTES + 1
             );
 
-            let check_report = validate_config_for_check(&config, None)
+            let check_report = validate_config_for_check(&config, None, false)
                 .expect_err("--check-config must reject an unrepresentable frame cap");
             assert_contains!(
                 format!("{check_report:#}"),
@@ -20230,7 +21393,7 @@ mod tests {
                     );
                 })?;
 
-            let check_report = validate_config_for_check(&topic_config, None)
+            let check_report = validate_config_for_check(&topic_config, None, false)
                 .expect_err("--check-config must reject a topic cap above plaintext capacity");
             let expected = format!(
                 "network.max_frame_bytes_consensus ({}) exceeds the AEAD-specific plaintext ceiling of {plaintext_ceiling} bytes derived from network.max_frame_bytes ({encrypted_cap})",
@@ -20244,6 +21407,50 @@ mod tests {
                 format!("{runtime_report:#}"),
                 "network.max_frame_bytes_consensus"
             );
+
+            Ok(())
+        }
+
+        #[test]
+        fn check_config_enforces_embedded_soracloud_runtime_feature() -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["soracloud_runtime", "production_mode"], true)
+                        .write(["soracloud_runtime", "inrou", "enabled"], true)
+                        .write(["soracloud_runtime", "inrou", "proxy_only"], false)
+                        .write(["soracloud_runtime", "egress", "default_allow"], false)
+                        .write(
+                            ["soracloud_runtime", "egress", "allowed_hosts"],
+                            Vec::<String>::new(),
+                        )
+                        .write(["soracloud_runtime", "egress", "rate_per_minute"], 60_i64)
+                        .write(
+                            ["soracloud_runtime", "egress", "max_bytes_per_minute"],
+                            1_048_576_i64,
+                        )
+                        .write(
+                            ["soracloud_runtime", "hf", "allow_inference_bridge_fallback"],
+                            false,
+                        );
+                })?;
+            config.settlement.offline.enabled = false;
+
+            let result = validate_config_for_check(&config, None, false);
+
+            #[cfg(feature = "embedded-soracloud-runtime")]
+            result.expect("featured irohad must accept Soracloud production mode");
+
+            #[cfg(not(feature = "embedded-soracloud-runtime"))]
+            {
+                let report = result.expect_err(
+                    "--check-config must reject production mode without the embedded runtime",
+                );
+                assert_contains!(
+                    format!("{report:#}"),
+                    "`soracloud_runtime.production_mode = true` requires building irohad with the `embedded-soracloud-runtime` feature"
+                );
+            }
 
             Ok(())
         }
@@ -20335,6 +21542,45 @@ mod tests {
         }
 
         #[test]
+        fn validate_config_runtime_rejects_sorafs_storage_without_compliance() -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) = load_config_with_overrides(|_, _| {})?;
+            config.torii.sorafs_storage.enabled = true;
+            config.torii.sorafs_gateway.compliance = None;
+
+            let mut emitter = Emitter::new();
+            validate_config_runtime(&mut emitter, &config);
+            let report = emitter
+                .into_result()
+                .expect_err("ungoverned embedded storage must fail before startup");
+            assert_contains!(
+                format!("{report:#}"),
+                "sorafs.storage.enabled requires the governed sorafs.gateway.compliance controller"
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn validate_config_runtime_rejects_gateway_automation_without_storage() -> eyre::Result<()>
+        {
+            let (mut config, _dir, _config_path) = load_config_with_overrides(|_, _| {})?;
+            config.torii.sorafs_storage.enabled = false;
+            config.torii.sorafs_gateway.acme.enabled = true;
+
+            let mut emitter = Emitter::new();
+            validate_config_runtime(&mut emitter, &config);
+            let report = emitter
+                .into_result()
+                .expect_err("gateway automation without storage must fail before startup");
+            assert_contains!(
+                format!("{report:#}"),
+                "SoraFS gateway ACME/compliance configuration requires sorafs.storage.enabled"
+            );
+
+            Ok(())
+        }
+
+        #[test]
         fn validator_cannot_assume_valid_confidential() -> eyre::Result<()> {
             let (config, _dir, _config_path) =
                 load_config_with_overrides(|table, _genesis_key| {
@@ -20361,6 +21607,11 @@ mod tests {
 
         assert_eq!(args.terminal_colors, is_coloring_supported());
         assert!(!args.startup.check_config);
+        assert!(
+            args.startup
+                .write_kagemusha_catalog_qualification_seal
+                .is_none()
+        );
     }
 
     #[test]
@@ -20368,6 +21619,135 @@ mod tests {
         let args = Args::try_parse_from(["test", "--check-config"]).unwrap();
 
         assert!(args.startup.check_config);
+    }
+
+    #[test]
+    fn qualification_seal_writer_requires_check_config() {
+        assert!(
+            Args::try_parse_from([
+                "test",
+                "--write-kagemusha-catalog-qualification-seal",
+                "/Library/SORA/Taira/seals/catalog.norito",
+            ])
+            .is_err()
+        );
+
+        let args = Args::try_parse_from([
+            "test",
+            "--check-config",
+            "--write-kagemusha-catalog-qualification-seal",
+            "/Library/SORA/Taira/seals/catalog.norito",
+        ])
+        .expect("the explicit writer is valid only with check-config");
+        assert!(args.startup.check_config);
+        assert_eq!(
+            args.startup.write_kagemusha_catalog_qualification_seal,
+            Some(PathBuf::from("/Library/SORA/Taira/seals/catalog.norito"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qualification_seal_path_must_be_canonical_and_source_separate() {
+        assert!(validate_canonical_absolute_path(Path::new("seal.norito"), "test seal").is_err());
+        assert!(
+            validate_canonical_absolute_path(Path::new("/trusted/../seal.norito"), "test seal")
+                .is_err()
+        );
+        assert!(
+            validate_canonical_absolute_path(Path::new("/trusted/seal.norito"), "test seal")
+                .is_ok()
+        );
+
+        let mut config = sample_config();
+        config.settlement.offline.kagemusha_release_policy_path =
+            Some(PathBuf::from("/qualified/policy/release-policy.norito"));
+        config.settlement.offline.kagemusha_artifact_dir =
+            Some(PathBuf::from("/qualified/artifacts"));
+        let error = validate_qualification_seal_directory_separation(
+            &config,
+            Path::new("/qualified/policy/catalog-seal.norito"),
+        )
+        .expect_err("seal publication must not mutate the policy parent");
+        assert!(error.contains("must be separate"));
+        let error = validate_qualification_seal_directory_separation(
+            &config,
+            Path::new("/qualified/artifacts/seals/catalog-seal.norito"),
+        )
+        .expect_err("seal publication must not mutate the artifact tree");
+        assert!(error.contains("must be separate"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn qualification_seal_publication_is_immutable_and_exclusive() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let temp = tempfile::tempdir().expect("private test root");
+        let canonical_temp = fs::canonicalize(temp.path()).expect("canonical private test root");
+        let seal_dir = canonical_temp.join("seals");
+        fs::create_dir(&seal_dir).expect("seal directory");
+        fs::set_permissions(&seal_dir, fs::Permissions::from_mode(0o700))
+            .expect("private seal directory");
+        let path = seal_dir.join("catalog.norito");
+        let expected_uid = rustix::process::geteuid().as_raw();
+        let target = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
+            .expect("trusted absent destination");
+        target
+            .publish_bytes_and_verify(b"canonical-seal-v1", |published| {
+                let bytes = fs::read(published)
+                    .map_err(|error| format!("failed to read published test seal: {error}"))?;
+                if bytes != b"canonical-seal-v1" {
+                    return Err("published test seal bytes differ".to_owned());
+                }
+                Ok(())
+            })
+            .expect("exclusive immutable publication");
+
+        let metadata = fs::symlink_metadata(&path).expect("published seal metadata");
+        assert!(metadata.is_file());
+        assert_eq!(metadata.uid(), expected_uid);
+        assert_eq!(metadata.nlink(), 1);
+        assert_eq!(metadata.mode() & 0o7777, 0o444);
+        #[cfg(target_os = "macos")]
+        require_no_macos_extended_acl(&path, "published qualification seal")
+            .expect("published seal is ACL-free");
+        let error = QualificationSealPublicationTarget::prepare_for_owner(&path, expected_uid)
+            .err()
+            .expect("an existing seal is never replaced");
+        assert!(error.contains("already exists"));
+
+        let rejected_path = seal_dir.join("rejected.norito");
+        let rejected_target =
+            QualificationSealPublicationTarget::prepare_for_owner(&rejected_path, expected_uid)
+                .expect("second trusted absent destination");
+        let error = rejected_target
+            .publish_bytes_and_verify(b"canonical-seal-v1", |_| {
+                Err("injected final verification failure".to_owned())
+            })
+            .expect_err("failed final verification must roll back the new inode");
+        assert!(error.contains("removed the newly published seal"));
+        assert!(!rejected_path.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn qualification_seal_publication_rejects_acl_writable_parent() {
+        let temp = tempfile::tempdir().expect("private ACL test root");
+        let canonical_temp = fs::canonicalize(temp.path()).expect("canonical ACL test root");
+        let seal_dir = canonical_temp.join("seals");
+        fs::create_dir(&seal_dir).expect("seal directory");
+        let expected_uid = rustix::process::geteuid().as_raw();
+        let error = {
+            let _acl = add_macos_acl(&seal_dir, "everyone allow write");
+            QualificationSealPublicationTarget::prepare_for_owner(
+                &seal_dir.join("catalog.norito"),
+                expected_uid,
+            )
+            .err()
+            .expect("ACL-writable publication parent must fail closed")
+        };
+        assert!(error.contains("extended ACL"));
     }
 
     #[test]

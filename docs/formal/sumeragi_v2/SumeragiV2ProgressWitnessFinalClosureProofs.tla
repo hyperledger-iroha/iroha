@@ -666,10 +666,12 @@ THEOREM LocalAdmissionPreservesResponsiveReplayLineagedCarrier ==
     /\ AsyncStrongTypeInvariant
     /\ AsyncProgressOwnershipInvariant
     /\ ResponsiveReplayLockedBodyLineagedCarrierInvariant
-    /\ LocalAdmissionStep(node)
+    /\ (LocalAdmissionStep(node)
+          \/ SerializedLocalPrecedesServeIngressStep(node))
     /\ UNCHANGED AsyncRecoveryVars
     => ResponsiveReplayLockedBodyLineagedCarrierInvariant'
 BY LocalAdmissionPreservesScheduledCandidateSet,
+   SelectedLocalAdmissionAdvancePreservesScheduledCandidateSet,
    HistoricalLineageFramePreservesResponsiveReplayCarrier,
    IsaT(120)
    DEF HistoricalLockedBodyLineageRetentionFrame,
@@ -677,7 +679,10 @@ BY LocalAdmissionPreservesScheduledCandidateSet,
        HistoricalLockedAuthenticatedHistoryRetained,
        HistoricalLockedLineagedRequestsRetained,
        HistoricalLockedLineagedCandidatesRetained,
-       LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       LocalAdmissionStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
        LeaveCausalQueues, AsyncIoVars, AsyncDeferredVars,
        AsyncLocalAdmissionVars, vars
 
@@ -822,7 +827,7 @@ THEOREM RunNodeWorkPreservesResponsiveReplayLineagedCarrier ==
 BY LocalAdmissionPreservesResponsiveReplayLineagedCarrier,
    IngressDrainPreservesResponsiveReplayLineagedCarrier,
    SerializedRuntimePreservesResponsiveReplayLineagedCarrier, Isa
-   DEF RunNodeWork
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
 
 THEOREM RunHistoricalServerEstablishesFinalMonotoneCarrierFrame ==
   \A node \in ValidatorIds:
@@ -963,7 +968,7 @@ THEOREM ResponsiveRestartPreservesFinalProgressWitnessClosure ==
   /\ FinalProgressWitnessClosureInvariant
   /\ PreGstResponsiveRestart
   => FinalProgressWitnessClosureInvariant'
-BY ResponsiveRestartAdvancesExactDurableDecisionAuthority, IsaT(420)
+BY ResponsiveRestartRebindsExactDurableDecisionAuthority, IsaT(420)
    DEF ResponsiveRecoveryValidationClearedInvariant,
        RecoveryNodeValidationCleared,
        AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,

@@ -1,5 +1,7 @@
 //! Authenticated Kagemusha ABI-21/V4 release verification and activation preparation.
 
+mod taira;
+
 use std::{
     collections::BTreeSet,
     fs::{self, File, OpenOptions},
@@ -119,6 +121,12 @@ enum Command {
     /// Build one release-bound activation instruction from an authenticated V4 catalog.
     #[command(name = "prepare-activation-v4")]
     PrepareActivationV4(PrepareActivationV4Args),
+    /// Build the actual rendered Taira validator roster for signed V4 release generation.
+    #[command(name = "prepare-taira-release-roster-v4")]
+    PrepareTairaReleaseRosterV4(taira::PrepareReleaseRosterV4Args),
+    /// Append the complete authenticated offline-cash state to a fresh Taira genesis.
+    #[command(name = "prepare-taira-testnet-bootstrap-v4")]
+    PrepareTairaTestnetBootstrapV4(taira::PrepareTestnetBootstrapV4Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -244,6 +252,12 @@ impl<T: Write> RunArgs<T> for Args {
                     instructions_hash,
                     policy_state_sha256,
                 )?;
+            }
+            Command::PrepareTairaReleaseRosterV4(args) => {
+                taira::prepare_release_roster_v4(args, writer)?;
+            }
+            Command::PrepareTairaTestnetBootstrapV4(args) => {
+                taira::prepare_testnet_bootstrap_v4(args, writer)?;
             }
         }
         Ok(())

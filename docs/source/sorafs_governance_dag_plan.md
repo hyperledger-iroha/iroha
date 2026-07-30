@@ -91,12 +91,19 @@ platforms fail closed. Request authentication is a hard cut to a signed
 canonical descriptor and envelope: configuration pins each strong Ed25519
 verification key plus bounded freshness/skew policy, every outbound operation
 requalifies the exact provider, and bearer/cookie/alias representations are
-rejected. The source tree supplies both the authenticated client and an
-injected broker-server library boundary. SF-12 still requires a supervised
-deployment-owned broker executable, genuine HSM/sealed-store and authenticated
-Kubo/head backends, deployment/package integration, optional RocksDB/IPLD
-storage if the JSON mirror cannot meet deployment scale, and captured
-multi-instance public rollout evidence—not an unimplemented IPFS/IPNS
+rejected. The source also exports a transport-agnostic inbound verifier for the
+exact eight authentication headers. It binds the endpoint scope, method,
+canonical absolute URL and query, selected public headers, body length and
+BLAKE3 digest, freshness interval, nonce, and pinned Ed25519 signature before
+backend dispatch. That receiver is not installed in deployment-owned Kubo or
+head-service ingress, and its bounded caller-owned replay cache is process-local
+rather than sealed or cross-replica. The source tree supplies both the
+authenticated client and an injected broker-server library boundary. SF-12
+still requires a supervised deployment-owned broker executable, genuine
+HSM/sealed-store and authenticated Kubo/head backends, receiver installation
+with durable shared replay state, deployment/package integration, optional
+RocksDB/IPLD storage if the JSON mirror cannot meet deployment scale, and
+captured multi-instance public rollout evidence—not an unimplemented IPFS/IPNS
 publisher.
 
 Implemented foundations include:
@@ -373,9 +380,11 @@ Still outstanding:
   rotation-aware IPFS/head authenticators, and sealed monotonic checkpoint-store
   adapters that derive their qualification revision/digest from the external
   control plane and reject revoked/stale policy internally, and capture
-  multi-instance rollout/rollback evidence. The generic packaged binary calls
-  the registry-aware launcher without inventing a registry and therefore emits
-  the typed `MissingRuntimeProviderRegistry` error before state access.
+  multi-instance rollout/rollback evidence. Install the exact inbound verifier
+  in the deployment-owned Kubo/head receivers and replace its process-local
+  replay cache with sealed cross-replica state. The generic packaged binary
+  calls the registry-aware launcher without inventing a registry and therefore
+  emits the typed `MissingRuntimeProviderRegistry` error before state access.
   Supported deployment packages link the library, inject their audited runtime
   registry programmatically, and provide the concrete adapters; no credential,
   private-key, environment, or provider-file fallback exists. The standalone

@@ -66,6 +66,31 @@ pub const REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical stream-token validation identifiers.
 pub const STREAM_TOKEN_VALIDATION_ID_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.stream-token.validation-id.v1";
+/// Domain separator for stable, chain-scoped regional gateway identities.
+pub const STREAM_TOKEN_GATEWAY_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.reputation.stream-token.gateway-id.v1";
+/// Domain separator for exact request-nonce commitments.
+pub const STREAM_TOKEN_REQUEST_NONCE_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.reputation.stream-token.request-nonce.v1";
+/// Domain separator for exact presented stream-token header commitments.
+pub const STREAM_TOKEN_EXACT_HEADER_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.reputation.stream-token.exact-header.v1";
+/// Domain separator for canonical stream-token request-context commitments.
+pub const STREAM_TOKEN_REQUEST_CONTEXT_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.reputation.stream-token.request-context.v1";
+/// First-release canonical stream-token request-context version.
+pub const STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1: u8 = 1;
+/// Maximum canonical chain-identity bytes accepted by gateway-id derivation.
+pub const STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1: usize = 255;
+/// Maximum governed compliance-gateway identity bytes.
+pub const STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1: usize = 128;
+/// Exact canonical first-release manifest-root CID bytes.
+pub const STREAM_TOKEN_REQUEST_MANIFEST_CID_BYTES_V1: usize =
+    sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;
+/// Maximum canonical chunk-profile handle bytes.
+pub const STREAM_TOKEN_REQUEST_PROFILE_HANDLE_MAX_BYTES_V1: usize = 128;
+/// Maximum canonical visible-ASCII request-nonce bytes.
+pub const STREAM_TOKEN_REQUEST_NONCE_MAX_BYTES_V1: usize = 128;
 /// Domain separator for content-derived journal event identifiers.
 pub const REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1: &[u8] = b"sorafs.reputation.journal.event-id.v1";
 /// Domain separator for explicit finalized-reputation archive retention requests.
@@ -1000,6 +1025,11 @@ pub enum StreamTokenViolationKindV1 {
     /// The token named a different chunking profile.
     ProfileMismatch,
     /// The token named a different admitted provider.
+    ///
+    /// The resulting journal event is attributed to the authoritative local
+    /// serving provider, never the token's caller-controlled provider claim.
+    /// The claimed canonical token material remains bound by
+    /// [`StreamTokenValidationOutcomeV1::token_body_digest`].
     ProviderMismatch,
     /// The token exceeded its signed concurrency ceiling.
     ConcurrencyLimitExceeded,
@@ -1075,6 +1105,542 @@ impl StreamTokenValidationStatusV1 {
             Self::Accepted | Self::ProviderViolation(_) => true,
             Self::Excluded(reason) => reason.carries_decoded_body(),
         }
+    }
+}
+
+/// Hard-cut validation failures for canonical stream-token gateway and request context.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum StreamTokenRequestContextErrorV1 {
+    /// The chain identity is empty, oversized, or not a canonical lowercase token.
+    #[error(
+        "stream-token chain identity must contain 1-{STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1} canonical lowercase ASCII bytes"
+    )]
+    InvalidChainId,
+    /// The governed gateway identity is empty, oversized, or not canonical.
+    #[error(
+        "stream-token compliance gateway identity must contain 1-{STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1} canonical lowercase ASCII bytes"
+    )]
+    InvalidComplianceGatewayId,
+    /// A variable-width canonical component cannot be represented by its V1 length frame.
+    #[error("stream-token canonical component `{field}` length does not fit u64")]
+    LengthOverflow {
+        /// Canonical component whose byte length overflowed.
+        field: &'static str,
+    },
+    /// A domain-separated derived gateway or request commitment is inert.
+    #[error("stream-token derived digest `{field}` must be non-zero")]
+    ZeroDerivedDigest {
+        /// Canonical derived field containing the zero digest.
+        field: &'static str,
+    },
+    /// The request-context schema version is unsupported.
+    #[error("unsupported stream-token request-context version {found}")]
+    UnsupportedVersion {
+        /// Version found in the rejected context.
+        found: u8,
+    },
+    /// The authoritative local serving-provider identity is inert.
+    #[error("stream-token request-context provider id must be non-zero")]
+    ZeroProviderId,
+    /// A required request-context digest is inert.
+    #[error("stream-token request-context digest `{field}` must be non-zero")]
+    ZeroContextDigest {
+        /// Canonical field containing the zero digest.
+        field: &'static str,
+    },
+    /// The manifest CID is not the exact canonical V1 dag-cbor/BLAKE3-256 CID.
+    #[error(
+        "stream-token request manifest CID must be the canonical {STREAM_TOKEN_REQUEST_MANIFEST_CID_BYTES_V1}-byte V1 dag-cbor/BLAKE3-256 CID"
+    )]
+    InvalidManifestCid,
+    /// The chunk-profile handle is empty, oversized, or noncanonical.
+    #[error(
+        "stream-token request profile handle must contain 1-{STREAM_TOKEN_REQUEST_PROFILE_HANDLE_MAX_BYTES_V1} canonical ASCII bytes"
+    )]
+    InvalidProfileHandle,
+    /// The raw request nonce is empty, oversized, or not visible ASCII.
+    #[error(
+        "stream-token request nonce must contain 1-{STREAM_TOKEN_REQUEST_NONCE_MAX_BYTES_V1} visible ASCII bytes"
+    )]
+    InvalidRequestNonce,
+    /// A CAR byte range is reversed or its inclusive byte length overflows.
+    #[error("stream-token CAR range {start}..={end_inclusive} is invalid")]
+    InvalidCarRange {
+        /// Inclusive first byte.
+        start: u64,
+        /// Inclusive last byte.
+        end_inclusive: u64,
+    },
+    /// The chunk digest is inert.
+    #[error("stream-token chunk digest must be non-zero")]
+    ZeroChunkDigest,
+    /// The exact stored chunk length is zero or the reserved maximum sentinel.
+    #[error("stream-token stored chunk length must be finite and non-zero")]
+    InvalidStoredChunkLength,
+}
+
+/// Derive the stable authenticated identity of one governed regional gateway.
+///
+/// The V1 hash input is:
+///
+/// `domain || chain_len_le_u64 || chain_utf8 || gateway_len_le_u64 || gateway_utf8`.
+///
+/// Both textual components are exact canonical lowercase ASCII tokens. Signer
+/// public keys are deliberately excluded so signer rotation cannot reset the
+/// gateway's sealed validation sequence.
+///
+/// # Errors
+///
+/// Rejects empty, oversized, noncanonical, length-overflowing, or inert input.
+pub fn derive_stream_token_gateway_id_v1(
+    chain_id: &ChainId,
+    compliance_gateway_id: &str,
+) -> Result<[u8; 32], StreamTokenRequestContextErrorV1> {
+    let chain_id = chain_id.as_str();
+    if !is_canonical_stream_token_identity(chain_id, STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1) {
+        return Err(StreamTokenRequestContextErrorV1::InvalidChainId);
+    }
+    if !is_canonical_stream_token_identity(
+        compliance_gateway_id,
+        STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1,
+    ) {
+        return Err(StreamTokenRequestContextErrorV1::InvalidComplianceGatewayId);
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(STREAM_TOKEN_GATEWAY_ID_DOMAIN_V1);
+    update_length_framed_digest(&mut hasher, chain_id.as_bytes(), "chain_id")?;
+    update_length_framed_digest(
+        &mut hasher,
+        compliance_gateway_id.as_bytes(),
+        "compliance_gateway_id",
+    )?;
+    nonzero_stream_token_derived_digest(hasher.finalize(), "gateway_id")
+}
+
+/// Digest of one exact presented stream-token header.
+///
+/// Only the domain-separated digest is retained or exposed through `Debug`;
+/// raw token bytes never enter the canonical request context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[repr(transparent)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
+    norito(transparent),
+    norito(with = "crate::json_helpers::fixed_bytes")
+)]
+pub struct StreamTokenExactHeaderDigestV1([u8; 32]);
+
+impl StreamTokenExactHeaderDigestV1 {
+    /// Commit to the exact header bytes, including empty or malformed text.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only if the byte length cannot fit the V1 frame or the
+    /// domain-separated digest is the reserved all-zero value.
+    pub fn from_exact_header(
+        exact_header: &[u8],
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(STREAM_TOKEN_EXACT_HEADER_DIGEST_DOMAIN_V1);
+        update_length_framed_digest(&mut hasher, exact_header, "stream_token_header")?;
+        nonzero_stream_token_derived_digest(hasher.finalize(), "exact_header_digest").map(Self)
+    }
+
+    /// Access the exact domain-separated header digest.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    fn validate(self) -> Result<(), StreamTokenRequestContextErrorV1> {
+        ensure_stream_token_context_digest(self.0, "exact_header_digest")
+    }
+}
+
+/// Presence commitment for one stream-token presentation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(
+        tag = "presentation",
+        content = "detail",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
+)]
+pub enum StreamTokenPresentationV1 {
+    /// The request did not carry a stream-token header.
+    Missing,
+    /// The request carried exact bytes committed by this digest.
+    ExactHeader(StreamTokenExactHeaderDigestV1),
+}
+
+impl StreamTokenPresentationV1 {
+    /// Build the unambiguous missing-or-exact-header presentation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an exact header cannot be length-framed or its
+    /// digest is inert.
+    pub fn from_exact_header(
+        exact_header: Option<&[u8]>,
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        exact_header.map_or(Ok(Self::Missing), |header| {
+            StreamTokenExactHeaderDigestV1::from_exact_header(header).map(Self::ExactHeader)
+        })
+    }
+
+    fn validate(self) -> Result<(), StreamTokenRequestContextErrorV1> {
+        match self {
+            Self::Missing => Ok(()),
+            Self::ExactHeader(digest) => digest.validate(),
+        }
+    }
+}
+
+/// Canonical inclusive CAR byte range committed by a validation context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct StreamTokenCarRangeV1 {
+    /// Inclusive first requested byte.
+    pub start: u64,
+    /// Inclusive last requested byte.
+    pub end_inclusive: u64,
+}
+
+impl StreamTokenCarRangeV1 {
+    /// Construct an ordered inclusive byte range with a representable length.
+    ///
+    /// # Errors
+    ///
+    /// Rejects reversed ranges and the full `u64` interval whose inclusive
+    /// length cannot be represented.
+    pub fn try_new(
+        start: u64,
+        end_inclusive: u64,
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        let range = Self {
+            start,
+            end_inclusive,
+        };
+        range.byte_length()?;
+        Ok(range)
+    }
+
+    /// Return the exact non-zero inclusive byte length.
+    ///
+    /// # Errors
+    ///
+    /// Rejects reversed ranges and an overflowing inclusive length.
+    pub fn byte_length(self) -> Result<u64, StreamTokenRequestContextErrorV1> {
+        end_inclusive_length(self.start, self.end_inclusive).ok_or(
+            StreamTokenRequestContextErrorV1::InvalidCarRange {
+                start: self.start,
+                end_inclusive: self.end_inclusive,
+            },
+        )
+    }
+
+    fn validate(self) -> Result<(), StreamTokenRequestContextErrorV1> {
+        self.byte_length().map(|_| ())
+    }
+}
+
+/// Canonical full-chunk selector committed by a validation context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct StreamTokenChunkRequestV1 {
+    /// Exact BLAKE3 chunk digest resolved below the manifest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub chunk_digest: [u8; 32],
+    /// Exact stored chunk length served by this request.
+    pub stored_length: u64,
+}
+
+impl StreamTokenChunkRequestV1 {
+    /// Construct a non-inert exact chunk selector.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an all-zero digest or zero/reserved-maximum stored length.
+    pub fn try_new(
+        chunk_digest: [u8; 32],
+        stored_length: u64,
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        let request = Self {
+            chunk_digest,
+            stored_length,
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    fn validate(self) -> Result<(), StreamTokenRequestContextErrorV1> {
+        if self.chunk_digest == [0; 32] {
+            return Err(StreamTokenRequestContextErrorV1::ZeroChunkDigest);
+        }
+        if self.stored_length == 0 || self.stored_length == u64::MAX {
+            return Err(StreamTokenRequestContextErrorV1::InvalidStoredChunkLength);
+        }
+        Ok(())
+    }
+}
+
+/// Exact range-serving route committed by a stream-token validation context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(
+        tag = "route",
+        content = "detail",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
+)]
+pub enum StreamTokenRequestRouteV1 {
+    /// Canonical inclusive CAR byte range.
+    CarRange(StreamTokenCarRangeV1),
+    /// Exact full chunk selected by digest.
+    Chunk(StreamTokenChunkRequestV1),
+}
+
+impl StreamTokenRequestRouteV1 {
+    /// Construct a canonical inclusive CAR byte-range route.
+    ///
+    /// # Errors
+    ///
+    /// Rejects reversed or length-overflowing ranges.
+    pub fn car_range(
+        start: u64,
+        end_inclusive: u64,
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        StreamTokenCarRangeV1::try_new(start, end_inclusive).map(Self::CarRange)
+    }
+
+    /// Construct a canonical exact-chunk route.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an inert digest or invalid stored length.
+    pub fn chunk(
+        chunk_digest: [u8; 32],
+        stored_length: u64,
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        StreamTokenChunkRequestV1::try_new(chunk_digest, stored_length).map(Self::Chunk)
+    }
+
+    fn validate(self) -> Result<(), StreamTokenRequestContextErrorV1> {
+        match self {
+            Self::CarRange(range) => range.validate(),
+            Self::Chunk(chunk) => chunk.validate(),
+        }
+    }
+}
+
+/// Payload-free canonical serving context for one stream-token validation.
+///
+/// The context retains only the authoritative provider and public manifest,
+/// profile, and route material. The raw nonce and token header are immediately
+/// reduced to separate domain-separated digests. Remote addresses, forwarding
+/// headers, aliases, PII, and other caller metadata are neither retained nor
+/// exposed through `Debug`.
+///
+/// Callers must use [`Self::try_new`] with the exact request nonce and optional
+/// raw token-header bytes. Deserialized values must pass [`Self::validate`]
+/// before use.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct StreamTokenValidationRequestContextV1 {
+    version: u8,
+    provider_id: ProviderId,
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    manifest_digest: [u8; 32],
+    manifest_cid: Vec<u8>,
+    chunk_profile_handle: String,
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    request_nonce_digest: [u8; 32],
+    token_presentation: StreamTokenPresentationV1,
+    route: StreamTokenRequestRouteV1,
+}
+
+impl StreamTokenValidationRequestContextV1 {
+    /// Construct and validate one exact payload-free request context.
+    ///
+    /// `request_nonce` and `exact_token_header` are hashed immediately and are
+    /// never retained in this value.
+    ///
+    /// # Errors
+    ///
+    /// Rejects inert identities/digests, noncanonical CID/profile/nonce
+    /// material, invalid route variants, and length-frame overflow.
+    pub fn try_new(
+        provider_id: ProviderId,
+        manifest_digest: [u8; 32],
+        manifest_cid: Vec<u8>,
+        chunk_profile_handle: String,
+        request_nonce: &str,
+        exact_token_header: Option<&[u8]>,
+        route: StreamTokenRequestRouteV1,
+    ) -> Result<Self, StreamTokenRequestContextErrorV1> {
+        validate_stream_token_request_nonce(request_nonce)?;
+        let request_nonce_digest = digest_length_framed_component(
+            STREAM_TOKEN_REQUEST_NONCE_DIGEST_DOMAIN_V1,
+            request_nonce.as_bytes(),
+            "request_nonce",
+        )?;
+        let context = Self {
+            version: STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1,
+            provider_id,
+            manifest_digest,
+            manifest_cid,
+            chunk_profile_handle,
+            request_nonce_digest,
+            token_presentation: StreamTokenPresentationV1::from_exact_header(exact_token_header)?,
+            route,
+        };
+        context.validate()?;
+        Ok(context)
+    }
+
+    /// Validate a decoded V1 context before deriving its commitment.
+    ///
+    /// # Errors
+    ///
+    /// Rejects unsupported versions, inert identities/digests, noncanonical
+    /// public serving material, and invalid route variants.
+    pub fn validate(&self) -> Result<(), StreamTokenRequestContextErrorV1> {
+        if self.version != STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1 {
+            return Err(StreamTokenRequestContextErrorV1::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        if self.provider_id.as_bytes() == &[0; 32] {
+            return Err(StreamTokenRequestContextErrorV1::ZeroProviderId);
+        }
+        ensure_stream_token_context_digest(self.manifest_digest, "manifest_digest")?;
+        validate_stream_token_manifest_cid(&self.manifest_cid)?;
+        validate_stream_token_profile_handle(&self.chunk_profile_handle)?;
+        ensure_stream_token_context_digest(self.request_nonce_digest, "request_nonce_digest")?;
+        self.token_presentation.validate()?;
+        self.route.validate()
+    }
+
+    /// Derive the canonical V1 request-context digest.
+    ///
+    /// The fixed frame is domain, version, provider id, manifest digest,
+    /// length-framed manifest CID, length-framed profile handle, nonce digest,
+    /// presentation tag/material, then route tag/material. Tags are `0` for
+    /// missing/CAR and `1` for exact-header/chunk. Integers use little endian.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an invalid context, length overflow, or the reserved zero digest.
+    pub fn digest(&self) -> Result<[u8; 32], StreamTokenRequestContextErrorV1> {
+        self.validate()?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(STREAM_TOKEN_REQUEST_CONTEXT_DIGEST_DOMAIN_V1);
+        hasher.update(&[self.version]);
+        hasher.update(self.provider_id.as_bytes());
+        hasher.update(&self.manifest_digest);
+        update_length_framed_digest(&mut hasher, &self.manifest_cid, "manifest_cid")?;
+        update_length_framed_digest(
+            &mut hasher,
+            self.chunk_profile_handle.as_bytes(),
+            "chunk_profile_handle",
+        )?;
+        hasher.update(&self.request_nonce_digest);
+        match self.token_presentation {
+            StreamTokenPresentationV1::Missing => {
+                hasher.update(&[0]);
+            }
+            StreamTokenPresentationV1::ExactHeader(digest) => {
+                hasher.update(&[1]);
+                hasher.update(digest.as_bytes());
+            }
+        }
+        match self.route {
+            StreamTokenRequestRouteV1::CarRange(range) => {
+                hasher.update(&[0]);
+                hasher.update(&range.start.to_le_bytes());
+                hasher.update(&range.end_inclusive.to_le_bytes());
+            }
+            StreamTokenRequestRouteV1::Chunk(chunk) => {
+                hasher.update(&[1]);
+                hasher.update(&chunk.chunk_digest);
+                hasher.update(&chunk.stored_length.to_le_bytes());
+            }
+        }
+        nonzero_stream_token_derived_digest(hasher.finalize(), "request_context_digest")
+    }
+
+    /// Return the context schema version.
+    #[must_use]
+    pub const fn version(&self) -> u8 {
+        self.version
+    }
+
+    /// Return the authoritative local serving provider.
+    #[must_use]
+    pub const fn provider_id(&self) -> ProviderId {
+        self.provider_id
+    }
+
+    /// Return the exact stored-manifest digest.
+    #[must_use]
+    pub const fn manifest_digest(&self) -> [u8; 32] {
+        self.manifest_digest
+    }
+
+    /// Borrow the canonical stored-manifest CID.
+    #[must_use]
+    pub fn manifest_cid(&self) -> &[u8] {
+        &self.manifest_cid
+    }
+
+    /// Borrow the canonical chunk-profile handle.
+    #[must_use]
+    pub fn chunk_profile_handle(&self) -> &str {
+        &self.chunk_profile_handle
+    }
+
+    /// Return the domain-separated exact request-nonce digest.
+    #[must_use]
+    pub const fn request_nonce_digest(&self) -> [u8; 32] {
+        self.request_nonce_digest
+    }
+
+    /// Return the missing-or-exact-header presentation commitment.
+    #[must_use]
+    pub const fn token_presentation(&self) -> StreamTokenPresentationV1 {
+        self.token_presentation
+    }
+
+    /// Return the exact canonical range route.
+    #[must_use]
+    pub const fn route(&self) -> StreamTokenRequestRouteV1 {
+        self.route
     }
 }
 
@@ -2051,6 +2617,103 @@ fn validate_text(text: &str) -> Result<(), ReputationJournalValidationError> {
     Ok(())
 }
 
+fn is_canonical_stream_token_identity(value: &str, maximum_bytes: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum_bytes
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'-' | b'_' | b':')
+        })
+}
+
+fn update_length_framed_digest(
+    hasher: &mut blake3::Hasher,
+    bytes: &[u8],
+    field: &'static str,
+) -> Result<(), StreamTokenRequestContextErrorV1> {
+    let length = u64::try_from(bytes.len())
+        .map_err(|_| StreamTokenRequestContextErrorV1::LengthOverflow { field })?;
+    hasher.update(&length.to_le_bytes());
+    hasher.update(bytes);
+    Ok(())
+}
+
+fn nonzero_stream_token_derived_digest(
+    hash: blake3::Hash,
+    field: &'static str,
+) -> Result<[u8; 32], StreamTokenRequestContextErrorV1> {
+    let digest = *hash.as_bytes();
+    if digest == [0; 32] {
+        return Err(StreamTokenRequestContextErrorV1::ZeroDerivedDigest { field });
+    }
+    Ok(digest)
+}
+
+fn digest_length_framed_component(
+    domain: &[u8],
+    bytes: &[u8],
+    field: &'static str,
+) -> Result<[u8; 32], StreamTokenRequestContextErrorV1> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(domain);
+    update_length_framed_digest(&mut hasher, bytes, field)?;
+    nonzero_stream_token_derived_digest(hasher.finalize(), field)
+}
+
+fn ensure_stream_token_context_digest(
+    digest: [u8; 32],
+    field: &'static str,
+) -> Result<(), StreamTokenRequestContextErrorV1> {
+    if digest == [0; 32] {
+        return Err(StreamTokenRequestContextErrorV1::ZeroContextDigest { field });
+    }
+    Ok(())
+}
+
+fn validate_stream_token_request_nonce(
+    request_nonce: &str,
+) -> Result<(), StreamTokenRequestContextErrorV1> {
+    if request_nonce.is_empty()
+        || request_nonce.len() > STREAM_TOKEN_REQUEST_NONCE_MAX_BYTES_V1
+        || !request_nonce.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(StreamTokenRequestContextErrorV1::InvalidRequestNonce);
+    }
+    Ok(())
+}
+
+fn validate_stream_token_manifest_cid(
+    manifest_cid: &[u8],
+) -> Result<(), StreamTokenRequestContextErrorV1> {
+    sorafs_manifest::validate_manifest_root_cid(
+        manifest_cid,
+        sorafs_manifest::MANIFEST_DAG_CODEC,
+        sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+    )
+    .map_err(|_| StreamTokenRequestContextErrorV1::InvalidManifestCid)
+}
+
+fn validate_stream_token_profile_handle(
+    profile_handle: &str,
+) -> Result<(), StreamTokenRequestContextErrorV1> {
+    if profile_handle.is_empty()
+        || profile_handle.len() > STREAM_TOKEN_REQUEST_PROFILE_HANDLE_MAX_BYTES_V1
+        || !profile_handle.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@' | b':')
+        })
+    {
+        return Err(StreamTokenRequestContextErrorV1::InvalidProfileHandle);
+    }
+    Ok(())
+}
+
+fn end_inclusive_length(start: u64, end_inclusive: u64) -> Option<u64> {
+    end_inclusive
+        .checked_sub(start)
+        .and_then(|distance| distance.checked_add(1))
+}
+
 fn domain_digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -2191,6 +2854,26 @@ mod tests {
         let mut digest = [0xA5; 32];
         digest[..4].copy_from_slice(&value.to_be_bytes());
         digest
+    }
+
+    fn canonical_stream_token_manifest_cid(marker: u8) -> Vec<u8> {
+        sorafs_manifest::canonical_manifest_root_cid([marker; 32])
+    }
+
+    fn stream_token_request_context(
+        request_nonce: &str,
+        exact_token_header: Option<&[u8]>,
+        route: StreamTokenRequestRouteV1,
+    ) -> Result<StreamTokenValidationRequestContextV1, StreamTokenRequestContextErrorV1> {
+        StreamTokenValidationRequestContextV1::try_new(
+            ProviderId::new([0x22; 32]),
+            [0x33; 32],
+            canonical_stream_token_manifest_cid(0x44),
+            "sorafs.sf1@1.0.0".to_owned(),
+            request_nonce,
+            exact_token_header,
+            route,
+        )
     }
 
     fn retention_request(
@@ -2747,6 +3430,360 @@ mod tests {
             ),
             Err(ReputationJournalValidationError::ImpossiblePorStatus)
         );
+    }
+
+    #[test]
+    fn stream_token_gateway_id_derivation_is_canonical_and_golden() {
+        let gateway_id =
+            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), "gateway.dxb-1")
+                .expect("canonical gateway identity");
+        assert_eq!(
+            hex::encode(gateway_id),
+            "666e62792547941724bdf7d0fbc09d9297fb4f8c8e176bc7ca44fec1050db254"
+        );
+
+        let split_a =
+            derive_stream_token_gateway_id_v1(&ChainId::from("ab"), "c").expect("first framing");
+        let split_b =
+            derive_stream_token_gateway_id_v1(&ChainId::from("a"), "bc").expect("second framing");
+        assert_ne!(
+            split_a, split_b,
+            "explicit length frames must prevent component-boundary aliases"
+        );
+        assert_ne!(
+            gateway_id,
+            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-nexus"), "gateway.dxb-1")
+                .expect("other chain"),
+            "gateway identities must be chain-scoped"
+        );
+        assert_ne!(
+            gateway_id,
+            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), "gateway.dxb-2")
+                .expect("other gateway"),
+            "governed gateway identities must not alias"
+        );
+
+        let oversized_chain = "a".repeat(STREAM_TOKEN_GATEWAY_CHAIN_ID_MAX_BYTES_V1 + 1);
+        for invalid_chain in [
+            "",
+            "Iroha3-taira",
+            "iroha3 taira",
+            "iroha3/taira",
+            oversized_chain.as_str(),
+        ] {
+            assert_eq!(
+                derive_stream_token_gateway_id_v1(
+                    &ChainId::from(invalid_chain.to_owned()),
+                    "gateway.dxb-1"
+                ),
+                Err(StreamTokenRequestContextErrorV1::InvalidChainId)
+            );
+        }
+        let oversized_gateway = "a".repeat(STREAM_TOKEN_COMPLIANCE_GATEWAY_ID_MAX_BYTES_V1 + 1);
+        for invalid_gateway in [
+            "",
+            "Gateway.dxb-1",
+            "gateway dxb-1",
+            "gateway/dxb-1",
+            oversized_gateway.as_str(),
+        ] {
+            assert_eq!(
+                derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), invalid_gateway),
+                Err(StreamTokenRequestContextErrorV1::InvalidComplianceGatewayId)
+            );
+        }
+    }
+
+    #[test]
+    fn stream_token_request_context_golden_vectors_and_domain_separation() {
+        const HEADER: &[u8] = b"Q2Fub25pY2FsVG9rZW4=";
+        let car = stream_token_request_context(
+            "nonce-golden-001",
+            Some(HEADER),
+            StreamTokenRequestRouteV1::car_range(64, 1_023).expect("CAR range"),
+        )
+        .expect("CAR request context");
+        assert_eq!(car.version(), STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1);
+        assert_eq!(car.provider_id(), ProviderId::new([0x22; 32]));
+        assert_eq!(car.manifest_digest(), [0x33; 32]);
+        let expected_manifest_cid = canonical_stream_token_manifest_cid(0x44);
+        assert_eq!(car.manifest_cid(), expected_manifest_cid.as_slice());
+        assert_eq!(car.chunk_profile_handle(), "sorafs.sf1@1.0.0");
+        assert_eq!(
+            hex::encode(car.request_nonce_digest()),
+            "510825647ebda3933cc33c79b0d489290723c5a40bd0d5b2343043bdb3af0459"
+        );
+        let StreamTokenPresentationV1::ExactHeader(header_digest) = car.token_presentation() else {
+            panic!("golden request must retain an exact-header digest");
+        };
+        assert_eq!(
+            hex::encode(header_digest.as_bytes()),
+            "89f238ddbd7e236df52aa8d3a549662cbc1bf7e3a711b2fd7172fcacda77226a"
+        );
+        assert_eq!(
+            hex::encode(car.digest().expect("CAR context digest")),
+            "604075922bc0b35a3aaef5928d9ab147bf900272b1697aeb7c4c50cf9eab86a6"
+        );
+
+        let chunk = stream_token_request_context(
+            "nonce-golden-001",
+            Some(HEADER),
+            StreamTokenRequestRouteV1::chunk([0x55; 32], 4_096).expect("chunk route"),
+        )
+        .expect("chunk request context");
+        assert_eq!(
+            hex::encode(chunk.digest().expect("chunk context digest")),
+            "e0a444f4fcd79717a1e53d607f1d401acc05374a58944cb784db3e5957a07874"
+        );
+        assert_ne!(
+            car.digest().expect("CAR digest"),
+            chunk.digest().expect("chunk digest"),
+            "route tags and route material must be domain separated"
+        );
+
+        let missing = stream_token_request_context(
+            "nonce-golden-001",
+            None,
+            StreamTokenRequestRouteV1::car_range(64, 1_023).expect("CAR range"),
+        )
+        .expect("missing-token context");
+        let empty_header = stream_token_request_context(
+            "nonce-golden-001",
+            Some(&[]),
+            StreamTokenRequestRouteV1::car_range(64, 1_023).expect("CAR range"),
+        )
+        .expect("present empty-header context");
+        assert_eq!(
+            empty_header.token_presentation(),
+            StreamTokenPresentationV1::ExactHeader(
+                StreamTokenExactHeaderDigestV1::from_exact_header(&[])
+                    .expect("empty header commitment")
+            )
+        );
+        let empty_header_digest = StreamTokenExactHeaderDigestV1::from_exact_header(&[])
+            .expect("empty header commitment");
+        assert_eq!(
+            hex::encode(empty_header_digest.as_bytes()),
+            "56a3a091b6c4991e2994deb20837f5fe73478dbb4a794705b88b048bb355f9f1"
+        );
+        assert_ne!(
+            missing.digest().expect("missing digest"),
+            empty_header.digest().expect("empty-header digest"),
+            "missing and present-but-empty token headers must never alias"
+        );
+
+        let gateway_id =
+            derive_stream_token_gateway_id_v1(&ChainId::from("iroha3-taira"), "gateway.dxb-1")
+                .expect("gateway id");
+        assert_ne!(
+            gateway_id,
+            car.digest().expect("context digest"),
+            "gateway and request-context domains must remain disjoint"
+        );
+    }
+
+    #[test]
+    fn stream_token_request_context_rejects_bounds_and_binds_every_field() {
+        const HEADER: &[u8] = b"Q2Fub25pY2FsVG9rZW4=";
+        let base = stream_token_request_context(
+            "nonce-golden-001",
+            Some(HEADER),
+            StreamTokenRequestRouteV1::car_range(64, 1_023).expect("CAR range"),
+        )
+        .expect("base request context");
+        let base_digest = base.digest().expect("base digest");
+
+        let mut changed = base.clone();
+        changed.provider_id = ProviderId::new([0x23; 32]);
+        assert_ne!(changed.digest().expect("provider tamper"), base_digest);
+        changed = base.clone();
+        changed.manifest_digest[0] ^= 1;
+        assert_ne!(changed.digest().expect("manifest tamper"), base_digest);
+        changed = base.clone();
+        changed.manifest_cid[4] ^= 1;
+        assert_ne!(changed.digest().expect("CID tamper"), base_digest);
+        changed = base.clone();
+        changed.chunk_profile_handle.push('x');
+        assert_ne!(changed.digest().expect("profile tamper"), base_digest);
+        changed = base.clone();
+        changed.request_nonce_digest[0] ^= 1;
+        assert_ne!(changed.digest().expect("nonce tamper"), base_digest);
+        changed = base.clone();
+        changed.token_presentation =
+            StreamTokenPresentationV1::from_exact_header(Some(b"different"))
+                .expect("different header");
+        assert_ne!(changed.digest().expect("header tamper"), base_digest);
+        changed = base.clone();
+        changed.route = StreamTokenRequestRouteV1::car_range(65, 1_023).expect("different range");
+        assert_ne!(changed.digest().expect("range tamper"), base_digest);
+
+        changed = base.clone();
+        changed.version = STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1 + 1;
+        assert_eq!(
+            changed.digest(),
+            Err(StreamTokenRequestContextErrorV1::UnsupportedVersion {
+                found: STREAM_TOKEN_REQUEST_CONTEXT_VERSION_V1 + 1
+            })
+        );
+        changed = base.clone();
+        changed.provider_id = ProviderId::new([0; 32]);
+        assert_eq!(
+            changed.validate(),
+            Err(StreamTokenRequestContextErrorV1::ZeroProviderId)
+        );
+        changed = base.clone();
+        changed.manifest_digest = [0; 32];
+        assert_eq!(
+            changed.validate(),
+            Err(StreamTokenRequestContextErrorV1::ZeroContextDigest {
+                field: "manifest_digest"
+            })
+        );
+        changed = base.clone();
+        changed.request_nonce_digest = [0; 32];
+        assert_eq!(
+            changed.validate(),
+            Err(StreamTokenRequestContextErrorV1::ZeroContextDigest {
+                field: "request_nonce_digest"
+            })
+        );
+        changed = base.clone();
+        changed.manifest_cid[0] = 2;
+        assert_eq!(
+            changed.validate(),
+            Err(StreamTokenRequestContextErrorV1::InvalidManifestCid)
+        );
+        changed = base.clone();
+        changed.manifest_cid[4..].fill(0);
+        assert_eq!(
+            changed.validate(),
+            Err(StreamTokenRequestContextErrorV1::InvalidManifestCid)
+        );
+        changed = base.clone();
+        changed.chunk_profile_handle = "invalid profile".to_owned();
+        assert_eq!(
+            changed.validate(),
+            Err(StreamTokenRequestContextErrorV1::InvalidProfileHandle)
+        );
+
+        let oversized_nonce = "n".repeat(STREAM_TOKEN_REQUEST_NONCE_MAX_BYTES_V1 + 1);
+        for invalid_nonce in [
+            "",
+            "nonce with spaces",
+            "nonce\nnewline",
+            oversized_nonce.as_str(),
+        ] {
+            assert_eq!(
+                stream_token_request_context(
+                    invalid_nonce,
+                    Some(HEADER),
+                    StreamTokenRequestRouteV1::car_range(64, 1_023).expect("CAR range")
+                ),
+                Err(StreamTokenRequestContextErrorV1::InvalidRequestNonce)
+            );
+        }
+        assert_eq!(
+            StreamTokenRequestRouteV1::car_range(2, 1),
+            Err(StreamTokenRequestContextErrorV1::InvalidCarRange {
+                start: 2,
+                end_inclusive: 1
+            })
+        );
+        assert_eq!(
+            StreamTokenRequestRouteV1::car_range(0, u64::MAX),
+            Err(StreamTokenRequestContextErrorV1::InvalidCarRange {
+                start: 0,
+                end_inclusive: u64::MAX
+            })
+        );
+        assert_eq!(
+            StreamTokenRequestRouteV1::chunk([0; 32], 1),
+            Err(StreamTokenRequestContextErrorV1::ZeroChunkDigest)
+        );
+        for stored_length in [0, u64::MAX] {
+            assert_eq!(
+                StreamTokenRequestRouteV1::chunk([0x55; 32], stored_length),
+                Err(StreamTokenRequestContextErrorV1::InvalidStoredChunkLength)
+            );
+        }
+    }
+
+    #[test]
+    fn stream_token_request_context_roundtrips_without_raw_or_alias_fields() {
+        let context = stream_token_request_context(
+            "nonce-golden-001",
+            Some(b"Q2Fub25pY2FsVG9rZW4="),
+            StreamTokenRequestRouteV1::chunk([0x55; 32], 4_096).expect("chunk route"),
+        )
+        .expect("request context");
+        let expected_digest = context.digest().expect("context digest");
+        let canonical = norito::encode_canonical(&context).expect("encode canonical context");
+        let decoded: StreamTokenValidationRequestContextV1 =
+            norito::decode_from_bytes(&canonical).expect("decode canonical context");
+        assert_eq!(decoded, context);
+        decoded.validate().expect("validate decoded context");
+        assert_eq!(decoded.digest().expect("decoded digest"), expected_digest);
+
+        let alternate = encode_with_alternate_norito_layout(&context);
+        let alternate_decoded: StreamTokenValidationRequestContextV1 =
+            norito::decode_from_bytes(&alternate).expect("decode alternate Norito layout");
+        assert_eq!(alternate_decoded, context);
+        assert_eq!(
+            alternate_decoded.digest().expect("alternate digest"),
+            expected_digest,
+            "ambient Norito layout must not affect the fixed digest frame"
+        );
+
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(
+            norito::decode_from_bytes::<StreamTokenValidationRequestContextV1>(&trailing).is_err(),
+            "trailing Norito bytes must fail the hard cut"
+        );
+
+        #[cfg(feature = "json")]
+        {
+            let value = norito::json::to_value(&context).expect("serialize request context");
+            let decoded = norito::json::value::from_value::<StreamTokenValidationRequestContextV1>(
+                value.clone(),
+            )
+            .expect("deserialize request context");
+            assert_eq!(decoded, context);
+            decoded.validate().expect("validate JSON context");
+
+            let fields = value.as_object().expect("request context object");
+            for forbidden in [
+                "request_nonce",
+                "exact_token_header",
+                "token_header",
+                "remote_ip",
+                "forwarded_headers",
+            ] {
+                assert!(
+                    !fields.contains_key(forbidden),
+                    "raw/private field {forbidden} must not be retained"
+                );
+            }
+
+            for alias in ["request_nonce", "token_header", "chunk_digest"] {
+                let mut aliased = value.clone();
+                aliased
+                    .as_object_mut()
+                    .expect("request context object")
+                    .insert(
+                        alias.to_owned(),
+                        norito::json::Value::String("forbidden".to_owned()),
+                    );
+                norito::json::value::from_value::<StreamTokenValidationRequestContextV1>(aliased)
+                    .expect_err("raw, legacy, and ambiguous aliases must be rejected");
+            }
+
+            let canonical_json =
+                norito::json::to_string(&context).expect("serialize canonical request JSON");
+            let trailing_json = format!("{canonical_json} null");
+            norito::json::from_str::<StreamTokenValidationRequestContextV1>(&trailing_json)
+                .expect_err("trailing JSON values must fail the hard cut");
+        }
     }
 
     #[test]

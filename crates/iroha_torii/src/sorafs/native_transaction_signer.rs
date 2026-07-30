@@ -524,6 +524,8 @@ where
     ) -> bool {
         transaction.payload() == expected_payload
             && transaction.authority() == self.binding.authority()
+            && transaction.attachments().is_none()
+            && transaction.multisig_signatures().is_none()
             && transaction.verify_signature().is_ok()
     }
 }
@@ -658,7 +660,8 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId,
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+        transaction::{FeePaymentIntent, MultisigSignatures, TransactionBuilder},
     };
 
     use super::*;
@@ -670,6 +673,8 @@ mod tests {
         Exact,
         SubstitutePayload(TransactionPayload),
         ForgeSignature(KeyPair),
+        AttachProofSidecar,
+        AttachEmptyMultisigSidecar,
     }
 
     struct TestProvider {
@@ -795,6 +800,16 @@ mod tests {
                 TestSignOutput::ForgeSignature(signer);
         }
 
+        fn attach_proof_sidecar_once(&self) {
+            *self.sign_output.lock().expect("sign-output fixture lock") =
+                TestSignOutput::AttachProofSidecar;
+        }
+
+        fn attach_empty_multisig_sidecar_once(&self) {
+            *self.sign_output.lock().expect("sign-output fixture lock") =
+                TestSignOutput::AttachEmptyMultisigSidecar;
+        }
+
         fn sign_payload(&self, payload: TransactionPayload) -> Result<SignedTransaction, ()> {
             self.sign_calls.fetch_add(1, Ordering::SeqCst);
             let output = std::mem::replace(
@@ -818,6 +833,25 @@ mod tests {
                     )
                     .map_err(|_| ())?;
                     builder.build_with_signature(signature)
+                }
+                TestSignOutput::AttachProofSidecar => {
+                    let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
+                        "halo2/ipa".into(),
+                        ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+                        VerifyingKeyId::new("halo2/ipa", "native-signer-sidecar-vk"),
+                    )]);
+                    TransactionBuilder::from_payload(payload)
+                        .map_err(|_| ())?
+                        .with_attachments(attachments)
+                        .try_sign(self.keypair.private_key())
+                        .map_err(|_| ())?
+                }
+                TestSignOutput::AttachEmptyMultisigSidecar => {
+                    let mut transaction = TransactionBuilder::from_payload(payload)
+                        .and_then(|builder| builder.try_sign(self.keypair.private_key()))
+                        .map_err(|_| ())?;
+                    transaction.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
+                    transaction
                 }
             };
             if let Some(qualification) = self
@@ -1372,6 +1406,59 @@ mod tests {
             Err(SoraFsProofOutcomeSigningError::SubstitutedTransaction)
         );
         assert_eq!(provider.sign_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn qualified_signer_accepts_exact_envelope_and_rejects_provider_sidecars() {
+        let exact_provider = Arc::new(TestProvider::new(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            "hsm://sorafs/proof-outcome/exact-envelope",
+            0x88,
+        ));
+        let exact = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            exact_provider.expected_binding(),
+            exact_provider.clone(),
+        )
+        .expect("qualify exact-envelope fixture")
+        .sign(payload(exact_provider.authority()))
+        .expect("accept exact sidecar-free signed transaction");
+        assert!(exact.attachments().is_none());
+        assert!(exact.multisig_signatures().is_none());
+        assert_eq!(exact_provider.sign_calls.load(Ordering::SeqCst), 1);
+
+        let attached_provider = Arc::new(TestProvider::new(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            "hsm://sorafs/proof-outcome/proof-sidecar",
+            0x89,
+        ));
+        let attached = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            attached_provider.expected_binding(),
+            attached_provider.clone(),
+        )
+        .expect("qualify proof-sidecar fixture");
+        attached_provider.attach_proof_sidecar_once();
+        assert_eq!(
+            attached.sign(payload(attached_provider.authority())),
+            Err(SoraFsProofOutcomeSigningError::SubstitutedTransaction)
+        );
+        assert_eq!(attached_provider.sign_calls.load(Ordering::SeqCst), 1);
+
+        let multisig_provider = Arc::new(TestProvider::new(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            "hsm://sorafs/proof-outcome/empty-multisig-sidecar",
+            0x8A,
+        ));
+        let multisig = qualify_sorafs_proof_outcome_transaction_signer_v1(
+            multisig_provider.expected_binding(),
+            multisig_provider.clone(),
+        )
+        .expect("qualify empty-multisig-sidecar fixture");
+        multisig_provider.attach_empty_multisig_sidecar_once();
+        assert_eq!(
+            multisig.sign(payload(multisig_provider.authority())),
+            Err(SoraFsProofOutcomeSigningError::SubstitutedTransaction)
+        );
+        assert_eq!(multisig_provider.sign_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

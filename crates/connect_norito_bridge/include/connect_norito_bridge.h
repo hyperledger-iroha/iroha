@@ -385,6 +385,36 @@ int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4(
     unsigned long request_norito_len,
     uint8_t** out_build_result_ptr,
     unsigned long* out_build_result_len);
+// Physical-iOS-only two-process evidence lane. The feature build exports
+// explicit rejecting stubs on simulators and all non-iOS targets.
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1(
+    const uint8_t* candidate_path_ptr,
+    unsigned long candidate_path_len,
+    const uint8_t* roster_path_ptr,
+    unsigned long roster_path_len,
+    const uint8_t* artifact_root_path_ptr,
+    unsigned long artifact_root_path_len,
+    const uint8_t* scenario_path_ptr,
+    unsigned long scenario_path_len,
+    const uint8_t* launch_nonce_ptr,
+    unsigned long launch_nonce_len,
+    uint8_t** out_checkpoint_ptr,
+    unsigned long* out_checkpoint_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1(
+    const uint8_t* candidate_path_ptr,
+    unsigned long candidate_path_len,
+    const uint8_t* roster_path_ptr,
+    unsigned long roster_path_len,
+    const uint8_t* artifact_root_path_ptr,
+    unsigned long artifact_root_path_len,
+    const uint8_t* scenario_path_ptr,
+    unsigned long scenario_path_len,
+    const uint8_t* checkpoint_ptr,
+    unsigned long checkpoint_len,
+    const uint8_t* launch_nonce_ptr,
+    unsigned long launch_nonce_len,
+    uint8_t** out_transcript_ptr,
+    unsigned long* out_transcript_len);
 #endif
 
 // ---------------- Kagemusha first-release protocol ----------------

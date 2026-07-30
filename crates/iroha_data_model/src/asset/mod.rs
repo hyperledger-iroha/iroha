@@ -20,8 +20,10 @@ pub use policy::{
     DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY, DomainAssetUsagePolicyV1,
 };
 pub use transfer_control::{
-    ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetTransferControlRecord, AssetTransferControlStoreV1,
+    ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1, ASSET_TRANSFER_CONTROL_METADATA_KEY,
+    AssetTransferAvailability, AssetTransferControlRecord, AssetTransferControlStoreV1,
     AssetTransferControlWindow, AssetTransferLimit, AssetTransferUsageBucket,
+    validate_asset_transfer_availability_reason,
 };
 pub use value::{Asset, AssetEntry, AssetValue};
 
@@ -40,9 +42,10 @@ pub mod prelude {
             DomainAssetUsagePolicyV1,
         },
         transfer_control::{
-            ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetTransferControlRecord,
-            AssetTransferControlStoreV1, AssetTransferControlWindow, AssetTransferLimit,
-            AssetTransferUsageBucket,
+            ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1, ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            AssetTransferAvailability, AssetTransferControlRecord, AssetTransferControlStoreV1,
+            AssetTransferControlWindow, AssetTransferLimit, AssetTransferUsageBucket,
+            validate_asset_transfer_availability_reason,
         },
         value::Asset,
     };

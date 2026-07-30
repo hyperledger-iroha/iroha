@@ -82,7 +82,7 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
    - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned. Validators must be BLS-Normal with PoPs provided in `trusted_peers_pop`; any trusted peer without a PoP is treated as network-trusted only and excluded from consensus. Configs carrying the removed `trusted_peers_bls` mapping, invalid PoPs, or PoPs for keys outside `trusted_peers` are rejected.
    - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
 3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
-4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
+4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent. The profile supplies defaults, but explicit `[sorafs.storage].enabled` and `[sorafs.discovery].discovery_enabled` values remain authoritative; disabling embedded storage does not require disabling Nexus consensus.
 
 ## Step 4 — Align data-space metadata and routing
 1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:

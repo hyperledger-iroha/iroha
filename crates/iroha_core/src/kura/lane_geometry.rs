@@ -9878,8 +9878,48 @@ impl Kura {
             } else {
                 self.require_lane_marker(&binding)?;
             }
+            self.ensure_authoritative_lane_artifact_namespace(&binding, &blocks)?;
         }
         Ok(())
+    }
+
+    /// Provision the structural lane-artifact namespace only after its lane binding is trusted.
+    ///
+    /// Authenticated startup deliberately defers lane provisioning until snapshot/journal
+    /// validation. A restored archive may legitimately omit this empty directory, but leaving it
+    /// absent turns every certified-lane lookup into a synchronous recovery warning. Bind and
+    /// synchronize both the new directory and its ancestor chain before publishing the
+    /// authoritative lane map, then revalidate the lane marker so path replacement fails closed.
+    fn ensure_authoritative_lane_artifact_namespace(
+        &self,
+        binding: &LaneGeometryBinding,
+        blocks: &Path,
+    ) -> Result<()> {
+        let blocks_identity = self.geometry_path_identity(blocks, true)?;
+        let lane_artifacts = Self::lane_artifact_dir(blocks);
+        match fs::create_dir(&lane_artifacts) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(Error::MkDir(error, lane_artifacts)),
+        }
+
+        let namespace = Self::open_bound_progress_directory(&self.store_root, &lane_artifacts)?;
+        namespace
+            .file
+            .sync_all()
+            .map_err(|error| Error::IO(error, lane_artifacts.clone()))?;
+        self.sync_geometry_parent(Some(blocks))?;
+        self.require_geometry_path_identity(blocks, true, blocks_identity)?;
+        if !self.geometry_bound_progress_directory_unchanged(&namespace) {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "authoritative lane artifact namespace changed while becoming durable",
+                ),
+                lane_artifacts,
+            ));
+        }
+        self.require_lane_marker_at(blocks, binding)
     }
 
     fn require_lane_marker(&self, binding: &LaneGeometryBinding) -> Result<()> {
@@ -21400,6 +21440,81 @@ mod tests {
         assert!(!root.join(JOURNAL_FILE_NAME).exists());
         assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
         assert_lane_paths_absent(&root, &lane_config);
+    }
+
+    #[test]
+    fn authenticated_primary_restore_heals_missing_lane_artifact_namespace() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let configured_catalog = configured_primary_catalog("authenticated-primary");
+        let configured = RuntimeLaneConfig::from_catalog(&configured_catalog);
+        let (incarnations, activation_heights) = initial_geometry();
+        let configured_catalog_hash = LaneLifecycleParameterV1::catalog_hash(&configured_catalog);
+
+        let (kura, _) = Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &configured,
+            &configured_catalog,
+        )
+        .expect("open authenticated configured Kura");
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            configured.primary(),
+            incarnations[&LaneId::SINGLE],
+            configured_catalog_hash,
+        )
+        .expect("authenticate configured primary geometry");
+        let bindings = kura
+            .geometry_bindings(&configured, &incarnations, &activation_heights)
+            .expect("derive authenticated primary binding");
+        let lineage_root = unscoped_lineage_root(&bindings);
+        let primary_blocks = configured.primary().blocks_dir(&root);
+        let lane_artifacts = Kura::lane_artifact_dir(&primary_blocks);
+        if lane_artifacts.exists() {
+            fs::remove_dir(&lane_artifacts).expect("remove empty primary artifact namespace");
+        }
+        assert!(
+            !lane_artifacts.exists(),
+            "fixture must restore an authenticated primary without its empty artifact namespace"
+        );
+
+        kura.restore_lane_segments_with_geometry_at_height_and_lineage_root(
+            &configured,
+            &incarnations,
+            &activation_heights,
+            0,
+            lineage_root,
+        )
+        .expect("restore must durably heal the authenticated primary namespace");
+        let namespace = Kura::open_bound_progress_directory(&root, &lane_artifacts)
+            .expect("healed primary artifact namespace is descriptor-bound");
+        assert!(
+            kura.geometry_bound_progress_directory_unchanged(&namespace),
+            "healed primary artifact namespace must retain its durable identity"
+        );
+        drop(namespace);
+        drop(kura);
+
+        let (reopened, _) = Kura::new_with_configured_lane_catalog(
+            &kura_config(&root),
+            &configured,
+            &configured_catalog,
+        )
+        .expect("reopen authenticated configured Kura");
+        reopened
+            .restore_lane_segments_with_geometry_at_height_and_lineage_root(
+                &configured,
+                &incarnations,
+                &activation_heights,
+                0,
+                lineage_root,
+            )
+            .expect("authenticated namespace healing must be restart-idempotent");
+        let namespace = Kura::open_bound_progress_directory(&root, &lane_artifacts)
+            .expect("reopened primary artifact namespace is descriptor-bound");
+        assert!(
+            reopened.geometry_bound_progress_directory_unchanged(&namespace),
+            "reopened primary artifact namespace must retain its durable identity"
+        );
     }
 
     #[test]

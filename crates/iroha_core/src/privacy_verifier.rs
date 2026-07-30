@@ -6,6 +6,8 @@
 //! this module can construct [`VerifiedPrivacyEffectsV1`], so state handlers
 //! cannot derive ledger effects from unverified caller-controlled bytes.
 
+#[cfg(feature = "zk-stark")]
+use iroha_data_model::zk::ZkAcePrivacyPublicInputsV1;
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -26,11 +28,12 @@ use iroha_data_model::{
         PrivacyVeRangeBitLengthV1, PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1,
         PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
     },
-    zk::ZkAcePrivacyPublicInputsV1,
 };
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
+#[cfg(feature = "zk-stark")]
+use crate::privacy_engines::zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1};
 use crate::{
     privacy_engines::{
         anonymous_pgc::{
@@ -70,7 +73,6 @@ use crate::{
             VeRangeBitLengthV1, VeRangeError, VeRangeParametersV1, VeRangeType1BatchStatementV1,
             verify_batch_encoded,
         },
-        zk_ace::{ZkAceNativeErrorV1, verify_zk_ace_privacy_v1},
         zk_ams::{
             VerifiedZkAmsBatchAdmissionV1, VerifiedZkAmsProvisionAccountV1, ZkAmsErrorV1,
             verify_zk_ams_batch_admission_v1, verify_zk_ams_provision_statement_v1,
@@ -614,6 +616,7 @@ pub(crate) fn verify_privacy_envelope_v1(
     // compile until this dispatcher has an explicit native-verifier arm.
     let proof = envelope.proof.bytes();
     let ledger = match &envelope.statement {
+        #[cfg(feature = "zk-stark")]
         PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) => {
             let public_inputs =
                 ZkAcePrivacyPublicInputsV1::new(statement.clone(), context.genesis_hash);
@@ -638,6 +641,14 @@ pub(crate) fn verify_privacy_envelope_v1(
                 amount: statement.amount,
                 replay_nullifier: statement.replay_nullifier,
             })
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        PrivacyStatementV1::ZkAcePqAuthorizationV0(_) => {
+            return Err(PrivacyVerificationErrorV1::EngineUnavailable(Box::new(
+                PrivacyEngineUnavailableFailureV1 {
+                    protocol_id: envelope.protocol_id,
+                },
+            )));
         }
         PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) => {
             verify_anonymous_pgc_payment_v1(statement, proof, envelope, &context)?
@@ -1767,6 +1778,7 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     #[error(transparent)]
     NativeVega(Box<PrivacyVegaVerificationFailureV1>),
     /// Direct native ZK-ACE decoding or verification failed.
+    #[cfg(feature = "zk-stark")]
     #[error(transparent)]
     NativeZkAce(Box<PrivacyZkAceVerificationFailureV1>),
     /// Native ZK-AMS decoding or verification failed.
@@ -1926,6 +1938,7 @@ pub(crate) struct PrivacyVegaVerificationFailureV1 {
 
 #[derive(Debug, Error)]
 #[error("native ZK-ACE verification failed: {source}")]
+#[cfg(feature = "zk-stark")]
 pub(crate) struct PrivacyZkAceVerificationFailureV1 {
     source: ZkAceNativeErrorV1,
 }

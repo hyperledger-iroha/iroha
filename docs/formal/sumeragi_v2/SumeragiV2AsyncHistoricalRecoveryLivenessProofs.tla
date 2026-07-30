@@ -326,9 +326,43 @@ BY Isa
    DEF HistoricalRecoveryTarget, AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep, RunNode,
        RunHistoricalRecoveryNode, RunNodeWork, LocalAdmissionStep,
-       IngressDrainStep, SerializedRuntimeStep, RuntimeStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        FifoRuntimeStep, ExecuteCommand,
        ExecuteApply, OpenHistoricalRecovery, PreGstCrash,
+       PreGstResponsiveCrash, PreGstResponsiveRestart,
+       PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+       AsyncSetGST, AsyncAllVars
+
+(***************************************************************************
+The target itself is retired only by its exact Apply transition.  Decision
+installation does not retire the historical executor: Fetch/Store/Validate
+and Apply still need that same joined owner.  This stronger frame is used by
+the indexed discovery corridor to carry target ownership across the
+clock-or-Decision disjunction without treating Decision as application.
+***************************************************************************)
+
+THEOREM HistoricalRecoveryTargetPersistsUnlessApplication ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalRecoveryTarget(node)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~NodeHasApplication(node)'
+    => HistoricalRecoveryTarget(node)'
+BY IsaT(600)
+   DEF HistoricalRecoveryTarget, AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep, RunNode,
+       RunHistoricalRecoveryNode, RunNodeWork, LocalAdmissionStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       FifoRuntimeStep, ExecuteCommand, ExecuteApply,
+       OpenHistoricalRecovery, PreGstCrash,
        PreGstResponsiveCrash, PreGstResponsiveRestart,
        PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
        AsyncSetGST, AsyncAllVars
@@ -364,8 +398,12 @@ PROOF
                  AsyncNonRunnerStep, OpenHistoricalRecovery,
                  HistoricalRecoverySourceReady, RunNode,
                  RunHistoricalRecoveryNode, RunNodeWork,
-                 LocalAdmissionStep, IngressDrainStep,
-                 SerializedRuntimeStep, RuntimeStep,
+                 LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+                 SerializedLocalPrecedesServeIngressStep,
+                 IngressDrainStep, SerializedRunnerRuntimeStep,
+                 SerializedRuntimeStep,
+                 SerializedRuntimePrecedesServeIngressStep,
+                 AsyncServeIngressTargetOnlyTurn, RuntimeStep,
                  ExecuteCommand, ExecuteApply,
                  PreGstCrash, PreGstResponsiveCrash,
                  PreGstResponsiveRestart, PreGstResponsiveReplay,
@@ -713,14 +751,51 @@ HistoricalCommitCertificateResponseScheduled(node) ==
        /\ CommitCertificateResponseAuthorized(response)
        /\ ItemScheduled(response)
 
+HistoricalCommitDecisionDirectEvidence(candidate, qc) ==
+  /\ candidate.evidence \in asyncSentItems
+  /\ candidate.evidence.kind = "CommitQC"
+  /\ candidate.evidence.envelope = QcEnvelope(candidate.node, qc)
+  /\ candidate.causalOrigin =
+       AsyncDeliveryCandidateCausalOriginAt(candidate.evidence, context)
+
+HistoricalCommitDecisionResponseEvidence(candidate, qc) ==
+  /\ candidate.evidence \in asyncSentItems
+  /\ candidate.evidence.kind = "CommitCertificateResponse"
+  /\ candidate.evidence.envelope.recipient = candidate.node
+  /\ candidate.evidence.envelope.qc = qc
+  /\ CommitCertificateRequestAuthorized(
+       candidate.evidence.envelope.request)
+  /\ candidate.causalOrigin =
+       AsyncCommitCertificateResponseCandidateCausalOriginAt(
+         candidate.evidence, context)
+
+(***************************************************************************
+The ingress DeliverQC candidate carries the authenticated CommitQC as its
+`item`.  Every reducer successor deliberately replaces `item` with
+`NoAsyncItem` while retaining the immutable evidence and causal origin.  The
+historical owner must follow that real representation; requiring a CommitQC
+item for BeginDecision or PersistDecision would describe no reachable causal
+successor and could turn a proofless leaf into an impossible antecedent.
+***************************************************************************)
 HistoricalCommitDecisionCandidateOwned(node, kind) ==
-  \E candidate \in AsyncCandidateSet:
+  \E candidate \in AsyncCandidateSet, qc \in commitQCs:
     /\ candidate.node = node
     /\ candidate.kind = kind
-    /\ candidate.item.kind = "CommitQC"
-    /\ candidate.item.envelope.qc \in commitQCs
-    /\ candidate.item.envelope.qc.context = context
+    /\ kind \in {"DeliverQC", "BeginDecision", "PersistDecision"}
+    /\ qc.context = context
+    /\ qc.phase = "Commit"
+    /\ candidate.consumerContext = context
+    /\ candidate.view = qc.view
+    /\ candidate.subject = qc.subject
     /\ HistoricalProtectedCandidateOwned(candidate)
+    /\ \/ HistoricalCommitDecisionDirectEvidence(candidate, qc)
+       \/ HistoricalCommitDecisionResponseEvidence(candidate, qc)
+    /\ IF kind = "DeliverQC"
+       THEN candidate.item =
+              IF candidate.evidence.kind = "CommitQC"
+              THEN candidate.evidence
+              ELSE DiscoveredCommitQcItem(candidate.evidence)
+       ELSE candidate.item = NoAsyncItem
 
 HistoricalActiveRequestRetransmissionProgressLeaf(specification) ==
   specification
@@ -915,6 +990,248 @@ ResponsiveDecisionServiceOwnershipInvariant ==
       => \/ node \in AsyncCurrentResponsiveVoters
          \/ HistoricalRecoveryTarget(node)
 
+(***************************************************************************
+Reachable Decision-service ownership.
+
+The temporal interface above used to leave ownership as a caller premise.
+That is too weak for the indexed historical authority proof: after a typed
+archive appears, an already-persisted Decision must still name a runner which
+is covered by concrete fairness.  The stronger invariant below is independent
+of GST.  A current-context Decision is created only by the selected serialized
+runner; that runner is either a current responsive voter or an exact
+historical target.  The only action which removes the latter owner is the same
+exact Apply which installs the terminal application.
+
+The proof deliberately classifies new durable Decision records rather than
+assuming that every responsive validator belongs to the voting roster.
+***************************************************************************)
+
+ReachableResponsiveDecisionServiceOwnershipInvariant ==
+  \A node \in Responsive:
+    (NodeHasDecision(node) /\ ~NodeHasApplication(node))
+      => \/ node \in AsyncCurrentResponsiveVoters
+         \/ HistoricalRecoveryTarget(node)
+
+HistoricalNewDecisionOwnedBy(node) ==
+  \A decision \in decisions' \ decisions:
+    decision.node = node
+
+THEOREM HistoricalExecuteCommandCreatesDecisionOnlyForCommandOwner ==
+  \A command:
+    ExecuteCommand(command)
+      => HistoricalNewDecisionOwnedBy(command.node)
+BY IsaT(240)
+   DEF HistoricalNewDecisionOwnedBy,
+       ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
+       CommandMatches, AssembleLocalBody, BeginLocalProposal,
+       PersistProposal, FetchBody, RebindRetainedBody, StoreBody,
+       ValidateBody, ValidateDecidedBody, ValidateLockedBody, RejectBody,
+       BeginPrepare, PersistPrepare, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, PersistLockCommit,
+       FormCommitQC, BeginDecision, PersistTimeout, FormTC,
+       BeginInstallTC, FetchCertifiedBody,
+       AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
+       ExecuteDecisionFetch, ExecuteSignProposal, ExecuteSignVote,
+       ExecuteFormPrepareQC, ExecuteSignTimeout, ExecutePersistInstall,
+       ExecutePersistDecision, ExecuteRequestCertifiedBody,
+       ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk,
+       CompleteProposalSignature, CompleteVoteSignature,
+       CompleteTimeoutSignature, FormPrepareQC, PersistInstallTC,
+       PersistDecision, ApplyDecision, DeliverProposal, DeliverVote,
+       DeliverQC, DeliverTimeout, DeliverTC, vars
+
+THEOREM HistoricalFifoRuntimeCreatesDecisionOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ FifoRuntimeStep(node)
+    => HistoricalNewDecisionOwnedBy(node)
+BY RuntimeSelectedCommandsAreTyped,
+   HistoricalExecuteCommandCreatesDecisionOnlyForCommandOwner,
+   AsyncStrongTypeProjectsAsyncType, IsaT(90)
+   DEF HistoricalNewDecisionOwnedBy, FifoRuntimeStep,
+       DeferCommand, DiscardCommand, vars
+
+THEOREM HistoricalDeferredDrainCreatesDecisionOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ DeferredDrainStep(node)
+    => HistoricalNewDecisionOwnedBy(node)
+BY RuntimeSelectedCommandsAreTyped,
+   HistoricalExecuteCommandCreatesDecisionOnlyForCommandOwner,
+   AsyncStrongTypeProjectsAsyncType, IsaT(90)
+   DEF HistoricalNewDecisionOwnedBy, DeferredDrainStep,
+       DiscardCommand, vars
+
+THEOREM HistoricalRuntimeCreatesDecisionOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ RuntimeStep(node)
+    => HistoricalNewDecisionOwnedBy(node)
+BY HistoricalFifoRuntimeCreatesDecisionOnlyForRunner,
+   HistoricalDeferredDrainCreatesDecisionOnlyForRunner, IsaT(120)
+   DEF HistoricalNewDecisionOwnedBy, RuntimeStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
+       BeginTimeout, vars
+
+THEOREM HistoricalRunNodeWorkCreatesDecisionOnlyForRunner ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ RunNodeWork(node)
+    => HistoricalNewDecisionOwnedBy(node)
+BY HistoricalRuntimeCreatesDecisionOnlyForRunner, IsaT(90)
+   DEF HistoricalNewDecisionOwnedBy, RunNodeWork,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       AdmitProducerCompletion, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata, DrainFairIngressSelected, vars
+
+THEOREM HistoricalAsyncNextCreatesDecisionOnlyForServiceOwner ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncNext
+  => \A decision \in decisions' \ decisions:
+       \/ decision.node \in AsyncCurrentResponsiveVoters'
+       \/ HistoricalRecoveryTarget(decision.node)'
+BY HistoricalRunNodeWorkCreatesDecisionOnlyForRunner, IsaT(600)
+   DEF HistoricalNewDecisionOwnedBy,
+       HistoricalRecoveryTarget,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
+       DeferredDrainStep, ExecuteCommand, ExecutePersistDecision,
+       PersistDecision, ExecuteApply, ApplyDecision,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       AsyncNetworkStep, AsyncFaultStep,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       RearmResponsiveRecovery, ResetNodeSchedulerForRestart,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars, vars
+
+THEOREM HistoricalBracketCreatesDecisionOnlyForServiceOwner ==
+  /\ AsyncStrongTypeInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => \A decision \in decisions' \ decisions:
+       \/ decision.node \in AsyncCurrentResponsiveVoters'
+       \/ HistoricalRecoveryTarget(decision.node)'
+PROOF
+  <1>1. CASE AsyncNext
+    BY <1>1, HistoricalAsyncNextCreatesDecisionOnlyForServiceOwner
+  <1>2. CASE UNCHANGED AsyncAllVars
+    BY <1>2, Isa
+       DEF HistoricalRecoveryTarget,
+           AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+           AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars, vars
+  <1> QED BY <1>1, <1>2
+
+THEOREM HistoricalDecisionTargetPersistsUntilApplication ==
+  \A node:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalRecoveryTarget(node)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ~NodeHasApplication(node)'
+    => HistoricalRecoveryTarget(node)'
+BY IsaT(600)
+   DEF HistoricalRecoveryTarget, AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep, RunNode,
+       RunHistoricalRecoveryNode, RunNodeWork, LocalAdmissionStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
+       FifoRuntimeStep, DeferredDrainStep, ExecuteCommand,
+       ExecuteApply, ApplyDecision, OpenHistoricalRecovery,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       ResetNodeSchedulerForRestart, AsyncSetGST,
+       NodeHasApplication, AsyncAllVars
+
+THEOREM HistoricalBracketKeepsResponsiveVoterSet ==
+  [AsyncNext]_AsyncAllVars
+    => /\ context' = context
+       /\ AsyncCurrentResponsiveVoters' = AsyncCurrentResponsiveVoters
+BY Isa
+   DEF AsyncNext, AsyncCurrentResponsiveVoters,
+       CurrentVoters, CurrentEpoch,
+       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars, vars
+
+THEOREM AsyncInitEstablishesReachableResponsiveDecisionServiceOwnership ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => ReachableResponsiveDecisionServiceOwnershipInvariant
+BY BootstrapParentContextPrecedes, IsaT(120)
+   DEF ReachableResponsiveDecisionServiceOwnershipInvariant,
+       AsyncInitAt, AsyncBaseInitAt, InitAt,
+       NodeHasDecision, NodeHasApplication,
+       HistoricalRecoveryTarget,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       BootstrapParentDecision, BootstrapParentCommitQC,
+       BootstrapParentContext, ContextRecord
+
+THEOREM AsyncBracketPreservesReachableResponsiveDecisionServiceOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ ReachableResponsiveDecisionServiceOwnershipInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => ReachableResponsiveDecisionServiceOwnershipInvariant'
+BY HistoricalBracketCreatesDecisionOnlyForServiceOwner,
+   HistoricalDecisionTargetPersistsUntilApplication,
+   HistoricalBracketKeepsResponsiveVoterSet, IsaT(300)
+   DEF ReachableResponsiveDecisionServiceOwnershipInvariant,
+       NodeHasDecision, NodeHasApplication,
+       HistoricalRecoveryTarget,
+       AsyncCurrentResponsiveVoters
+
+THEOREM ReachableResponsiveDecisionServiceOwnershipObligation ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []ReachableResponsiveDecisionServiceOwnershipInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []ReachableResponsiveDecisionServiceOwnershipInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => ReachableResponsiveDecisionServiceOwnershipInvariant
+      BY AsyncInitEstablishesReachableResponsiveDecisionServiceOwnership
+    <2>2. AsyncSpecAt(initialContext)
+             => []AsyncStrongTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>3. /\ AsyncStrongTypeInvariant
+           /\ ReachableResponsiveDecisionServiceOwnershipInvariant
+           /\ [AsyncNext]_AsyncAllVars
+          => ReachableResponsiveDecisionServiceOwnershipInvariant'
+      BY AsyncBracketPreservesReachableResponsiveDecisionServiceOwnership
+    <2> QED BY <2>1, <2>2, <2>3, PTL DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+THEOREM ReachableOwnershipImpliesPostGstDecisionServiceOwnership ==
+  ReachableResponsiveDecisionServiceOwnershipInvariant
+    => ResponsiveDecisionServiceOwnershipInvariant
+BY Isa
+   DEF ReachableResponsiveDecisionServiceOwnershipInvariant,
+       ResponsiveDecisionServiceOwnershipInvariant
+
+THEOREM ResponsiveDecisionServiceOwnershipObligation ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => []ResponsiveDecisionServiceOwnershipInvariant
+BY ReachableResponsiveDecisionServiceOwnershipObligation,
+   ReachableOwnershipImpliesPostGstDecisionServiceOwnership, PTL
+
 ResponsiveDecisionServiceOwnershipProperty(specification) ==
   specification => []ResponsiveDecisionServiceOwnershipInvariant
 
@@ -932,14 +1249,16 @@ HistoricalRecoveryAsyncTemporalClosurePremises(specification) ==
 (***************************************************************************
 Exact premise accounting.
 
-The first two closure premises are consequences of the actual Async
+The first three closure premises are consequences of the actual Async
 transition system: target creation records a nonempty canonical remote
-CommitQC request outbox, and the discovery guard persists until either the
-request set is published or Decision is installed.  They therefore must not
-remain hidden among the temporal assumptions supplied to the corridor.
+CommitQC request outbox, the discovery guard persists until either the
+request set is published or Decision is installed, and every reachable
+unapplied responsive Decision retains either its current-voter runner or its
+exact historical target.  They therefore must not remain hidden among the
+temporal assumptions supplied to the corridor.
 
-The other seven predicates are the smallest remaining service boundary in
-this child.  Six are historical-service predicates.  The seventh is the
+The other six predicates are the smallest remaining service boundary in
+this child.  Five are historical-service predicates.  The sixth is the
 current-voter application-completion property supplied by the higher
 proof-bearing closure; keeping it explicit prevents this lower historical
 module from importing the post-debt DecisionApplication facade and creating a
@@ -953,6 +1272,7 @@ silently replacing one of those dependencies with target-to-Decision itself.
 HistoricalRecoveryAsyncModelDerivedPremises(specification) ==
   /\ HistoricalCommitCertificateDiscoveryPersistenceProperty(specification)
   /\ HistoricalRecoveryTargetRemoteServerProperty(specification)
+  /\ ResponsiveDecisionServiceOwnershipProperty(specification)
 
 HistoricalRecoveryAsyncRemainingCorridorPremises(specification) ==
   /\ HistoricalCommitCertificateDiscoveryClockProgressProperty(specification)
@@ -960,7 +1280,6 @@ HistoricalRecoveryAsyncRemainingCorridorPremises(specification) ==
   /\ HistoricalCommitCertificateConcreteLeafProperties(specification)
   /\ HistoricalDecisionFrontierAvailabilityProperty(specification)
   /\ HistoricalDecisionConcreteLeafProperties(specification)
-  /\ ResponsiveDecisionServiceOwnershipProperty(specification)
   /\ ApplicationCompletionProgressProperty(specification)
 
 HistoricalRecoveryAsyncRemainingCorridorObligation ==
@@ -973,7 +1292,8 @@ THEOREM HistoricalRecoveryAsyncModelDerivedPremisesFromAsyncSpec ==
     HistoricalRecoveryAsyncModelDerivedPremises(
       AsyncSpecAt(initialContext))
 BY HistoricalCommitCertificateDiscoveryPersistenceFromAsyncSpec,
-   HistoricalRecoveryTargetRemoteServerFromAsyncSpec
+   HistoricalRecoveryTargetRemoteServerFromAsyncSpec,
+   ResponsiveDecisionServiceOwnershipObligation
    DEF HistoricalRecoveryAsyncModelDerivedPremises
 
 THEOREM HistoricalRecoveryAsyncTemporalClosurePremisesPartition ==
@@ -988,6 +1308,8 @@ BY DEF HistoricalRecoveryAsyncTemporalClosurePremises,
 THEOREM HistoricalActiveCommitCertificateRequestReachesDecision ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ HistoricalProtectedServiceRankLeafProperties(
          AsyncSpecAt(initialContext))
     /\ HistoricalCommitCertificateConcreteLeafProperties(
@@ -1000,6 +1322,8 @@ THEOREM HistoricalActiveCommitCertificateRequestReachesDecision ==
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncSpecAt(initialContext),
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext)),
                 HistoricalProtectedServiceRankLeafProperties(
                   AsyncSpecAt(initialContext)),
                 HistoricalCommitCertificateConcreteLeafProperties(
@@ -1075,6 +1399,8 @@ PROOF
 THEOREM HistoricalTargetDecisionReachesApplicationFromConcreteLeaves ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ HistoricalProtectedServiceRankLeafProperties(
          AsyncSpecAt(initialContext))
     /\ HistoricalDecisionFrontierAvailabilityProperty(
@@ -1089,6 +1415,8 @@ THEOREM HistoricalTargetDecisionReachesApplicationFromConcreteLeaves ==
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncSpecAt(initialContext),
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext)),
                 HistoricalProtectedServiceRankLeafProperties(
                   AsyncSpecAt(initialContext)),
                 HistoricalDecisionFrontierAvailabilityProperty(
@@ -1186,6 +1514,8 @@ PROOF
 THEOREM HistoricalRecoveryTargetDecisionFromExactCorridor ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ HistoricalRecoveryAsyncTemporalClosurePremises(
          AsyncSpecAt(initialContext))
     => HistoricalRecoveryTargetDecisionProgressProperty(
@@ -1193,6 +1523,8 @@ THEOREM HistoricalRecoveryTargetDecisionFromExactCorridor ==
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncSpecAt(initialContext),
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext)),
                 HistoricalRecoveryAsyncTemporalClosurePremises(
                   AsyncSpecAt(initialContext))
          PROVE HistoricalRecoveryTargetDecisionProgressProperty(
@@ -1230,6 +1562,8 @@ PROOF
 THEOREM ResponsiveDecisionApplicationFromExactCorridor ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ HistoricalRecoveryAsyncTemporalClosurePremises(
          AsyncSpecAt(initialContext))
     => ResponsiveDecisionApplicationProgressProperty(
@@ -1237,6 +1571,8 @@ THEOREM ResponsiveDecisionApplicationFromExactCorridor ==
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncSpecAt(initialContext),
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext)),
                 HistoricalRecoveryAsyncTemporalClosurePremises(
                   AsyncSpecAt(initialContext))
          PROVE ResponsiveDecisionApplicationProgressProperty(
@@ -1274,6 +1610,8 @@ PROOF
 THEOREM HistoricalRecoveryAsyncTemporalPrerequisitesFromExactCorridor ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ HistoricalRecoveryAsyncTemporalClosurePremises(
          AsyncSpecAt(initialContext))
     => HistoricalRecoveryAsyncTemporalPrerequisites(
@@ -1285,6 +1623,8 @@ BY HistoricalRecoveryTargetDecisionFromExactCorridor,
 THEOREM HistoricalRecoveryAsyncTemporalPrerequisitesFromRemainingCorridor ==
   \A initialContext:
     /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ HistoricalRecoveryAsyncRemainingCorridorPremises(
          AsyncSpecAt(initialContext))
     => HistoricalRecoveryAsyncTemporalPrerequisites(
@@ -1292,6 +1632,8 @@ THEOREM HistoricalRecoveryAsyncTemporalPrerequisitesFromRemainingCorridor ==
 PROOF
   <1>1. ASSUME NEW initialContext,
                 AsyncSpecAt(initialContext),
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext)),
                 HistoricalRecoveryAsyncRemainingCorridorPremises(
                   AsyncSpecAt(initialContext))
          PROVE HistoricalRecoveryAsyncTemporalPrerequisites(

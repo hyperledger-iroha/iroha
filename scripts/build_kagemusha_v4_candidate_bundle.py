@@ -3,6 +3,14 @@
 
 from __future__ import annotations
 
+import sys
+
+# The reviewed source closure rejects every ignored path except the separately
+# bound root Cargo.lock.  Keep imports from creating __pycache__ entries that
+# would otherwise make the post-build source identity differ from its pre-build
+# seal.
+sys.dont_write_bytecode = True
+
 import argparse
 from contextlib import contextmanager
 import hashlib
@@ -12,7 +20,6 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
-import sys
 from typing import Callable, ContextManager, Iterator, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

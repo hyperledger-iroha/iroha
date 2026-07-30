@@ -55,7 +55,7 @@ if IROHA_PYTHON_ADDRESS.exists():
 
 DEFAULT_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
 DEFAULT_CHAIN_DISCRIMINANT = 369
-DEFAULT_DOMAIN = "wonderland.universal"
+DEFAULT_DOMAIN = "universal"
 DEFAULT_ALIAS_PREFIX = "taira-rollout-canary"
 DEFAULT_TIME_TO_LIVE_MS = 120_000
 DEFAULT_STATUS_TIMEOUT_MS = 120_000
@@ -352,8 +352,6 @@ def normalize_domain(domain: str | None) -> str:
     normalized = domain.strip()
     if not normalized:
         return DEFAULT_DOMAIN
-    if "." not in normalized:
-        return f"{normalized}.universal"
     return normalized
 
 
@@ -984,7 +982,6 @@ def write_config(
         [
             "",
             "[account]",
-            f'id = "{account_id}"',
             f'domain = "{domain}"',
             f'public_key = "{public_key}"',
             f'private_key = "{private_key}"',

@@ -711,6 +711,14 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
 
     func testArtifactStreamRejectsInvalidDigestAndIntegerBounds() throws {
         let digest = Data(repeating: 0xA5, count: 32)
+        let maximum = KagemushaRecursiveSpend.artifactMaximumStreamedFileBytesV4
+        XCTAssertEqual(maximum, UInt64(4) * 1024 * 1024 * 1024)
+        let admitted = try KagemushaRecursiveSpendArtifactStream(
+            role: .stepEqProvingKey,
+            expectedSHA256: digest,
+            byteCount: maximum
+        ) { _ in }
+        XCTAssertEqual(admitted.byteCount, maximum)
         for invalidDigest in [Data(), Data(repeating: 0, count: 32)] {
             XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactStream(
                 role: .stepEqParamsIpa,
@@ -720,7 +728,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         }
         for invalidCount in [
             UInt64(0),
-            UInt64(KagemushaRecursiveSpend.artifactMaximumFileBytes) + 1,
+            maximum + 1,
             UInt64.max,
         ] {
             XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactStream(

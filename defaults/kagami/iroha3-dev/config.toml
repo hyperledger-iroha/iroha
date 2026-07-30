@@ -38,4 +38,5 @@ public_key = "ed012067822E5566A0F5A2DDBD8745CFCAA215EB684D2D8BA200EA9F2DD9B247B1
 # [settlement.offline]
 # kagemusha_release_policy_path = "/etc/iroha/kagemusha/release-policy.norito"
 # kagemusha_artifact_dir = "/var/lib/iroha/kagemusha/v4"
+# kagemusha_catalog_qualification_seal_path = "/var/lib/iroha/kagemusha-seals/catalog-qualification-v1.norito"
 # kagemusha_max_decoded_bytes = 268435456

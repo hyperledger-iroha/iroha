@@ -22,10 +22,19 @@ use std::fs::File;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
+pub use crate::governance::{
+    GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
+    GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1, GovernanceDagHttpRequestReceiverV1,
+    GovernanceDagRequestAuthenticationErrorV1, GovernanceDagRequestAuthenticationPolicyV1,
+    GovernanceDagRequestAuthenticationReplayCacheV1,
+    canonicalize_governance_dag_outbound_http_request_v1,
+    governance_dag_request_authentication_headers_v1,
+    parse_governance_dag_request_authentication_headers_v1,
+    verify_governance_dag_request_authentication_v1,
+};
 use crate::{
-    GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1, GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1,
-    GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1, GovernanceDagAuthenticationScope,
-    GovernanceDagCanonicalRequestHeaderV1, GovernanceDagCanonicalRequestV1,
+    GovernanceDagAuthenticationScope, GovernanceDagCanonicalRequestV1,
     GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticator,
     GovernanceDagRuntimeProviderQualificationV1, GovernanceDagSealedCheckpointStore,
     GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot,
@@ -89,15 +98,6 @@ const MAX_PUBLIC_TOKEN_BYTES: usize = 512;
 const SOURCE_ENTRY_HARD_CAP: usize = 131_072;
 const SOURCE_TOTAL_BYTES_HARD_CAP: u64 = 1024 * 1024 * 1024;
 const IPFS_MULTIPART_BOUNDARY_PREFIX: &str = "iroha-sorafs-gdag-v1";
-const REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1: usize = 4_096;
-const REQUEST_AUTH_HEADER_VERSION: &str = "x-sorafs-governance-auth-version";
-const REQUEST_AUTH_HEADER_SCOPE: &str = "x-sorafs-governance-auth-scope";
-const REQUEST_AUTH_HEADER_ISSUED_AT: &str = "x-sorafs-governance-auth-issued-at";
-const REQUEST_AUTH_HEADER_EXPIRES_AT: &str = "x-sorafs-governance-auth-expires-at";
-const REQUEST_AUTH_HEADER_NONCE: &str = "x-sorafs-governance-auth-nonce";
-const REQUEST_AUTH_HEADER_REQUEST_DIGEST: &str = "x-sorafs-governance-auth-request-digest";
-const REQUEST_AUTH_HEADER_PUBLIC_KEY: &str = "x-sorafs-governance-auth-public-key";
-const REQUEST_AUTH_HEADER_SIGNATURE: &str = "x-sorafs-governance-auth-signature";
 // Norito temporarily copies nested length-delimited fields while decoding.
 // The governed block/head schemas stay below this amplification, while the
 // finite multiplier still rejects archives that attempt allocation bombs.
@@ -332,11 +332,9 @@ pub enum GovernanceDagServiceLauncherError {
 struct OpaqueAuthenticator {
     handle: String,
     qualification: GovernanceDagRuntimeProviderQualificationV1,
-    public_key: [u8; 32],
-    max_envelope_lifetime_secs: u64,
-    max_future_skew_secs: u64,
+    verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
     provider: Arc<dyn GovernanceDagRequestAuthenticator>,
-    replay_cache: Arc<Mutex<BTreeMap<[u8; 32], u64>>>,
+    replay_cache: Arc<Mutex<GovernanceDagRequestAuthenticationReplayCacheV1>>,
 }
 
 impl fmt::Debug for OpaqueAuthenticator {
@@ -344,12 +342,18 @@ impl fmt::Debug for OpaqueAuthenticator {
         formatter
             .debug_struct("OpaqueAuthenticator")
             .field("handle", &self.handle)
-            .field("public_key", &hex::encode(self.public_key))
+            .field(
+                "public_key",
+                &hex::encode(self.verification_policy.public_key()),
+            )
             .field(
                 "max_envelope_lifetime_secs",
-                &self.max_envelope_lifetime_secs,
+                &self.verification_policy.max_envelope_lifetime_secs(),
             )
-            .field("max_future_skew_secs", &self.max_future_skew_secs)
+            .field(
+                "max_future_skew_secs",
+                &self.verification_policy.max_future_skew_secs(),
+            )
             .field("provider", &"[REDACTED]")
             .finish_non_exhaustive()
     }
@@ -371,7 +375,7 @@ impl OpaqueAuthenticator {
                 "{label} configured policy qualification is invalid"
             )));
         }
-        validate_request_auth_policy(
+        let verification_policy = validate_request_auth_policy(
             expected_public_key,
             max_envelope_lifetime_secs,
             max_future_skew_secs,
@@ -414,11 +418,11 @@ impl OpaqueAuthenticator {
         Ok(Self {
             handle,
             qualification: expected_qualification,
-            public_key: expected_public_key,
-            max_envelope_lifetime_secs,
-            max_future_skew_secs,
+            verification_policy,
             provider,
-            replay_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            replay_cache: Arc::new(Mutex::new(
+                GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            )),
         })
     }
 
@@ -445,7 +449,7 @@ impl OpaqueAuthenticator {
             )
         })?;
         if self.provider.handle() != self.handle
-            || self.provider.public_key() != self.public_key
+            || self.provider.public_key() != self.verification_policy.public_key()
             || qualification != self.qualification
         {
             return Err(GovernanceDagServiceError::Network(
@@ -461,81 +465,21 @@ impl OpaqueAuthenticator {
         request: &GovernanceDagCanonicalRequestV1,
         envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
     ) -> Result<(), GovernanceDagServiceError> {
-        if envelope.scope() != request.scope()
-            || envelope.request_digest() != request.request_digest()
-            || envelope.public_key() != self.public_key
-        {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG request-auth envelope does not match the canonical request"
-                    .to_owned(),
-            ));
-        }
-        let issued_at = envelope.issued_at_unix_secs();
-        let expires_at = envelope.expires_at_unix_secs();
         let now = current_unix_timestamp_seconds();
-        let lifetime = expires_at.checked_sub(issued_at).ok_or_else(|| {
-            GovernanceDagServiceError::Network(
-                "Governance DAG request-auth envelope has invalid timing".to_owned(),
-            )
-        })?;
-        if issued_at == 0
-            || lifetime == 0
-            || lifetime > self.max_envelope_lifetime_secs
-            || issued_at > now.saturating_add(self.max_future_skew_secs)
-            || expires_at <= now
-            || envelope.nonce().iter().all(|byte| *byte == 0)
-        {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG request-auth envelope is stale, future-dated, overlong, or malformed"
-                    .to_owned(),
-            ));
-        }
-        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &envelope.public_key())
-            .map_err(|_| {
-                GovernanceDagServiceError::Network(
-                    "Governance DAG request-auth envelope contains a malformed public key"
-                        .to_owned(),
-                )
-            })?;
-        let signature =
-            iroha_crypto::ed25519_parse_signature(&envelope.signature()).map_err(|_| {
-                GovernanceDagServiceError::Network(
-                    "Governance DAG request-auth envelope contains a malformed signature"
-                        .to_owned(),
-                )
-            })?;
-        let signing_payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
-            request,
-            issued_at,
-            expires_at,
-            envelope.nonce(),
-            envelope.public_key(),
-        );
-        signature
-            .verify(&public_key, &signing_payload)
-            .map_err(|_| {
-                GovernanceDagServiceError::Network(
-                    "Governance DAG request-auth signature verification failed".to_owned(),
-                )
-            })?;
         let mut replay_cache = self.replay_cache.lock().map_err(|_| {
             GovernanceDagServiceError::Network(
                 "Governance DAG request-auth replay state is unavailable".to_owned(),
             )
         })?;
-        replay_cache.retain(|_, retained_expiry| *retained_expiry > now);
-        if replay_cache.contains_key(&envelope.nonce()) {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG request-auth envelope replay was rejected".to_owned(),
-            ));
-        }
-        if replay_cache.len() >= REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1 {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG request-auth replay state reached its bounded capacity".to_owned(),
-            ));
-        }
-        replay_cache.insert(envelope.nonce(), expires_at);
-        Ok(())
+        verify_governance_dag_request_authentication_v1(
+            request,
+            envelope,
+            request.scope(),
+            &self.verification_policy,
+            now,
+            &mut replay_cache,
+        )
+        .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))
     }
 }
 
@@ -544,31 +488,24 @@ fn validate_request_auth_policy(
     max_envelope_lifetime_secs: u64,
     max_future_skew_secs: u64,
     label: &str,
-) -> Result<(), GovernanceDagServiceError> {
-    if !(1..=300).contains(&max_envelope_lifetime_secs)
-        || max_future_skew_secs > 60
-        || max_future_skew_secs >= max_envelope_lifetime_secs
-    {
-        return Err(GovernanceDagServiceError::Config(format!(
-            "{label} request-auth timing bounds are invalid"
-        )));
-    }
-    let key = PublicKey::from_bytes(Algorithm::Ed25519, &public_key).map_err(|_| {
-        GovernanceDagServiceError::Config(format!(
-            "{label} request-auth public key is not canonical Ed25519"
-        ))
-    })?;
-    let (algorithm, canonical_bytes) = key.try_to_bytes().map_err(|_| {
-        GovernanceDagServiceError::Config(format!(
-            "{label} request-auth public key is not canonical Ed25519"
-        ))
-    })?;
-    if algorithm != Algorithm::Ed25519 || canonical_bytes != public_key.as_slice() {
-        return Err(GovernanceDagServiceError::Config(format!(
-            "{label} request-auth public key is not canonical Ed25519"
-        )));
-    }
-    Ok(())
+) -> Result<GovernanceDagRequestAuthenticationPolicyV1, GovernanceDagServiceError> {
+    GovernanceDagRequestAuthenticationPolicyV1::try_new(
+        public_key,
+        max_envelope_lifetime_secs,
+        max_future_skew_secs,
+    )
+    .map_err(|error| {
+        let reason = match error {
+            GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyTiming => {
+                "request-auth timing bounds are invalid"
+            }
+            GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyPublicKey => {
+                "request-auth public key is not canonical Ed25519"
+            }
+            _ => "request-auth policy is invalid",
+        };
+        GovernanceDagServiceError::Config(format!("{label} {reason}"))
+    })
 }
 
 #[derive(Clone)]
@@ -3469,60 +3406,6 @@ fn canonical_outbound_request_descriptor(
     scope: GovernanceDagAuthenticationScope,
     max_request_bytes: u64,
 ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagServiceError> {
-    let method = request.method().as_str();
-    if !matches!(method, "GET" | "POST" | "PUT") {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request method is not allowed by V1".to_owned(),
-        ));
-    }
-    let canonical_url = canonical_request_url(request.url())?;
-    let mut selected_headers = Vec::with_capacity(
-        request
-            .headers()
-            .len()
-            .min(GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1),
-    );
-    for (name, value) in request.headers() {
-        if selected_headers.len() >= GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1 {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG outbound request has too many public headers".to_owned(),
-            ));
-        }
-        let name = name.as_str();
-        if is_forbidden_request_auth_header(name) {
-            return Err(GovernanceDagServiceError::Network(
-                "Governance DAG outbound request contains a forbidden credential header".to_owned(),
-            ));
-        }
-        let value = value.to_str().map_err(|_| {
-            GovernanceDagServiceError::Network(
-                "Governance DAG outbound request header is not visible ASCII".to_owned(),
-            )
-        })?;
-        selected_headers.push(
-            GovernanceDagCanonicalRequestHeaderV1::try_new(name, value).map_err(|_| {
-                GovernanceDagServiceError::Network(
-                    "Governance DAG outbound request contains a noncanonical public header"
-                        .to_owned(),
-                )
-            })?,
-        );
-    }
-    selected_headers.sort_unstable();
-    if selected_headers.len() > GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1
-        || selected_headers
-            .iter()
-            .try_fold(0_usize, |total, header| {
-                total
-                    .checked_add(header.name().len())
-                    .and_then(|total| total.checked_add(header.value().len()))
-            })
-            .is_none_or(|total| total > GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1)
-    {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request headers exceed the V1 bound".to_owned(),
-        ));
-    }
     let body = match request.body() {
         None => &[][..],
         Some(body) => body.as_bytes().ok_or_else(|| {
@@ -3531,174 +3414,29 @@ fn canonical_outbound_request_descriptor(
             )
         })?,
     };
-    let body_length = u64::try_from(body.len()).map_err(|_| {
-        GovernanceDagServiceError::Network(
-            "Governance DAG outbound request body length exceeds u64".to_owned(),
-        )
-    })?;
-    if body_length > max_request_bytes {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request body exceeds the configured bound".to_owned(),
-        ));
-    }
-    GovernanceDagCanonicalRequestV1::try_new(
+    canonicalize_governance_dag_outbound_http_request_v1(
         scope,
-        method,
-        &canonical_url,
-        selected_headers,
-        body_length,
-        blake3_array(body),
+        request.method().as_str(),
+        request.url().as_str(),
+        request
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_bytes())),
+        body,
         max_request_bytes,
     )
-    .map_err(|_| {
-        GovernanceDagServiceError::Network(
-            "Governance DAG outbound request descriptor is not canonical or bounded".to_owned(),
-        )
+    .map_err(|error| {
+        GovernanceDagServiceError::Network(format!(
+            "Governance DAG outbound request was rejected: {error}"
+        ))
     })
-}
-
-fn canonical_request_url(url: &Url) -> Result<String, GovernanceDagServiceError> {
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || !matches!(url.scheme(), "http" | "https")
-    {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request URL is not canonical".to_owned(),
-        ));
-    }
-    let rendered = url.as_str();
-    if rendered.is_empty()
-        || rendered.len() > crate::GOVERNANCE_DAG_REQUEST_AUTH_MAX_URL_BYTES_V1
-        || rendered.chars().any(char::is_control)
-        || rendered.contains('\\')
-        || has_noncanonical_percent_escape(rendered)
-    {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request URL is not canonical".to_owned(),
-        ));
-    }
-    let reparsed = Url::parse(rendered).map_err(|_| {
-        GovernanceDagServiceError::Network(
-            "Governance DAG outbound request URL is not canonical".to_owned(),
-        )
-    })?;
-    if reparsed.as_str() != rendered {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request URL is not canonical".to_owned(),
-        ));
-    }
-    let pairs = url
-        .query_pairs()
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    if pairs.windows(2).any(|pair| pair[0].0 >= pair[1].0) {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request query is not strictly canonical".to_owned(),
-        ));
-    }
-    let mut reconstructed = url.clone();
-    reconstructed.set_query(None);
-    if !pairs.is_empty() {
-        let mut serializer = reconstructed.query_pairs_mut();
-        for (key, value) in &pairs {
-            serializer.append_pair(key, value);
-        }
-    }
-    if reconstructed.as_str() != rendered {
-        return Err(GovernanceDagServiceError::Network(
-            "Governance DAG outbound request query has noncanonical encoding".to_owned(),
-        ));
-    }
-    Ok(rendered.to_owned())
-}
-
-fn has_noncanonical_percent_escape(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            index += 1;
-            continue;
-        }
-        let Some(encoded) = bytes.get(index + 1..index + 3) else {
-            return true;
-        };
-        if !encoded.iter().all(|byte| byte.is_ascii_hexdigit())
-            || encoded
-                .iter()
-                .any(|byte| byte.is_ascii_alphabetic() && !byte.is_ascii_uppercase())
-        {
-            return true;
-        }
-        let decoded =
-            (request_auth_hex_nibble(encoded[0]) << 4) | request_auth_hex_nibble(encoded[1]);
-        if decoded.is_ascii_alphanumeric() || matches!(decoded, b'-' | b'.' | b'_' | b'~') {
-            return true;
-        }
-        index += 3;
-    }
-    false
-}
-
-fn request_auth_hex_nibble(byte: u8) -> u8 {
-    match byte {
-        b'0'..=b'9' => byte - b'0',
-        b'A'..=b'F' => byte - b'A' + 10,
-        b'a'..=b'f' => byte - b'a' + 10,
-        _ => unreachable!("caller validates hexadecimal request-auth escapes"),
-    }
-}
-
-fn is_forbidden_request_auth_header(name: &str) -> bool {
-    matches!(
-        name,
-        "authorization"
-            | "proxy-authorization"
-            | "cookie"
-            | "cookie2"
-            | "set-cookie"
-            | "x-api-key"
-            | "x-auth-token"
-    ) || name.starts_with("x-sorafs-governance-auth-")
 }
 
 fn attach_request_authentication_headers(
     request: &mut reqwest::Request,
     envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
 ) -> Result<(), GovernanceDagServiceError> {
-    let fields = [
-        (
-            REQUEST_AUTH_HEADER_VERSION,
-            GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1.to_string(),
-        ),
-        (
-            REQUEST_AUTH_HEADER_SCOPE,
-            envelope.scope().as_str().to_owned(),
-        ),
-        (
-            REQUEST_AUTH_HEADER_ISSUED_AT,
-            envelope.issued_at_unix_secs().to_string(),
-        ),
-        (
-            REQUEST_AUTH_HEADER_EXPIRES_AT,
-            envelope.expires_at_unix_secs().to_string(),
-        ),
-        (REQUEST_AUTH_HEADER_NONCE, hex::encode(envelope.nonce())),
-        (
-            REQUEST_AUTH_HEADER_REQUEST_DIGEST,
-            hex::encode(envelope.request_digest()),
-        ),
-        (
-            REQUEST_AUTH_HEADER_PUBLIC_KEY,
-            hex::encode(envelope.public_key()),
-        ),
-        (
-            REQUEST_AUTH_HEADER_SIGNATURE,
-            hex::encode(envelope.signature()),
-        ),
-    ];
-    for (name, value) in fields {
+    for (name, value) in governance_dag_request_authentication_headers_v1(envelope) {
         let value = HeaderValue::from_str(&value).map_err(|_| {
             GovernanceDagServiceError::Network(
                 "Governance DAG request-auth public header encoding failed".to_owned(),
@@ -5745,7 +5483,8 @@ mod tests {
     };
 
     use crate::{
-        FilesystemGovernancePublisher, GovernanceDagRuntimeSigner, GovernancePublisher,
+        FilesystemGovernancePublisher, GovernanceDagCanonicalRequestHeaderV1,
+        GovernanceDagRuntimeSigner, GovernancePublisher,
         governance::{
             qualify_governance_dag_runtime_checkpoint_store,
             qualify_governance_dag_runtime_signer_provider,
@@ -6007,6 +5746,53 @@ mod tests {
             request, issued_at, expires_at, nonce, public_key, signature,
         )
         .expect("construct test request-auth envelope")
+    }
+
+    fn request_auth_header_fields(
+        envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+    ) -> Vec<(String, Vec<u8>)> {
+        governance_dag_request_authentication_headers_v1(envelope)
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value.into_bytes()))
+            .collect()
+    }
+
+    fn verify_request_before_test_backend(
+        request: &GovernanceDagCanonicalRequestV1,
+        headers: &[(String, Vec<u8>)],
+        body: &[u8],
+        expected_scope: GovernanceDagAuthenticationScope,
+        policy: &GovernanceDagRequestAuthenticationPolicyV1,
+        now: u64,
+        replay_cache: &mut GovernanceDagRequestAuthenticationReplayCacheV1,
+        backend_calls: &AtomicU64,
+    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+        let mut receiver = GovernanceDagHttpRequestReceiverV1::try_new(
+            expected_scope,
+            1024 * 1024,
+            policy,
+            replay_cache,
+        )?;
+        let verified_request = receiver.verify_http_request(
+            request.method(),
+            request.canonical_url(),
+            request
+                .selected_headers()
+                .iter()
+                .map(|header| (header.name(), header.value().as_bytes()))
+                .chain(
+                    headers
+                        .iter()
+                        .map(|(name, value)| (name.as_str(), value.as_slice())),
+                ),
+            body,
+            now,
+        )?;
+        if verified_request != *request {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
+        }
+        backend_calls.fetch_add(1, AtomicOrdering::SeqCst);
+        Ok(())
     }
 
     fn canonical_test_request(
@@ -9176,6 +8962,648 @@ enabled = false
     }
 
     #[test]
+    fn inbound_request_auth_accepts_canonical_ipfs_and_head_operations() {
+        let now = 1_700_000_000;
+        let ipfs_policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid IPFS receiver policy");
+        let head_policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_HEAD_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid signed-head receiver policy");
+        let cases = vec![
+            (
+                GovernanceDagAuthenticationScope::Ipfs,
+                "GET",
+                "https://example.invalid/api/v0/cat?arg=cid",
+                vec![("accept-encoding", b"identity".as_slice())],
+                b"".as_slice(),
+                TEST_IPFS_AUTH_HANDLE,
+                [0x31; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::Ipfs,
+                "POST",
+                "https://example.invalid/api/v0/add?pin=false",
+                vec![
+                    (
+                        "content-type",
+                        b"multipart/form-data;boundary=gdag".as_slice(),
+                    ),
+                    ("accept-encoding", b"identity".as_slice()),
+                ],
+                b"canonical-block".as_slice(),
+                TEST_IPFS_AUTH_HANDLE,
+                [0x32; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::SignedHead,
+                "GET",
+                "https://example.invalid/governance/head",
+                vec![
+                    ("if-none-match", b"\"v7\"".as_slice()),
+                    ("accept-encoding", b"identity".as_slice()),
+                ],
+                b"".as_slice(),
+                TEST_HEAD_AUTH_HANDLE,
+                [0x33; 32],
+            ),
+            (
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head",
+                vec![
+                    ("if-match", b"\"v7\"".as_slice()),
+                    ("content-type", b"application/vnd.iroha.norito".as_slice()),
+                    ("accept-encoding", b"identity".as_slice()),
+                ],
+                b"canonical-head".as_slice(),
+                TEST_HEAD_AUTH_HANDLE,
+                [0x34; 32],
+            ),
+        ];
+        let backend_calls = AtomicU64::new(0);
+        let mut ipfs_replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let mut head_replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        for (scope, method, url, headers, body, handle, nonce) in cases {
+            let request = GovernanceDagCanonicalRequestV1::try_from_http_parts(
+                scope,
+                method,
+                url,
+                headers,
+                body,
+                1024 * 1024,
+            )
+            .expect("canonical inbound request");
+            let envelope =
+                signed_test_request_auth_envelope(handle, &request, now, now + 15, nonce);
+            let mut headers = request_auth_header_fields(&envelope);
+            headers.push((
+                "content-length".to_owned(),
+                body.len().to_string().into_bytes(),
+            ));
+            headers.push(("cache-control".to_owned(), b"no-store".to_vec()));
+            headers.push(("x-request-id".to_owned(), b"public-request-id".to_vec()));
+            let (policy, replay_cache) = match scope {
+                GovernanceDagAuthenticationScope::Ipfs => (&ipfs_policy, &mut ipfs_replay_cache),
+                GovernanceDagAuthenticationScope::SignedHead => {
+                    (&head_policy, &mut head_replay_cache)
+                }
+            };
+            verify_request_before_test_backend(
+                &request,
+                &headers,
+                body,
+                scope,
+                policy,
+                now,
+                replay_cache,
+                &backend_calls,
+            )
+            .expect("verified request reaches the test backend");
+        }
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 4);
+    }
+
+    #[test]
+    fn inbound_request_auth_header_mapping_is_an_exact_hard_cut() {
+        let now = 1_700_000_000;
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "POST",
+            "https://example.invalid/api/v0/pin/add?arg=cid&recursive=true",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let envelope = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0xab; 32],
+        );
+        let canonical = request_auth_header_fields(&envelope);
+        let parsed = parse_governance_dag_request_authentication_headers_v1(
+            canonical
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_slice()))
+                .chain(std::iter::once(("accept-encoding", b"identity".as_slice()))),
+        )
+        .expect("ignore ordinary headers and parse the exact auth header set");
+        assert_eq!(parsed, envelope);
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid IPFS receiver policy");
+        let mut zero_bound_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let zero_bound_error = GovernanceDagHttpRequestReceiverV1::try_new(
+            GovernanceDagAuthenticationScope::Ipfs,
+            0,
+            &policy,
+            &mut zero_bound_cache,
+        )
+        .expect_err("receiver must reject a zero body ceiling");
+        assert_eq!(
+            zero_bound_error,
+            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest
+        );
+        let backend_calls = AtomicU64::new(0);
+
+        let mut missing = canonical.clone();
+        missing.remove(0);
+        let cases = [
+            (
+                missing,
+                GovernanceDagRequestAuthenticationErrorV1::MissingHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push(canonical[0].clone());
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::DuplicateHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push(("x-sorafs-governance-auth-key".to_owned(), vec![b'a'; 64]));
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::UnknownHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push((
+                        "x-sorafs-governance-auth-extension".to_owned(),
+                        b"1".to_vec(),
+                    ));
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::UnknownHeader,
+            ),
+            (
+                {
+                    let mut fields = canonical.clone();
+                    fields.push(("X-Sorafs-Governance-Auth-Version".to_owned(), b"1".to_vec()));
+                    fields
+                },
+                GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader,
+            ),
+        ];
+        for (fields, expected) in cases {
+            let error = verify_request_before_test_backend(
+                &request,
+                &fields,
+                b"",
+                GovernanceDagAuthenticationScope::Ipfs,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("noncanonical header map must stop before backend dispatch");
+            assert_eq!(error, expected);
+        }
+
+        for (index, value) in [
+            (0, b"01".to_vec()),
+            (1, b"IPFS".to_vec()),
+            (2, b"01".to_vec()),
+            (4, "AA".repeat(32).into_bytes()),
+            (5, b"00".to_vec()),
+        ] {
+            let mut fields = canonical.clone();
+            fields[index].1 = value;
+            let error = verify_request_before_test_backend(
+                &request,
+                &fields,
+                b"",
+                GovernanceDagAuthenticationScope::Ipfs,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("noncanonical header value must stop before backend dispatch");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader
+            );
+        }
+        assert_eq!(
+            backend_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "no header-mapping failure may reach the backend"
+        );
+    }
+
+    #[test]
+    fn inbound_request_auth_binds_every_request_part_before_backend_dispatch() {
+        let now = 1_700_000_000;
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head?revision=7",
+            &[
+                ("accept-encoding", "identity"),
+                ("content-type", "application/vnd.iroha.norito"),
+                ("if-match", "\"v7\""),
+            ],
+            b"head-v7",
+        );
+        let envelope = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x61; 32],
+        );
+        let headers = request_auth_header_fields(&envelope);
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_HEAD_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid signed-head receiver policy");
+        let tampered = [
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "POST",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=8",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v6\""),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                ],
+                b"head-v7",
+            ),
+            canonical_test_request(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                &[
+                    ("accept-encoding", "identity"),
+                    ("content-type", "application/vnd.iroha.norito"),
+                    ("if-match", "\"v7\""),
+                ],
+                b"HEAD-v7",
+            ),
+            GovernanceDagCanonicalRequestV1::try_new(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head?revision=7",
+                request.selected_headers().to_vec(),
+                request.body_length().saturating_add(1),
+                request.body_blake3(),
+                1024 * 1024,
+            )
+            .expect("canonical body-length tamper descriptor"),
+        ];
+        let backend_calls = AtomicU64::new(0);
+        for (index, tampered_request) in tampered.iter().enumerate() {
+            let body = if index == 5 {
+                b"HEAD-v7".as_slice()
+            } else {
+                b"head-v7".as_slice()
+            };
+            let error = verify_request_before_test_backend(
+                tampered_request,
+                &headers,
+                body,
+                GovernanceDagAuthenticationScope::SignedHead,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("tampered request must stop before backend dispatch");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::RequestMismatch
+            );
+        }
+        let error = verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"head-v7",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("wrong receiver scope must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::RequestMismatch
+        );
+        let wrong_key_policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("alternate valid receiver key");
+        let error = verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"head-v7",
+            GovernanceDagAuthenticationScope::SignedHead,
+            &wrong_key_policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("wrong pinned key must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::RequestMismatch
+        );
+        assert_eq!(
+            backend_calls.load(AtomicOrdering::SeqCst),
+            0,
+            "no binding failure may reach the backend"
+        );
+    }
+
+    #[test]
+    fn inbound_request_auth_rejects_time_nonce_signature_and_replay_failures() {
+        let now = 1_700_000_000;
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::Ipfs,
+            "GET",
+            "https://example.invalid/api/v0/cat?arg=cid",
+            &[("accept-encoding", "identity")],
+            b"",
+        );
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_IPFS_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid IPFS receiver policy");
+        let backend_calls = AtomicU64::new(0);
+        for (issued_at, expires_at, nonce) in [
+            (now - 20, now - 1, [0x71; 32]),
+            (now + 6, now + 16, [0x72; 32]),
+            (now, now + 31, [0x73; 32]),
+        ] {
+            let envelope = signed_test_request_auth_envelope(
+                TEST_IPFS_AUTH_HANDLE,
+                &request,
+                issued_at,
+                expires_at,
+                nonce,
+            );
+            let error = verify_request_before_test_backend(
+                &request,
+                &request_auth_header_fields(&envelope),
+                b"",
+                GovernanceDagAuthenticationScope::Ipfs,
+                &policy,
+                now,
+                &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+                &backend_calls,
+            )
+            .expect_err("invalid timing must stop before backend dispatch");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::InvalidTiming
+            );
+        }
+
+        let valid = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x74; 32],
+        );
+        let mut zero_nonce_headers = request_auth_header_fields(&valid);
+        zero_nonce_headers[4].1 = "00".repeat(32).into_bytes();
+        let error = verify_request_before_test_backend(
+            &request,
+            &zero_nonce_headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("zero nonce must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::MalformedEnvelope
+        );
+
+        let mut bad_signature_headers = request_auth_header_fields(&valid);
+        let mut invalid_signature = valid.signature();
+        invalid_signature[32..].fill(0);
+        bad_signature_headers[7].1 = hex::encode(invalid_signature).into_bytes();
+        let error = verify_request_before_test_backend(
+            &request,
+            &bad_signature_headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut GovernanceDagRequestAuthenticationReplayCacheV1::new(),
+            &backend_calls,
+        )
+        .expect_err("invalid signature must stop before backend dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::SignatureVerification
+        );
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 0);
+
+        let headers = request_auth_header_fields(&valid);
+        let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect("first nonce use reaches backend");
+        let error = verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect_err("replayed nonce must stop before backend dispatch");
+        assert_eq!(error, GovernanceDagRequestAuthenticationErrorV1::Replay);
+        assert_eq!(
+            backend_calls.load(AtomicOrdering::SeqCst),
+            1,
+            "replay rejection must not invoke the backend again"
+        );
+
+        let second = signed_test_request_auth_envelope(
+            TEST_IPFS_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x75; 32],
+        );
+        let mut bounded_cache =
+            GovernanceDagRequestAuthenticationReplayCacheV1::try_with_capacity(1)
+                .expect("one-entry replay cache");
+        let capacity_backend_calls = AtomicU64::new(0);
+        verify_request_before_test_backend(
+            &request,
+            &headers,
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut bounded_cache,
+            &capacity_backend_calls,
+        )
+        .expect("first live nonce fits bounded cache");
+        let error = verify_request_before_test_backend(
+            &request,
+            &request_auth_header_fields(&second),
+            b"",
+            GovernanceDagAuthenticationScope::Ipfs,
+            &policy,
+            now,
+            &mut bounded_cache,
+            &capacity_backend_calls,
+        )
+        .expect_err("full live replay cache must fail closed");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::ReplayCacheFull
+        );
+        assert_eq!(capacity_backend_calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
+    fn inbound_receiver_rejects_framing_before_replay_consumption_or_dispatch() {
+        let now = 1_700_000_000;
+        let body = b"canonical-head";
+        let request = canonical_test_request(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            &[
+                ("accept-encoding", "identity"),
+                ("content-type", "application/vnd.iroha.norito"),
+                ("if-match", "\"v7\""),
+            ],
+            body,
+        );
+        let envelope = signed_test_request_auth_envelope(
+            TEST_HEAD_AUTH_HANDLE,
+            &request,
+            now,
+            now + 15,
+            [0x76; 32],
+        );
+        let mut ambiguous_headers = request_auth_header_fields(&envelope);
+        ambiguous_headers.push(("transfer-encoding".to_owned(), b"chunked".to_vec()));
+        let policy = GovernanceDagRequestAuthenticationPolicyV1::try_new(
+            test_request_auth_public_key(TEST_HEAD_AUTH_HANDLE),
+            30,
+            5,
+        )
+        .expect("valid signed-head receiver policy");
+        let mut replay_cache = GovernanceDagRequestAuthenticationReplayCacheV1::new();
+        let backend_calls = AtomicU64::new(0);
+        let error = verify_request_before_test_backend(
+            &request,
+            &ambiguous_headers,
+            body,
+            GovernanceDagAuthenticationScope::SignedHead,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect_err("ambiguous framing must stop before verification and dispatch");
+        assert_eq!(
+            error,
+            GovernanceDagRequestAuthenticationErrorV1::InvalidFraming
+        );
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 0);
+
+        verify_request_before_test_backend(
+            &request,
+            &request_auth_header_fields(&envelope),
+            body,
+            GovernanceDagAuthenticationScope::SignedHead,
+            &policy,
+            now,
+            &mut replay_cache,
+            &backend_calls,
+        )
+        .expect("same nonce remains usable after pre-verification framing rejection");
+        assert_eq!(backend_calls.load(AtomicOrdering::SeqCst), 1);
+    }
+
+    #[test]
     fn canonical_request_hard_cut_rejects_credentials_aliases_and_bounds() {
         assert!(
             GovernanceDagCanonicalRequestHeaderV1::try_new(
@@ -9311,6 +9739,118 @@ enabled = false
     }
 
     #[test]
+    fn outbound_descriptor_binds_only_selected_public_headers() {
+        let body = b"canonical-body";
+        let baseline_headers = [
+            ("accept-encoding", b"identity".as_slice()),
+            ("content-type", b"application/vnd.iroha.norito".as_slice()),
+        ];
+        let baseline = canonicalize_governance_dag_outbound_http_request_v1(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            baseline_headers,
+            body,
+            1024,
+        )
+        .expect("canonical baseline descriptor");
+        let with_ordinary_headers = [
+            ("accept-encoding", b"identity".as_slice()),
+            ("content-type", b"application/vnd.iroha.norito".as_slice()),
+            ("content-length", b"14".as_slice()),
+            ("cache-control", b"no-cache".as_slice()),
+            ("x-request-id", b"request-7".as_slice()),
+        ];
+        let with_ordinary = canonicalize_governance_dag_outbound_http_request_v1(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            with_ordinary_headers,
+            body,
+            1024,
+        )
+        .expect("ordinary public headers are safely excluded");
+        assert_eq!(with_ordinary, baseline);
+
+        let changed_selected = canonicalize_governance_dag_outbound_http_request_v1(
+            GovernanceDagAuthenticationScope::SignedHead,
+            "PUT",
+            "https://example.invalid/governance/head",
+            [
+                ("accept-encoding", b"gzip".as_slice()),
+                ("content-type", b"application/vnd.iroha.norito".as_slice()),
+                ("content-length", b"14".as_slice()),
+                ("cache-control", b"no-cache".as_slice()),
+                ("x-request-id", b"request-7".as_slice()),
+            ],
+            body,
+            1024,
+        )
+        .expect("alternate selected public header remains canonical");
+        assert_ne!(
+            changed_selected.request_digest(),
+            baseline.request_digest(),
+            "a selected public header must change the signed request digest"
+        );
+    }
+
+    #[test]
+    fn outbound_descriptor_rejects_credentials_auth_prefixes_and_ambiguous_framing() {
+        for forbidden_name in [
+            "authorization",
+            "Proxy-Authorization",
+            "cookie",
+            "x-api-key",
+            "x-auth-token",
+            "x-sorafs-governance-auth-version",
+            "X-Sorafs-Governance-Auth-Extension",
+        ] {
+            let error = canonicalize_governance_dag_outbound_http_request_v1(
+                GovernanceDagAuthenticationScope::Ipfs,
+                "GET",
+                "https://example.invalid/api/v0/cat?arg=cid",
+                [(forbidden_name, b"must-not-pass".as_slice())],
+                b"",
+                1024,
+            )
+            .expect_err("credential and authentication-prefix headers must fail closed");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::ForbiddenHeader,
+                "unexpected rejection for {forbidden_name}"
+            );
+        }
+
+        let framing_cases = [
+            vec![("content-length", b"13".as_slice())],
+            vec![("content-length", b"014".as_slice())],
+            vec![
+                ("content-length", b"14".as_slice()),
+                ("content-length", b"14".as_slice()),
+            ],
+            vec![("content-length", b"14, 14".as_slice())],
+            vec![("Content-Length", b"14".as_slice())],
+            vec![("transfer-encoding", b"chunked".as_slice())],
+            vec![("Transfer-Encoding", b"identity".as_slice())],
+        ];
+        for headers in framing_cases {
+            let error = canonicalize_governance_dag_outbound_http_request_v1(
+                GovernanceDagAuthenticationScope::SignedHead,
+                "PUT",
+                "https://example.invalid/governance/head",
+                headers,
+                b"canonical-body",
+                1024,
+            )
+            .expect_err("ambiguous HTTP framing must fail closed");
+            assert_eq!(
+                error,
+                GovernanceDagRequestAuthenticationErrorV1::InvalidFraming
+            );
+        }
+    }
+
+    #[test]
     fn public_auth_headers_preserve_final_body_and_conditional_headers() {
         let client = Client::builder().no_proxy().build().expect("test client");
         let mut request = client
@@ -9350,16 +9890,7 @@ enabled = false
         );
         assert!(request.headers().get(header::AUTHORIZATION).is_none());
         assert!(request.headers().get(header::COOKIE).is_none());
-        for name in [
-            REQUEST_AUTH_HEADER_VERSION,
-            REQUEST_AUTH_HEADER_SCOPE,
-            REQUEST_AUTH_HEADER_ISSUED_AT,
-            REQUEST_AUTH_HEADER_EXPIRES_AT,
-            REQUEST_AUTH_HEADER_NONCE,
-            REQUEST_AUTH_HEADER_REQUEST_DIGEST,
-            REQUEST_AUTH_HEADER_PUBLIC_KEY,
-            REQUEST_AUTH_HEADER_SIGNATURE,
-        ] {
+        for name in GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1 {
             assert!(
                 request.headers().contains_key(name),
                 "missing fixed public request-auth header {name}"

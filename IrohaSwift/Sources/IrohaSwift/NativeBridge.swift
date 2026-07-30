@@ -732,7 +732,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         defer {
             free(pointer)
         }
-        guard length <= CUnsignedLong(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
+        guard length <= CUnsignedLong(
+            KagemushaRecursiveSpend.artifactMaximumInMemoryArchiveBytes
+        ) else {
             throw NativeBridgeError.kagemushaProve
         }
         return Data(bytes: pointer, count: Int(length))

@@ -65,14 +65,15 @@ use sorafs_node::{
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
     ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
     ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolverErrorV1,
-    ProviderIngestCompletionSignerResolverV1, ProviderIngestCompletionSignerV1,
-    ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedCursorV1,
-    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
-    ProviderIngestIngressDispositionV1, ProviderIngestIngressPrepareErrorV1,
-    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1,
-    ProviderIngestRuntimeV1, ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1,
-    ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
+    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolutionContextV1,
+    ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
+    ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
+    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
+    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
+    ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1, ProviderIngestRuntimeV1,
+    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
+    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1, store::StorageError,
 };
 
@@ -200,11 +201,12 @@ impl ProviderIngestAuthenticatedSourceRuntimeV1
 
 /// Runtime-only governed signer resolver.
 ///
-/// Resolution must validate the requested owner against the governance state
+/// Resolution must validate the requested owner, signer policy, and exact
+/// non-zero assignment revision against immutable governance/assignment state
 /// at the supplied finalized cursor, including current key rotation and
-/// revocation, and the returned signer must repeat that key-validity check
-/// atomically with signing. The returned signer signs only the exact payload
-/// provided by the core runtime.
+/// revocation. It must not infer any of those values from the transaction
+/// payload. The returned signer must repeat the resolved checks atomically with
+/// signing and sign only a payload matching that independently pinned context.
 pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
     /// Stable production identity compared with `iroha_config`.
     fn runtime_handle(&self) -> &str;
@@ -245,11 +247,10 @@ pub trait ProviderIngestGovernedSignerResolverRuntimeV1: Send + Sync + 'static {
         &self,
     ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>;
 
-    /// Resolve one governed signer for the exact owner and finalized cursor.
+    /// Resolve one governed signer for the exact finalized authorization.
     fn resolve(
         &self,
-        provider_owner: AccountId,
-        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        context: ProviderIngestCompletionSignerResolutionContextV1,
     ) -> ProviderIngestFutureV1<
         '_,
         std::result::Result<
@@ -338,8 +339,42 @@ struct GovernedCompletionSignerV1 {
     signer: Arc<dyn ProviderIngestCompletionSignerV1>,
     owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
     provider_id: ProviderId,
-    expected_owner: AccountId,
+    expected_context: ProviderIngestCompletionSignerResolutionContextV1,
     expected_binding: ProviderIngestCompletionSignerBindingV1,
+}
+
+fn completion_payload_matches_resolution_context(
+    payload: &TransactionPayload,
+    context: &ProviderIngestCompletionSignerResolutionContextV1,
+) -> bool {
+    if !context.is_valid() || payload.authority() != &context.provider_owner {
+        return false;
+    }
+    let iroha_data_model::transaction::Executable::Instructions(instructions) =
+        payload.instructions()
+    else {
+        return false;
+    };
+    if instructions.len() != 1 {
+        return false;
+    }
+    let Some(completion) = instructions[0]
+        .as_any()
+        .downcast_ref::<CompleteReplicationOrder>()
+    else {
+        return false;
+    };
+    let authority = completion.expected_authority();
+    let anchor = completion.finalized_anchor();
+    completion.order_id().as_bytes() != &[0; 32]
+        && completion.provider_id().as_bytes() != &[0; 32]
+        && *completion.completion_epoch() != 0
+        && *completion.expected_assignment_revision() == context.expected_assignment_revision
+        && authority.is_valid()
+        && authority.provider_owner == context.provider_owner
+        && authority.signer_policy == context.signer_policy
+        && anchor.height == context.finalized_cursor.height
+        && anchor.block_hash == context.finalized_cursor.block_hash
 }
 
 impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
@@ -362,7 +397,7 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
             || self.signer.runtime_handle() != self.expected_binding.runtime_handle.as_str()
             || qualification != self.expected_binding.qualification
             || qualification.validate().is_err()
-            || !qualification.matches_authority(&self.expected_owner)
+            || !qualification.matches_authority(&self.expected_context.provider_owner)
         {
             return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
         }
@@ -383,10 +418,11 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         let current_policy = self.signer.current_eligibility()?;
         if !self
             .owner_authority
-            .owner_matches(self.provider_id, &self.expected_owner)
-            || self.signer.authority() != &self.expected_owner
+            .owner_matches(self.provider_id, &self.expected_context.provider_owner)
+            || self.signer.authority() != &self.expected_context.provider_owner
             || self.signer.signer_policy() != current_policy
             || current_policy != qualification.signer_policy
+            || current_policy != self.expected_context.signer_policy
             || !current_policy.is_valid()
         {
             return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
@@ -402,9 +438,21 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
     > {
         Box::pin(async move {
+            if !completion_payload_matches_resolution_context(&payload, &self.expected_context) {
+                return Err(ProviderIngestCompletionSignerErrorV1::Rejected);
+            }
             self.current_eligibility()?;
+            let expected_payload = payload.clone();
             let transaction = self.signer.sign(payload).await?;
             self.current_eligibility()?;
+            if transaction.payload() != &expected_payload
+                || !completion_payload_matches_resolution_context(
+                    transaction.payload(),
+                    &self.expected_context,
+                )
+            {
+                return Err(ProviderIngestCompletionSignerErrorV1::Rejected);
+            }
             Ok(transaction)
         })
     }
@@ -452,13 +500,17 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
 
     fn resolve(
         &self,
-        provider_owner: AccountId,
-        finalized_cursor: ProviderIngestFinalizedCursorV1,
+        context: ProviderIngestCompletionSignerResolutionContextV1,
     ) -> ProviderIngestFutureV1<
         '_,
         std::result::Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
     > {
         Box::pin(async move {
+            if !context.is_valid()
+                || context.signer_policy != self.expected_signer_binding.qualification.signer_policy
+            {
+                return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+            }
             validate_resolver_qualification(
                 self.resolver.as_ref(),
                 self.expected_resolver_qualification,
@@ -469,15 +521,12 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
             )?;
             if !self
                 .owner_authority
-                .owner_matches(self.provider_id, &provider_owner)
+                .owner_matches(self.provider_id, &context.provider_owner)
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
             }
-            let expected_owner = provider_owner.clone();
-            let signer = self
-                .resolver
-                .resolve(provider_owner, finalized_cursor)
-                .await;
+            let expected_context = context.clone();
+            let signer = self.resolver.resolve(context).await;
             validate_resolver_qualification(
                 self.resolver.as_ref(),
                 self.expected_resolver_qualification,
@@ -510,17 +559,18 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
             };
             if !self
                 .owner_authority
-                .owner_matches(self.provider_id, &expected_owner)
+                .owner_matches(self.provider_id, &expected_context.provider_owner)
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
             }
-            if signer.authority() != &expected_owner
+            if signer.authority() != &expected_context.provider_owner
                 || signer.signer_policy() != expected_policy
                 || !expected_policy.is_valid()
+                || expected_policy != expected_context.signer_policy
                 || signer.runtime_handle() != self.expected_signer_binding.runtime_handle.as_str()
                 || signer_qualification != self.expected_signer_binding.qualification
                 || signer_qualification.validate().is_err()
-                || !signer_qualification.matches_authority(&expected_owner)
+                || !signer_qualification.matches_authority(&expected_context.provider_owner)
                 || expected_policy != signer_qualification.signer_policy
             {
                 return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
@@ -529,7 +579,7 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
                 signer,
                 owner_authority: Arc::clone(&self.owner_authority),
                 provider_id: self.provider_id,
-                expected_owner,
+                expected_context,
                 expected_binding: self.expected_signer_binding.clone(),
             }))
         })
@@ -622,6 +672,8 @@ struct DeadlineBoundedReaderV1 {
     deadline: Instant,
     remaining: u64,
     terminal_state: DeadlineBoundedReaderTerminalStateV1,
+    #[cfg(test)]
+    clock: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -640,7 +692,36 @@ impl DeadlineBoundedReaderV1 {
                 .unwrap_or_else(Instant::now),
             remaining: expected_bytes,
             terminal_state: DeadlineBoundedReaderTerminalStateV1::Pending,
+            #[cfg(test)]
+            clock: Arc::new(Instant::now),
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_clock(
+        inner: Box<dyn Read + Send>,
+        timeout: Duration,
+        expected_bytes: u64,
+        clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        let started_at = clock();
+        Self {
+            inner,
+            deadline: started_at.checked_add(timeout).unwrap_or(started_at),
+            remaining: expected_bytes,
+            terminal_state: DeadlineBoundedReaderTerminalStateV1::Pending,
+            clock,
+        }
+    }
+
+    #[cfg(not(test))]
+    fn current_time(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[cfg(test)]
+    fn current_time(&self) -> Instant {
+        (self.clock)()
     }
 
     fn failure(&mut self, kind: io::ErrorKind, message: &'static str) -> io::Error {
@@ -654,7 +735,7 @@ impl DeadlineBoundedReaderV1 {
     }
 
     fn require_live_deadline(&mut self) -> io::Result<()> {
-        if Instant::now() >= self.deadline {
+        if self.current_time() >= self.deadline {
             return Err(self.failure(
                 io::ErrorKind::TimedOut,
                 "provider-ingest verified reader exceeded its operation deadline",
@@ -2523,7 +2604,29 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug)]
+    struct TestClockV1 {
+        now: Mutex<Instant>,
+    }
+
+    impl TestClockV1 {
+        fn new() -> Self {
+            Self {
+                now: Mutex::new(Instant::now()),
+            }
+        }
+
+        fn now(&self) -> Instant {
+            *self.now.lock().expect("test clock lock")
+        }
+
+        fn advance(&self, duration: Duration) {
+            let mut now = self.now.lock().expect("test clock lock");
+            *now = now.checked_add(duration).expect("test clock advance");
+        }
+    }
+
+    #[derive(Debug)]
     enum TestTerminalBehaviorV1 {
         Eof,
         Error {
@@ -2531,7 +2634,10 @@ mod tests {
             message: &'static str,
         },
         ExtraByte(u8),
-        DelayedEof(Duration),
+        AdvancingEof {
+            clock: Arc<TestClockV1>,
+            advance: Duration,
+        },
     }
 
     struct TestTerminalReaderV1 {
@@ -2579,17 +2685,17 @@ mod tests {
                 u64::try_from(output.len()).unwrap_or(u64::MAX),
                 Ordering::SeqCst,
             );
-            match self.terminal_behavior {
+            match &self.terminal_behavior {
                 TestTerminalBehaviorV1::Eof => Ok(0),
                 TestTerminalBehaviorV1::Error { kind, message } => {
-                    Err(io::Error::new(kind, message))
+                    Err(io::Error::new(*kind, *message))
                 }
                 TestTerminalBehaviorV1::ExtraByte(byte) => {
-                    output[0] = byte;
+                    output[0] = *byte;
                     Ok(1)
                 }
-                TestTerminalBehaviorV1::DelayedEof(delay) => {
-                    std::thread::sleep(delay);
+                TestTerminalBehaviorV1::AdvancingEof { clock, advance } => {
+                    clock.advance(*advance);
                     Ok(0)
                 }
             }
@@ -2632,6 +2738,7 @@ mod tests {
         qualification_revision: AtomicU64,
         owner_authority: TestOwnerAuthorityV1,
         mutation: Mutex<Option<TestSignerMutationV1>>,
+        sign_calls: AtomicU64,
     }
 
     impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
@@ -2683,6 +2790,7 @@ mod tests {
             std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
         > {
             Box::pin(async move {
+                self.sign_calls.fetch_add(1, Ordering::SeqCst);
                 let transaction = TransactionBuilder::from_payload(payload)
                     .and_then(|builder| builder.try_sign(self.key.private_key()))
                     .map_err(|_| ProviderIngestCompletionSignerErrorV1::Rejected)?;
@@ -2710,6 +2818,7 @@ mod tests {
         qualification_after_readiness: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
         qualification_after_resolve: Mutex<Option<ProviderIngestRuntimeProviderQualificationV1>>,
         readiness: Mutex<std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1>>,
+        last_resolution_context: Mutex<Option<ProviderIngestCompletionSignerResolutionContextV1>>,
     }
 
     impl TestGovernedSignerResolverV1 {
@@ -2722,6 +2831,7 @@ mod tests {
                 qualification_after_readiness: Mutex::new(None),
                 qualification_after_resolve: Mutex::new(None),
                 readiness: Mutex::new(Ok(())),
+                last_resolution_context: Mutex::new(None),
             }
         }
     }
@@ -2782,8 +2892,7 @@ mod tests {
 
         fn resolve(
             &self,
-            _provider_owner: AccountId,
-            _finalized_cursor: ProviderIngestFinalizedCursorV1,
+            context: ProviderIngestCompletionSignerResolutionContextV1,
         ) -> ProviderIngestFutureV1<
             '_,
             std::result::Result<
@@ -2791,6 +2900,10 @@ mod tests {
                 ProviderIngestCompletionSignerResolverErrorV1,
             >,
         > {
+            *self
+                .last_resolution_context
+                .lock()
+                .expect("resolver context lock") = Some(context);
             let signer = Arc::clone(&self.signer);
             if let Some(qualification) = self
                 .qualification_after_resolve
@@ -2821,6 +2934,7 @@ mod tests {
         key: &KeyPair,
         provider_id: ProviderId,
         completion_epoch: u64,
+        expected_assignment_revision: u64,
     ) -> TransactionPayload {
         let provider_owner = AccountId::new(key.public_key().clone());
         let signer_policy = test_signer_policy(1);
@@ -2838,7 +2952,7 @@ mod tests {
                     provider_owner,
                     signer_policy,
                 ),
-            expected_assignment_revision: 1,
+            expected_assignment_revision,
             finalized_anchor: ProviderIngestFinalizedAnchorV1 {
                 height: completion_epoch,
                 block_hash: [0xB2; 32],
@@ -2861,7 +2975,7 @@ mod tests {
         );
         let key =
             KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("derive signer key");
-        let payload = test_completion_payload(&key, ProviderId::new([0x41; 32]), 8);
+        let payload = test_completion_payload(&key, ProviderId::new([0x41; 32]), 8, 1);
         let payload_bytes =
             norito::to_bytes(&payload).expect("encode canonical completion payload");
         let decoded_payload = norito::decode_from_bytes::<TransactionPayload>(&payload_bytes)
@@ -2926,7 +3040,7 @@ mod tests {
         let authority = AccountId::new(key.public_key().clone());
         let owner_authority = TestOwnerAuthorityV1::new(authority.clone());
         let provider_id = ProviderId::new([0x41; 32]);
-        let payload = test_completion_payload(&key, provider_id, 8);
+        let payload = test_completion_payload(&key, provider_id, 8, 1);
         let signer = Arc::new(TestGovernedCompletionSignerV1 {
             key,
             authority,
@@ -2934,6 +3048,7 @@ mod tests {
             qualification_revision: AtomicU64::new(1),
             owner_authority: owner_authority.clone(),
             mutation: Mutex::new(mutation),
+            sign_calls: AtomicU64::new(0),
         });
         (signer, owner_authority, provider_id, payload)
     }
@@ -2976,8 +3091,19 @@ mod tests {
     fn signer_test_cursor() -> ProviderIngestFinalizedCursorV1 {
         ProviderIngestFinalizedCursorV1 {
             height: 8,
-            block_hash: [0x48; 32],
+            block_hash: [0xB2; 32],
         }
+    }
+
+    fn signer_resolution_context(
+        provider_owner: AccountId,
+    ) -> ProviderIngestCompletionSignerResolutionContextV1 {
+        ProviderIngestCompletionSignerResolutionContextV1::new(
+            provider_owner,
+            test_signer_policy(1),
+            1,
+            signer_test_cursor(),
+        )
     }
 
     #[test]
@@ -3029,6 +3155,7 @@ mod tests {
         );
         let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
         let resolver = Arc::new(TestGovernedSignerResolverV1::new(signer));
+        let observed_resolver = Arc::clone(&resolver);
         *resolver
             .qualification_after_resolve
             .lock()
@@ -3046,10 +3173,18 @@ mod tests {
             expected_signer_binding,
         };
 
+        let expected_context = signer_resolution_context(provider_owner);
         assert!(matches!(
-            adapter.resolve(provider_owner, signer_test_cursor()).await,
+            adapter.resolve(expected_context.clone()).await,
             Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
         ));
+        assert_eq!(
+            *observed_resolver
+                .last_resolution_context
+                .lock()
+                .expect("resolver context lock"),
+            Some(expected_context)
+        );
     }
 
     #[tokio::test]
@@ -3067,9 +3202,42 @@ mod tests {
         let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
 
         assert!(matches!(
-            adapter.resolve(provider_owner, signer_test_cursor()).await,
+            adapter
+                .resolve(signer_resolution_context(provider_owner))
+                .await,
             Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
         ));
+    }
+
+    #[tokio::test]
+    async fn governed_signer_pins_assignment_revision_before_hsm_signing() {
+        let (signer, owner_authority, provider_id, exact_payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
+        let governed = adapter
+            .resolve(signer_resolution_context(provider_owner))
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        let signed = governed
+            .sign(exact_payload.clone())
+            .await
+            .expect("sign exact assignment revision");
+        assert_eq!(signed.payload(), &exact_payload);
+        assert_eq!(signer.sign_calls.load(Ordering::SeqCst), 1);
+
+        let substituted_payload = test_completion_payload(&signer.key, provider_id, 8, 2);
+        assert_eq!(
+            governed.sign(substituted_payload).await,
+            Err(ProviderIngestCompletionSignerErrorV1::Rejected)
+        );
+        assert_eq!(
+            signer.sign_calls.load(Ordering::SeqCst),
+            1,
+            "substituted assignment revision must not reach the HSM signer"
+        );
     }
 
     #[tokio::test]
@@ -3081,7 +3249,7 @@ mod tests {
         let provider_owner = signer.authority().clone();
         let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
         let governed = adapter
-            .resolve(provider_owner, signer_test_cursor())
+            .resolve(signer_resolution_context(provider_owner))
             .await
             .expect("resolve governed signer")
             .expect("governed signer");
@@ -3101,7 +3269,7 @@ mod tests {
         let provider_owner = signer.authority().clone();
         let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
         let governed = adapter
-            .resolve(provider_owner, signer_test_cursor())
+            .resolve(signer_resolution_context(provider_owner))
             .await
             .expect("resolve governed signer")
             .expect("governed signer");
@@ -3119,7 +3287,7 @@ mod tests {
         let provider_owner = signer.authority().clone();
         let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
         let governed = adapter
-            .resolve(provider_owner, signer_test_cursor())
+            .resolve(signer_resolution_context(provider_owner))
             .await
             .expect("resolve governed signer")
             .expect("governed signer");
@@ -3144,7 +3312,7 @@ mod tests {
         let adapter =
             governed_signer_adapter(Arc::clone(&signer), owner_authority.clone(), provider_id);
         let governed = adapter
-            .resolve(provider_owner, signer_test_cursor())
+            .resolve(signer_resolution_context(provider_owner))
             .await
             .expect("resolve governed signer")
             .expect("governed signer");
@@ -3169,7 +3337,7 @@ mod tests {
         let provider_owner = signer.authority().clone();
         let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
         let governed = adapter
-            .resolve(provider_owner, signer_test_cursor())
+            .resolve(signer_resolution_context(provider_owner))
             .await
             .expect("resolve governed signer")
             .expect("governed signer");
@@ -3722,19 +3890,25 @@ mod tests {
     fn deadline_bounded_reader_checks_deadline_after_terminal_probe() {
         let payload = b"exact bytes".to_vec();
         let expected_len = u64::try_from(payload.len()).expect("payload length fits u64");
+        let clock = Arc::new(TestClockV1::new());
         let (inner, terminal_probe_count, terminal_probe_width) = TestTerminalReaderV1::new(
             payload.clone(),
-            TestTerminalBehaviorV1::DelayedEof(Duration::from_millis(10)),
+            TestTerminalBehaviorV1::AdvancingEof {
+                clock: Arc::clone(&clock),
+                advance: Duration::from_secs(2),
+            },
         );
-        let mut reader =
-            DeadlineBoundedReaderV1::new(Box::new(inner), Duration::from_secs(1), expected_len);
+        let reader_clock = Arc::clone(&clock);
+        let mut reader = DeadlineBoundedReaderV1::new_with_clock(
+            Box::new(inner),
+            Duration::from_secs(1),
+            expected_len,
+            Arc::new(move || reader_clock.now()),
+        );
         let mut observed = vec![0_u8; payload.len()];
         reader
             .read_exact(&mut observed)
             .expect("read exact authorized bytes before deadline");
-        reader.deadline = Instant::now()
-            .checked_add(Duration::from_millis(1))
-            .expect("terminal deadline");
 
         let mut trailing = [0_u8; 8];
         assert_eq!(
@@ -3746,6 +3920,18 @@ mod tests {
         );
         assert_eq!(terminal_probe_count.load(Ordering::SeqCst), 1);
         assert_eq!(terminal_probe_width.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            reader
+                .read(&mut trailing)
+                .expect_err("post-probe deadline failure is sticky")
+                .kind(),
+            io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            terminal_probe_count.load(Ordering::SeqCst),
+            1,
+            "sticky timeout must not re-enter the underlying transport"
+        );
     }
 
     #[test]

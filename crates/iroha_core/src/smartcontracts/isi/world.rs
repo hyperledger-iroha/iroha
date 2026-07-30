@@ -36393,7 +36393,7 @@ seiyaku GovernanceLifecycle {
                 0,
                 0,
             );
-            let mut state_block = state.block(&header);
+            let mut state_block = state.block(header);
             let mut stx = state_block.transaction();
             let request = |sequence, predecessor, height, hash| {
                 ReputationFinalizedArchiveRetentionRequestV1::try_new(

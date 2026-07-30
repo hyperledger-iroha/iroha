@@ -57,7 +57,11 @@ pub mod kagemusha_artifact_v4;
 /// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_cycle_loader;
+/// Dense normalized-GLV MSM used by the reciprocal Kagemusha point audit.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_dense_msm;
 /// Offline-verifiable consensus finality for Kagemusha top-up anchors.
+#[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_finality;
 /// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
 #[cfg(feature = "zk-halo2-ipa")]
@@ -6175,10 +6179,8 @@ mod stark_backend_tag_tests {
         halo2_open_verify_circuit_id_is_halo2_family, halo2_open_verify_circuit_id_matches_backend,
         is_developer_only_backend_label, is_ivm_execution_backend,
         is_production_claim_backend_label, is_production_verify_backend_label,
-        is_stark_fri_v1_backend, is_trusted_setup_backend_label,
-        is_verifier_backend_registry_label_v1, is_verifier_readiness_claim_label,
-        production_verify_backend_tag, stark_open_verify_circuit_id_matches_backend,
-        verifier_backend_registry_tag_v1, verify_backend,
+        is_stark_fri_v1_backend, is_trusted_setup_backend_label, production_verify_backend_tag,
+        stark_open_verify_circuit_id_matches_backend, verify_backend,
     };
     use iroha_data_model::privacy::{PRIVACY_RETIRED_PROTOCOL_LABELS_V1, PrivacyProtocolIdV1};
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};

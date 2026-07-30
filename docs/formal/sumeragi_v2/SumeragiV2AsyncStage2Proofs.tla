@@ -490,8 +490,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
        TimeoutSigningRequiresIntent, VoteRoundAdmissible,
        LockedPrepareRound, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork, LocalAdmissionStep, AdmitProducerCompletion,
-       AdmitCausalHead, IngressDrainStep, SerializedRuntimeStep,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       AdmitProducerCompletion, AdmitCausalHead, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        DeferredTagStep, DirectTimeoutStep, DirectRetransmitStep,
        IdleRuntimeStep, RemoveNextNodeCommand,
@@ -820,8 +824,12 @@ BY BusyPhaseOwnerPartitionObligation,
        CausalCandidates, TrackedWorkCandidates,
        CandidateConsumerCurrent, CommandDispatchable,
        CommandExecutionReady, RunNode, RunNodeWork,
-       LocalAdmissionStep, AdmitProducerCompletion,
-       AdmitCausalHead, IngressDrainStep, SerializedRuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       AdmitProducerCompletion, AdmitCausalHead, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        DeferredTagStep, DirectTimeoutStep, DirectRetransmitStep,
        IdleRuntimeStep, RemoveNextNodeCommand,
@@ -907,8 +915,11 @@ BY BusyPhaseOwnerPartitionObligation,
        SerializedBusyOwnershipInvariant, RequestsUniqueByNode,
        RequestNodeSet, NodeIdle, PendingNodes, SigningNodes,
        AllPendingRequests, RunNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep, ExecuteCommand,
        ExecuteRegularCommand, ExecuteSignProposal, ExecuteSignVote,
@@ -1399,7 +1410,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        RemoveNextDeferredCommand, AdvanceNextDeferredClass,
        InstallDeferredHandoff, RetainDeferredHandoffs,
        ClearDeferredHandoff, FifoRuntimeStep, DeferCommand,
-       DiscardCommand, RuntimeStep, SerializedRuntimeStep,
+       DiscardCommand, RuntimeStep, SerializedRunnerRuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RunNode, RunNodeWork, AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep, AsyncAllVars
 
@@ -1492,6 +1508,7 @@ PROOF
          ReadyRunAuxOrderingIsWellFounded,
          ProtectedOwnedCandidateEnablesFairRunNode,
          LocalAdmissionStrictlyDecreasesRuntimeReach,
+         SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
          IngressDrainStrictlyDecreasesRuntimeReach,
          IsaT(180), PTL
          DEF Goal, Stage2IdleHandoffAwaitingRearm,
@@ -1510,8 +1527,12 @@ PROOF
              ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunNode, RunNode, RunNodeWork,
-             LocalAdmissionStep, IngressDrainStep,
-             SerializedRuntimeStep, RuntimeStep, DirectTimeoutStep,
+             LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+             SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn,
+             RuntimeStep, DirectTimeoutStep,
              DirectRetransmitStep, DeferredTagStep,
              DeferredTimeoutStep, DeferredRetransmitStep,
              FifoRuntimeStep, IdleRuntimeStep, AsyncTick,
@@ -1579,6 +1600,7 @@ PROOF
          ReadyRunAuxOrderingIsWellFounded,
          ProtectedOwnedCandidateEnablesFairRunNode,
          LocalAdmissionStrictlyDecreasesRuntimeReach,
+         SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
          IngressDrainStrictlyDecreasesRuntimeReach,
          HeadTailProperties, IsaT(180), PTL
          DEF Stage2IdleHandoffCursorProgress,
@@ -1601,8 +1623,11 @@ PROOF
              ReadyDeferredCount, ReadyTimeoutDebt,
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunNode, RunNode, RunNodeWork,
-             LocalAdmissionStep, IngressDrainStep,
-             SerializedRuntimeStep, RuntimeStep,
+             LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+             SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn, RuntimeStep,
              DeferredDrainStep, RemoveNextDeferredCommand,
              AdvanceNextDeferredClass, DeferredHandoffQueueHead,
              DeferredHandoffMatches,
@@ -1744,6 +1769,7 @@ PROOF
          ReadyRunAuxOrderingIsWellFounded,
          ProtectedOwnedCandidateEnablesFairRunNode,
          LocalAdmissionStrictlyDecreasesRuntimeReach,
+         SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
          IngressDrainStrictlyDecreasesRuntimeReach,
          HeadTailProperties, IsaT(180), PTL
          DEF Stage2HandoffProgressExit,
@@ -1763,8 +1789,11 @@ PROOF
              ReadyDeferredCount, ReadyTimeoutDebt,
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunNode, RunNode, RunNodeWork,
-             LocalAdmissionStep, IngressDrainStep,
-             SerializedRuntimeStep, RuntimeStep,
+             LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+             SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn, RuntimeStep,
              DeferredDrainStep, RemoveNextDeferredCommand,
              AdvanceNextDeferredClass, DeferredHandoffQueueHead,
              DeferredHandoffMatches,
@@ -1932,7 +1961,12 @@ PROOF
              AdvanceNextDeferredClass, NextDeferredCommand,
              SelectedDeferredClass, DeferredClassQueue,
              FifoRuntimeStep, DeferCommand, DiscardCommand,
-             RuntimeStep, SerializedRuntimeStep, RunNode,
+             RuntimeStep, SerializedRunnerRuntimeStep,
+             SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+             SerializedLocalPrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn, RunNode,
              RunNodeWork, AsyncNext, AsyncNonCrashStep,
              AsyncRunnerStep, AsyncNonRunnerStep,
              AsyncProgressOwnershipInvariant,
@@ -2026,6 +2060,7 @@ PROOF
          ReadyRunAuxRankInCarrier,
          ProtectedOwnedCandidateEnablesFairRunNode,
          LocalAdmissionStrictlyDecreasesRuntimeReach,
+         SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
          IngressDrainStrictlyDecreasesRuntimeReach,
          HeadTailProperties, FS_CardinalityType,
          IsaT(300), PTL
@@ -2062,9 +2097,12 @@ PROOF
              ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
              ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
              PostGstRunNode, RunNode, RunNodeWork,
-             LocalAdmissionStep, AdmitProducerCompletion,
-             AdmitCausalHead, IngressDrainStep,
-             SerializedRuntimeStep, RuntimeStep,
+             LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+             SerializedLocalPrecedesServeIngressStep,
+             AdmitProducerCompletion, AdmitCausalHead, IngressDrainStep,
+             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn, RuntimeStep,
              DeferredDrainStep, DeferredTagStep,
              DirectTimeoutStep, DirectRetransmitStep,
              FifoRuntimeStep, IdleRuntimeStep,
@@ -2141,7 +2179,12 @@ PROOF
              RemoveNextDeferredCommand, ClearDeferredHandoff,
              RetainDeferredHandoffs, DeferredDrainStep,
              FifoRuntimeStep, DeferCommand, DiscardCommand,
-             RuntimeStep, SerializedRuntimeStep, RunNode,
+             RuntimeStep, SerializedRunnerRuntimeStep,
+             SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+             SerializedLocalPrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn, RunNode,
              RunNodeWork, AsyncNext, AsyncNonCrashStep,
              AsyncRunnerStep, AsyncNonRunnerStep, AsyncAllVars
     <2> QED BY <2>5
@@ -2263,25 +2306,38 @@ PROOF
   <1> QED BY <1>1
 
 
+ProtectedServiceFiniteRunnerEpisodeClosureProperty(specification) ==
+  /\ Stage3FiniteServeEpisodeResidualProperty(specification)
+  /\ Stage6FiniteRunnerEpisodeClosureProperty(specification)
+
 THEOREM ProtectedServiceRankProgressObligation ==
   \A initialContext:
-    ProtectedServiceRanksProgressProperty(AsyncSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ProtectedServiceRanksProgressProperty(
+           AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ProtectedServiceRanksProgressProperty(
                  AsyncSpecAt(initialContext))
     <2>1. ProtectedStage3RankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedStage3RankProgressFromFairSchedulerObligation
+         DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty
     <2>2. ProtectedStage4RankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedStage4RankProgressFromFairScheduler
+         DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty,
+             Stage6FiniteRunnerEpisodeClosureProperty
     <2>3. ProtectedStage5RankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedStage5RankProgressFromFairFifo
     <2>4. ProtectedStage6RankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedStage6RankProgressFromFairCausalAdmissionObligation
+         DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty
     <2>5. ProtectedServeRankProgressProperty(
              AsyncSpecAt(initialContext))
       BY ProtectedServeRankProgressFromFairFifo

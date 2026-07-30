@@ -1757,6 +1757,8 @@ impl PreparedOperation {
             || transaction.verify_signature().is_err()
             || transaction.chain() != expected_chain_id
             || transaction.authority() != expected_authority
+            || transaction.attachments().is_some()
+            || transaction.multisig_signatures().is_some()
         {
             return Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction);
         }
@@ -2813,7 +2815,8 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         asset::AssetDefinitionId,
-        transaction::{FeePaymentIntent, TransactionBuilder},
+        proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+        transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
     use tempfile::TempDir;
 
@@ -3233,6 +3236,69 @@ mod tests {
         assert_ne!(
             forwarder
                 .store_signed_transaction(operation_id, &valid)
+                .unwrap(),
+            [0; 32]
+        );
+    }
+
+    #[test]
+    fn signed_envelope_rejects_proof_and_even_empty_multisig_sidecars() {
+        let forwarder = AppealFinanceTransactionForwarder::in_memory(policy()).unwrap();
+        let context = drawdown_context();
+        let signer = key(4);
+        let authority = AccountId::new(signer.public_key().clone());
+        let operation_id = forwarder
+            .enqueue_unsigned_operation(authority.clone(), drawdown_operation(), &context)
+            .unwrap()
+            .operation_id();
+        forwarder
+            .claim_for_signing(operation_id, cursor(7, 7))
+            .unwrap();
+
+        let transaction_builder = || {
+            TransactionBuilder::new(
+                ChainId::from("appeal-finance-forwarder-test"),
+                authority.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([InstructionBox::from(drawdown_operation())])
+        };
+        let attachments = ProofAttachmentList(vec![ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
+            VerifyingKeyId::new("halo2/ipa", "appeal-sidecar-vk"),
+        )]);
+        let attached = transaction_builder()
+            .with_attachments(attachments)
+            .try_sign(signer.private_key())
+            .unwrap();
+        assert!(attached.verify_signature().is_ok());
+        assert!(matches!(
+            forwarder.store_signed_transaction(operation_id, &norito::to_bytes(&attached).unwrap()),
+            Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
+        ));
+
+        let mut empty_multisig = transaction_builder()
+            .try_sign(signer.private_key())
+            .unwrap();
+        empty_multisig.set_multisig_signatures(MultisigSignatures::new(Vec::new()));
+        assert!(empty_multisig.verify_signature().is_ok());
+        assert!(matches!(
+            forwarder.store_signed_transaction(
+                operation_id,
+                &norito::to_bytes(&empty_multisig).unwrap()
+            ),
+            Err(AppealFinanceTransactionForwarderError::InvalidSignedTransaction)
+        ));
+
+        let exact = transaction_builder()
+            .try_sign(signer.private_key())
+            .unwrap();
+        assert!(exact.attachments().is_none());
+        assert!(exact.multisig_signatures().is_none());
+        assert_ne!(
+            forwarder
+                .store_signed_transaction(operation_id, &norito::to_bytes(&exact).unwrap())
                 .unwrap(),
             [0; 32]
         );

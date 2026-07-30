@@ -4060,8 +4060,11 @@ impl FairV2Ingress {
     /// only one round-robin turn. This lets a proposal, certificate, body
     /// response, or payload chunk bypass an auxiliary request waiting for I/O
     /// capacity without dropping or duplicating that request. If a
-    /// certified-body request is queued, entries newer than the earliest such
-    /// request are excluded before the downstream predicate runs. Once the
+    /// active-height certified-body request is queued, entries newer than the
+    /// earliest reservation-bearing request are excluded before the downstream
+    /// predicate runs. Historical requests do not own the active-height Serve
+    /// gate and therefore cannot hide its exact target behind this cutoff.
+    /// Ungated test queues retain the legacy all-request cutoff. Once the
     /// blocked entry becomes admissible, the head-first search selects it
     /// before later entries. When every entry is rejected, one complete source
     /// rotation restores the original source order and total length.
@@ -4088,7 +4091,11 @@ impl FairV2Ingress {
             .lanes
             .values()
             .flat_map(|lane| lane.entries.iter())
-            .filter(|entry| fair_v2_ingress_is_certified_body_request(&entry.inbound))
+            .filter(|entry| {
+                fair_v2_ingress_is_certified_body_request(&entry.inbound)
+                    && (!state.requires_certified_serve_gate
+                        || entry.certified_serve_reservation.is_some())
+            })
             .map(|entry| entry.admission_ordinal)
             .min();
         let ready_sources = state.ready.len();
@@ -4871,6 +4878,18 @@ mod worker_launch_tests {
         Err(std::io::Error::other("injected synchronous spawn failure"))
     }
 
+    static RESTART_ISOLATION_SPAWN_CALLED: AtomicBool = AtomicBool::new(false);
+
+    fn record_restart_isolation_spawn(
+        _builder: std::thread::Builder,
+        _work: SumeragiThreadWork,
+    ) -> std::io::Result<SumeragiThreadCompletion> {
+        RESTART_ISOLATION_SPAWN_CALLED.store(true, Ordering::Release);
+        Err(std::io::Error::other(
+            "restart isolation must reject before spawning",
+        ))
+    }
+
     #[test]
     fn synchronous_spawn_failure_precedes_queue_wake_publication() {
         let output_guard = ConsensusOutputGuard::isolated();
@@ -4888,6 +4907,36 @@ mod worker_launch_tests {
         assert!(!wake_published.load(Ordering::Acquire));
         assert!(output_guard.restart_required());
         assert!(output_guard.acquire().is_none());
+    }
+
+    #[test]
+    fn restart_required_relaunch_is_rejected_before_any_publication() {
+        let output_guard = ConsensusOutputGuard::isolated();
+        output_guard.activate_restart_required();
+        RESTART_ISOLATION_SPAWN_CALLED.store(false, Ordering::Release);
+
+        let work_called = Arc::new(AtomicBool::new(false));
+        let work_observer = Arc::clone(&work_called);
+        let wake_published = Arc::new(AtomicBool::new(false));
+        let wake_observer = Arc::clone(&wake_published);
+
+        let error = launch_sumeragi_thread(
+            output_guard.as_ref(),
+            Box::new(move || work_observer.store(true, Ordering::Release)),
+            move || wake_observer.store(true, Ordering::Release),
+            record_restart_isolation_spawn,
+        )
+        .expect_err("a poisoned process must not host a fresh generation-zero worker");
+
+        assert!(
+            error
+                .to_string()
+                .contains("requires restart before another worker can start")
+        );
+        assert!(!RESTART_ISOLATION_SPAWN_CALLED.load(Ordering::Acquire));
+        assert!(!work_called.load(Ordering::Acquire));
+        assert!(!wake_published.load(Ordering::Acquire));
+        assert!(output_guard.restart_required());
     }
 
     #[test]

@@ -149,6 +149,13 @@ impl Round {
 pub struct Generation(u64);
 
 impl Generation {
+    /// Initial generation for a fresh process/view ownership episode.
+    ///
+    /// The view in [`EventTag`] separates ordinary timeout-certificate view
+    /// changes.  Only a strict lock upgrade for the already-installed timeout
+    /// round increments this local counter.
+    pub(crate) const INITIAL: Self = Self(0);
+
     /// Constructs a generation.
     #[must_use]
     pub const fn new(value: u64) -> Self {
@@ -203,18 +210,20 @@ impl EventTag {
         self.generation
     }
 
-    /// Whether this tag is a strictly later local incarnation at a
-    /// non-regressing view of the same height.
+    /// Whether this tag is a strictly later local incarnation at the same
+    /// height.
     ///
     /// A second timeout certificate for the same timed-out round may install
     /// a strictly higher PrepareQC without changing the resulting view.  The
     /// generation therefore participates in lifecycle ownership independently
-    /// of the view number.
+    /// when the view is unchanged.  An ordinary view advance starts a fresh
+    /// generation-zero episode; the `(view, generation)` pair is ordered
+    /// lexicographically so that reset cannot alias prior-view work.
     #[must_use]
     pub(crate) const fn strictly_advances(self, previous: Self) -> bool {
         self.height == previous.height
-            && self.view >= previous.view
-            && self.generation.0 > previous.generation.0
+            && (self.view > previous.view
+                || (self.view == previous.view && self.generation.0 > previous.generation.0))
     }
 }
 
@@ -1351,4 +1360,26 @@ pub enum ConsensusMessageV2 {
     BodyRequest(Subject),
     /// One body chunk returned by the transport adapter.
     BodyChunk(PayloadChunk),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EventTag, Generation};
+
+    #[test]
+    fn event_tag_advance_is_lexicographic_within_one_height() {
+        let previous = EventTag::new(7, 3, Generation::new(u64::MAX));
+        let later_view = EventTag::new(7, 4, Generation::INITIAL);
+        assert!(later_view.strictly_advances(previous));
+
+        let same_view_previous = EventTag::new(7, 4, Generation::new(8));
+        let same_view_upgrade = EventTag::new(7, 4, Generation::new(9));
+        assert!(same_view_upgrade.strictly_advances(same_view_previous));
+
+        assert!(!same_view_previous.strictly_advances(same_view_previous));
+        assert!(
+            !EventTag::new(7, 3, Generation::new(u64::MAX)).strictly_advances(same_view_previous)
+        );
+        assert!(!EventTag::new(8, 5, Generation::new(10)).strictly_advances(same_view_previous));
+    }
 }

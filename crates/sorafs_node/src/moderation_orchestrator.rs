@@ -5737,56 +5737,18 @@ fn ensure_dead_letter_capacity(
 }
 
 fn make_panel_notification_capacity(
-    state: &mut ModerationOrchestratorCheckpointV1,
+    state: &ModerationOrchestratorCheckpointV1,
     additional: usize,
     limit: usize,
 ) -> Result<(), ModerationOrchestratorError> {
-    if additional > limit {
+    // TODO: Permit bounded pruning only after an authenticated signed archive
+    // durably installs and reads back every terminal notification receipt.
+    if state.panel_notifications.len().saturating_add(additional) > limit {
         return Err(ModerationOrchestratorError::ResourceExhausted {
             resource: "panel notifications",
             limit,
         });
     }
-    let excess = state
-        .panel_notifications
-        .len()
-        .saturating_add(additional)
-        .saturating_sub(limit);
-    if excess == 0 {
-        return Ok(());
-    }
-    let mut terminal = state
-        .panel_notifications
-        .iter()
-        .filter(|entry| {
-            matches!(
-                entry.state,
-                StoredPanelNotificationStateV1::Delivered
-                    | StoredPanelNotificationStateV1::DeadLetter
-            )
-        })
-        .map(|entry| {
-            (
-                entry.notification.finalized_event_cursor.sequence,
-                entry.notification.notification_id,
-            )
-        })
-        .collect::<Vec<_>>();
-    terminal.sort_unstable();
-    if terminal.len() < excess {
-        return Err(ModerationOrchestratorError::ResourceExhausted {
-            resource: "panel notifications",
-            limit,
-        });
-    }
-    let remove = terminal
-        .into_iter()
-        .take(excess)
-        .map(|(_, notification_id)| notification_id)
-        .collect::<BTreeSet<_>>();
-    state
-        .panel_notifications
-        .retain(|entry| !remove.contains(&entry.notification.notification_id));
     Ok(())
 }
 
@@ -11061,16 +11023,24 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn panel_notification_terminal_compaction_preserves_scan_progress_and_live_work() {
-        let temp = tempfile::tempdir().expect("tempdir");
+    struct SaturatedPanelNotificationFixture {
+        bounds: ModerationOrchestratorConfigV1,
+        governance: AccountId,
+        reader: Arc<MockSnapshotReader>,
+        orchestrator: ModerationOrchestratorV1,
+    }
+
+    fn saturated_delivered_panel_notifications(
+        temp: &TempDir,
+        checkpoint_name: &str,
+    ) -> SaturatedPanelNotificationFixture {
         let governance = account(99);
         let (awaiting, _) = awaiting_acceptance_snapshot(2, [0x29; 32], governance.clone());
         let reader = Arc::new(MockSnapshotReader::new(awaiting));
-        let mut bounds = config(&temp, "panel-compaction.norito");
+        let mut bounds = config(temp, checkpoint_name);
         bounds.max_handoffs = 3;
         let orchestrator = ModerationOrchestratorV1::open(
-            bounds,
+            bounds.clone(),
             deps(
                 Arc::clone(&reader),
                 Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
@@ -11078,26 +11048,12 @@ mod tests {
         )
         .expect("orchestrator");
         orchestrator.reconcile().expect("queue assignments");
-        reader.replace(activated_case_snapshot(3, [0x2A; 32], governance));
-        assert!(matches!(
-            orchestrator.reconcile(),
-            Err(ModerationOrchestratorError::ResourceExhausted {
-                resource: "panel notifications",
-                limit: 3
-            })
-        ));
-        assert_eq!(
-            orchestrator
-                .snapshot()
-                .expect("failed queue preserves prior projection")
-                .finalized_height,
-            2
-        );
 
         let sink = MockPanelNotificationSink::default();
         let assignments = orchestrator
             .claim_panel_notifications([0xA1; 32], 1_000, 3)
             .expect("claim assignments");
+        assert_eq!(assignments.len(), 3);
         for claim in &assignments {
             let receipt = sink.deliver(claim, 1_001);
             orchestrator
@@ -11109,42 +11065,109 @@ mod tests {
                 )
                 .expect("finalize assignment");
         }
-        orchestrator
-            .reconcile()
-            .expect("terminal assignment records compact for activation");
         {
             let state = orchestrator.state.lock().expect("state");
             assert_eq!(state.panel_notifications.len(), 3);
-            assert_eq!(
+            assert!(
                 state
                     .panel_notifications
                     .iter()
-                    .filter(|entry| {
-                        entry.notification.kind
-                            == ModerationPanelNotificationKindV1::BallotActivated
-                    })
-                    .count(),
-                2
-            );
-            assert_eq!(
-                state
-                    .panel_notification_scanned_cursor
-                    .expect("scan cursor")
-                    .sequence,
-                6
+                    .all(|entry| entry.state == StoredPanelNotificationStateV1::Delivered)
             );
         }
-        orchestrator
-            .reconcile()
-            .expect("same finalized event cannot requeue compacted identities");
+
+        SaturatedPanelNotificationFixture {
+            bounds,
+            governance,
+            reader,
+            orchestrator,
+        }
+    }
+
+    #[test]
+    fn panel_notification_capacity_without_signed_archive_is_fail_closed_and_non_mutating() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let SaturatedPanelNotificationFixture {
+            bounds,
+            governance,
+            reader,
+            orchestrator,
+        } = saturated_delivered_panel_notifications(&temp, "panel-capacity-fail-closed.norito");
+        let before_state = orchestrator.state.lock().expect("state").clone();
+        let before_checkpoint =
+            std::fs::read(&bounds.checkpoint_path).expect("read saturated checkpoint");
+
+        reader.replace(activated_case_snapshot(3, [0x2A; 32], governance));
+        assert!(matches!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notifications",
+                limit: 3
+            })
+        ));
+
+        let after_state = orchestrator.state.lock().expect("state").clone();
+        let after_checkpoint =
+            std::fs::read(&bounds.checkpoint_path).expect("read checkpoint after exhaustion");
+        assert_eq!(after_state, before_state);
+        assert_eq!(after_checkpoint, before_checkpoint);
+    }
+
+    #[test]
+    fn panel_notification_capacity_failure_is_restart_stable_and_preserves_terminal_receipts() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let SaturatedPanelNotificationFixture {
+            bounds,
+            governance,
+            reader,
+            orchestrator,
+        } = saturated_delivered_panel_notifications(&temp, "panel-capacity-restart.norito");
+        let expected_state = orchestrator.state.lock().expect("state").clone();
+        let expected_checkpoint =
+            std::fs::read(&bounds.checkpoint_path).expect("read saturated checkpoint");
+
+        reader.replace(activated_case_snapshot(3, [0x2A; 32], governance));
+        assert!(matches!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notifications",
+                limit: 3
+            })
+        ));
+        drop(orchestrator);
+
+        let restarted = ModerationOrchestratorV1::open(
+            bounds.clone(),
+            deps(
+                Arc::clone(&reader),
+                Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown)),
+            ),
+        )
+        .expect("restart from saturated checkpoint");
         assert_eq!(
-            orchestrator
-                .state
-                .lock()
-                .expect("state")
-                .panel_notifications
-                .len(),
-            3
+            restarted.state.lock().expect("restarted state").clone(),
+            expected_state
+        );
+        assert_eq!(
+            std::fs::read(&bounds.checkpoint_path).expect("read restarted checkpoint"),
+            expected_checkpoint
+        );
+
+        assert!(matches!(
+            restarted.reconcile(),
+            Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notifications",
+                limit: 3
+            })
+        ));
+        assert_eq!(
+            restarted.state.lock().expect("restarted state").clone(),
+            expected_state
+        );
+        assert_eq!(
+            std::fs::read(&bounds.checkpoint_path)
+                .expect("read checkpoint after restarted exhaustion"),
+            expected_checkpoint
         );
     }
 

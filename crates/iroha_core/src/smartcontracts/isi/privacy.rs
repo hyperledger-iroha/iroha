@@ -214,7 +214,6 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         | PrivacyVerificationErrorV1::NativeVeRange(_)
         | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
-        | PrivacyVerificationErrorV1::NativeZkAce(_)
         | PrivacyVerificationErrorV1::NativeZkAms(_)
         | PrivacyVerificationErrorV1::NativeZkX509(_)
         | PrivacyVerificationErrorV1::NativeOrchard(_)
@@ -223,6 +222,8 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         | PrivacyVerificationErrorV1::NativeFcmp(_)
         | PrivacyVerificationErrorV1::NativeIvmPrivateNote(_)
         | PrivacyVerificationErrorV1::NativePqMasp(_) => false,
+        #[cfg(feature = "zk-stark")]
+        PrivacyVerificationErrorV1::NativeZkAce(_) => false,
     };
     if invariant {
         Error::InvariantViolation(message.into())
@@ -5950,7 +5951,7 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "zk-stark")]
-    use crate::privacy_verifier::zk_ace_runtime_fixture_for_test;
+    use crate::privacy_verifier::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
     use crate::{
         kura::Kura,
         privacy_engines::{
@@ -5971,7 +5972,7 @@ mod tests {
         },
         privacy_profiles::compiled_privacy_profile_v1,
         privacy_verifier::{
-            FcmpRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
+            FcmpRuntimeFixtureForTest, ZkAmsRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
             zk_ams_runtime_fixture_for_test,
         },
         query::store::LiveQueryStore,
@@ -9089,7 +9090,7 @@ mod tests {
     #[cfg(feature = "zk-stark")]
     #[test]
     fn zk_ace_submit_atomically_transfers_and_records_replay_nullifier() {
-        let fixture = zk_ace_runtime_fixture_for_test();
+        let fixture: ZkAceRuntimeFixtureForTest = zk_ace_runtime_fixture_for_test();
         let PrivacyStatementV1::ZkAcePqAuthorizationV0(statement) = &fixture.envelope.statement
         else {
             unreachable!("ZK-ACE runtime fixture")
@@ -9222,7 +9223,7 @@ mod tests {
 
     #[test]
     fn zk_ams_submit_commits_batch_successor_then_provisions_once() {
-        let fixture = zk_ams_runtime_fixture_for_test();
+        let fixture: ZkAmsRuntimeFixtureForTest = zk_ams_runtime_fixture_for_test();
         let namespace = fixture.bootstrap.namespace();
         let bootstrap_digest = fixture.bootstrap.digest();
         let bootstrap_provenance =

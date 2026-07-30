@@ -2261,6 +2261,110 @@ PROOF
     <2> QED BY <2>3, <2>4, <2>5, <2>6
   <1> QED BY <1>1
 
+THEOREM SelectedLocalAdmissionAdvancePreservesProgressCommitHistories ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProgressFrontierAction
+    /\ SelectedLocalAdmissionAdvance(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProgressFrontierAction,
+                SelectedLocalAdmissionAdvance(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+    <2>1. /\ TypeInvariant
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncIoTopologyTypeInvariant
+           /\ AsyncIoWorkContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncIoContentTypeInvariant,
+             AsyncDeferredTypeInvariant
+    <2>2. DeferredProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory
+         DEF SelectedLocalAdmissionAdvance, AsyncDeferredVars
+    <2>3. CASE SelectedLocalSource(node) = "Producer"
+      <3> DEFINE Candidate == SelectedCompletionCandidate(node)
+      <3>1. /\ AdmitProducerCompletion(node)
+             /\ LeaveCausalQueues
+        BY <1>1, <2>3 DEF SelectedLocalAdmissionAdvance
+      <3>2. /\ AsyncCandidateTyped(Candidate)
+             /\ Candidate.class = "Completion"
+             /\ ProgressCommitSource(Candidate)
+        BY <2>1, <3>1, ProducerSelectedCompletionFacts,
+           CompletionCandidateHasProgressCommitSource
+           DEF Candidate
+      <3>3. EnqueueCandidate(Candidate)
+        BY <3>1 DEF AdmitProducerCompletion, Candidate
+      <3>4. QueuedProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>2, <3>3,
+           EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>5. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCausalQueuesPreserveProgressCommitHistory
+           DEF LeaveCausalQueues
+      <3> QED BY <2>2, <3>4, <3>5
+    <2>4. CASE SelectedLocalSource(node) = "Causal"
+      <3> DEFINE Candidate == HeadCausalCandidate(node)
+      <3>1. AdmitCausalHead(node)
+        BY <1>1, <2>4 DEF SelectedLocalAdmissionAdvance
+      <3>2. /\ CausalQueueNonempty(node)
+             /\ AsyncCandidateTyped(Candidate)
+             /\ ProgressCommitSource(Candidate)
+        BY <1>1, <2>1, <2>4, SelectedCausalCanAdvance,
+           CausalHeadHasProgressCommitSource
+           DEF SelectedLocalAdmissionAdvance,
+               CausalHeadCanAdvance, Candidate
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <2>4, <3>1,
+           AdmitCausalHeadPreservesCausalProgressCommitHistory
+      <3>4. CASE CandidateInFlight(Candidate)
+        <4>1. UNCHANGED asyncCommandQueues
+          BY <3>1, <3>4, Isa DEF AdmitCausalHead, Candidate
+        <4> QED BY <1>1, <2>1, <4>1,
+             UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3>5. CASE /\ ~CandidateInFlight(Candidate)
+                   /\ Candidate.class = "Completion"
+        <4>1. UNCHANGED asyncCommandQueues
+          BY <3>1, <3>5, Isa DEF AdmitCausalHead, Candidate
+        <4> QED BY <1>1, <2>1, <4>1,
+             UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3>6. CASE /\ ~CandidateInFlight(Candidate)
+                   /\ Candidate.class # "Completion"
+        <4>1. EnqueueCandidate(Candidate)
+          BY <3>1, <3>6 DEF AdmitCausalHead, Candidate
+        <4> QED BY <1>1, <2>1, <3>2, <4>1,
+             EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>7. QueuedProgressCommitHistoryInvariant'
+        BY <3>4, <3>5, <3>6, SMT
+      <3> QED BY <2>2, <3>3, <3>7
+    <2>5. \/ SelectedLocalSource(node) = "Producer"
+           \/ SelectedLocalSource(node) = "Causal"
+      BY SMT
+         DEF SelectedLocalSource, PreferredLocalSource,
+             OtherLocalSource
+    <2> QED BY <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
 THEOREM IngressDrainPreservesProgressCommitHistories ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant

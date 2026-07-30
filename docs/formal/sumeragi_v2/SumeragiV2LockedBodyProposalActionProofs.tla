@@ -9,6 +9,476 @@ prefix below the outstanding temporal debt.  No scheduler or temporal
 assumptions are introduced here.
 ***************************************************************************)
 
+(***************************************************************************
+Target-indexed retained-lock authority.
+
+`target` is the responsive validator whose durable lock creates the liveness
+obligation.  It is not required to be the leader which eventually proposes.
+The complete PrepareQC is retained as the authority identity; rank and subject
+alone are not enough to authorize certified-body recovery.  A later leader
+receives that exact authority through a TC for its own predecessor view and
+then becomes the ordinary `HistoricalLockedPrepareSource` which owns the
+certified request/Serve/response pipeline.
+
+There is intentionally no equality between `nodeView[target]` and
+`leaderView`.  Delayed TC delivery may advance either process past several
+views, so synchronization is indexed by the target leader episode and exact
+certificate identity, not by a coincident source clock.
+***************************************************************************)
+
+LockedBodySourcePrepareAuthority(
+    target, lockedRound, subject, prepareQc) ==
+  /\ StableAvailableRetainedLock(target, lockedRound, subject)
+  /\ prepareQc \in prepareQCs
+  /\ prepareQc = lockPrepareQc[target]
+  /\ prepareQc.context = context
+  /\ prepareQc.height = context.height
+  /\ prepareQc.phase = "Prepare"
+  /\ prepareQc.view = lockedRound
+  /\ prepareQc.subject = subject
+
+LockedBodyExactAuthorityTC(
+    tc, lockedRound, subject, prepareQc, leaderView) ==
+  /\ tc \in TcRecordSet
+  /\ leaderView \in Views
+  /\ leaderView > lockedRound
+  /\ tc.context = context
+  /\ tc.height = context.height
+  /\ tc.view + 1 = leaderView
+  /\ tc.highestPrepareQc = prepareQc
+  /\ prepareQc.context = context
+  /\ prepareQc.height = context.height
+  /\ prepareQc.phase = "Prepare"
+  /\ prepareQc.view = lockedRound
+  /\ prepareQc.subject = subject
+  /\ TCValid(tc)
+
+LockedBodyExactAuthorityTcTargetCorridor(
+    target, leader, lockedRound, subject, prepareQc, leaderView, tc) ==
+  /\ LockedBodySourcePrepareAuthority(
+       target, lockedRound, subject, prepareQc)
+  /\ leader \in AsyncCurrentResponsiveVoters \cap up
+  /\ Leader(context, leaderView) = leader
+  /\ LockedBodyExactAuthorityTC(
+       tc, lockedRound, subject, prepareQc, leaderView)
+  /\ \E carrier \in AsyncCurrentResponsiveVoters:
+       \/ TimeoutCertificateDelivery(carrier, leader, tc)
+       \/ TimeoutCertificateInstallOwner(leader, tc)
+
+LockedBodyResponsiveLeaderAuthority(
+    target, leader, lockedRound, subject, prepareQc, leaderView) ==
+  /\ LockedBodySourcePrepareAuthority(
+       target, lockedRound, subject, prepareQc)
+  /\ leader \in AsyncCurrentResponsiveVoters \cap up
+  /\ leaderView \in Views
+  /\ leaderView > lockedRound
+  /\ nodeView[leader] = leaderView
+  /\ Leader(context, leaderView) = leader
+  /\ highestPrepareQc[leader] = prepareQc
+  /\ highestRank[leader] = lockedRound
+  /\ highestSubject[leader] = subject
+  /\ HistoricalLockedPrepareSource(leader, prepareQc)
+  /\ \E installed \in installedTCs:
+       /\ installed.node = leader
+       /\ installed.tc = lastInstalledTc[leader]
+       /\ installed.tc.view + 1 = leaderView
+       /\ installed.tc.highestPrepareQc = prepareQc
+
+LockedBodyFreshSourceAuthority(
+    target, lockedRound, subject, prepareQc, sourceView) ==
+  /\ LockedBodySourcePrepareAuthority(
+       target, lockedRound, subject, prepareQc)
+  /\ sourceView = nodeView[target]
+  /\ AsyncViewTimeout(sourceView) > AsyncWorstCaseServiceBudget
+  /\ AsyncFreshNodeServiceWindow(target, context, sourceView)
+
+LockedBodyFreshResponsiveLeaderAuthority(
+    target, leader, lockedRound, subject, prepareQc, leaderView) ==
+  /\ LockedBodyResponsiveLeaderAuthority(
+       target, leader, lockedRound, subject, prepareQc, leaderView)
+  /\ AsyncViewTimeout(leaderView) > AsyncWorstCaseServiceBudget
+  /\ AsyncFreshNodeServiceWindow(leader, context, leaderView)
+
+(***************************************************************************
+The durable lock does not merely determine a rank/subject projection.  Under
+the already-proved Core invariant it names one concrete PrepareQC, including
+the original signer evidence.  This removes certificate selection from the
+source-exposure temporal seam: only reaching a fresh service clock remains.
+***************************************************************************)
+
+THEOREM StableRetainedLockBindsExactSourcePrepareAuthority ==
+  \A target \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects:
+    /\ StrongInductiveInvariant
+    /\ StableAvailableRetainedLock(target, lockedRound, subject)
+    => LockedBodySourcePrepareAuthority(
+         target, lockedRound, subject, lockPrepareQc[target])
+BY IsaT(180)
+   DEF LockedBodySourcePrepareAuthority,
+       StableAvailableRetainedLock,
+       StrongInductiveInvariant, ReducerProvenanceInvariant,
+       HighestAndLockAreCertified, CertificatesBackedByIntents,
+       HistoricalQcValid, PrepareQcRank, PrepareQcSubject,
+       TypeInvariant, ModelConfiguration, NoRank
+
+THEOREM LockedBodyExactAuthorityTcBindsTargetLeaderView ==
+  \A lockedRound \in Views, subject \in Subjects,
+     leaderView \in Views:
+    \A tc, prepareQc:
+      LockedBodyExactAuthorityTC(
+        tc, lockedRound, subject, prepareQc, leaderView)
+        => /\ tc.view = leaderView - 1
+           /\ tc.highestPrepareQc = prepareQc
+           /\ prepareQc.view = lockedRound
+           /\ prepareQc.subject = subject
+BY SMT DEF LockedBodyExactAuthorityTC
+
+THEOREM LockedBodyFreshAuthorityWindowsExcludeOlderTimeoutOwners ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, sourceView, leaderView \in Views:
+    \A prepareQc:
+      /\ LockedBodyFreshSourceAuthority(
+           target, lockedRound, subject, prepareQc, sourceView)
+      /\ LockedBodyFreshResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      => /\ ~AsyncOlderOrEqualTimeoutLifecycleOwned(
+                target, context, sourceView)
+         /\ ~AsyncOlderOrEqualTimeoutLifecycleOwned(
+                leader, context, leaderView)
+         /\ nodeView[target] = sourceView
+         /\ nodeView[leader] = leaderView
+BY DEF LockedBodyFreshSourceAuthority,
+       LockedBodyFreshResponsiveLeaderAuthority,
+       AsyncFreshNodeServiceWindow
+
+THEOREM DeliverLockedBodyExactAuthorityTcHandsOffToInstallOwner ==
+  \A leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, tc:
+      /\ LockedBodyExactAuthorityTC(
+           tc, lockedRound, subject, prepareQc, leaderView)
+      /\ DeliverTC(TcEnvelope(leader, tc))
+      => \/ TimeoutCertificateInstallOwner(leader, tc)'
+         \/ NodeHasDecision(leader)'
+BY Isa
+   DEF LockedBodyExactAuthorityTC,
+       TimeoutCertificateInstallOwner,
+       DeliverTC, TcAt, NodeHasDecision, NoDecisionForNode
+
+THEOREM BeginLockedBodyExactAuthorityTcHandsOffToInstallWal ==
+  \A leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, tc:
+      /\ LockedBodyExactAuthorityTC(
+           tc, lockedRound, subject, prepareQc, leaderView)
+      /\ BeginInstallTC(leader, tc)
+      => TimeoutCertificateInstallOwner(leader, tc)'
+BY Isa
+   DEF LockedBodyExactAuthorityTC,
+       TimeoutCertificateInstallOwner,
+       BeginInstallTC, InstallTcWal
+
+(***************************************************************************
+This action fact covers the distinct-target handoff.  The local fast path
+`target = leader` is covered by the original proposal-attempt lemmas below.
+The strict pre-install inequalities select the case in which this exact QC,
+rather than an older local high, becomes both durable Prepare frontiers.
+Fresh clock ownership is deliberately not claimed here: the asynchronous
+wrapper must first retire the executing timeout lifecycle and reset the new
+view deadline.
+***************************************************************************)
+
+THEOREM PersistExactAuthorityTcEstablishesResponsiveLeaderAuthority ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, tc:
+      \A request \in InstallTcWalSet:
+        /\ target # leader
+        /\ LockedBodySourcePrepareAuthority(
+             target, lockedRound, subject, prepareQc)
+        /\ leader \in AsyncCurrentResponsiveVoters \cap up
+        /\ Leader(context, leaderView) = leader
+        /\ LockedBodyExactAuthorityTC(
+             tc, lockedRound, subject, prepareQc, leaderView)
+        /\ request.node = leader
+        /\ request.tc = tc
+        /\ tc.view >= nodeView[leader]
+        /\ lockedRound > lockRank[leader]
+        /\ lockedRound > highestRank[leader]
+        /\ NoDecisionForNode(leader)
+        /\ PersistInstallTC(request)
+        => LockedBodyResponsiveLeaderAuthority(
+             target, leader, lockedRound, subject,
+             prepareQc, leaderView)'
+BY IsaT(240)
+   DEF LockedBodySourcePrepareAuthority,
+       LockedBodyExactAuthorityTC,
+       LockedBodyResponsiveLeaderAuthority,
+       StableAvailableRetainedLock,
+       HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareRecoveryProvenance,
+       InstalledTcSelectsPrepareFor,
+       AsyncProposalSubject,
+       PersistInstallTC, StrictSameRoundTcUpgrade,
+       TcHighRank, TcHighSubject,
+       PrepareQcRank, PrepareQcSubject,
+       NoDecisionForNode, RetainedLockedBodyHeldBy,
+       BodyHeldBy, CurrentVoters, CurrentEpoch,
+       AsyncCurrentResponsiveVoters
+
+THEOREM LockedBodyResponsiveLeaderAuthorityProjectsRecoveryStage ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc:
+      /\ HistoricalLockedBodyRecoveryStageInvariant
+      /\ LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      => HistoricalLockedBodyRecoveryStage(leader, prepareQc)
+BY Isa
+   DEF LockedBodyResponsiveLeaderAuthority,
+       HistoricalLockedBodyRecoveryStageInvariant,
+       AsyncCurrentResponsiveVoters
+
+THEOREM LockedBodyResponsiveLeaderRecoveryStageStep ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc:
+      /\ AsyncStrongTypeInvariant
+      /\ LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      /\ HistoricalLockedBodyRecoveryStage(leader, prepareQc)
+      /\ [AsyncNext]_AsyncAllVars
+      => \/ ~HistoricalLockedPrepareSource(leader, prepareQc)'
+         \/ HistoricalLockedBodyRecoveryStage(leader, prepareQc)'
+BY HistoricalLockedBodyExistingSourceStepPreservation, Isa
+   DEF LockedBodyResponsiveLeaderAuthority,
+       HistoricalLockedBodySourceRetired
+
+(***************************************************************************
+The terminal producer action is exact and target-neutral: once the frozen
+later-view SignProposal command executes, Core appends that same subject and
+view to `proposalNetwork`.  The retained-lock release goal follows without
+Decision convergence or a different producer occurrence.
+***************************************************************************)
+
+THEOREM ExecuteRetainedLockSignProposalBroadcastsExactLockedSubject ==
+  \A leader \in ValidatorIds, lockedRound, leaderView \in Views,
+     subject \in Subjects:
+    \A candidate \in AsyncCandidateSet:
+      /\ TypeInvariant
+      /\ candidate.kind = "SignProposal"
+      /\ candidate.node = leader
+      /\ candidate.consumerContext = context
+      /\ candidate.view = leaderView
+      /\ candidate.subject = subject
+      /\ leaderView > lockedRound
+      /\ ExecuteSignProposal(candidate)
+      => LockedBodyReproposedUnchangedLater(lockedRound, subject)'
+BY IsaT(180)
+   DEF ExecuteSignProposal, CommandMatches,
+       CompleteProposalSignature, BroadcastProposals,
+       LockedBodyReproposedUnchangedLater,
+       ProposalEnvelope, CurrentVoters, CurrentEpoch,
+       TypeInvariant, ModelConfiguration
+
+(***************************************************************************
+Exact proposal-producer action corridor.
+
+The three nonterminal reducer stages each declare one causal child.  The
+child keeps the immutable first-admission origin and every exact body and
+authority coordinate; only the work kind changes.  `AssembleBody` cannot
+take its Decision/Apply branch while the retained Prepare authority is live,
+because `HistoricalLockedPrepareSource` includes `NoDecisionForNode`.
+
+These are action facts, not temporal progress.  In particular, a producer
+which is already semantically covered may be discarded instead of executing;
+the final theorem in this section classifies that exit into the existing
+same-origin, monotone-coverage, or terminal-tombstone lifecycle outcomes.
+***************************************************************************)
+
+LockedBodyProposalProducerKinds ==
+  {"AssembleBody", "BeginProposal", "PersistProposal", "SignProposal"}
+
+LockedBodyProposalPrefixKinds ==
+  {"AssembleBody", "BeginProposal", "PersistProposal"}
+
+LockedBodyNextProposalProducerKind(kind) ==
+  CASE kind = "AssembleBody" -> "BeginProposal"
+    [] kind = "BeginProposal" -> "PersistProposal"
+    [] OTHER -> "SignProposal"
+
+LockedBodyProposalCausalSuccessor(command) ==
+  CausalCandidate(
+    "Completion",
+    LockedBodyNextProposalProducerKind(command.kind),
+    command)
+
+LockedBodyProposalIntentCovered(candidate) ==
+  \E proposal \in proposalIntents:
+    /\ proposal.proposer = candidate.node
+    /\ proposal.context = candidate.consumerContext
+    /\ proposal.height = candidate.height
+    /\ proposal.view = candidate.view
+    /\ proposal.subject = candidate.subject
+
+LockedBodyProposalProducerDispositionAfter(candidate) ==
+  \/ AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter(candidate)
+  \/ AsyncCandidateMonotoneSemanticCoverageAfterIn(
+       asyncControlServiceState', candidate)
+  \/ AsyncCandidateTerminalTombstoned(candidate)'
+
+THEOREM LockedBodyProposalPrefixDeclaresExactSameOriginSuccessor ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, candidate:
+      /\ LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      /\ candidate.kind \in LockedBodyProposalPrefixKinds
+      /\ candidate.node = leader
+      /\ candidate.consumerContext = context
+      /\ candidate.height = context.height
+      /\ candidate.view = leaderView
+      /\ candidate.subject = subject
+      => LET successor == LockedBodyProposalCausalSuccessor(candidate)
+         IN /\ CommandSuccessors(candidate) = <<successor>>
+            /\ successor.class = "Completion"
+            /\ successor.kind =
+                 LockedBodyNextProposalProducerKind(candidate.kind)
+            /\ successor.node = candidate.node
+            /\ successor.height = candidate.height
+            /\ successor.view = candidate.view
+            /\ successor.subject = candidate.subject
+            /\ successor.item = NoAsyncItem
+            /\ successor.consumerContext = candidate.consumerContext
+            /\ successor.consumerView = candidate.consumerView
+            /\ successor.consumerGeneration =
+                 candidate.consumerGeneration
+            /\ successor.evidence = candidate.evidence
+            /\ successor.bodyIdentity = candidate.bodyIdentity
+            /\ successor.manifestIdentity = candidate.manifestIdentity
+            /\ successor.commitmentIdentity =
+                 candidate.commitmentIdentity
+            /\ successor.causalOrigin = candidate.causalOrigin
+BY IsaT(240)
+   DEF LockedBodyResponsiveLeaderAuthority,
+       HistoricalLockedPrepareSource, NoDecisionForNode,
+       LockedBodyProposalPrefixKinds,
+       LockedBodyNextProposalProducerKind,
+       LockedBodyProposalCausalSuccessor,
+       CommandSuccessors, ExactDecidedLocalBody,
+       CausalCandidate, AsyncCandidateFrom,
+       AsyncCandidateWithIdentityAndOrigin
+
+THEOREM ExecuteLockedBodyProposalPrefixPreservesResponsiveLeaderAuthority ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, candidate:
+      /\ LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      /\ candidate.kind \in LockedBodyProposalPrefixKinds
+      /\ candidate.node = leader
+      /\ candidate.consumerContext = context
+      /\ candidate.height = context.height
+      /\ candidate.view = leaderView
+      /\ candidate.subject = subject
+      /\ ExecuteCommand(candidate)
+      => LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject,
+           prepareQc, leaderView)'
+BY IsaT(360)
+   DEF LockedBodyProposalPrefixKinds,
+       LockedBodyResponsiveLeaderAuthority,
+       LockedBodySourcePrepareAuthority,
+       StableAvailableRetainedLock,
+       HistoricalLockedPrepareSource,
+       HistoricalLockedPrepareRecoveryProvenance,
+       InstalledTcSelectsPrepareFor,
+       ExactLockedCommitIntents,
+       NoDecisionForNode,
+       ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
+       AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM LockedBodyIgnoredProposalProducerHasDurableDisposition ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, candidate \in AsyncCandidateSet:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      /\ candidate.kind \in LockedBodyProposalProducerKinds
+      /\ candidate.node = leader
+      /\ candidate.consumerContext = context
+      /\ candidate.height = context.height
+      /\ candidate.view = leaderView
+      /\ candidate.subject = subject
+      /\ candidate.item = NoAsyncItem
+      /\ CandidateConsumerCurrent(candidate)
+      /\ (candidate.kind = "SignProposal"
+            => LockedBodyProposalIntentCovered(candidate))
+      /\ gst
+      /\ AsyncNext
+      /\ AsyncCandidateIgnoredWithoutApplicationThisStep(candidate)
+      => LockedBodyProposalProducerDispositionAfter(candidate)
+BY AsyncCandidateDiscardInstallsTerminalTombstone, IsaT(900)
+   DEF LockedBodyProposalProducerKinds,
+       LockedBodyProposalProducerDispositionAfter,
+       LockedBodyResponsiveLeaderAuthority,
+       HistoricalLockedPrepareSource, NoDecisionForNode,
+       AsyncCandidateIgnoredWithoutApplicationThisStep,
+       AsyncCandidatePhysicallyDiscardedThisStep,
+       AsyncCandidateSuccessfullyServicedThisStep,
+       AsyncCandidateSemanticallyAppliedThisStep,
+       AsyncCandidateTerminallyDiscardedThisStep,
+       AsyncCandidateTerminalRetirementEligibleAfterStep,
+       AsyncCandidateMonotoneSemanticCoverageAfterIn,
+       AsyncCandidateReducerStageCoveredAfterIn,
+       AsyncCandidateProposalStageCoveredAfter,
+       AsyncCandidateConsumerEpisodeObsoleteAfter,
+       AsyncCandidateSameOriginPhysicalOrDurableOwnerAfter,
+       LockedBodyProposalIntentCovered,
+       ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
+       ExecuteSignProposal, AssembleLocalBody, BeginLocalProposal,
+       PersistProposal, CompleteProposalSignature
+
+THEOREM LockedBodyScheduledProposalProducerDepartureIsClassified ==
+  \A target, leader \in ValidatorIds, lockedRound \in Views,
+     subject \in Subjects, leaderView \in Views:
+    \A prepareQc, candidate \in AsyncCandidateSet:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncProgressOwnershipInvariant
+      /\ AsyncCandidateServiceLifecycleInvariant
+      /\ LockedBodyResponsiveLeaderAuthority(
+           target, leader, lockedRound, subject, prepareQc, leaderView)
+      /\ candidate.kind \in LockedBodyProposalProducerKinds
+      /\ candidate.node = leader
+      /\ candidate.consumerContext = context
+      /\ candidate.height = context.height
+      /\ candidate.view = leaderView
+      /\ candidate.subject = subject
+      /\ candidate.item = NoAsyncItem
+      /\ CandidateConsumerCurrent(candidate)
+      /\ (candidate.kind = "SignProposal"
+            => LockedBodyProposalIntentCovered(candidate))
+      /\ gst
+      /\ AsyncNext
+      /\ CandidateScheduled(candidate)
+      /\ ~CandidateScheduledAfter(candidate)
+      => \/ AsyncCandidateSuccessfullyServicedThisStep(candidate)
+         \/ LockedBodyProposalProducerDispositionAfter(candidate)
+BY AsyncCandidateScheduledIdentityDepartureRetiresLifecycleAtGst,
+   LockedBodyIgnoredProposalProducerHasDurableDisposition, Isa
+   DEF LockedBodyProposalProducerKinds,
+       LockedBodyProposalProducerDispositionAfter
+
+(***************************************************************************
+The original single-node frame remains the exact local fast-path action
+lemma.  The temporal retained-lock proof below no longer assumes that this
+same node must eventually land on one of its own leader views.
+***************************************************************************)
+
 LockedBodyProposalAttemptStableFrame(
     node, leaderView, lockedRound, subject) ==
   /\ StableAvailableRetainedLock(node, lockedRound, subject)

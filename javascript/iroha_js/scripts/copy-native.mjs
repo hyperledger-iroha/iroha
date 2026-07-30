@@ -126,8 +126,16 @@ export const REQUIRED_NATIVE_EXPORTS = Object.freeze([
   "noritoDecodeInstruction",
   "compileKotodama",
   "sorafsValidateAppealFinanceCancelAssetLockJson",
+  "securePrivateFileAbiVersion",
+  "securePrivateDirectoryEnsure",
+  "securePrivateFileRead",
+  "securePrivateFileWriteAtomic",
 ]);
 export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 21;
+export const REQUIRED_NATIVE_EXPORT_RESULTS = Object.freeze({
+  connectNoritoBridgeAbiVersion: REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  securePrivateFileAbiVersion: 1,
+});
 
 function assertRegularFile(path, label) {
   if (!existsSync(path)) {
@@ -331,6 +339,16 @@ export function probeNativeBindingExports(
   if (!Number.isSafeInteger(requiredAbiVersion) || requiredAbiVersion < 0) {
     throw new TypeError("required native bridge ABI version must be a safe unsigned integer");
   }
+  const requiredResults = Object.fromEntries(
+    requiredExports.flatMap((name) => {
+      if (name === "connectNoritoBridgeAbiVersion") {
+        return [[name, requiredAbiVersion]];
+      }
+      return Object.hasOwn(REQUIRED_NATIVE_EXPORT_RESULTS, name)
+        ? [[name, REQUIRED_NATIVE_EXPORT_RESULTS[name]]]
+        : [];
+    }),
+  );
   const probeSource = String.raw`
 const bindingPath = process.argv[1];
 let binding;
@@ -347,12 +365,17 @@ if (/\.(?:cjs|js)$/iu.test(bindingPath)) {
   binding = nativeModule.exports;
 }
 const required = JSON.parse(process.argv[2]);
+const requiredResults = JSON.parse(process.argv[3]);
 const missing = required.filter((name) => typeof binding[name] !== "function");
 if (missing.length > 0) {
   process.stderr.write("missing required native exports: " + missing.join(", "));
   process.exitCode = 1;
-} else {
-  const expectedAbi = Number(process.argv[3]);
+}
+if (
+  Object.hasOwn(requiredResults, "connectNoritoBridgeAbiVersion") &&
+  typeof binding.connectNoritoBridgeAbiVersion === "function"
+) {
+  const expectedAbi = requiredResults.connectNoritoBridgeAbiVersion;
   const actualAbi = binding.connectNoritoBridgeAbiVersion();
   if (!Number.isSafeInteger(actualAbi) || actualAbi !== expectedAbi) {
     process.stderr.write(
@@ -360,6 +383,28 @@ if (missing.length > 0) {
     );
     process.exitCode = 1;
   }
+}
+const wrongResult = Object.entries(requiredResults).flatMap(([name, expected]) => {
+  if (name === "connectNoritoBridgeAbiVersion") return [];
+  if (typeof binding[name] !== "function") return [];
+  try {
+    const observed = binding[name]();
+    return Object.is(observed, expected) ? [] : [[name, expected, observed]];
+  } catch (error) {
+    return [[name, expected, "threw " + String(error?.message ?? error)]];
+  }
+});
+if (wrongResult.length > 0) {
+  process.stderr.write(
+    "invalid required native export results: " +
+      wrongResult
+        .map(
+          ([name, expected, observed]) =>
+            name + " expected " + expected + " but found " + String(observed),
+        )
+        .join(", "),
+  );
+  process.exitCode = 1;
 }
 `;
   const probe = spawnSync(
@@ -369,7 +414,7 @@ if (missing.length > 0) {
       probeSource,
       bindingPath,
       JSON.stringify(requiredExports),
-      String(requiredAbiVersion),
+      JSON.stringify(requiredResults),
     ],
     {
       cwd: repoRoot,

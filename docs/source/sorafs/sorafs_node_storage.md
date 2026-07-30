@@ -492,6 +492,15 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
   public-key, and finalized-owner checks. Test-marked, stale, rotated, or
   substituted providers fail closed and returned transaction bytes are not
   accepted after post-operation drift.
+- The broker accepts only the configured session chain and expected owner, an
+  `Instructions` executable containing exactly one non-zero
+  `CompleteReplicationOrder`, and the exact retained signer-policy lineage,
+  assignment revision, and finalized anchor. Session admission, broker
+  request/result validation, and the durable outbox reject alternate
+  executables, extra instructions, proof attachments, even-empty multisig
+  sidecars, invalid signatures, and any context substitution. This closes the
+  source contract only; it does not supply the deployment-owned transport,
+  HSM/KMS signer, or sealed-CAS backend.
 - The production completion outbox treats the injected external sealed
   checkpoint store as authoritative. Configuration binds that provider by the
   exact stable `checkpoint_store_handle`, non-zero

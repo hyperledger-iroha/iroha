@@ -231,12 +231,13 @@ from .sorafs_hedging_billing import (
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
     from .crypto import Instruction, SignedTransactionEnvelope  # noqa: F401
-    from .tx import QuantityLike, TransactionDraft
+    from .tx import AssetTransferAvailability, QuantityLike, TransactionDraft
 else:  # pragma: no cover - runtime type aliases
     Instruction = Any  # type: ignore[assignment]
     SignedTransactionEnvelope = Any  # type: ignore[assignment]
     ConnectControlBase = Any  # type: ignore[assignment]
     QuantityLike = Any  # type: ignore[assignment]
+    AssetTransferAvailability = Any  # type: ignore[assignment]
     TransactionDraft = Any  # type: ignore[assignment]
 
 
@@ -6473,6 +6474,286 @@ class AccountTransaction:
 
 
 @dataclass(frozen=True)
+class VerifiedCommittedTransaction:
+    """A committed transaction whose native Merkle proofs match its exact carrier block."""
+
+    transaction_hash: str
+    block_hash: str
+    block_height: int
+    result_hash: str
+    proof_kind: str
+    entrypoint_kind: str
+    authority: Optional[str]
+    signer_public_key_hex: Optional[str]
+    metadata: Optional[Mapping[str, Any]]
+    executable: Optional[Mapping[str, Any]]
+    result_ok: bool
+    rejection_code: Optional[str]
+    rejection_message: Optional[str]
+    contract_rejection: Optional[Mapping[str, Any]]
+    batch_outcomes: Tuple[Mapping[str, Any], ...]
+    committed_transaction: Mapping[str, Any]
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> "VerifiedCommittedTransaction":
+        if not isinstance(payload, Mapping):
+            raise TypeError("verified committed transaction payload must be an object")
+        required_fields = {
+            "transaction_hash",
+            "block_hash",
+            "block_height",
+            "result_hash",
+            "proof_kind",
+            "entrypoint_kind",
+            "authority",
+            "signer_public_key_hex",
+            "metadata",
+            "executable",
+            "result_ok",
+            "rejection_code",
+            "rejection_message",
+            "contract_rejection",
+            "batch_outcomes",
+            "committed_transaction",
+        }
+        if set(payload) != required_fields:
+            raise ValueError(
+                "verified committed transaction payload must contain exactly "
+                + ", ".join(sorted(required_fields))
+            )
+        transaction_hash = _normalize_hash_hex(
+            payload.get("transaction_hash"),
+            "verified transaction hash",
+        )
+        block_hash = _normalize_hash_hex(
+            payload.get("block_hash"),
+            "verified carrier block hash",
+        )
+        result_hash = _normalize_hash_hex(
+            payload.get("result_hash"),
+            "verified transaction result hash",
+        )
+        block_height = _normalize_positive_int(
+            payload.get("block_height"),
+            "verified carrier block height",
+            allow_zero=False,
+        )
+        proof_kind = payload.get("proof_kind")
+        if proof_kind not in {"ordinary", "certified_merge"}:
+            raise ValueError(
+                "verified committed transaction proof_kind must be "
+                "'ordinary' or 'certified_merge'"
+            )
+        entrypoint_kind = payload.get("entrypoint_kind")
+        if entrypoint_kind not in {
+            "External",
+            "SealedCommitment",
+            "SealedReveal",
+            "PrivateKaigi",
+            "Time",
+        }:
+            raise ValueError("verified transaction entrypoint_kind is not recognized")
+        authority_value = payload.get("authority")
+        authority = (
+            None
+            if authority_value is None
+            else _require_exact_non_empty_string(
+                authority_value,
+                "verified transaction authority",
+            )
+        )
+        signer_value = payload.get("signer_public_key_hex")
+        signer_public_key_hex = (
+            None
+            if signer_value is None
+            else _normalize_hex_string(
+                signer_value,
+                "verified transaction signer public key",
+            )
+        )
+        metadata_value = payload.get("metadata")
+        if metadata_value is not None and not isinstance(metadata_value, Mapping):
+            raise TypeError("verified transaction metadata must be an object or null")
+        executable_value = payload.get("executable")
+        if executable_value is not None and not isinstance(executable_value, Mapping):
+            raise TypeError("verified transaction executable must be an object or null")
+        result_ok = payload.get("result_ok")
+        if not isinstance(result_ok, bool):
+            raise TypeError("verified transaction result_ok must be a bool")
+        rejection_code_value = payload.get("rejection_code")
+        rejection_message_value = payload.get("rejection_message")
+        if result_ok:
+            if rejection_code_value is not None or rejection_message_value is not None:
+                raise ValueError("successful verified transaction must omit rejection detail")
+            rejection_code = None
+            rejection_message = None
+        else:
+            rejection_code = _require_exact_non_empty_string(
+                rejection_code_value,
+                "verified transaction rejection code",
+            )
+            rejection_message = _require_exact_non_empty_string(
+                rejection_message_value,
+                "verified transaction rejection message",
+            )
+        if "contract_rejection" not in payload:
+            raise ValueError("verified transaction contract_rejection field is required")
+        contract_rejection_value = payload["contract_rejection"]
+        if contract_rejection_value is None:
+            contract_rejection: Optional[Mapping[str, Any]] = None
+        else:
+            if result_ok:
+                raise ValueError(
+                    "successful verified transaction must omit contract rejection detail"
+                )
+            if not isinstance(contract_rejection_value, Mapping):
+                raise TypeError(
+                    "verified transaction contract_rejection must be an object or null"
+                )
+            required_contract_fields = {"contract", "namespace", "name", "code"}
+            if set(contract_rejection_value) != required_contract_fields:
+                raise ValueError(
+                    "verified transaction contract_rejection must contain exactly "
+                    + ", ".join(sorted(required_contract_fields))
+                )
+            contract_name = _require_exact_non_empty_string(
+                contract_rejection_value["contract"],
+                "verified transaction contract rejection contract",
+            )
+            contract_namespace = _require_exact_non_empty_string(
+                contract_rejection_value["namespace"],
+                "verified transaction contract rejection namespace",
+            )
+            contract_error_name = _require_exact_non_empty_string(
+                contract_rejection_value["name"],
+                "verified transaction contract rejection name",
+            )
+            contract_error_code_value = contract_rejection_value["code"]
+            if isinstance(contract_error_code_value, bool) or not isinstance(
+                contract_error_code_value, int
+            ):
+                raise TypeError(
+                    "verified transaction contract rejection code must be an integer"
+                )
+            if not 0 < contract_error_code_value <= 0xFFFF_FFFF:
+                raise ValueError(
+                    "verified transaction contract rejection code must be a non-zero u32"
+                )
+            contract_error_code = contract_error_code_value
+            if rejection_code != contract_error_name:
+                raise ValueError(
+                    "verified transaction rejection_code must equal the "
+                    "manifest-authenticated contract error name"
+                )
+            contract_rejection = {
+                "contract": contract_name,
+                "namespace": contract_namespace,
+                "name": contract_error_name,
+                "code": contract_error_code,
+            }
+        raw_batch_outcomes = payload.get("batch_outcomes")
+        if not isinstance(raw_batch_outcomes, list):
+            raise TypeError("verified transaction batch_outcomes must be an array")
+        batch_outcomes: List[Mapping[str, Any]] = []
+        for index, raw_outcome in enumerate(raw_batch_outcomes):
+            if not isinstance(raw_outcome, Mapping):
+                raise TypeError(f"verified batch outcome {index} must be an object")
+            required_fields = {
+                "leg_index",
+                "leg_id",
+                "asset",
+                "destination",
+                "amount",
+                "status",
+                "rejection_code",
+                "rejection_message",
+            }
+            if set(raw_outcome) != required_fields:
+                raise ValueError(
+                    f"verified batch outcome {index} must contain exactly "
+                    + ", ".join(sorted(required_fields))
+                )
+            leg_index = _normalize_positive_int(
+                raw_outcome["leg_index"],
+                f"verified batch outcome {index} leg_index",
+                allow_zero=True,
+            )
+            leg_id = _require_exact_non_empty_string(
+                raw_outcome["leg_id"],
+                f"verified batch outcome {index} leg_id",
+            )
+            asset = _require_exact_non_empty_string(
+                raw_outcome["asset"],
+                f"verified batch outcome {index} asset",
+            )
+            destination = _require_exact_non_empty_string(
+                raw_outcome["destination"],
+                f"verified batch outcome {index} destination",
+            )
+            amount = _require_exact_non_empty_string(
+                raw_outcome["amount"],
+                f"verified batch outcome {index} amount",
+            )
+            status = raw_outcome["status"]
+            outcome_code = raw_outcome["rejection_code"]
+            outcome_message = raw_outcome["rejection_message"]
+            if status == "Applied":
+                if outcome_code is not None or outcome_message is not None:
+                    raise ValueError(
+                        f"applied verified batch outcome {index} must omit rejection detail"
+                    )
+            elif status == "Rejected":
+                outcome_code = _require_exact_non_empty_string(
+                    outcome_code,
+                    f"verified batch outcome {index} rejection_code",
+                )
+                outcome_message = _require_exact_non_empty_string(
+                    outcome_message,
+                    f"verified batch outcome {index} rejection_message",
+                )
+            else:
+                raise ValueError(
+                    f"verified batch outcome {index} status must be Applied or Rejected"
+                )
+            batch_outcomes.append(
+                {
+                    "leg_index": leg_index,
+                    "leg_id": leg_id,
+                    "asset": asset,
+                    "destination": destination,
+                    "amount": amount,
+                    "status": status,
+                    "rejection_code": outcome_code,
+                    "rejection_message": outcome_message,
+                }
+            )
+        committed = payload.get("committed_transaction")
+        if not isinstance(committed, Mapping):
+            raise TypeError("verified committed transaction record must be an object")
+        return cls(
+            transaction_hash=transaction_hash,
+            block_hash=block_hash,
+            block_height=block_height,
+            result_hash=result_hash,
+            proof_kind=proof_kind,
+            entrypoint_kind=entrypoint_kind,
+            authority=authority,
+            signer_public_key_hex=signer_public_key_hex,
+            metadata=dict(metadata_value) if metadata_value is not None else None,
+            executable=dict(executable_value) if executable_value is not None else None,
+            result_ok=result_ok,
+            rejection_code=rejection_code,
+            rejection_message=rejection_message,
+            contract_rejection=contract_rejection,
+            batch_outcomes=tuple(batch_outcomes),
+            committed_transaction=dict(committed),
+        )
+
+
+@dataclass(frozen=True)
 class AccountTransactionsPage:
     """Paginated account transaction list."""
 
@@ -11897,6 +12178,7 @@ __all__ = [
     "AccountAssetsPage",
     "AccountTransaction",
     "AccountTransactionsPage",
+    "VerifiedCommittedTransaction",
     "AccountRecord",
     "AccountListPage",
     "DomainRecord",
@@ -12267,7 +12549,7 @@ class ToriiClient(_BaseToriiClient):
         return type(self)._maybe_json(response)
 
     @staticmethod
-    def _escrow_query_signing_key(
+    def _native_query_signing_key(
         *,
         private_key: Optional[bytes],
         private_key_hex: Optional[str],
@@ -12283,6 +12565,103 @@ class ToriiClient(_BaseToriiClient):
             raise TypeError("private_key must be bytes-like")
         return bytes(private_key)
 
+    @staticmethod
+    def _native_query_response_bytes(
+        response: requests.Response,
+        context: str,
+    ) -> bytes:
+        content_type = response.headers.get("Content-Type", "")
+        if "application/x-norito" not in content_type.lower():
+            raise RuntimeError(f"{context} did not return canonical Norito")
+        content = response.content
+        if not isinstance(content, (bytes, bytearray, memoryview)) or not content:
+            raise RuntimeError(f"{context} returned an empty response")
+        return bytes(content)
+
+    def get_verified_committed_transaction(
+        self,
+        *,
+        transaction_hash: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+    ) -> VerifiedCommittedTransaction:
+        """Fetch and verify a committed transaction against its exact carrier block.
+
+        ``transaction_hash`` is the canonical external transaction hash returned by
+        :class:`SignedTransactionEnvelope`; it is the same entrypoint hash committed by blocks.
+        Both ledger reads use signed native queries. The returned value is created only after the
+        entrypoint and execution-result Merkle proofs verify against the returned carrier block.
+        """
+
+        from .crypto import (
+            build_find_block_by_hash_query,
+            build_find_committed_transaction_query,
+            committed_transaction_carrier_block_hash,
+            verify_committed_transaction_inclusion,
+        )
+
+        normalized_hash = _normalize_hash_hex(transaction_hash, "transaction_hash")
+        canonical_authority = self._native_transaction_account_id(authority, "authority")
+        signing_key = self._native_query_signing_key(
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+        )
+        transaction_request = build_find_committed_transaction_query(
+            canonical_authority,
+            signing_key,
+            normalized_hash,
+        )
+        transaction_response = self._request(
+            "POST",
+            "/query",
+            data=transaction_request,
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            },
+        )
+        self._expect_status(transaction_response, {200})
+        transaction_response_bytes = self._native_query_response_bytes(
+            transaction_response,
+            "committed transaction query",
+        )
+
+        block_hash = committed_transaction_carrier_block_hash(
+            normalized_hash,
+            transaction_response_bytes,
+        )
+        block_request = build_find_block_by_hash_query(
+            canonical_authority,
+            signing_key,
+            block_hash,
+        )
+        block_response = self._request(
+            "POST",
+            "/query",
+            data=block_request,
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/x-norito",
+            },
+        )
+        self._expect_status(block_response, {200})
+        block_response_bytes = self._native_query_response_bytes(
+            block_response,
+            "carrier block query",
+        )
+        verified = verify_committed_transaction_inclusion(
+            normalized_hash,
+            transaction_response_bytes,
+            block_response_bytes,
+        )
+        result = VerifiedCommittedTransaction.from_payload(verified)
+        if result.transaction_hash != normalized_hash:
+            raise RuntimeError(
+                "native verifier returned a different committed transaction hash"
+            )
+        return result
+
     def get_asset_escrow(
         self,
         *,
@@ -12297,7 +12676,7 @@ class ToriiClient(_BaseToriiClient):
 
         request = build_find_asset_escrow_query(
             self._native_transaction_account_id(authority, "authority"),
-            self._escrow_query_signing_key(
+            self._native_query_signing_key(
                 private_key=private_key,
                 private_key_hex=private_key_hex,
             ),
@@ -12390,7 +12769,7 @@ class ToriiClient(_BaseToriiClient):
             build_find_asset_escrows_by_seller_query,
         )
 
-        signing_key = self._escrow_query_signing_key(
+        signing_key = self._native_query_signing_key(
             private_key=private_key,
             private_key_hex=private_key_hex,
         )
@@ -17112,7 +17491,7 @@ class ToriiClient(_BaseToriiClient):
             result["batch_receipt"] = dict(receipt)
         return result
 
-    def set_asset_transfer_freeze_and_wait(
+    def set_asset_transfer_availability_and_wait(
         self,
         *,
         chain_id: str,
@@ -17122,14 +17501,16 @@ class ToriiClient(_BaseToriiClient):
         private_key_hex: Optional[str] = None,
         account_id: str,
         asset_definition_id: str,
-        outgoing_frozen: bool,
+        expected_revision: int,
+        incoming: Union["AssetTransferAvailability", str],
+        outgoing: Union["AssetTransferAvailability", str],
         reason: Optional[str] = None,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Freeze or unfreeze outbound transfers and optionally wait for commit."""
+        """Update directional transfer availability and optionally wait for commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,
@@ -17137,10 +17518,12 @@ class ToriiClient(_BaseToriiClient):
             fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
-        draft.set_asset_transfer_freeze(
+        draft.set_asset_transfer_availability(
             self._native_transaction_account_id(account_id, "account_id"),
             _require_non_empty_string(asset_definition_id, "asset_definition_id"),
-            outgoing_frozen,
+            expected_revision,
+            incoming,
+            outgoing,
             reason=reason,
         )
         return self._submit_transaction_draft_result(

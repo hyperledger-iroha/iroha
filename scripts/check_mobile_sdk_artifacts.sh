@@ -373,6 +373,8 @@ KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4
   connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4
   connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_apple_proof_phase_v1
+  connect_norito_kagemusha_recursive_spend_candidate_lab_apple_restart_phase_v1
 )
 
 # The first mobile release is one exact ABI-21/V4 contract. Keep the complete

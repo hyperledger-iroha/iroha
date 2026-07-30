@@ -130,11 +130,19 @@ Checked-in response-file examples cover provider and metrics canaries.
   orders. Native capacity-dispute `Opened` and `Resolved` journal transitions
   are authoritative; capacity telemetry never creates a dispute implicitly.
 - **Token violations**: rate of throttle breaches and unauthorized access
-  attempts. Native stream-token validation admission uses a hard-cut
-  gateway-id/non-zero-sequence/request-context binding and a bounded durable
-  per-gateway high-water mark. Exact replay is idempotent; stale or substituted
-  sequence reuse fails closed across restart. The regional gateway transaction
-  forwarder remains open.
+  attempts. Native journal admission uses a hard-cut gateway-id/non-zero-
+  sequence/request-context binding and a bounded durable per-gateway high-water
+  mark. Exact replay is idempotent; stale or substituted sequence reuse fails
+  closed across restart. The data model derives the gateway id from
+  length-framed chain and compliance-gateway identities and defines a canonical
+  request-context digest over the authoritative serving provider, manifest
+  digest/CID, chunk profile, nonce digest, missing-or-exact-header commitment,
+  and CAR-range or exact-chunk route. Raw nonce, token bytes, aliases, PII, and
+  forwarding metadata are not retained. A `ProviderMismatch` is attributed to
+  the authoritative serving provider, never the token's caller-controlled
+  provider claim. This is a source-model foundation: configuration, broker,
+  Torii capture, a sealed ordered gateway outbox, and the regional callback
+  owner remain open.
 - **Repair escalations**: projected from the existing finalized native repair
   event feed.
 - **Orderbook and settlement**: projected from the existing finalized native
@@ -703,8 +711,9 @@ Completed local foundations:
 - Sequence/digest-bound PoR terminal ownership, exact durable reputation
   admission/acknowledgement, and reputation-first authenticated replay-archive
   compaction are wired into the standard launcher. Stream-token admission has
-  a bounded restart-safe per-gateway sequence fence; its regional callback
-  owner remains a deployment integration item.
+  a bounded restart-safe per-gateway sequence fence, and the canonical
+  payload-free request-context model is implemented. The sealed ordered gateway
+  outbox and regional callback owner remain deployment integration items.
 - Canonical reputation schemas, scoring, penalties, smoothing, trust-edge
   iteration, snapshot validation, Merkle roots, and provider proofs.
 - Governance DAG payload validation and the keyless finalized multi-feed

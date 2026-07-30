@@ -15,10 +15,10 @@ already-proved exact Decision source into:
   * the terminal application.
 
 For executable owners it specializes the deferred Stage-2 fence to the exact
-Decision node.  A durable Decision excludes a same-node pending InstallTC, so
-the matching Busy completion is dispatchable without
-`AsyncInstallGenerationBudget` for any unrelated validator.  The resulting
-local Busy-phase proof is complete in this module.
+Decision node.  A durable Decision excludes a same-node pending InstallTC, and
+the global view-local generation/rank invariant makes checked generation
+exhaustion unreachable at every validator.  The resulting local Busy-phase
+proof is complete in this module.
 
 For active requests it names every concrete ownership handoff: retained
 fanout alias, retransmission packet, normal/historical ingress, fresh-nonce
@@ -103,9 +103,9 @@ BY Isa
 (***************************************************************************
 Decision-local Stage-2 specialization.
 
-The generic Stage-2 proof uses `AsyncInstallGenerationBudget` only to turn the
-disjunction supplied by `BusyCompletionCandidateIsDispatchable` into the
-dispatchable arm.  The exact Decision source supplies that fact locally.
+The generic Stage-2 decomposition uses the strong view-local rank invariant to
+exclude checked generation exhaustion.  The exact Decision source additionally
+supplies the narrower same-node exclusion used by this projection.
 The residual below is therefore temporal Busy-owner persistence/service, not
 generation exhaustion.
 ***************************************************************************)
@@ -186,8 +186,12 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer,
        LocalAdmissionStep, AdmitProducerCompletion,
-       AdmitCausalHead, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       AdmitCausalHead, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep,
        DirectTimeoutStep, DirectRetransmitStep,
        IdleRuntimeStep, RemoveNextNodeCommand,
@@ -291,8 +295,12 @@ BY BusyPhaseOwnerPartitionObligation,
        CandidateConsumerCurrent, CommandDispatchable,
        CommandExecutionReady, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer,
-       LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DeferredTagStep, DirectTimeoutStep,
        DirectRetransmitStep, IdleRuntimeStep,
        RemoveNextNodeCommand, RemoveNextDeferredCommand,
@@ -530,14 +538,18 @@ PROOF
 THEOREM ExactDecisionBusyPhaseTakesWellFoundedStep ==
   \A initialContext, node, qc, target:
     \A phase \in ExactDecisionActiveBusyPhaseCarrier:
-      AsyncSpecAt(initialContext)
-        => ExactDecisionStage2BusyAtPhase(
-             node, qc, target, phase)
-             ~> ExactDecisionStage2BusyPhaseGoal(
-                  node, qc, target, phase)
+      ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+        AsyncSpecAt(initialContext))
+        => (AsyncSpecAt(initialContext)
+              => ExactDecisionStage2BusyAtPhase(
+                   node, qc, target, phase)
+                   ~> ExactDecisionStage2BusyPhaseGoal(
+                        node, qc, target, phase))
 PROOF
   <1>1. ASSUME NEW initialContext, NEW node, NEW qc, NEW target,
-                NEW phase \in ExactDecisionActiveBusyPhaseCarrier
+                NEW phase \in ExactDecisionActiveBusyPhaseCarrier,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE AsyncSpecAt(initialContext)
                  => ExactDecisionStage2BusyAtPhase(
                       node, qc, target, phase)
@@ -563,6 +575,8 @@ PROOF
            ProtectedStage5RankProgressFromFairFifo,
            FairProtectedStage6RankProgress,
            ProtectedPostDeferredRanksComposeFromLeavesObligation
+           DEF ProtectedServiceFiniteRunnerEpisodeClosureProperty,
+               Stage6FiniteRunnerEpisodeClosureProperty
       <3>3. \A witness \in AsyncCandidateSet:
                ExactDecisionBusyWitnessBlocked(
                  node, qc, target, phase, witness)
@@ -635,10 +649,14 @@ PROOF
 
 THEOREM ExactDecisionStage2BusyClosure ==
   \A initialContext:
-    ExactDecisionStage2BusyClosureProperty(
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
       AsyncSpecAt(initialContext))
+      => ExactDecisionStage2BusyClosureProperty(
+           AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ExactDecisionStage2BusyClosureProperty(
                  AsyncSpecAt(initialContext))
     <2>1. ASSUME AsyncSpecAt(initialContext)
@@ -701,8 +719,10 @@ ExactDecisionCandidateExitProperty(specification) ==
 
 THEOREM ExactDecisionLocalStage2ClosesPhysicalOwnerExit ==
   \A initialContext:
-    ExactDecisionStage2BusyClosureProperty(
-      AsyncSpecAt(initialContext))
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
+    /\ ExactDecisionStage2BusyClosureProperty(
+         AsyncSpecAt(initialContext))
       => ExactDecisionCandidateExitProperty(
            AsyncSpecAt(initialContext))
 BY FairProtectedStage3RankProgress,
@@ -729,7 +749,9 @@ BY FairProtectedStage3RankProgress,
        Stage2RankProgressExit,
        Stage2HandoffRankBlocked,
        ResponsiveProtectedCandidateOwned,
-       ProtectedCandidateOwned
+       ProtectedCandidateOwned,
+       ProtectedServiceFiniteRunnerEpisodeClosureProperty,
+       Stage6FiniteRunnerEpisodeClosureProperty
 
 (***************************************************************************
 Reducer semantic handoffs after physical ownership exit.
@@ -786,8 +808,12 @@ BY DecisionExecutableStageOwnerIsDispatchable,
        CommandSuccessorsScheduledAfter,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, FifoRuntimeStep,
        DeferredDrainStep, DiscardCommand, DeferCommand,
        ExecuteCommand, ExecuteRegularCommand,
        ExecuteDecisionFetch, ExecuteApply,
@@ -2691,6 +2717,29 @@ BY ExactDecisionResponsePhysicalCompletionDebtIsFinite,
        ExactDecisionPhysicalCompletionRunnerRank,
        ExactDecisionPhysicalCompletionRunnerCarrier
 
+THEOREM ExactDecisionPhysicalCompletionNonIngressRunLowersRank ==
+  \A node \in ValidatorIds, response:
+    /\ AsyncTypeInvariant
+    /\ \/ LocalAdmissionStep(node)
+       \/ SerializedRunnerRuntimeStep(node)
+       \/ SerializedLocalPrecedesServeIngressStep(node)
+       \/ AsyncServeIngressTargetOnlyTurn(node)
+    => /\ DrainableIngressTurnReachRank(node)'
+              < DrainableIngressTurnReachRank(node)
+       /\ TransportCompletionOwnerDebt(response)'
+              = TransportCompletionOwnerDebt(response)
+BY LocalStepDecreasesDrainableIngressTurnReach,
+   SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
+   SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
+   ExactTicketTurnDecreasesDrainableIngressTurnReach,
+   SerializedRuntimeLeavesIngress, IsaT(180)
+   DEF LocalAdmissionStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       TransportCompletionOwnerDebt,
+       TransportCompletionOwnerIndices, IngressLane
+
 THEOREM ExactDecisionPhysicalCompletionSameNodeRunStrictlyProgresses ==
   \A node, qc, archive, request, response, packet:
     \A rank \in ExactDecisionPhysicalCompletionRunnerCarrier:
@@ -2729,18 +2778,23 @@ PROOF
       BY <1>1, AsyncBracketNextPreservesStrongTypeInvariant
          DEF PostGstRunNode
     <2>3. CASE asyncRunnerPhase[node] = "Local"
-      <3>1. LocalAdmissionStep(node)
-        BY <1>1
-           DEF PostGstRunNode, RunNode, RunNodeWork
-      <3>2. DrainableIngressTurnReachRank(node)'
-                  < DrainableIngressTurnReachRank(node)
-        BY <2>1, <3>1, LocalStepDecreasesDrainableIngressTurnReach
-      <3>3. TransportCompletionOwnerDebt(response)' =
-                  TransportCompletionOwnerDebt(response)
-        BY <3>1, Isa
-           DEF LocalAdmissionStep, TransportCompletionOwnerDebt,
-               TransportCompletionOwnerIndices, IngressLane
-      <3> QED BY <1>1, <2>2, <3>2, <3>3, Isa
+      <3>1. \/ LocalAdmissionStep(node)
+             \/ SerializedLocalPrecedesServeIngressStep(node)
+             \/ AsyncServeIngressTargetOnlyTurn(node)
+        BY <1>1, <2>3, RunNodeWorkConcreteActionCaseSplit, Isa
+           DEF PostGstRunNode, RunNode,
+               IngressDrainStep, SerializedRunnerRuntimeStep,
+               SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               SerializedLocalPrecedesServeIngressStep,
+               SelectedLocalAdmissionAdvance
+      <3>2. /\ DrainableIngressTurnReachRank(node)'
+                       < DrainableIngressTurnReachRank(node)
+              /\ TransportCompletionOwnerDebt(response)' =
+                       TransportCompletionOwnerDebt(response)
+        BY <2>1, <3>1,
+           ExactDecisionPhysicalCompletionNonIngressRunLowersRank
+      <3> QED BY <1>1, <2>2, <3>2, Isa
            DEF ExactDecisionPhysicalCompletionRunnerStrictResult,
                ExactDecisionPhysicalCompletionRunnerProgress,
                ExactDecisionPhysicalCompletionRunnerGoal,
@@ -2799,18 +2853,23 @@ PROOF
                  SetLessThan, LexPairOrdering, OpToRel
       <3> QED BY <3>2, <3>3
     <2>5. CASE asyncRunnerPhase[node] = "Runtime"
-      <3>1. SerializedRuntimeStep(node)
-        BY <1>1
-           DEF PostGstRunNode, RunNode, RunNodeWork
-      <3>2. DrainableIngressTurnReachRank(node)'
-                  < DrainableIngressTurnReachRank(node)
-        BY <2>1, <3>1, RuntimeStepDecreasesDrainableIngressTurnReach
-      <3>3. TransportCompletionOwnerDebt(response)' =
-                  TransportCompletionOwnerDebt(response)
-        BY <2>1, <3>1, SerializedRuntimeLeavesIngress, Isa
-           DEF TransportCompletionOwnerDebt,
-               TransportCompletionOwnerIndices, IngressLane
-      <3> QED BY <1>1, <2>2, <3>2, <3>3, Isa
+      <3>1. \/ SerializedRunnerRuntimeStep(node)
+             \/ AsyncServeIngressTargetOnlyTurn(node)
+        BY <1>1, <2>5, RunNodeWorkConcreteActionCaseSplit, Isa
+           DEF PostGstRunNode, RunNode,
+               LocalAdmissionStep, IngressDrainStep,
+               SerializedRunnerRuntimeStep,
+               SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep,
+               SerializedLocalPrecedesServeIngressStep,
+               SelectedLocalAdmissionAdvance
+      <3>2. /\ DrainableIngressTurnReachRank(node)'
+                       < DrainableIngressTurnReachRank(node)
+              /\ TransportCompletionOwnerDebt(response)' =
+                       TransportCompletionOwnerDebt(response)
+        BY <2>1, <3>1,
+           ExactDecisionPhysicalCompletionNonIngressRunLowersRank
+      <3> QED BY <1>1, <2>2, <3>2, Isa
            DEF ExactDecisionPhysicalCompletionRunnerStrictResult,
                ExactDecisionPhysicalCompletionRunnerProgress,
                ExactDecisionPhysicalCompletionRunnerGoal,
@@ -2856,6 +2915,11 @@ BY AsyncBracketNextPreservesStrongTypeInvariant, IsaT(300)
        TransportCompletionOwnerIndices,
        IngressLane,
        RunNode, RunNodeWork,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RunHistoricalServer, RunHistoricalRecoveryNode,
        AsyncAllVars, AsyncSchedulerVars
 
@@ -3565,10 +3629,14 @@ BY ExactDecisionServeJobProjectsProtectedOwner,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
-       LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       AdmitProducerCompletion, AdmitCausalHead,
        IngressDrainStep, DrainFairIngressSelected,
        DrainHistoricalIngressSelected,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        CommitCertificateDiscoveryStepWork,
@@ -4007,8 +4075,11 @@ BY ExactDecisionSendingRetransmitPublishesExactAlias,
        ReadyRunInnerOrdering, ReadyRunInnerCarrier,
        RuntimeReachRank,
        PostGstRunNode, RunNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DeferredDrainStep, DeferredTagStep,
        DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep,
@@ -4176,7 +4247,11 @@ BY ExactDecisionSendingRetransmitPublishesExactAlias,
        ExactDecisionRequestPacketEmissionGoal,
        ExactDecisionSendingRetransmitStep,
        PostGstRunNode, RunNode, RunNodeWork,
-       SerializedRuntimeStep, RuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        AsyncAllVars
 
 THEOREM FairExactDecisionRequestSendingHandoff ==
@@ -5710,6 +5785,55 @@ BY AsyncBracketNextPreservesStrongTypeInvariant,
        PostGstRunNode, RunNode, RunNodeWork, SerializedRuntimeStep,
        AsyncAllVars
 
+THEOREM ExactDecisionRequestIngressOlderRuntimeInterleaveCannotAscendRank ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ PostGstRunNode(archive)
+    /\ SerializedRuntimePrecedesServeIngressStep(archive)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)'
+    => <<ExactDecisionRequestIngressRank(archive, request)',
+          ExactDecisionRequestIngressRank(archive, request)>>
+         \in ExactDecisionRequestIngressRankOrdering
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach,
+   ExactDecisionRequestIngressStrictComponentLowersRank, IsaT(300)
+   DEF ExactDecisionRequestIngressStrictComponentDecrease,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressTargetServeCapacityDebt,
+       ExactDecisionRequestIngressReachRank,
+       PostGstRunNode, RunNode, RunNodeWork,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncAllVars
+
+THEOREM ExactDecisionRequestIngressOlderLocalInterleaveCannotAscendRank ==
+  \A node, qc, archive, request:
+    /\ AsyncStrongTypeInvariant
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)
+    /\ PostGstRunNode(archive)
+    /\ SerializedLocalPrecedesServeIngressStep(archive)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ ExactDecisionRequestIngressLaneResidual(
+         node, qc, archive, request)'
+    => <<ExactDecisionRequestIngressRank(archive, request)',
+          ExactDecisionRequestIngressRank(archive, request)>>
+         \in ExactDecisionRequestIngressRankOrdering
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
+   ExactDecisionRequestIngressStrictComponentLowersRank, IsaT(300)
+   DEF ExactDecisionRequestIngressStrictComponentDecrease,
+       ExactDecisionRequestIngressModeRank,
+       ExactDecisionRequestIngressTargetServeCapacityDebt,
+       ExactDecisionRequestIngressReachRank,
+       PostGstRunNode, RunNode, RunNodeWork,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncAllVars
+
 THEOREM ExactDecisionRequestIngressIoServiceLowersCapacityDebt ==
   \A node, qc, archive, request:
     /\ AsyncStrongTypeInvariant
@@ -5949,8 +6073,11 @@ BY IsaT(300)
        AsyncByzantineProposal, AsyncByzantineVote,
        AsyncByzantineTimeout,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DirectTimeoutStep, DirectRetransmitStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        FifoRuntimeStep, DeferredDrainStep, IdleRuntimeStep,
@@ -6000,8 +6127,12 @@ BY AsyncBracketStepPreservesNodeApplication, IsaT(300)
        CausalQueueNonempty, HeadCausalCandidate,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunHistoricalServer, RunNodeWork, LocalAdmissionStep,
-       SerializedRuntimeStep, RuntimeStep,
+       RunHistoricalServer, RunNodeWork,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DirectTimeoutStep, DirectRetransmitStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        FifoRuntimeStep, DeferredDrainStep, IdleRuntimeStep,
@@ -6155,8 +6286,12 @@ BY IsaT(300)
        AsyncIoQueueDepth,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunHistoricalServer, RunNodeWork, LocalAdmissionStep,
+       RunHistoricalServer, RunNodeWork,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
        IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        DrainFairIngressSelected, DrainHistoricalIngressSelected,
        AdmitCausalHead, ServiceIoWorker, ServiceIoWorkerWork,
        ServiceHistoricalRecoveryIoWorker,
@@ -7382,6 +7517,8 @@ BY ExactDecisionRequestLifecycleFrozenOwnersDoNotReplenish,
    ExactDecisionRequestEarlierIngressOwnerServiceLowersRank,
    ExactDecisionRequestFrozenServeBarrierPredecessorServiceLowersRank,
    ExactDecisionRequestFrozenServeBarrierMaterializationLowersRank,
+   ExactDecisionRequestIngressOlderRuntimeInterleaveCannotAscendRank,
+   ExactDecisionRequestIngressOlderLocalInterleaveCannotAscendRank,
    ExactDecisionRequestLifecycleOrdinalCannotResurrect,
    ExactDecisionRequestIngressOrdinalPersistsUntilDrain, IsaT(300)
    DEF ExactDecisionRequestLifecycleStepClassification,
@@ -7702,6 +7839,7 @@ THEOREM ExactDecisionRequestLifecycleSelectedActionConsumesEpisode ==
          node, qc, archive, request, rank, budget)'
 BY ExactDecisionRequestIngressIoServicePersistsAndLowers,
    ExactDecisionRequestIngressLocalProducerCannotAscendRank,
+   ExactDecisionRequestIngressOlderLocalInterleaveCannotAscendRank,
    ExactDecisionRequestIngressRuntimeActivationCannotAscendRank,
    ExactDecisionRequestIngressRunnerActionCreatesGoal,
    ExactDecisionRequestEarlierIngressOwnerServiceLowersRank,
@@ -7979,8 +8117,8 @@ BY ExactDecisionRequestAdmissionHandoffConvergence,
 Protected Serve FIFO closure under the actual exact-corridor specification.
 
 The generic Serve FIFO rank leaf is already proved under `AsyncSpecAt`; it
-does not consume the install-generation budget needed by unrelated Stage-2
-candidate work.  The older aggregate starvation bridge was stated only for
+does not assume away checked install-generation exhaustion in unrelated
+Stage-2 candidate work.  The older aggregate starvation bridge was stated only for
 `AsyncLiveSpecAt`, so the two lemmas below specialize its well-founded
 natural-position argument to the weaker specification used here.
 ***************************************************************************)
@@ -9484,8 +9622,11 @@ BY AsyncNextPreservesControlServiceStateTypeInvariant,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DrainFairIngressSelected, AdmitCausalHead,
        AdmitProducerCompletion, ServiceIoWorkerWork,
        FifoRuntimeStep, DeferredDrainStep,
@@ -9535,14 +9676,13 @@ THEOREM ExactDecisionSameGenerationCandidateServiceCannotReactivateAtGst ==
     /\ gst
     /\ [AsyncNext]_AsyncAllVars
     /\ ~AsyncCandidateTransientMarkerExitThisStep(candidate)
-    => /\ AsyncCandidateTransientServiceActive(candidate)'
+    => /\ ~AsyncCandidateTransientServiceMarked(candidate)'
        /\ ~CandidateScheduled(candidate)'
 BY AsyncCandidateSameGenerationServicedIdentityCannotReactivateAtGst
 
 THEOREM ExactDecisionTerminalCandidateDiscardCannotReactivateAtGst ==
   \A identity \in AsyncCandidateAdmissionIdentitySet:
     /\ AsyncCandidateServiceLifecycleInvariant
-    /\ identity.service.phase = "DeliverChunk"
     /\ AsyncCandidateTerminalIdentityTombstoned(identity.service)
     /\ identity \notin AsyncScheduledCandidateAdmissionIdentities
     /\ gst
@@ -9716,8 +9856,11 @@ BY HistoricalDiscoveryPublicationHelpersHaveFixedClockFrame,
        AsyncNext, AsyncNonCrashStep,
        AsyncRunnerStep, AsyncNonRunnerStep,
        RunNode, RunHistoricalRecoveryNode, RunHistoricalServer,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep,
+       RunNodeWork, LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep, IngressDrainStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        CommitCertificateDiscoveryStepWork,
@@ -11056,6 +11199,8 @@ BY ExactDecisionRequestEmissionKernelsDischargeResidual,
 
 THEOREM ExactDecisionResidualKernelsDischargeStageService ==
   \A initialContext:
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
     /\ ExactDecisionStage2BusyClosureProperty(
          AsyncSpecAt(initialContext))
     /\ ExactDecisionRequestPacketEmissionKernelProperty(
@@ -11098,8 +11243,10 @@ BY ExactDecisionServiceSourceDecomposition,
 
 THEOREM ExactDecisionOffSchedulerResidualConvergenceDischargesStageService ==
   \A initialContext:
-    ExactDecisionOffSchedulerResidualConvergenceProperty(
-      AsyncSpecAt(initialContext))
+    /\ ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+         AsyncSpecAt(initialContext))
+    /\ ExactDecisionOffSchedulerResidualConvergenceProperty(
+         AsyncSpecAt(initialContext))
       => ExactDecisionStageServiceProperty(
            AsyncSpecAt(initialContext))
 BY ExactDecisionStage2BusyClosure,

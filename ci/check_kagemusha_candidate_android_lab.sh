@@ -74,6 +74,8 @@ for needle, message in (
     ('mavenCentral()', "candidate lab must declare Maven Central"),
     ('kagemushaCandidateCompileOnly', "candidate lab must expose the guarded compile-only contract"),
     ('compileDebugAndroidTestKotlin', "compile-only contract must compile androidTest Kotlin"),
+    ('addGeneratedSourceDirectory', "candidate lab generated inputs must use the AGP Variant API"),
+    ('androidTestImplementation(project(":core-jvm"))', "candidate lab must declare its AccountAddress dependency"),
     ('stageCandidateLabTestApk', "candidate lab must retain the exact androidTest APK"),
     ('candidate-stage-manifest-v1.json', "candidate lab must bind the exact stage manifest"),
 ):
@@ -82,6 +84,7 @@ for needle, message in (
 for forbidden in (
     "maven-publish", "publishing {", "kagemusha-wallet-release.apk",
     "output.outputFileName", "variant.outputFileName",
+    "assets.srcDir(generatedAssets)", "jniLibs.srcDir(generatedJni)",
 ):
     if forbidden in gradle:
         errors.append(f"candidate lab Gradle file must not contain {forbidden}")
@@ -164,7 +167,7 @@ continuity_signatures = {
         "ByteArray",
     ),
     "nativeBuildRedeemRequestV4": (
-        ["ByteArray"] * 6 + ["Int"] + ["ByteArray"] * 4 + ["Long"],
+        ["ByteArray"] * 5 + ["Int", "ByteArray", "Int"] + ["ByteArray"] * 4 + ["Long"],
         "ByteArray",
     ),
 }
@@ -463,18 +466,22 @@ for needle in (
     ":kagemusha-candidate-evidence-lab:compileDebugAndroidTestKotlin",
     "--offline",
     "--max-workers=2",
+    "GRADLE_RO_DEP_CACHE",
+    "compile-gradle-read-only-cache",
+    "chmod -R u+w",
 ):
     if needle not in compile_check:
         errors.append(f"actual AGP/Kotlin compile-only check is missing {needle}")
 
 source_seal = text["source_seal"]
 for needle in (
-    "iroha.kagemusha.full-source-tree-sha256.v2",
+    "iroha.kagemusha.full-source-tree-sha256.v3",
     '"status",',
     '"--porcelain=v1",',
     '"-z",',
     '"--untracked-files=all",',
-    "ALLOWED_MODES",
+    "ALLOWED_INDEX_MODES",
+    "ALLOWED_UNTRACKED_MODES",
     "head_before = _head(root)",
     "_index_entries(root)",
 ):

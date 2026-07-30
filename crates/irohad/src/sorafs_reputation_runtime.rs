@@ -1352,6 +1352,7 @@ mod tests {
     struct CountingRetentionControl {
         reconciliations: AtomicU64,
         ready: AtomicBool,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
     impl CountingRetentionControl {
@@ -1359,6 +1360,18 @@ mod tests {
             Self {
                 reconciliations: AtomicU64::new(0),
                 ready: AtomicBool::new(ready),
+                external_calls: None,
+            }
+        }
+
+        fn with_external_calls(
+            ready: bool,
+            external_calls: Arc<ExternalProviderCallCounters>,
+        ) -> Self {
+            Self {
+                reconciliations: AtomicU64::new(0),
+                ready: AtomicBool::new(ready),
+                external_calls: Some(external_calls),
             }
         }
     }
@@ -1370,6 +1383,7 @@ mod tests {
             (),
             crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1,
         >{
+            ExternalProviderCallCounters::record_readiness(&self.external_calls);
             if self.ready.load(Ordering::Acquire) {
                 Ok(())
             } else {
@@ -1388,6 +1402,7 @@ mod tests {
             crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlErrorV1,
         >{
             self.revalidate()?;
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             self.reconciliations.fetch_add(1, Ordering::AcqRel);
             Ok(
                 crate::sorafs_reputation_finalized_query::ReputationFinalizedArchiveRetentionControlOutcomeV1::NoRequest,
@@ -1448,10 +1463,12 @@ mod tests {
         ready: bool,
         qualification: ReputationRuntimeProviderQualificationV1,
         malformed_bootstrap_continuation: bool,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
     impl ReputationRuntimeProviderV1 for UnavailableQuery {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
@@ -1461,6 +1478,7 @@ mod tests {
             ReputationRuntimeProviderQualificationV1,
             ReputationExternalFailureV1,
         > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
             if self.ready {
                 Ok(self.qualification)
             } else {
@@ -1476,6 +1494,7 @@ mod tests {
             _chain_id: &ChainId,
             _maximum_height: u64,
         ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1487,6 +1506,7 @@ mod tests {
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             let anchor = ReputationFinalizedAnchorV1 {
                 chain_id: chain_id.clone(),
                 identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
@@ -1537,6 +1557,7 @@ mod tests {
             _after: Option<ProofOutcomeFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ProofOutcomeFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1546,6 +1567,7 @@ mod tests {
             _after: Option<ReputationJournalFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ReputationJournalFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1555,6 +1577,7 @@ mod tests {
             _after: Option<RepairFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<RepairFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1564,6 +1587,7 @@ mod tests {
             _after: Option<OrderbookFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<OrderbookFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1573,6 +1597,7 @@ mod tests {
             _after: Option<ReserveFinalizedEventCursorV1>,
             _limit: u32,
         ) -> Result<ReserveFinalizedEventPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
 
@@ -1582,6 +1607,7 @@ mod tests {
             _after_provider_id: Option<ProviderId>,
             _limit: u32,
         ) -> Result<ReserveProviderAccountPageV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             unreachable!("assembly must not query external state")
         }
     }
@@ -1590,6 +1616,7 @@ mod tests {
     struct PendingThresholdSigner {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
     #[derive(Debug)]
@@ -1616,10 +1643,12 @@ mod tests {
     struct PendingJournalSubmitter {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
     impl ReputationRuntimeProviderV1 for PendingJournalSubmitter {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
@@ -1629,12 +1658,14 @@ mod tests {
             ReputationRuntimeProviderQualificationV1,
             ReputationExternalFailureV1,
         > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
             Ok(self.qualification)
         }
     }
 
     impl ReputationJournalTransactionSubmitterV1 for PendingJournalSubmitter {
         fn supports_authority(&self, _authority: &AccountId) -> bool {
+            ExternalProviderCallCounters::record_readiness(&self.external_calls);
             true
         }
 
@@ -1642,6 +1673,7 @@ mod tests {
             &self,
             request: &ReputationJournalTransactionRequestV1,
         ) -> ReputationJournalTransactionSubmitOutcomeV1 {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             ReputationJournalTransactionSubmitOutcomeV1::Ambiguous {
                 receipt: request.idempotency_key,
             }
@@ -1650,6 +1682,7 @@ mod tests {
 
     impl ReputationRuntimeProviderV1 for PendingThresholdSigner {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
@@ -1659,6 +1692,7 @@ mod tests {
             ReputationRuntimeProviderQualificationV1,
             ReputationExternalFailureV1,
         > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
             Ok(self.qualification)
         }
     }
@@ -1668,6 +1702,7 @@ mod tests {
             &self,
             _request: &ReputationThresholdSigningRequestV1,
         ) -> Result<Option<SignedReputationSnapshotV1>, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             Ok(None)
         }
     }
@@ -1713,10 +1748,12 @@ mod tests {
     struct PendingGovernanceDag {
         handle: String,
         qualification: ReputationRuntimeProviderQualificationV1,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
     }
 
     impl ReputationRuntimeProviderV1 for PendingGovernanceDag {
         fn handle(&self) -> &str {
+            ExternalProviderCallCounters::record_handle(&self.external_calls);
             &self.handle
         }
 
@@ -1726,6 +1763,7 @@ mod tests {
             ReputationRuntimeProviderQualificationV1,
             ReputationExternalFailureV1,
         > {
+            ExternalProviderCallCounters::record_qualification(&self.external_calls);
             Ok(self.qualification)
         }
     }
@@ -1736,6 +1774,7 @@ mod tests {
             _request: &ReputationGovernanceDagPublicationRequestV1,
         ) -> Result<Option<ReputationGovernanceDagReadbackV1>, ReputationExternalFailureV1>
         {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
             Ok(None)
         }
     }
@@ -1854,6 +1893,16 @@ mod tests {
         trust_policy: &ReputationSnapshotTrustPolicyV1,
         query_handle: &str,
     ) -> ReputationRuntimeDependenciesV1 {
+        dependencies_with_calls(config, chain_id, trust_policy, query_handle, None)
+    }
+
+    fn dependencies_with_calls(
+        config: &SorafsReputationRuntime,
+        chain_id: &ChainId,
+        trust_policy: &ReputationSnapshotTrustPolicyV1,
+        query_handle: &str,
+        external_calls: Option<Arc<ExternalProviderCallCounters>>,
+    ) -> ReputationRuntimeDependenciesV1 {
         let weights = ReputationWeightsV1 {
             version: REPUTATION_WEIGHTS_VERSION_V1,
             por_success_bps: config.por_success_bps,
@@ -1897,10 +1946,12 @@ mod tests {
                 ready: true,
                 qualification: query_qualification,
                 malformed_bootstrap_continuation: false,
+                external_calls: external_calls.clone(),
             }),
             journal_transaction_submitter: Arc::new(PendingJournalSubmitter {
                 handle: config.journal_transaction_submitter_handle.clone(),
                 qualification: submitter_qualification,
+                external_calls: external_calls.clone(),
             }),
             threshold_signer: Arc::new(PendingThresholdSigner {
                 handle: config.threshold_signer_handle.clone(),
@@ -1908,6 +1959,7 @@ mod tests {
                     config.threshold_signer_revision,
                     config.threshold_signer_policy_digest,
                 ),
+                external_calls: external_calls.clone(),
             }),
             governance_dag: Arc::new(PendingGovernanceDag {
                 handle: config.governance_dag_handle.clone(),
@@ -1915,6 +1967,7 @@ mod tests {
                     config.governance_dag_revision,
                     config.governance_dag_policy_digest,
                 ),
+                external_calls,
             }),
             retention_control: None,
         }
@@ -1929,54 +1982,17 @@ mod tests {
         Arc<ExternalProviderCallCounters>,
     ) {
         let calls = Arc::new(ExternalProviderCallCounters::default());
-        let finalized_query: Arc<dyn ReputationFinalizedQueryV1> =
-            Arc::new(CountingExternalProvider::new(
-                config.finalized_query_handle.clone(),
-                finalized_query_qualification_v1(config, chain_id, trust_policy)
-                    .expect("counting finalized-query qualification"),
-                Arc::clone(&calls),
-            ));
-        let journal_transaction_submitter: Arc<dyn ReputationJournalTransactionSubmitterV1> =
-            Arc::new(CountingExternalProvider::new(
-                config.journal_transaction_submitter_handle.clone(),
-                ReputationRuntimeProviderQualificationV1::new(
-                    config.journal_transaction_submitter_revision,
-                    config.journal_transaction_submitter_policy_digest,
-                ),
-                Arc::clone(&calls),
-            ));
-        let threshold_signer: Arc<dyn ReputationThresholdSignerClientV1> =
-            Arc::new(CountingExternalProvider::new(
-                config.threshold_signer_handle.clone(),
-                ReputationRuntimeProviderQualificationV1::new(
-                    config.threshold_signer_revision,
-                    config.threshold_signer_policy_digest,
-                ),
-                Arc::clone(&calls),
-            ));
-        let governance_dag: Arc<dyn ReputationGovernanceDagClientV1> =
-            Arc::new(CountingExternalProvider::new(
-                config.governance_dag_handle.clone(),
-                ReputationRuntimeProviderQualificationV1::new(
-                    config.governance_dag_revision,
-                    config.governance_dag_policy_digest,
-                ),
-                Arc::clone(&calls),
-            ));
-        let retention_control: Arc<dyn ReputationFinalizedArchiveRetentionControlV1> =
-            Arc::new(CountingExternalRetentionControl {
-                calls: Arc::clone(&calls),
-            });
-        (
-            ReputationRuntimeDependenciesV1 {
-                finalized_query,
-                journal_transaction_submitter,
-                threshold_signer,
-                governance_dag,
-                retention_control: Some(retention_control),
-            },
-            calls,
-        )
+        let mut dependencies = dependencies_with_calls(
+            config,
+            chain_id,
+            trust_policy,
+            &config.finalized_query_handle,
+            Some(Arc::clone(&calls)),
+        );
+        dependencies.retention_control = Some(Arc::new(
+            CountingRetentionControl::with_external_calls(true, Arc::clone(&calls)),
+        ));
+        (dependencies, calls)
     }
 
     #[tokio::test]
@@ -2576,6 +2592,7 @@ mod tests {
             ready: false,
             qualification: query_qualification,
             malformed_bootstrap_continuation: false,
+            external_calls: None,
         });
 
         let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
@@ -2610,6 +2627,7 @@ mod tests {
             ready: true,
             qualification: query_qualification,
             malformed_bootstrap_continuation: true,
+            external_calls: None,
         });
 
         let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
@@ -2645,6 +2663,7 @@ mod tests {
                 )
                 .expect("substituted publisher qualification"),
             ),
+            external_calls: None,
         });
 
         let error = assemble(&config, &chain_id, trust_policy.as_ref(), dependencies)
@@ -2681,6 +2700,7 @@ mod tests {
                 REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
                 [0xE1; 32],
             ),
+            external_calls: None,
         });
         let mismatch = assemble(
             &mismatched_config,
@@ -2716,6 +2736,7 @@ mod tests {
             ready: true,
             qualification: query_qualification,
             malformed_bootstrap_continuation: false,
+            external_calls: None,
         });
         let _ = assemble(
             &test_marked_config,

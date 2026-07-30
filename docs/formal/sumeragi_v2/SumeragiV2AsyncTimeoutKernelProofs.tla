@@ -758,12 +758,24 @@ PROOF
       BY <1>1, <2>2, Isa
          DEF IngressDrainStep, DrainFairIngressSelected, vars
     <2>3. CASE SerializedRuntimeStep(node)
+                  \/ SerializedRuntimePrecedesServeIngressStep(node)
       <3>1. RuntimeStep(node)
-        BY <2>3 DEF SerializedRuntimeStep
+        BY <2>3
+           DEF SerializedRuntimeStep,
+               SerializedRuntimePrecedesServeIngressStep
       <3>2. \E command: ExecuteCommand(command)
         BY <1>1, <3>1, ChangedRuntimeStepExecutesCommand
       <3> QED BY <3>2
-    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, <2>4, Isa
+         DEF AsyncServeIngressTargetOnlyTurn, vars
+    <2>5. CASE SerializedLocalPrecedesServeIngressStep(node)
+      BY <1>1, <2>5, Isa
+         DEF SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             AdmitProducerCompletion, AdmitCausalHead, vars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF RunNodeWork
   <1> QED BY <1>1
 
 THEOREM AsyncFaultStepKeepsTimeoutPool ==

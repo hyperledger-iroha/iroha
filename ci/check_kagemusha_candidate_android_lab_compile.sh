@@ -190,6 +190,9 @@ IFS='|' read -r CANDIDATE_SHA256 STAGE_SHA256 SOURCE_COMMIT SOURCE_TREE_SHA256 \
 }
 FIXTURE_CANDIDATE_ROOT="$ROOT_DIR/artifacts/kagemusha-candidate-evidence/$CANDIDATE_SHA256"
 cleanup() {
+  if [[ -d "$FIXTURE_CANDIDATE_ROOT" && ! -L "$FIXTURE_CANDIDATE_ROOT" ]]; then
+    chmod -R u+w "$FIXTURE_CANDIDATE_ROOT" 2>/dev/null || true
+  fi
   rm -rf "$FIXTURE_CANDIDATE_ROOT"
 }
 trap cleanup EXIT
@@ -211,14 +214,30 @@ PRIVATE_GRADLE_HOME="$EVIDENCE_ROOT/compile-gradle-user-home"
 mkdir -p "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
 chmod 0700 "$PRIVATE_GRADLE_HOME" "$PRIVATE_GRADLE_HOME/caches" "$PRIVATE_GRADLE_HOME/wrapper"
 SOURCE_GRADLE_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
-for cache_path in \
-  "$SOURCE_GRADLE_HOME"/caches/modules-2 \
-  "$SOURCE_GRADLE_HOME"/caches/jars-* \
-  "$SOURCE_GRADLE_HOME"/caches/transforms-*; do
-  if [[ -e "$cache_path" ]]; then
-    ln -s "$cache_path" "$PRIVATE_GRADLE_HOME/caches/$(basename "$cache_path")"
-  fi
-done
+SOURCE_DEPENDENCY_CACHE="$SOURCE_GRADLE_HOME/caches/modules-2"
+[[ -d "$SOURCE_DEPENDENCY_CACHE" ]] || {
+  echo "[kagemusha-candidate-compile] ERROR: warmed Gradle dependency cache is required" >&2
+  exit 69
+}
+READ_ONLY_DEPENDENCY_CACHE="$EVIDENCE_ROOT/compile-gradle-read-only-cache"
+mkdir -m 0700 "$READ_ONLY_DEPENDENCY_CACHE"
+case "$(uname -s)" in
+  Darwin)
+    /bin/cp -cR "$SOURCE_DEPENDENCY_CACHE" "$READ_ONLY_DEPENDENCY_CACHE/modules-2"
+    ;;
+  Linux)
+    cp -a --reflink=auto \
+      "$SOURCE_DEPENDENCY_CACHE" "$READ_ONLY_DEPENDENCY_CACHE/modules-2"
+    ;;
+  *)
+    echo "[kagemusha-candidate-compile] ERROR: unsupported Gradle cache snapshot host" >&2
+    exit 69
+    ;;
+esac
+rm -f \
+  "$READ_ONLY_DEPENDENCY_CACHE/modules-2/modules-2.lock" \
+  "$READ_ONLY_DEPENDENCY_CACHE/modules-2/gc.properties"
+chmod -R a-w "$READ_ONLY_DEPENDENCY_CACHE"
 if [[ -d "$SOURCE_GRADLE_HOME/wrapper/dists" ]]; then
   ln -s "$SOURCE_GRADLE_HOME/wrapper/dists" "$PRIVATE_GRADLE_HOME/wrapper/dists"
 fi
@@ -234,6 +253,7 @@ fi
     ANDROID_HOME="$ANDROID_SDK_RESOLVED" \
     ANDROID_SDK_ROOT="$ANDROID_SDK_RESOLVED" \
     GRADLE_USER_HOME="$PRIVATE_GRADLE_HOME" \
+    GRADLE_RO_DEP_CACHE="$READ_ONLY_DEPENDENCY_CACHE" \
     ./gradlew --no-daemon --offline --max-workers=2 \
     -PkagemushaCandidateCompileOnly=true \
     -PkagemushaCandidateEvidenceLab=true \

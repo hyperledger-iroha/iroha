@@ -1043,17 +1043,17 @@ CrashRecoveryStateInvariant ==
   /\ TimeoutSigningRequiresIntent
   /\ AppliedRequiresDecision
 
-THEOREM RestartIncrementsSelectedGeneration ==
+THEOREM RestartResetsSelectedGeneration ==
   \A node \in ValidatorIds:
     TypeInvariant /\ Restart(node)
-      => generation'[node] = generation[node] + 1
+      => generation'[node] = 0
 BY Isa DEF TypeInvariant, Restart
 
 THEOREM CrashAndRestartPreserveDurableSafety ==
   /\ CrashPreservesDurableProjection
   /\ RestartPreservesDurableProjection
   /\ PendingWritesAreUnacknowledged
-  /\ (TypeInvariant => StaleGenerationRejected)
+  /\ (TypeInvariant => RestartStartsFreshProcessGeneration)
 PROOF
   <1>1. CrashPreservesDurableProjection
     BY SMTT(120)
@@ -1065,18 +1065,14 @@ PROOF
            DurableProjectionPrime, Restart
   <1>3. PendingWritesAreUnacknowledged
     BY SMTT(120) DEF PendingWritesAreUnacknowledged, Crash
-  <1>4. TypeInvariant => StaleGenerationRejected
+  <1>4. TypeInvariant => RestartStartsFreshProcessGeneration
     <2>1. ASSUME TypeInvariant,
                   NEW node \in ValidatorIds,
                   Restart(node)
-           PROVE generation'[node] > generation[node]
-      <3>1. generation'[node] = generation[node] + 1
-        BY <2>1, RestartIncrementsSelectedGeneration
-           DEF StrongInductiveInvariant, Safety
-      <3>2. generation[node] \in Int
-        BY <2>1 DEF TypeInvariant, Generations
-      <3> QED BY <3>1, <3>2, SMT
-    <2> QED BY <2>1 DEF StaleGenerationRejected
+           PROVE generation'[node] = 0
+      BY <2>1, RestartResetsSelectedGeneration
+         DEF StrongInductiveInvariant, Safety
+    <2> QED BY <2>1 DEF RestartStartsFreshProcessGeneration
   <1> QED BY <1>1, <1>2, <1>3, <1>4
 
 CrashRecoveryProperty(specification) ==
@@ -1085,7 +1081,7 @@ CrashRecoveryProperty(specification) ==
   /\ (specification => [][RestartPreservesDurableProjection]_vars)
   /\ (specification => [][PendingWritesAreUnacknowledged]_vars)
   /\ (specification =>
-        [][TypeInvariant => StaleGenerationRejected]_vars)
+        [][TypeInvariant => RestartStartsFreshProcessGeneration]_vars)
 
 THEOREM CrashRecoveryObligation ==
   \A initialContext:
@@ -1104,7 +1100,7 @@ PROOF
             => /\ [][CrashPreservesDurableProjection]_vars
                /\ [][RestartPreservesDurableProjection]_vars
                /\ [][PendingWritesAreUnacknowledged]_vars
-               /\ [][TypeInvariant => StaleGenerationRejected]_vars
+               /\ [][TypeInvariant => RestartStartsFreshProcessGeneration]_vars
       BY CrashAndRestartPreserveDurableSafety, PTL
     <2> QED BY <2>3, <2>4
        DEF CrashRecoveryProperty

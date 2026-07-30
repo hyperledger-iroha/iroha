@@ -4201,6 +4201,7 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
     // A governed artifact may carry either the normalized Core STARK key or
     // the richer audited BFV-native descriptor. These are distinct typed
     // artifact formats; each must use its one canonical V1 representation.
+    #[cfg(feature = "zk-stark")]
     if let Err(core_err) = norito::decode_canonical::<crate::zk_stark::StarkFriVerifyingKeyV1>(
         &native_material.native_payload,
     ) {
@@ -4213,6 +4214,15 @@ fn validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_la
             ))
         })?;
     }
+    #[cfg(not(feature = "zk-stark"))]
+    norito::decode_canonical::<
+        iroha_crypto::fhe_bfv::BfvFullBootstrapNativeStarkFriVerifyingKeyPayloadV1,
+    >(&native_material.native_payload)
+    .map_err(|native_err| {
+        invalid_parameter(format!(
+            "FHE full-bootstrap execution native verifier-key payload must use the canonical BFV-native governed V1 format when Core STARK support is disabled: {native_err}"
+        ))
+    })?;
     Ok(())
 }
 

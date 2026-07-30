@@ -90,6 +90,21 @@ BY SMTT(30)
        NodeHasApplication, AsyncDeferredVars, AsyncIoVars,
        AsyncLocalAdmissionVars, AsyncAuxVars, vars
 
+THEOREM SelectedLocalAdmissionAdvancePreservesHistoricalRecoveryType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SelectedLocalAdmissionAdvance(node)
+    => AsyncHistoricalRecoveryTypeInvariant'
+BY SMTT(30)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
+       EnqueueCandidate, LeaveCausalQueues,
+       UpdateLocalAdmissionMetadata,
+       AsyncHistoricalRecoveryTypeInvariant,
+       NodeHasApplication, AsyncDeferredVars, AsyncIoVars,
+       AsyncLocalAdmissionVars, AsyncAuxVars, vars
+
 THEOREM IngressDrainPreservesHistoricalRecoveryType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
@@ -1149,7 +1164,7 @@ THEOREM ProducerAdmissionRunnerPreservesSchedulerType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ RunNodeWork(node)
-    /\ LocalAdmissionStep(node)
+    /\ SelectedLocalAdmissionAdvance(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => AsyncSchedulerTypeInvariant'
@@ -1157,7 +1172,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 RunNodeWork(node),
-                LocalAdmissionStep(node),
+                SelectedLocalAdmissionAdvance(node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Producer"
          PROVE AsyncSchedulerTypeInvariant'
@@ -1166,7 +1181,7 @@ PROOF
     <2>2. /\ AdmitProducerCompletion(node)
            /\ UNCHANGED asyncDeferredCompletionQueues
            /\ UpdateLocalAdmissionMetadata(node, "Producer")
-      BY <1>1 DEF LocalAdmissionStep, AsyncDeferredVars
+      BY <1>1 DEF SelectedLocalAdmissionAdvance, AsyncDeferredVars
     <2>3. AsyncIoTypeInvariant'
       BY <1>1, <2>1, <2>2,
          AdmitProducerCompletionWithDeferredFramePreservesIoType
@@ -1182,7 +1197,7 @@ PROOF
              AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
              AsyncIoTopologyTypeInvariant,
              AsyncIoWorkContentTypeInvariant, RunNodeWork,
-             LocalAdmissionStep, AdmitProducerCompletion,
+             SelectedLocalAdmissionAdvance, AdmitProducerCompletion,
              EnqueueCandidate, ProducerSelectedReadyQueue,
              ProducerOtherReadyQueue, SelectedCompletionSource,
              AsyncConfiguration, AsyncLocalSources,
@@ -1208,7 +1223,8 @@ PROOF
            /\ UNCHANGED AsyncIngressTopologyTypeVars
            /\ UNCHANGED asyncIngressLanes
       BY <1>1, <2>2, Isa
-         DEF RunNodeWork, LocalAdmissionStep, AdmitProducerCompletion,
+         DEF RunNodeWork, SelectedLocalAdmissionAdvance,
+             AdmitProducerCompletion,
              LeaveCausalQueues, AsyncDeferredVars,
              AsyncDeferredTopologyTypeVars,
              AsyncTransportContentTypeVars,
@@ -1231,7 +1247,8 @@ PROOF
            /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                           asyncRetransmitDeadlines>>
       BY <1>1, <2>2, Isa
-         DEF RunNodeWork, RunnerServiceFrame, LocalAdmissionStep,
+         DEF RunNodeWork, RunnerServiceFrame,
+             SelectedLocalAdmissionAdvance,
              AdmitProducerCompletion, vars
     <2>9. AsyncTransportClockTypeInvariant'
       BY <1>1, <2>1, <2>5, <2>8,
@@ -1239,7 +1256,8 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant
     <2>10. AsyncHistoricalRecoveryTypeInvariant'
-      BY <1>1, LocalAdmissionPreservesHistoricalRecoveryType
+      BY <1>1,
+         SelectedLocalAdmissionAdvancePreservesHistoricalRecoveryType
     <2> QED BY <2>3, <2>4, <2>7, <2>9, <2>10
          DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
              AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
@@ -3022,7 +3040,7 @@ THEOREM CausalAdmissionRunnerPreservesSchedulerType ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ RunNodeWork(node)
-    /\ LocalAdmissionStep(node)
+    /\ SelectedLocalAdmissionAdvance(node)
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     => AsyncSchedulerTypeInvariant'
@@ -3030,7 +3048,7 @@ PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 AsyncTypeInvariant,
                 RunNodeWork(node),
-                LocalAdmissionStep(node),
+                SelectedLocalAdmissionAdvance(node),
                 LocalAdmissionCanAdvance(node),
                 SelectedLocalSource(node) = "Causal"
          PROVE AsyncSchedulerTypeInvariant'
@@ -3058,7 +3076,7 @@ PROOF
       <3>3. CausalQueueNonempty(node)
         BY <1>1, SelectedCausalCanAdvance DEF CausalHeadCanAdvance
       <3>4. AdmitCausalHead(node)
-        BY <1>1 DEF LocalAdmissionStep
+        BY <1>1 DEF SelectedLocalAdmissionAdvance
       <3>5. /\ asyncCausalQueues' =
                     [asyncCausalQueues EXCEPT ![node] = Tail(@)]
              /\ UNCHANGED vars
@@ -3082,7 +3100,7 @@ PROOF
                     [asyncRunnerBudget EXCEPT ![node] = @ - 1]
              /\ UNCHANGED AsyncDeferredVars
              /\ UpdateLocalAdmissionMetadata(node, "Causal")
-        BY <1>1 DEF LocalAdmissionStep
+        BY <1>1 DEF SelectedLocalAdmissionAdvance
       <3>7. RunnerServiceFrame(node)
         BY <1>1 DEF RunNodeWork, RunnerServiceFrame
       <3>8. /\ asyncRunnerBudget
@@ -3164,7 +3182,7 @@ PROOF
         BY <3>1, <3>2, <3>5, <3>7,
            RunnerServiceFramePreservesClockType
       <3> QED BY <1>1, <3>11, <3>12, <3>14, <3>15,
-                   LocalAdmissionPreservesHistoricalRecoveryType
+                   SelectedLocalAdmissionAdvancePreservesHistoricalRecoveryType
            DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
                AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
                AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
@@ -3188,7 +3206,7 @@ PROOF
       <3>3. CausalQueueNonempty(node)
         BY <1>1, SelectedCausalCanAdvance DEF CausalHeadCanAdvance
       <3>4. AdmitCausalHead(node)
-        BY <1>1 DEF LocalAdmissionStep
+        BY <1>1 DEF SelectedLocalAdmissionAdvance
       <3>5. /\ asyncCausalQueues' =
                     [asyncCausalQueues EXCEPT ![node] = Tail(@)]
              /\ UNCHANGED vars
@@ -3208,7 +3226,7 @@ PROOF
                     [asyncRunnerBudget EXCEPT ![node] = @ - 1]
              /\ UNCHANGED AsyncDeferredVars
              /\ UpdateLocalAdmissionMetadata(node, "Causal")
-        BY <1>1 DEF LocalAdmissionStep
+        BY <1>1 DEF SelectedLocalAdmissionAdvance
       <3>7. RunnerServiceFrame(node)
         BY <1>1 DEF RunNodeWork, RunnerServiceFrame
       <3>8. /\ asyncRunnerBudget
@@ -3284,7 +3302,7 @@ PROOF
         BY <3>1, <3>2, <3>5, <3>7,
            RunnerServiceFramePreservesClockType
       <3> QED BY <1>1, <3>11, <3>12, <3>13, <3>15, <3>16,
-                   LocalAdmissionPreservesHistoricalRecoveryType
+                   SelectedLocalAdmissionAdvancePreservesHistoricalRecoveryType
            DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
                AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
                AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
@@ -3310,7 +3328,7 @@ PROOF
         BY <1>1, <2>3, SelectedCausalCanAdvance
            DEF CausalHeadCanAdvance, Candidate
       <3>4. AdmitCausalHead(node)
-        BY <1>1 DEF LocalAdmissionStep
+        BY <1>1 DEF SelectedLocalAdmissionAdvance
       <3>5. /\ AsyncCandidateTyped(Candidate)
              /\ Candidate.node = node
              /\ CanEnqueueClass(node, Candidate.class)
@@ -3337,7 +3355,7 @@ PROOF
                     [asyncRunnerBudget EXCEPT ![node] = @ - 1]
              /\ UNCHANGED AsyncDeferredVars
              /\ UpdateLocalAdmissionMetadata(node, "Causal")
-        BY <1>1 DEF LocalAdmissionStep
+        BY <1>1 DEF SelectedLocalAdmissionAdvance
       <3>8. RunnerServiceFrame(node)
         BY <1>1 DEF RunNodeWork, RunnerServiceFrame
       <3>9. /\ asyncRunnerBudget
@@ -3445,7 +3463,7 @@ PROOF
         BY <3>1, <3>2, <3>6, <3>8,
            RunnerServiceFramePreservesClockType
       <3> QED BY <1>1, <3>13, <3>14, <3>15, <3>17, <3>18,
-                   LocalAdmissionPreservesHistoricalRecoveryType
+                   SelectedLocalAdmissionAdvancePreservesHistoricalRecoveryType
            DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
                AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
                AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
@@ -3466,14 +3484,49 @@ PROOF
          PROVE AsyncSchedulerTypeInvariant'
     <2>1. CASE /\ LocalAdmissionCanAdvance(node)
                  /\ SelectedLocalSource(node) = "Producer"
-      BY <1>1, <2>1, ProducerAdmissionRunnerPreservesSchedulerType
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <1>1, <2>1, LocalAdmissionAdvanceSelectsAtomicWork
+      <3> QED BY <1>1, <2>1, <3>1,
+           ProducerAdmissionRunnerPreservesSchedulerType
     <2>2. CASE /\ LocalAdmissionCanAdvance(node)
                  /\ SelectedLocalSource(node) = "Causal"
-      BY <1>1, <2>2, CausalAdmissionRunnerPreservesSchedulerType
+      <3>1. SelectedLocalAdmissionAdvance(node)
+        BY <1>1, <2>2, LocalAdmissionAdvanceSelectsAtomicWork
+      <3> QED BY <1>1, <2>2, <3>1,
+           CausalAdmissionRunnerPreservesSchedulerType
     <2>3. CASE ~LocalAdmissionCanAdvance(node)
       BY <1>1, <2>3,
          LocalAdmissionPhaseAdvancePreservesSchedulerType
     <2> QED BY <2>1, <2>2, <2>3, SMT
+         DEF SelectedLocalSource, PreferredLocalSource,
+             OtherLocalSource
+  <1> QED BY <1>1
+
+THEOREM SerializedLocalPrecedesServeIngressPreservesSchedulerType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ RunNodeWork(node)
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => AsyncSchedulerTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                RunNodeWork(node),
+                SerializedLocalPrecedesServeIngressStep(node)
+         PROVE AsyncSchedulerTypeInvariant'
+    <2>1. /\ SelectedLocalAdmissionAdvance(node)
+           /\ LocalAdmissionCanAdvance(node)
+      BY <1>1
+         DEF SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             AsyncOlderLocalLifecyclePrecedesServeIngress
+    <2>2. CASE SelectedLocalSource(node) = "Producer"
+      BY <1>1, <2>1, <2>2,
+         ProducerAdmissionRunnerPreservesSchedulerType
+    <2>3. CASE SelectedLocalSource(node) = "Causal"
+      BY <1>1, <2>1, <2>3,
+         CausalAdmissionRunnerPreservesSchedulerType
+    <2> QED BY <1>1, <2>2, <2>3, SMT
          DEF SelectedLocalSource, PreferredLocalSource,
              OtherLocalSource
   <1> QED BY <1>1

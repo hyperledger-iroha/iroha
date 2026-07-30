@@ -380,8 +380,8 @@ impl From<crate::isi::asset_alias::SetAssetDefinitionBalancePolicy> for Instruct
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::asset_transfer_control::SetAssetTransferFreeze> for InstructionBox {
-    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferFreeze) -> Self {
+impl From<crate::isi::asset_transfer_control::SetAssetTransferAvailability> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferAvailability) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2310,19 +2310,51 @@ fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, no
 }
 
 #[cfg(feature = "json")]
-fn json_optional_string(map: &norito::json::Map, key: &str) -> Option<String> {
-    map.get(key)
-        .and_then(norito::json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-#[cfg(feature = "json")]
 fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito::json::Error> {
     map.get(key)
         .and_then(norito::json::Value::as_bool)
         .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` must be a bool")))
+}
+
+#[cfg(feature = "json")]
+fn json_required_u64(map: &norito::json::Map, key: &str) -> Result<u64, norito::json::Error> {
+    map.get(key)
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| {
+            norito::json::Error::Message(format!("instruction `{key}` must be an unsigned integer"))
+        })
+}
+
+#[cfg(feature = "json")]
+fn json_required_asset_transfer_availability(
+    map: &norito::json::Map,
+    key: &str,
+) -> Result<crate::asset::AssetTransferAvailability, norito::json::Error> {
+    match map.get(key).and_then(norito::json::Value::as_str) {
+        Some("Enabled") => Ok(crate::asset::AssetTransferAvailability::Enabled),
+        Some("Disabled") => Ok(crate::asset::AssetTransferAvailability::Disabled),
+        _ => Err(norito::json::Error::Message(format!(
+            "instruction `{key}` must be exactly `Enabled` or `Disabled`"
+        ))),
+    }
+}
+
+#[cfg(feature = "json")]
+fn json_optional_exact_nonblank_string(
+    map: &norito::json::Map,
+    key: &str,
+) -> Result<Option<String>, norito::json::Error> {
+    match map.get(key) {
+        None | Some(norito::json::Value::Null) => Ok(None),
+        Some(norito::json::Value::String(value))
+            if !value.is_empty() && value.trim() == value.as_str() =>
+        {
+            Ok(Some(value.clone()))
+        }
+        _ => Err(norito::json::Error::Message(format!(
+            "instruction `{key}` must be non-empty exact text or null"
+        ))),
+    }
 }
 
 #[cfg(feature = "json")]
@@ -2393,14 +2425,31 @@ fn instruction_box_from_object(
             norito::json::Error::Message("instruction `params` must be an object".to_owned())
         })?;
     match name.as_str() {
-        "SetAssetTransferFreeze" => {
+        "SetAssetTransferAvailability" => {
+            if let Some(unexpected) = params.keys().find(|key| {
+                !matches!(
+                    key.as_str(),
+                    "account_id"
+                        | "asset_definition_id"
+                        | "expected_revision"
+                        | "incoming"
+                        | "outgoing"
+                        | "reason"
+                )
+            }) {
+                return Err(norito::json::Error::Message(format!(
+                    "unsupported SetAssetTransferAvailability field `{unexpected}`"
+                )));
+            }
             let (account_id, asset_definition_id) = json_asset_transfer_target(params)?;
             Ok(
-                crate::isi::asset_transfer_control::SetAssetTransferFreeze::new(
+                crate::isi::asset_transfer_control::SetAssetTransferAvailability::new(
                     account_id,
                     asset_definition_id,
-                    json_required_bool(params, "outgoing_frozen")?,
-                    json_optional_string(params, "reason"),
+                    json_required_u64(params, "expected_revision")?,
+                    json_required_asset_transfer_availability(params, "incoming")?,
+                    json_required_asset_transfer_availability(params, "outgoing")?,
+                    json_optional_exact_nonblank_string(params, "reason")?,
                 )
                 .into(),
             )
@@ -3694,8 +3743,12 @@ pub mod error {
         pub enum AssetTransferAdmissionError {
             /// HoldingLimitExceeded: {0}
             HoldingLimitExceeded(Box<str>),
-            /// Outbound transfer is frozen: {0}
-            Frozen(Box<str>),
+            /// Incoming asset movement is disabled: {0}
+            IncomingDisabled(Box<str>),
+            /// Outgoing asset movement is disabled: {0}
+            OutgoingDisabled(Box<str>),
+            /// Availability revision did not match: {0}
+            AvailabilityRevisionMismatch(Box<str>),
             /// Account is blacklisted for outbound transfer: {0}
             Blacklisted(Box<str>),
             /// Transfer policy rejected the operation: {0}
@@ -4230,8 +4283,8 @@ pub mod prelude {
             RebindAccountAlias, RenewAliasLease,
         },
         asset_transfer_control::{
-            SetAssetHoldingLimit, SetAssetTransferBlacklist, SetAssetTransferControl,
-            SetAssetTransferFreeze,
+            SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
+            SetAssetTransferControl,
         },
         bridge::{
             ApplySccpRouteGovernance, RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof,

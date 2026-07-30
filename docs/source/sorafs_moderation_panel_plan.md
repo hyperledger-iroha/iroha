@@ -46,6 +46,12 @@ credentials. Standard `irohad` forwards the deployment-owned boundary into
 Torii, and startup or an in-flight call fails closed when the provider is
 missing, substituted, stale, unavailable, or test-marked.
 
+Until an authenticated signed archive installs and reads back every terminal
+panel-notification receipt, saturated notification capacity returns
+`ResourceExhausted` without deleting or mutating retained receipts or
+checkpoint bytes. Restart preserves the same saturated state. Notification
+receipt compaction remains an open production requirement.
+
 The strict transaction ingress is the one deliberate local boundary: it admits
 an already signed transaction through Torii's canonical durable queue and owns
 no signing authority. It no longer self-attests from operator-supplied values.

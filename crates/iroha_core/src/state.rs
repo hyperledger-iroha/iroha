@@ -16465,6 +16465,13 @@ impl DetachedStateTransactionDelta {
                 asset: destination_id.clone(),
                 amount: amount.clone(),
             })),
+            data_pre::DataEvent::from(data_pre::AssetEvent::Transferred(
+                data_pre::AssetTransferred {
+                    source: source_id.clone(),
+                    destination: destination_id.clone(),
+                    amount: amount.clone(),
+                },
+            )),
         ];
 
         state_transaction.world.account(&destination).is_ok()
@@ -30264,11 +30271,17 @@ impl State {
                     entry.activation_root,
                     &entry.lane_snapshots,
                 )?;
-                self.validate_merge_queue_plan_admissions(
+                self.validate_merge_queue_plan_admissions_with_canonical_history(
                     &entry.queue_plan_admissions,
                     &entry.active_lanes,
                     entry.merge_qc.carrier_height,
                     false,
+                    |authority_height| {
+                        usize::try_from(authority_height)
+                            .ok()
+                            .and_then(NonZeroUsize::new)
+                            .and_then(|height| self.kura.get_durable_block_hash(height))
+                    },
                 )?;
                 self.validate_merge_quorum_certificate(entry, false, false)?;
                 self.validate_merge_lane_drain_certificate_payload(
@@ -34104,12 +34117,37 @@ impl State {
         Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
         MergeLedgerCommitError,
     > {
+        let block_hashes = self.block_hashes.view();
+        self.validate_merge_queue_plan_admissions_with_canonical_history(
+            admissions,
+            active_lanes,
+            carrier_height,
+            validate_live_authority,
+            |authority_height| {
+                usize::try_from(authority_height)
+                    .ok()
+                    .and_then(|height| height.checked_sub(1))
+                    .and_then(|index| block_hashes.get(index).copied())
+            },
+        )
+    }
+
+    fn validate_merge_queue_plan_admissions_with_canonical_history(
+        &self,
+        admissions: &[Vec<u8>],
+        active_lanes: &[MergeLaneBinding],
+        carrier_height: u64,
+        validate_live_authority: bool,
+        canonical_block_hash_at_height: impl Fn(u64) -> Option<HashOf<BlockHeader>>,
+    ) -> Result<
+        Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV2>,
+        MergeLedgerCommitError,
+    > {
         if !merge_queue_plan_admissions_within_limits(admissions) {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "queue-plan admission controls exceed their count or byte bounds".to_owned(),
             ));
         }
-        let block_hashes = self.block_hashes.view();
         let mut validated = Vec::with_capacity(admissions.len());
         let mut previous_registry_key = None;
         for bytes in admissions {
@@ -34143,10 +34181,7 @@ impl State {
             let exact_predecessor = if context.authority_height == 0 {
                 None
             } else {
-                usize::try_from(context.authority_height)
-                    .ok()
-                    .and_then(|height| height.checked_sub(1))
-                    .and_then(|index| block_hashes.get(index).copied())
+                canonical_block_hash_at_height(context.authority_height)
             };
             if exact_predecessor != context.predecessor_block_hash {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -62459,6 +62494,38 @@ impl StateTransaction<'_, '_> {
             let AccountEvent::Asset(asset_event) = account_event else {
                 return Json::from(payload);
             };
+            if let AssetEvent::Transferred(transfer) = asset_event {
+                let source = transfer.source();
+                let destination = transfer.destination();
+                let mut details = norito::json::Map::new();
+                details.insert("kind".to_owned(), norito::json!("asset_transfer"));
+                details.insert("op".to_owned(), norito::json!("transferred"));
+                details.insert(
+                    "asset_definition_id".to_owned(),
+                    norito::json!(source.definition().to_string()),
+                );
+                details.insert(
+                    "source_asset_id".to_owned(),
+                    norito::json!(source.to_string()),
+                );
+                details.insert(
+                    "destination_asset_id".to_owned(),
+                    norito::json!(destination.to_string()),
+                );
+                details.insert(
+                    "source_account_id".to_owned(),
+                    norito::json!(source.account().to_string()),
+                );
+                details.insert(
+                    "destination_account_id".to_owned(),
+                    norito::json!(destination.account().to_string()),
+                );
+                details.insert(
+                    "amount".to_owned(),
+                    norito::json!(transfer.amount().to_string()),
+                );
+                return Json::from(norito::json::Value::Object(details));
+            }
             let (op, changed) = match asset_event {
                 AssetEvent::Added(changed) => ("added", changed),
                 AssetEvent::Removed(changed) => ("removed", changed),
@@ -71241,6 +71308,65 @@ seiyaku SequentialNfts {
             object.get("amount_i64").is_none(),
             "the retired width-specific projection must not truncate wide values"
         );
+    }
+
+    #[test]
+    fn trigger_args_from_asset_transfer_bind_both_participants() {
+        let asset_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let (source, _) = gen_account_in("transfer-source");
+        let (destination, _) = gen_account_in("transfer-destination");
+        let asset_definition = AssetDefinitionId::new(asset_domain, "ds".parse().unwrap());
+        let source_asset = AssetId::new(asset_definition.clone(), source.clone());
+        let destination_asset = AssetId::new(asset_definition.clone(), destination.clone());
+        let amount = Quantity::from(17_u32);
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Transferred(
+                data_pre::AssetTransferred {
+                    source: source_asset.clone(),
+                    destination: destination_asset.clone(),
+                    amount: amount.clone(),
+                },
+            )),
+        ));
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let stx = state_block.transaction();
+
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let object = payload.as_object().expect("trigger args object");
+        assert_eq!(object.get("kind"), Some(&norito::json!("asset_transfer")));
+        assert_eq!(object.get("op"), Some(&norito::json!("transferred")));
+        assert_eq!(
+            object.get("source_account_id"),
+            Some(&norito::json!(source.to_string()))
+        );
+        assert_eq!(
+            object.get("destination_account_id"),
+            Some(&norito::json!(destination.to_string()))
+        );
+        assert_eq!(
+            object.get("source_asset_id"),
+            Some(&norito::json!(source_asset.to_string()))
+        );
+        assert_eq!(
+            object.get("destination_asset_id"),
+            Some(&norito::json!(destination_asset.to_string()))
+        );
+        assert_eq!(
+            object.get("asset_definition_id"),
+            Some(&norito::json!(asset_definition.to_string()))
+        );
+        assert_eq!(
+            object.get("amount"),
+            Some(&norito::json!(amount.to_string()))
+        );
+        assert!(object.get("account_id").is_none());
     }
 
     #[test]
@@ -121843,6 +121969,143 @@ seiyaku IdentitylessRawCallback {
             state.validate_certified_merge_entry_for_global_order(&forged_entry),
             Err(MergeLedgerCommitError::IncarnationContext(_))
         ));
+    }
+
+    #[test]
+    fn restart_authenticates_queue_plan_predecessor_from_durable_kura_before_state_replay() {
+        let (state, validator_keypairs, commit_keypairs, parent) =
+            configured_single_lane_merge_state();
+        let kura = Arc::clone(&state.kura);
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x52,
+        );
+        let candidate = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![certificate],
+            )
+            .expect("canonical QueuePlan candidate construction")
+            .expect("QueuePlan controls produce a standalone candidate");
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        kura.store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+            .expect("persist QueuePlan merge carrier before State publication");
+        drop(state);
+
+        let mut restarted = State::try_new_with_chain(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("durable QueuePlan predecessor authenticates before State block replay");
+        assert_eq!(
+            restarted.committed_height(),
+            0,
+            "startup recovery must not pretend future Kura carriers are in State"
+        );
+        assert!(
+            restarted.merge_ledger().is_empty(),
+            "the future carrier remains unpublished until exact State replay"
+        );
+
+        restarted.push_block_hash_for_testing(parent.hash());
+        restarted.push_block_hash_for_testing(carrier.hash());
+        restarted
+            .recover_merge_ledger_from_kura()
+            .expect("exact State replay hydrates the authenticated QueuePlan carrier");
+        assert_eq!(restarted.merge_ledger().snapshot()[0].as_ref(), &entry);
+    }
+
+    #[test]
+    fn restart_rejects_queue_plan_predecessor_conflicting_with_durable_kura() {
+        let (state, validator_keypairs, commit_keypairs, parent) =
+            configured_single_lane_merge_state();
+        let kura = Arc::clone(&state.kura);
+        let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+        let (_, valid_certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan.clone(),
+            &validator_keypairs,
+            1,
+            0x53,
+        );
+        let mut candidate = state
+            .merge_candidate_with_queue_plan_admissions(
+                &parent.header(),
+                0,
+                None,
+                vec![valid_certificate],
+            )
+            .expect("canonical QueuePlan candidate construction")
+            .expect("QueuePlan controls produce a standalone candidate");
+
+        let conflicting_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"conflicting-queue-plan-restart-predecessor",
+        ));
+        {
+            let mut block_hashes = state.block_hashes.block_and_revert();
+            block_hashes.push(conflicting_predecessor);
+            block_hashes.commit();
+        }
+        let (_, conflicting_certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x54,
+        );
+        {
+            let mut block_hashes = state.block_hashes.block_and_revert();
+            block_hashes.push(parent.hash());
+            block_hashes.commit();
+        }
+        candidate.queue_plan_admissions = vec![conflicting_certificate];
+        let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let entry = merge_entry_from_candidate(candidate, qc);
+        let carrier = certified_merge_carrier_after(&parent, &entry);
+        kura.store_block_with_merge_entry(Arc::new(carrier), &entry)
+            .expect("persist cryptographically valid conflicting QueuePlan carrier");
+        drop(state);
+
+        let recovery = State::try_new_with_chain(
+            World::default(),
+            kura,
+            LiveQueryStore::start_test(),
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        );
+        let error = match recovery {
+            Ok(_) => panic!("durable Kura history must reject a conflicting QueuePlan predecessor"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                error,
+                MergeLedgerCommitError::ExecutionBatchInvalid(ref message)
+                    if message.contains(
+                        "queue-plan admission predecessor is absent or differs from canonical history"
+                    )
+            ),
+            "unexpected conflicting predecessor rejection: {error}"
+        );
     }
 
     #[test]

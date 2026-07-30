@@ -108,6 +108,7 @@ from .client import (
     AccountAssetsPage,
     AccountTransaction,
     AccountTransactionsPage,
+    VerifiedCommittedTransaction,
     AccountRecord,
     AccountListPage,
     DomainRecord,
@@ -409,6 +410,7 @@ _BASE_EXPORTS = [
     "create_torii_client",
     "TransactionStatusError",
     "DataModelMismatchError",
+    "VerifiedCommittedTransaction",
     "resolve_torii_client_config",
     "ResolvedToriiClientConfig",
     "SseEvent",
@@ -745,6 +747,8 @@ _BASE_EXPORTS = [
 ]
 
 _CRYPTO_EXPORTS: List[str] = [
+    "ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1",
+    "AssetTransferAvailability",
     "ContractCall",
     "TransactionExecutableEntry",
     "TransactionConfig",
@@ -826,6 +830,10 @@ _CRYPTO_EXPORTS: List[str] = [
     "parse_public_key_multihash",
     "parse_private_key_multihash",
     "build_signed_transaction",
+    "build_find_committed_transaction_query",
+    "build_find_block_by_hash_query",
+    "committed_transaction_carrier_block_hash",
+    "verify_committed_transaction_inclusion",
     "signed_transaction_envelope_from_json",
     "hash_blake2b_32",
     "sign",
@@ -931,6 +939,8 @@ _CRYPTO_EXPORTS: List[str] = [
 
 try:
     from .tx import (
+        ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1,
+        AssetTransferAvailability,
         ContractCall,
         TransactionConfig,
         TransactionDraft,
@@ -1016,6 +1026,10 @@ try:
         parse_public_key_multihash,
         parse_private_key_multihash,
         build_signed_transaction,
+        build_find_committed_transaction_query,
+        build_find_block_by_hash_query,
+        committed_transaction_carrier_block_hash,
+        verify_committed_transaction_inclusion,
         signed_transaction_envelope_from_json,
         hash_blake2b_32,
         sign,

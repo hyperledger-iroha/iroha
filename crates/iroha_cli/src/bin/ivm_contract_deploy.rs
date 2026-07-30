@@ -1,5 +1,5 @@
-//! Deploy a contract with governance-attributed native registration,
-//! activation, and alias-binding instruction transactions.
+//! Deploy a contract with governance-attributed native registration and one
+//! atomic deployment commit.
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
@@ -14,6 +14,7 @@
 
 use std::{
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
@@ -26,20 +27,14 @@ use iroha::{
     client::Client,
     config::{self, Config},
     data_model::{
-        account::Account,
-        isi::{
-            contract_alias::SetContractAlias,
-            smart_contract_code::{
-                ActivateContractInstance, FinalizeSmartContractCodeUpload,
-                RegisterSmartContractCode, SMART_CONTRACT_CODE_CHUNK_BYTES,
-                UploadSmartContractCodeChunk,
-            },
+        isi::smart_contract_code::{
+            CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+            SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
         },
         metadata::Metadata,
         name::Name,
         prelude::*,
-        query::account::prelude::FindAccountById,
-        smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAlias},
+        smart_contract::ContractAlias,
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
@@ -57,8 +52,10 @@ use iroha_version::codec::EncodeVersioned;
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use sorafs_orchestrator::AnonymityPolicy;
 use url::Url;
+use zeroize::Zeroizing;
 
 const DEFAULT_CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
+const MAX_PRIVATE_KEY_FILE_BYTES: u64 = 16 * 1024;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -68,16 +65,15 @@ struct Args {
     chain_id: String,
     #[arg(long)]
     authority: String,
-    #[arg(long)]
-    private_key: String,
+    /// Owner-held mode-0600 regular file containing one exact private-key
+    /// literal. Inline key arguments are intentionally unsupported so process
+    /// listings cannot expose the signer.
+    #[arg(long, value_name = "PATH")]
+    private_key_file: PathBuf,
     #[arg(long)]
     code_file: PathBuf,
     #[arg(long)]
     contract_alias: String,
-    #[arg(long)]
-    previous_contract_address: Option<String>,
-    #[arg(long)]
-    dataspace_id: Option<u64>,
     #[arg(long, default_value_t = DEFAULT_CHAIN_DISCRIMINANT_TAIRA)]
     chain_discriminant: u16,
     /// Canonical Norito JSON selecting the fee payer, sponsor revision, and gas bound.
@@ -98,6 +94,30 @@ struct Args {
     emit_only: bool,
     #[arg(long, default_value_t = false)]
     skip_register_bytes: bool,
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonDeserialize, norito::derive::JsonSerialize,
+)]
+#[norito(deny_unknown_fields)]
+struct ContractDeploymentStateSnapshot {
+    authority: String,
+    contract_alias: String,
+    deploy_nonce: String,
+    dataspace_alias: String,
+    dataspace_id: String,
+    previous_contract_address: Option<String>,
+    observed_block_height: String,
+    observed_block_hash: String,
+    ledger_time_ms: String,
+    chain_discriminant: String,
+}
+
+struct ValidatedContractDeploymentState {
+    snapshot: ContractDeploymentStateSnapshot,
+    deploy_nonce: u64,
+    dataspace_id: DataSpaceId,
+    previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
 }
 
 #[cfg(test)]
@@ -204,39 +224,247 @@ fn deployment_transaction_metadata(
     Ok(metadata)
 }
 
-fn current_deploy_nonce(client: &Client, authority: &AccountId) -> Result<u64> {
-    let account: Account = client
-        .query_single(FindAccountById::new(authority.clone()))
-        .wrap_err_with(|| format!("account `{authority}` not found"))?;
-    let nonce_key =
-        Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY).expect("static metadata key is valid");
-    account
-        .metadata()
-        .get(&nonce_key)
-        .map(|value| {
-            value
-                .try_into_any_norito::<u64>()
-                .map_err(|_| eyre!("`{CONTRACT_DEPLOY_NONCE_METADATA_KEY}` metadata is not a u64"))
-        })
-        .transpose()
-        .map(|value| value.unwrap_or(0))
+fn canonical_decimal_u64(raw: &str, field: &str) -> Result<u64> {
+    let parsed = raw
+        .parse::<u64>()
+        .wrap_err_with(|| format!("deployment-state `{field}` is not a u64"))?;
+    if parsed.to_string() != raw {
+        return Err(eyre!(
+            "deployment-state `{field}` is not canonical decimal text"
+        ));
+    }
+    Ok(parsed)
 }
 
-fn resolve_alias_dataspace(
-    alias: &ContractAlias,
-    dataspace_id: Option<u64>,
-) -> Result<DataSpaceId> {
-    if let Some(dataspace_id) = dataspace_id {
-        return Ok(DataSpaceId::new(dataspace_id));
+fn read_contract_deployment_state(
+    client: &Client,
+    authority: &AccountId,
+    contract_alias: &ContractAlias,
+    chain_discriminant: u16,
+) -> Result<ValidatedContractDeploymentState> {
+    let response = client
+        .post_contract_deployment_state(contract_alias)
+        .wrap_err("failed to read authenticated contract deployment state")?;
+    let status = response.status();
+    let body = response.into_body();
+    if status.as_u16() != 200 {
+        return Err(eyre!(
+            "contract deployment-state request failed with HTTP {}: {}",
+            status,
+            std::str::from_utf8(&body).unwrap_or("")
+        ));
     }
-    if alias.dataspace_segment() == "universal" {
-        Ok(DataSpaceId::UNIVERSAL)
+    let snapshot: ContractDeploymentStateSnapshot = norito::json::from_slice(&body)
+        .wrap_err("decode closed contract deployment-state response")?;
+    if snapshot.authority != authority.to_string()
+        || snapshot.contract_alias != contract_alias.to_string()
+    {
+        return Err(eyre!(
+            "contract deployment-state response does not bind the exact authority and alias"
+        ));
+    }
+
+    let deploy_nonce = canonical_decimal_u64(&snapshot.deploy_nonce, "deploy_nonce")?;
+    if deploy_nonce == u64::MAX {
+        return Err(eyre!("contract deployment nonce is exhausted"));
+    }
+    let dataspace_id = DataSpaceId::new(canonical_decimal_u64(
+        &snapshot.dataspace_id,
+        "dataspace_id",
+    )?);
+    let expected_dataspace_alias = if contract_alias.dataspace_segment() == "universal" {
+        "universal"
     } else {
-        Err(eyre!(
-            "dataspace alias `{}` has no built-in numeric mapping; pass the catalog-resolved --dataspace-id",
-            alias.dataspace_segment()
-        ))
+        contract_alias.dataspace_segment()
+    };
+    if snapshot.dataspace_alias != expected_dataspace_alias {
+        return Err(eyre!(
+            "contract deployment-state response names a different dataspace alias"
+        ));
     }
+    let response_discriminant =
+        canonical_decimal_u64(&snapshot.chain_discriminant, "chain_discriminant")?;
+    if response_discriminant != u64::from(chain_discriminant) {
+        return Err(eyre!(
+            "contract deployment-state chain discriminant differs from the configured client"
+        ));
+    }
+    let observed_height =
+        canonical_decimal_u64(&snapshot.observed_block_height, "observed_block_height")?;
+    if observed_height == 0 {
+        return Err(eyre!(
+            "contract deployment-state observed block height must be non-zero"
+        ));
+    }
+    canonical_decimal_u64(&snapshot.ledger_time_ms, "ledger_time_ms")?;
+    let observed_hash: iroha_crypto::HashOf<iroha::data_model::block::BlockHeader> = snapshot
+        .observed_block_hash
+        .parse()
+        .wrap_err("deployment-state observed block hash is invalid")?;
+    if observed_hash.to_string() != snapshot.observed_block_hash {
+        return Err(eyre!(
+            "deployment-state observed block hash is not canonical"
+        ));
+    }
+
+    let previous_contract_address = snapshot
+        .previous_contract_address
+        .as_deref()
+        .map(str::parse::<iroha::data_model::smart_contract::ContractAddress>)
+        .transpose()
+        .wrap_err("deployment-state previous contract address is invalid")?;
+    if let Some(previous) = previous_contract_address.as_ref()
+        && (previous.to_string()
+            != snapshot
+                .previous_contract_address
+                .as_deref()
+                .expect("present parsed previous address has source")
+            || previous
+                .dataspace_id()
+                .map_err(|error| eyre!(error.to_string()))?
+                != dataspace_id)
+    {
+        return Err(eyre!(
+            "deployment-state previous contract address is non-canonical or in another dataspace"
+        ));
+    }
+
+    Ok(ValidatedContractDeploymentState {
+        snapshot,
+        deploy_nonce,
+        dataspace_id,
+        previous_contract_address,
+    })
+}
+
+#[cfg(unix)]
+fn validate_private_key_file_metadata(metadata: &fs::Metadata, path: &Path) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if metadata.uid() != rustix::process::geteuid().as_raw()
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
+    {
+        return Err(eyre!(
+            "private-key file {} must be an owner-held mode-0600 single-link regular file",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_private_key_file_metadata(_metadata: &fs::Metadata, path: &Path) -> Result<()> {
+    Err(eyre!(
+        "private-key file {} cannot be authenticated on this platform",
+        path.display()
+    ))
+}
+
+fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
+    let before = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect private-key file {}", path.display()))?;
+    if before.file_type().is_symlink() || !before.file_type().is_file() {
+        return Err(eyre!(
+            "private-key file {} must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    if before.len() == 0 || before.len() > MAX_PRIVATE_KEY_FILE_BYTES {
+        return Err(eyre!(
+            "private-key file {} must contain 1..={MAX_PRIVATE_KEY_FILE_BYTES} bytes",
+            path.display()
+        ));
+    }
+    validate_private_key_file_metadata(&before, path)?;
+
+    #[cfg(unix)]
+    let mut file = {
+        let descriptor = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        )
+        .wrap_err_with(|| format!("securely open private-key file {}", path.display()))?;
+        fs::File::from(descriptor)
+    };
+    #[cfg(not(unix))]
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .wrap_err_with(|| format!("open private-key file {}", path.display()))?;
+
+    let opened = file
+        .metadata()
+        .wrap_err_with(|| format!("inspect opened private-key file {}", path.display()))?;
+    if !opened.file_type().is_file() {
+        return Err(eyre!(
+            "private-key file {} must remain a regular file",
+            path.display()
+        ));
+    }
+    validate_private_key_file_metadata(&opened, path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            return Err(eyre!(
+                "private-key file {} changed during secure open",
+                path.display()
+            ));
+        }
+    }
+
+    let maximum_read = MAX_PRIVATE_KEY_FILE_BYTES
+        .checked_add(1)
+        .expect("bounded private-key file size");
+    let mut raw = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(before.len()).expect("bounded private-key file length fits usize"),
+    ));
+    file.by_ref()
+        .take(maximum_read)
+        .read_to_end(&mut raw)
+        .wrap_err_with(|| format!("read private-key file {}", path.display()))?;
+    let after = file
+        .metadata()
+        .wrap_err_with(|| format!("reinspect private-key file {}", path.display()))?;
+    validate_private_key_file_metadata(&after, path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+
+        if after.dev() != opened.dev()
+            || after.ino() != opened.ino()
+            || after.len() != opened.len()
+            || after.mtime() != opened.mtime()
+            || after.mtime_nsec() != opened.mtime_nsec()
+        {
+            return Err(eyre!(
+                "private-key file {} changed while it was read",
+                path.display()
+            ));
+        }
+    }
+    if u64::try_from(raw.len()).ok() != Some(opened.len()) {
+        return Err(eyre!(
+            "private-key file {} changed while it was read",
+            path.display()
+        ));
+    }
+
+    let raw = raw.strip_suffix(b"\n").unwrap_or(raw.as_slice());
+    let literal = std::str::from_utf8(raw)
+        .map_err(|_| eyre!("private-key file {} must be UTF-8", path.display()))?;
+    if literal.is_empty() || literal.trim() != literal || literal.chars().any(char::is_control) {
+        return Err(eyre!(
+            "private-key file {} must contain one exact private-key literal",
+            path.display()
+        ));
+    }
+    literal
+        .parse()
+        .wrap_err_with(|| format!("parse private-key file {}", path.display()))
 }
 
 struct NativeUploadTransactionPlan {
@@ -303,7 +531,7 @@ fn deployment_transaction_sequence(
     skip_register_bytes: bool,
     register_plans: Vec<(String, String, SignedTransaction)>,
     register_manifest_tx: SignedTransaction,
-    activate_tx: SignedTransaction,
+    commit_deployment_tx: SignedTransaction,
 ) -> Vec<(String, String, SignedTransaction)> {
     let mut planned = if skip_register_bytes {
         Vec::new()
@@ -315,8 +543,31 @@ fn deployment_transaction_sequence(
         "register-manifest".to_owned(),
         register_manifest_tx,
     ));
-    planned.push(("activate".to_owned(), "activate".to_owned(), activate_tx));
+    planned.push((
+        "commit_deployment".to_owned(),
+        "commit-deployment".to_owned(),
+        commit_deployment_tx,
+    ));
     planned
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_commit_deployment_transaction(
+    signing: &TransactionSigningContext<'_>,
+    expected_deploy_nonce: u64,
+    contract_address: iroha::data_model::smart_contract::ContractAddress,
+    code_hash: Hash,
+    contract_alias: ContractAlias,
+    expected_previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
+) -> Result<SignedTransaction> {
+    signing.sign([InstructionBox::from(CommitContractDeployment {
+        expected_deploy_nonce,
+        contract_address,
+        code_hash,
+        contract_alias,
+        lease_expiry_ms: None,
+        expected_previous_contract_address,
+    })])
 }
 
 fn build_native_upload_transaction_plan(
@@ -404,6 +655,90 @@ mod tests {
         )
     }
 
+    fn private_key_file_fixture(contents: &str) -> Result<tempfile::NamedTempFile> {
+        use std::io::Write as _;
+
+        let mut file = tempfile::NamedTempFile::new()?;
+        file.write_all(contents.as_bytes())?;
+        file.flush()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(file)
+    }
+
+    #[test]
+    fn private_key_file_accepts_one_exact_literal_with_terminal_newline() -> Result<()> {
+        let expected = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let exposed = iroha_crypto::ExposedPrivateKey(expected.private_key().clone()).to_string();
+        let file = private_key_file_fixture(&format!("{exposed}\n"))?;
+
+        let actual = read_private_key_file(file.path())?;
+
+        assert_eq!(
+            KeyPair::from(actual).public_key(),
+            expected.public_key(),
+            "the file parser must preserve the exact private key"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_key_file_rejects_surrounding_whitespace_without_echoing_secret() -> Result<()> {
+        let secret = "secret-material-that-must-not-appear-in-errors";
+        let file = private_key_file_fixture(&format!(" {secret}\n"))?;
+
+        let error = read_private_key_file(file.path()).expect_err("whitespace must be rejected");
+        let message = error.to_string();
+
+        assert!(message.contains("one exact private-key literal"));
+        assert!(!message.contains(secret));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_key_file_rejects_non_mode_0600_permissions() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let file = private_key_file_fixture("not-inspected-after-mode-check\n")?;
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o400))?;
+
+        let error = read_private_key_file(file.path()).expect_err("mode 0400 must fail");
+
+        assert!(error.to_string().contains("mode-0600"));
+        Ok(())
+    }
+
+    #[test]
+    fn clap_surface_does_not_accept_inline_private_keys() {
+        let parsed = Args::try_parse_from([
+            "ivm-contract-deploy",
+            "--torii-url",
+            "http://127.0.0.1:8080",
+            "--chain-id",
+            "localnet",
+            "--authority",
+            "authority",
+            "--private-key",
+            "must-not-be-accepted",
+            "--code-file",
+            "contract.to",
+            "--contract-alias",
+            "contract::universal",
+            "--fee-payment-json",
+            "fee.json",
+        ]);
+
+        assert!(
+            parsed.is_err(),
+            "inline private keys must not be a CLI option"
+        );
+    }
+
     #[test]
     fn ivm_contract_deploy_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
@@ -416,22 +751,74 @@ mod tests {
     }
 
     #[test]
-    fn alias_dataspace_resolution_has_no_embedded_catalog_ids() -> Result<()> {
-        let universal: ContractAlias = "router::universal".parse()?;
-        assert_eq!(
-            resolve_alias_dataspace(&universal, None)?,
-            DataSpaceId::UNIVERSAL
-        );
-
-        let governance: ContractAlias = "router::governance".parse()?;
-        let error = resolve_alias_dataspace(&governance, None)
-            .expect_err("non-reserved aliases require a catalog-resolved id");
-        assert!(error.to_string().contains("--dataspace-id"));
-        assert_eq!(
-            resolve_alias_dataspace(&governance, Some(17))?,
-            DataSpaceId::new(17)
-        );
+    fn deployment_state_decimal_fields_must_be_canonical() -> Result<()> {
+        assert_eq!(canonical_decimal_u64("17", "fixture")?, 17);
+        for invalid in ["", "017", "+17", " 17", "17 "] {
+            assert!(
+                canonical_decimal_u64(invalid, "fixture").is_err(),
+                "non-canonical decimal `{invalid}` must fail"
+            );
+        }
         Ok(())
+    }
+
+    #[test]
+    fn deployment_state_snapshot_rejects_unknown_fields() {
+        let payload = br#"{
+            "authority":"authority",
+            "contract_alias":"deploy::universal",
+            "deploy_nonce":"0",
+            "dataspace_alias":"universal",
+            "dataspace_id":"0",
+            "previous_contract_address":null,
+            "observed_block_height":"1",
+            "observed_block_hash":"hash",
+            "ledger_time_ms":"1",
+            "chain_discriminant":"369",
+            "retired_hint":"must-fail"
+        }"#;
+
+        let result = norito::json::from_slice::<ContractDeploymentStateSnapshot>(payload);
+
+        assert!(
+            result.is_err(),
+            "deployment-state DTO must reject unknown compatibility fields"
+        );
+    }
+
+    #[test]
+    fn clap_surface_rejects_independent_deployment_cas_inputs() {
+        for retired in [
+            ["--dataspace-id", "20"],
+            [
+                "--expected-previous-contract-address",
+                "caller-controlled-address",
+            ],
+        ] {
+            let mut arguments = vec![
+                "ivm-contract-deploy",
+                "--torii-url",
+                "http://127.0.0.1:8080",
+                "--chain-id",
+                "localnet",
+                "--authority",
+                "authority",
+                "--private-key-file",
+                "private.key",
+                "--code-file",
+                "contract.to",
+                "--contract-alias",
+                "contract::universal",
+                "--fee-payment-json",
+                "fee.json",
+            ];
+            arguments.extend(retired);
+
+            assert!(
+                Args::try_parse_from(arguments).is_err(),
+                "deployment CAS state must come only from the authenticated snapshot"
+            );
+        }
     }
 
     #[test]
@@ -455,6 +842,62 @@ mod tests {
         tx.verify_signature()
             .wrap_err("verify IVM deploy instruction helper signature")?;
         assert_eq!(tx.authority(), &authority);
+        Ok(())
+    }
+
+    #[test]
+    fn final_deployment_transaction_is_one_native_atomic_commit() -> Result<()> {
+        let key_pair = checked_ivm_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::of(key_pair.public_key().clone());
+        let chain_id = ChainId::from("ivm-contract-deploy-native-commit-test");
+        let fee_payment = test_fee_payment();
+        let metadata = Metadata::default();
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            DEFAULT_CHAIN_DISCRIMINANT_TAIRA,
+            &authority,
+            11,
+            DataSpaceId::UNIVERSAL,
+        )
+        .map_err(|error| eyre!(error.to_string()))?;
+        let contract_alias: ContractAlias = "atomic_deploy::universal".parse()?;
+        let code_hash = Hash::new(b"reviewed-contract-artifact");
+        let transaction = build_commit_deployment_transaction(
+            &TransactionSigningContext {
+                chain_id: &chain_id,
+                authority: &authority,
+                private_key: key_pair.private_key(),
+                transaction_ttl: None,
+                fee_payment: &fee_payment,
+                metadata: &metadata,
+            },
+            11,
+            contract_address.clone(),
+            code_hash,
+            contract_alias.clone(),
+            None,
+        )?;
+
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            panic!("native contract deployment commit must use instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        let commit = instructions[0]
+            .as_any()
+            .downcast_ref::<CommitContractDeployment>()
+            .expect("final deployment transaction must be the native atomic commit");
+        assert_eq!(commit.expected_deploy_nonce, 11);
+        assert_eq!(commit.contract_address, contract_address);
+        assert_eq!(commit.code_hash, code_hash);
+        assert_eq!(commit.contract_alias, contract_alias);
+        assert!(commit.lease_expiry_ms.is_none());
+        assert!(commit.expected_previous_contract_address.is_none());
+        assert!(
+            instructions[0]
+                .as_any()
+                .downcast_ref::<iroha::data_model::isi::SetKeyValueBox>()
+                .is_none(),
+            "generic metadata writes cannot advance the reserved deployment nonce"
+        );
         Ok(())
     }
 
@@ -785,7 +1228,7 @@ mod tests {
                 "register-bytes-chunk-0001-of-0002",
                 "register-bytes-finalize",
                 "register-manifest",
-                "activate",
+                "commit-deployment",
             ]
         );
         let output = tempfile::tempdir()?;
@@ -802,7 +1245,7 @@ mod tests {
                 "register-bytes-chunk-0001-of-0002.norito",
                 "register-bytes-finalize.norito",
                 "register-manifest.norito",
-                "activate.norito",
+                "commit-deployment.norito",
             ]
         );
         for ((_, _, transaction), (path, byte_len)) in sequence.iter().zip(&written) {
@@ -822,7 +1265,7 @@ mod tests {
                 .iter()
                 .map(|(_, slug, _)| slug.as_str())
                 .collect::<Vec<_>>(),
-            vec!["register-manifest", "activate"]
+            vec!["register-manifest", "commit-deployment"]
         );
         Ok(())
     }
@@ -877,12 +1320,14 @@ mod tests {
         .wrap_err("sign metadata-test manifest")?;
         transactions
             .push(signing.sign([InstructionBox::from(RegisterSmartContractCode { manifest })])?);
-        transactions.push(
-            signing.sign([InstructionBox::from(ActivateContractInstance {
-                contract_address,
-                code_hash,
-            })])?,
-        );
+        transactions.push(build_commit_deployment_transaction(
+            &signing,
+            7,
+            contract_address,
+            code_hash,
+            "metadata_test::universal".parse()?,
+            None,
+        )?);
 
         for transaction in &transactions {
             assert_eq!(transaction.metadata(), &metadata);
@@ -968,10 +1413,7 @@ fn main() -> Result<()> {
         .to_account_id()
         .map_err(|err| eyre!(err.to_string()))
         .wrap_err("failed to decode --authority")?;
-    let private_key: PrivateKey = args
-        .private_key
-        .parse()
-        .wrap_err("failed to parse --private-key")?;
+    let private_key = read_private_key_file(&args.private_key_file)?;
     let key_pair = KeyPair::from(private_key.clone());
     let client = make_client(
         &args.torii_url,
@@ -988,8 +1430,15 @@ fn main() -> Result<()> {
         .contract_alias
         .parse()
         .wrap_err("failed to parse --contract-alias")?;
-    let dataspace_id = resolve_alias_dataspace(&contract_alias, args.dataspace_id)?;
-    let deploy_nonce = current_deploy_nonce(&client, &authority)?;
+    let deployment_state = read_contract_deployment_state(
+        &client,
+        &authority,
+        &contract_alias,
+        args.chain_discriminant,
+    )?;
+    let deploy_nonce = deployment_state.deploy_nonce;
+    let dataspace_id = deployment_state.dataspace_id;
+    let expected_previous_contract_address = deployment_state.previous_contract_address.clone();
     let next_nonce = deploy_nonce
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
@@ -1001,12 +1450,6 @@ fn main() -> Result<()> {
     )
     .map_err(|err| eyre!(err.to_string()))
     .wrap_err("failed to derive contract address")?;
-    let previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress> =
-        args.previous_contract_address
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .wrap_err("failed to parse --previous-contract-address")?;
 
     let code =
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
@@ -1018,7 +1461,7 @@ fn main() -> Result<()> {
         .wrap_err("failed to sign contract manifest")?;
     let code_hash = verified.code_hash;
     let transaction_ttl = args.transaction_ttl_ms.map(Duration::from_millis);
-    // Registration and activation are one governance operation. Bind every
+    // Registration and atomic commit are one governance operation. Bind every
     // transaction in the sequence to the same contract address and approver
     // set so protected-lane admission cannot observe a partially attributed
     // deployment.
@@ -1074,45 +1517,26 @@ fn main() -> Result<()> {
         quote_and_resign_transaction(&client, &register_manifest_tx, &fee_payment)?;
     fee_quotes.push(register_manifest_quote);
 
-    let nonce_key =
-        Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY).expect("static metadata key is valid");
-    let mut activate_instructions = Vec::new();
-    if let Some(previous_contract_address) = previous_contract_address
-        && previous_contract_address != contract_address
-    {
-        activate_instructions.push(InstructionBox::from(SetContractAlias::clear(
-            previous_contract_address,
-        )));
-    }
-    activate_instructions.extend([
-        InstructionBox::from(ActivateContractInstance {
-            contract_address: contract_address.clone(),
-            code_hash,
-        }),
-        InstructionBox::from(SetContractAlias::bind(
-            contract_address.clone(),
-            contract_alias.clone(),
-            None,
-        )),
-        InstructionBox::from(SetKeyValue::account(
-            authority.clone(),
-            nonce_key,
-            Json::new(next_nonce),
-        )),
-    ]);
-    let activate_tx = signing.sign(activate_instructions)?;
-    let (activate_tx, activate_quote) =
-        quote_and_resign_transaction(&client, &activate_tx, &fee_payment)?;
-    let activation_fee_payment = activate_quote.intent.clone();
-    fee_quotes.push(activate_quote);
+    let commit_deployment_tx = build_commit_deployment_transaction(
+        &signing,
+        deploy_nonce,
+        contract_address.clone(),
+        code_hash,
+        contract_alias.clone(),
+        expected_previous_contract_address.clone(),
+    )?;
+    let (commit_deployment_tx, commit_deployment_quote) =
+        quote_and_resign_transaction(&client, &commit_deployment_tx, &fee_payment)?;
+    let commit_deployment_fee_payment = commit_deployment_quote.intent.clone();
+    fee_quotes.push(commit_deployment_quote);
 
     let register_manifest_tx_hash = register_manifest_tx.hash();
-    let activate_tx_hash = activate_tx.hash();
+    let commit_deployment_tx_hash = commit_deployment_tx.hash();
     let planned_txs = deployment_transaction_sequence(
         args.skip_register_bytes,
         register_plans,
         register_manifest_tx,
-        activate_tx,
+        commit_deployment_tx,
     );
     let written = if let Some(out_dir) = args.out_dir.as_deref() {
         Some(
@@ -1138,50 +1562,64 @@ fn main() -> Result<()> {
     } else {
         "committed"
     };
+    let deployment_state_snapshot = norito::json::to_value(&deployment_state.snapshot)
+        .wrap_err("encode authenticated deployment-state snapshot")?;
+    let authority_literal = authority.to_string();
+    let contract_subject_account = contract_address.subject_id().to_string();
     let operation_receipt = norito::json!({
         "operation_kind": ("contract_deploy"),
         "status": (operation_status),
         "transport": ("ivm-contract-deploy-helper"),
+        "torii_url": (args.torii_url.clone()),
+        "chain_id": (args.chain_id.clone()),
+        "authority": (authority_literal.clone()),
+        "chain_discriminant": (args.chain_discriminant),
         "dataspace": (dataspace_id.to_string()),
         "contract_alias": (contract_alias.to_string()),
         "contract_address": (contract_address.to_string()),
+        "contract_subject_account": (contract_subject_account.clone()),
         "code_hash_hex": (code_hash_hex.clone()),
         "abi_hash_hex": (Option::<String>::None),
-        "tx_hash_hex": (activate_tx_hash.to_string()),
+        "tx_hash_hex": (commit_deployment_tx_hash.to_string()),
         "entrypoint": (Option::<String>::None),
         "entrypoint_hash_hex": (Option::<String>::None),
-        "gas_limit": (activation_fee_payment.gas_limit().map(std::num::NonZeroU64::get)),
+        "gas_limit": (commit_deployment_fee_payment.gas_limit().map(std::num::NonZeroU64::get)),
         "gas_used": (Option::<u64>::None),
-        "fee_payment": (activation_fee_payment),
+        "fee_payment": (commit_deployment_fee_payment),
         "fee_quotes": (fee_quotes.clone()),
         "payload_digest_hex": (payload_digest_hex),
+        "deployment_state": (deployment_state_snapshot.clone()),
     });
     let result = norito::json!({
         "ok": true,
         "submitted": (!args.emit_only),
         "torii_url": (args.torii_url),
         "chain_id": (args.chain_id),
-        "authority": (authority),
+        "authority": (authority_literal),
+        "chain_discriminant": (args.chain_discriminant),
+        "dataspace": (dataspace_id.to_string()),
         "contract_alias": (contract_alias),
         "contract_address": (contract_address),
-        "contract_subject_account": (contract_address.subject_id()),
+        "contract_subject_account": (contract_subject_account),
         "deploy_nonce": (deploy_nonce),
         "next_deploy_nonce": (next_nonce),
         "code_hash_hex": (code_hash_hex.clone()),
         "register_manifest_tx_hash": (register_manifest_tx_hash),
-        "activate_tx_hash": (activate_tx_hash),
+        "commit_deployment_tx_hash": (commit_deployment_tx_hash),
+        "expected_previous_contract_address": (expected_previous_contract_address),
+        "deployment_state": (deployment_state_snapshot),
         "fee_quotes": (fee_quotes),
         "operation_receipt": (operation_receipt),
         "terminal_kind": (if args.emit_only { "Prepared" } else { "Committed" }),
         "final": (if args.emit_only {
             norito::json!({
                 "kind": ("Prepared"),
-                "hash": (activate_tx_hash),
+                "hash": (commit_deployment_tx_hash),
             })
         } else {
             norito::json!({
                 "kind": ("Committed"),
-                "hash": (activate_tx_hash),
+                "hash": (commit_deployment_tx_hash),
             })
         }),
     });

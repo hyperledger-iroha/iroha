@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     ffi::{OsStr, OsString},
     fmt,
     fs::{self, File},
@@ -224,12 +225,21 @@ pub const GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1: usize = 8;
 pub const GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_VALUE_BYTES_V1: usize = 1024;
 /// Maximum aggregate bytes in selected public request-header names and values.
 pub const GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADER_BYTES_V1: usize = 4 * 1024;
-
-const GOVERNANCE_DAG_REQUEST_AUTH_DOMAIN_V1: &[u8] =
-    b"sorafs.governance-dag.http-request-auth.v1\0";
-const GOVERNANCE_DAG_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
-    b"sorafs.governance-dag.http-request-digest.v1\0";
-const GOVERNANCE_DAG_REQUEST_AUTH_ALLOWED_HEADERS_V1: &[&str] = &[
+/// Maximum live nonce entries retained by one V1 request-auth replay cache.
+pub const GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1: usize = 4_096;
+/// Exact lowercase HTTP header names carrying one V1 authentication envelope.
+pub const GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1: [&str; 8] = [
+    "x-sorafs-governance-auth-version",
+    "x-sorafs-governance-auth-scope",
+    "x-sorafs-governance-auth-issued-at",
+    "x-sorafs-governance-auth-expires-at",
+    "x-sorafs-governance-auth-nonce",
+    "x-sorafs-governance-auth-request-digest",
+    "x-sorafs-governance-auth-public-key",
+    "x-sorafs-governance-auth-signature",
+];
+/// Ordered lowercase HTTP header names selected into the V1 request digest.
+pub const GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1: [&str; 6] = [
     "accept",
     "accept-encoding",
     "content-type",
@@ -237,6 +247,14 @@ const GOVERNANCE_DAG_REQUEST_AUTH_ALLOWED_HEADERS_V1: &[&str] = &[
     "if-none-match",
     "user-agent",
 ];
+
+const GOVERNANCE_DAG_REQUEST_AUTH_DOMAIN_V1: &[u8] =
+    b"sorafs.governance-dag.http-request-auth.v1\0";
+const GOVERNANCE_DAG_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.governance-dag.http-request-digest.v1\0";
+const GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1: &str = "x-sorafs-governance-auth-";
+const GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1: u64 = 300;
+const GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
 
 /// One canonical, explicitly public HTTP header selected for authentication.
 ///
@@ -262,7 +280,7 @@ impl GovernanceDagCanonicalRequestHeaderV1 {
             || name.bytes().any(|byte| {
                 !byte.is_ascii_lowercase() && !byte.is_ascii_digit() && !matches!(byte, b'-')
             })
-            || GOVERNANCE_DAG_REQUEST_AUTH_ALLOWED_HEADERS_V1
+            || GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1
                 .binary_search(&name)
                 .is_err()
         {
@@ -296,7 +314,7 @@ impl GovernanceDagCanonicalRequestHeaderV1 {
     }
 }
 
-/// Bounded canonical descriptor of one complete outbound Governance DAG request.
+/// Bounded canonical descriptor of one complete Governance DAG HTTP request.
 ///
 /// The descriptor contains public routing metadata and a body commitment only.
 /// It cannot carry credentials, private keys, cookies, streaming bodies, or
@@ -313,6 +331,47 @@ pub struct GovernanceDagCanonicalRequestV1 {
 }
 
 impl GovernanceDagCanonicalRequestV1 {
+    /// Construct a descriptor from exact bounded HTTP request parts.
+    ///
+    /// Callers must supply every present V1-selected public header exactly
+    /// once. Names must already be lowercase and values must be visible ASCII.
+    /// The constructor sorts them, rejects duplicates, and commits the exact
+    /// body bytes without retaining them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, payload-free reason when any request part is
+    /// noncanonical or exceeds a V1 bound.
+    pub fn try_from_http_parts<'a>(
+        scope: GovernanceDagAuthenticationScope,
+        method: &str,
+        canonical_url: &str,
+        selected_headers: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+        body: &[u8],
+        max_body_bytes: u64,
+    ) -> Result<Self, &'static str> {
+        let body_length = u64::try_from(body.len())
+            .map_err(|_| "Governance DAG request body length exceeds u64")?;
+        let mut canonical_headers = selected_headers
+            .into_iter()
+            .map(|(name, value)| {
+                let value = std::str::from_utf8(value)
+                    .map_err(|_| "Governance DAG request header value is not canonical")?;
+                GovernanceDagCanonicalRequestHeaderV1::try_new(name, value)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        canonical_headers.sort_unstable();
+        Self::try_new(
+            scope,
+            method,
+            canonical_url,
+            canonical_headers,
+            body_length,
+            *blake3::hash(body).as_bytes(),
+            max_body_bytes,
+        )
+    }
+
     /// Construct a fully validated V1 descriptor and its request digest.
     ///
     /// `max_body_bytes` is the already validated deployment request bound.
@@ -452,6 +511,235 @@ impl GovernanceDagCanonicalRequestV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GovernanceDagAuthenticationHeaderDispositionV1 {
+    Reject,
+    Retain,
+}
+
+/// Build one canonical outbound descriptor from a complete HTTP request.
+///
+/// Only the fixed V1 selected-public-header set is committed. Ordinary public
+/// transport headers are deliberately excluded, while credential headers and
+/// every Governance DAG authentication-prefix header are rejected. A
+/// canonical `content-length`, when present, must occur exactly once and match
+/// the complete byte body; `transfer-encoding` is never accepted because this
+/// contract authenticates a finalized in-memory body rather than HTTP framing.
+///
+/// # Errors
+///
+/// Returns a stable, payload-free rejection for forbidden headers, ambiguous
+/// framing, or any noncanonical request field.
+pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
+    scope: GovernanceDagAuthenticationScope,
+    method: &str,
+    canonical_url: &str,
+    headers: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+    body: &[u8],
+    max_body_bytes: u64,
+) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagRequestAuthenticationErrorV1> {
+    let (selected_headers, authentication_headers) = partition_governance_dag_http_headers_v1(
+        headers,
+        body,
+        GovernanceDagAuthenticationHeaderDispositionV1::Reject,
+    )?;
+    debug_assert!(authentication_headers.is_empty());
+    GovernanceDagCanonicalRequestV1::try_from_http_parts(
+        scope,
+        method,
+        canonical_url,
+        selected_headers,
+        body,
+        max_body_bytes,
+    )
+    .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)
+}
+
+/// Reusable receiver boundary for authenticated Governance DAG HTTP requests.
+///
+/// The receiver partitions real header pairs into the fixed
+/// selected-public-header set and exactly eight authentication fields, derives
+/// each canonical descriptor from its exact byte body, and verifies request
+/// binding, timing, the pinned Ed25519 signature, and one-use replay state
+/// before returning. It is transport-agnostic and does not itself install a
+/// receiver in Kubo, IPFS, IPNS, or a head service.
+///
+/// Replay state is deliberately caller-owned, bounded, and borrowed for this
+/// receiver's lifetime. Deployments must retain one receiver/cache for the
+/// lifetime of the corresponding pinned policy.
+// TODO: Install this boundary in deployment-owned Kubo/head ingress and
+// replace process-local replay memory with sealed cross-replica state before
+// production qualification.
+#[derive(Debug)]
+pub struct GovernanceDagHttpRequestReceiverV1<'a> {
+    scope: GovernanceDagAuthenticationScope,
+    max_body_bytes: u64,
+    policy: &'a GovernanceDagRequestAuthenticationPolicyV1,
+    replay_cache: &'a mut GovernanceDagRequestAuthenticationReplayCacheV1,
+}
+
+impl<'a> GovernanceDagHttpRequestReceiverV1<'a> {
+    /// Bind one endpoint scope, request-size ceiling, policy, and replay cache.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero request-size ceiling before any request can be accepted.
+    pub fn try_new(
+        scope: GovernanceDagAuthenticationScope,
+        max_body_bytes: u64,
+        policy: &'a GovernanceDagRequestAuthenticationPolicyV1,
+        replay_cache: &'a mut GovernanceDagRequestAuthenticationReplayCacheV1,
+    ) -> Result<Self, GovernanceDagRequestAuthenticationErrorV1> {
+        if max_body_bytes == 0 {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest);
+        }
+        Ok(Self {
+            scope,
+            max_body_bytes,
+            policy,
+            replay_cache,
+        })
+    }
+
+    /// Authenticate one complete HTTP request before backend dispatch.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable, payload-free rejection and does not return a
+    /// descriptor until every structural, timing, signature, and replay check
+    /// succeeds.
+    pub fn verify_http_request<'h>(
+        &mut self,
+        method: &str,
+        canonical_url: &str,
+        headers: impl IntoIterator<Item = (&'h str, &'h [u8])>,
+        body: &[u8],
+        now_unix_secs: u64,
+    ) -> Result<GovernanceDagCanonicalRequestV1, GovernanceDagRequestAuthenticationErrorV1> {
+        let (selected_headers, authentication_headers) = partition_governance_dag_http_headers_v1(
+            headers,
+            body,
+            GovernanceDagAuthenticationHeaderDispositionV1::Retain,
+        )?;
+        let request = GovernanceDagCanonicalRequestV1::try_from_http_parts(
+            self.scope,
+            method,
+            canonical_url,
+            selected_headers,
+            body,
+            self.max_body_bytes,
+        )
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest)?;
+        let envelope =
+            parse_governance_dag_request_authentication_headers_v1(authentication_headers)?;
+        verify_governance_dag_request_authentication_v1(
+            &request,
+            &envelope,
+            self.scope,
+            self.policy,
+            now_unix_secs,
+            self.replay_cache,
+        )?;
+        Ok(request)
+    }
+}
+
+type GovernanceDagHttpHeaderRefV1<'a> = (&'a str, &'a [u8]);
+type GovernanceDagPartitionedHttpHeadersV1<'a> = (
+    Vec<GovernanceDagHttpHeaderRefV1<'a>>,
+    Vec<GovernanceDagHttpHeaderRefV1<'a>>,
+);
+
+fn partition_governance_dag_http_headers_v1<'a>(
+    headers: impl IntoIterator<Item = GovernanceDagHttpHeaderRefV1<'a>>,
+    body: &[u8],
+    authentication_headers: GovernanceDagAuthenticationHeaderDispositionV1,
+) -> Result<GovernanceDagPartitionedHttpHeadersV1<'a>, GovernanceDagRequestAuthenticationErrorV1> {
+    let body_length = u64::try_from(body.len())
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::InvalidFraming)?;
+    let mut selected = Vec::with_capacity(GOVERNANCE_DAG_REQUEST_AUTH_MAX_HEADERS_V1);
+    let mut authentication = Vec::with_capacity(GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1.len());
+    let mut content_length = None;
+    for (name, value) in headers {
+        if governance_request_auth_is_forbidden_credential_header_v1(name) {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::ForbiddenHeader);
+        }
+        if governance_request_auth_header_has_prefix_v1(name) {
+            if authentication_headers == GovernanceDagAuthenticationHeaderDispositionV1::Reject {
+                return Err(GovernanceDagRequestAuthenticationErrorV1::ForbiddenHeader);
+            }
+            authentication.push((name, value));
+            continue;
+        }
+        if name.eq_ignore_ascii_case("transfer-encoding") {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidFraming);
+        }
+        if name.eq_ignore_ascii_case("content-length") {
+            if name != "content-length" || content_length.is_some() {
+                return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidFraming);
+            }
+            let parsed = parse_governance_request_content_length_v1(value)?;
+            if parsed != body_length {
+                return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidFraming);
+            }
+            content_length = Some(parsed);
+            continue;
+        }
+        if GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1
+            .binary_search(&name)
+            .is_ok()
+        {
+            selected.push((name, value));
+            continue;
+        }
+        if GOVERNANCE_DAG_REQUEST_AUTH_SELECTED_HEADER_NAMES_V1
+            .iter()
+            .any(|selected_name| selected_name.eq_ignore_ascii_case(name))
+        {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader);
+        }
+        // Every remaining header is ordinary public HTTP metadata. It is
+        // intentionally excluded from the signed descriptor.
+    }
+    Ok((selected, authentication))
+}
+
+fn parse_governance_request_content_length_v1(
+    value: &[u8],
+) -> Result<u64, GovernanceDagRequestAuthenticationErrorV1> {
+    if value.is_empty()
+        || (value.len() > 1 && value[0] == b'0')
+        || !value.iter().all(u8::is_ascii_digit)
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidFraming);
+    }
+    std::str::from_utf8(value)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or(GovernanceDagRequestAuthenticationErrorV1::InvalidFraming)
+}
+
+fn governance_request_auth_is_forbidden_credential_header_v1(name: &str) -> bool {
+    [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "cookie2",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+    ]
+    .iter()
+    .any(|forbidden| forbidden.eq_ignore_ascii_case(name))
+}
+
+fn governance_request_auth_header_has_prefix_v1(name: &str) -> bool {
+    name.get(..GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1.len())
+        .is_some_and(|prefix| {
+            prefix.eq_ignore_ascii_case(GOVERNANCE_DAG_REQUEST_AUTH_HEADER_PREFIX_V1)
+        })
+}
+
 fn governance_request_auth_url_is_canonical(value: &str) -> bool {
     let Ok(url) = Url::parse(value) else {
         return false;
@@ -520,6 +808,238 @@ fn governance_request_auth_hex_nibble(byte: u8) -> u8 {
     }
 }
 
+/// Stable, payload-free rejection from the V1 request-authentication contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceDagRequestAuthenticationErrorV1 {
+    /// The pinned Ed25519 public key is malformed or noncanonical.
+    InvalidPolicyPublicKey,
+    /// The configured timing bounds are outside the V1 policy.
+    InvalidPolicyTiming,
+    /// The requested replay-cache capacity is zero or above the V1 ceiling.
+    InvalidReplayCacheCapacity,
+    /// One of the eight fixed authentication headers is absent.
+    MissingHeader,
+    /// One fixed authentication header occurs more than once.
+    DuplicateHeader,
+    /// An unrecognized authentication-header alias or extension was supplied.
+    UnknownHeader,
+    /// An authentication header name or value is not in canonical wire form.
+    NoncanonicalHeader,
+    /// A credential or pre-existing authentication-prefix header was supplied.
+    ForbiddenHeader,
+    /// HTTP framing is ambiguous or disagrees with the finalized byte body.
+    InvalidFraming,
+    /// The method, URL, selected headers, or body commitment is noncanonical.
+    NoncanonicalRequest,
+    /// The envelope does not bind the receiver's exact request, scope, or key.
+    RequestMismatch,
+    /// The issuance interval is stale, future-dated, empty, or overlong.
+    InvalidTiming,
+    /// A required non-zero envelope field is zero.
+    MalformedEnvelope,
+    /// The Ed25519 public key is malformed or noncanonical.
+    MalformedPublicKey,
+    /// The Ed25519 signature encoding is malformed.
+    MalformedSignature,
+    /// The signature does not authenticate the exact canonical request.
+    SignatureVerification,
+    /// The nonce is already live in the caller-owned replay cache.
+    Replay,
+    /// The bounded replay cache cannot accept another live nonce.
+    ReplayCacheFull,
+}
+
+impl fmt::Display for GovernanceDagRequestAuthenticationErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidPolicyPublicKey => {
+                "Governance DAG request-auth policy public key is invalid"
+            }
+            Self::InvalidPolicyTiming => {
+                "Governance DAG request-auth policy timing bounds are invalid"
+            }
+            Self::InvalidReplayCacheCapacity => {
+                "Governance DAG request-auth replay-cache capacity is invalid"
+            }
+            Self::MissingHeader => {
+                "Governance DAG request-auth required header is missing"
+            }
+            Self::DuplicateHeader => {
+                "Governance DAG request-auth header is duplicated"
+            }
+            Self::UnknownHeader => {
+                "Governance DAG request-auth header alias or extension is not recognized"
+            }
+            Self::NoncanonicalHeader => {
+                "Governance DAG request-auth header is not canonical"
+            }
+            Self::ForbiddenHeader => {
+                "Governance DAG request contains a forbidden credential or authentication header"
+            }
+            Self::InvalidFraming => {
+                "Governance DAG request HTTP framing is ambiguous or inconsistent"
+            }
+            Self::NoncanonicalRequest => {
+                "Governance DAG request is not canonical or bounded"
+            }
+            Self::RequestMismatch => {
+                "Governance DAG request-auth envelope does not match the canonical request"
+            }
+            Self::InvalidTiming => {
+                "Governance DAG request-auth envelope is stale, future-dated, overlong, or malformed"
+            }
+            Self::MalformedEnvelope => {
+                "Governance DAG request-auth envelope is malformed"
+            }
+            Self::MalformedPublicKey => {
+                "Governance DAG request-auth envelope contains a malformed public key"
+            }
+            Self::MalformedSignature => {
+                "Governance DAG request-auth envelope contains a malformed signature"
+            }
+            Self::SignatureVerification => {
+                "Governance DAG request-auth signature verification failed"
+            }
+            Self::Replay => {
+                "Governance DAG request-auth envelope replay was rejected"
+            }
+            Self::ReplayCacheFull => {
+                "Governance DAG request-auth replay state reached its bounded capacity"
+            }
+        })
+    }
+}
+
+impl std::error::Error for GovernanceDagRequestAuthenticationErrorV1 {}
+
+/// Pinned receiver policy for V1 Governance DAG request authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceDagRequestAuthenticationPolicyV1 {
+    public_key: [u8; 32],
+    max_envelope_lifetime_secs: u64,
+    max_future_skew_secs: u64,
+}
+
+impl GovernanceDagRequestAuthenticationPolicyV1 {
+    /// Construct and validate one receiver policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed policy rejection when the key is not canonical Ed25519
+    /// or the timing bounds exceed V1.
+    pub fn try_new(
+        public_key: [u8; 32],
+        max_envelope_lifetime_secs: u64,
+        max_future_skew_secs: u64,
+    ) -> Result<Self, GovernanceDagRequestAuthenticationErrorV1> {
+        if !(1..=GOVERNANCE_DAG_REQUEST_AUTH_MAX_ENVELOPE_LIFETIME_SECS_V1)
+            .contains(&max_envelope_lifetime_secs)
+            || max_future_skew_secs > GOVERNANCE_DAG_REQUEST_AUTH_MAX_FUTURE_SKEW_SECS_V1
+            || max_future_skew_secs >= max_envelope_lifetime_secs
+        {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyTiming);
+        }
+        if public_key.iter().all(|byte| *byte == 0) {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyPublicKey);
+        }
+        let key = PublicKey::from_bytes(Algorithm::Ed25519, &public_key)
+            .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyPublicKey)?;
+        let (algorithm, canonical_bytes) = key
+            .try_to_bytes()
+            .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyPublicKey)?;
+        if algorithm != Algorithm::Ed25519 || canonical_bytes != public_key.as_slice() {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidPolicyPublicKey);
+        }
+        Ok(Self {
+            public_key,
+            max_envelope_lifetime_secs,
+            max_future_skew_secs,
+        })
+    }
+
+    /// Raw canonical Ed25519 public key pinned by the receiver.
+    #[must_use]
+    pub const fn public_key(self) -> [u8; 32] {
+        self.public_key
+    }
+
+    /// Maximum accepted envelope lifetime in seconds.
+    #[must_use]
+    pub const fn max_envelope_lifetime_secs(self) -> u64 {
+        self.max_envelope_lifetime_secs
+    }
+
+    /// Maximum accepted issuance skew into the future in seconds.
+    #[must_use]
+    pub const fn max_future_skew_secs(self) -> u64 {
+        self.max_future_skew_secs
+    }
+}
+
+/// Caller-owned bounded live-nonce cache for V1 replay rejection.
+///
+/// Receivers should retain one cache for each independently pinned
+/// authentication policy. The cache never evicts a live nonce to admit another
+/// request; capacity pressure therefore fails closed.
+#[derive(Debug)]
+pub struct GovernanceDagRequestAuthenticationReplayCacheV1 {
+    entries: BTreeMap<[u8; 32], u64>,
+    capacity: usize,
+}
+
+impl GovernanceDagRequestAuthenticationReplayCacheV1 {
+    /// Construct an empty cache with the governed V1 capacity.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            entries: BTreeMap::new(),
+            capacity: GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
+        }
+    }
+
+    /// Construct an empty cache with a smaller deterministic capacity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero or a capacity above
+    /// [`GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1`].
+    pub fn try_with_capacity(
+        capacity: usize,
+    ) -> Result<Self, GovernanceDagRequestAuthenticationErrorV1> {
+        if capacity == 0 || capacity > GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1 {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidReplayCacheCapacity);
+        }
+        Ok(Self {
+            entries: BTreeMap::new(),
+            capacity,
+        })
+    }
+
+    fn consume(
+        &mut self,
+        nonce: [u8; 32],
+        expires_at_unix_secs: u64,
+        now_unix_secs: u64,
+    ) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+        self.entries
+            .retain(|_, retained_expiry| *retained_expiry > now_unix_secs);
+        if self.entries.contains_key(&nonce) {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::Replay);
+        }
+        if self.entries.len() >= self.capacity {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::ReplayCacheFull);
+        }
+        self.entries.insert(nonce, expires_at_unix_secs);
+        Ok(())
+    }
+}
+
+impl Default for GovernanceDagRequestAuthenticationReplayCacheV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Public HSM-signed authentication envelope for one canonical request.
 ///
 /// The envelope deliberately exposes only fixed public authentication fields.
@@ -541,7 +1061,8 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
     /// Construct one structurally canonical signed envelope.
     ///
     /// Freshness, pinned-key equality, request equality, replay, and signature
-    /// verification remain the service's responsibility.
+    /// verification are enforced by
+    /// [`verify_governance_dag_request_authentication_v1`].
     ///
     /// # Errors
     ///
@@ -642,6 +1163,212 @@ impl GovernanceDagRequestAuthenticationEnvelopeV1 {
     pub const fn signature(&self) -> [u8; 64] {
         self.signature
     }
+}
+
+/// Render the exact eight canonical public HTTP authentication headers.
+#[must_use]
+pub fn governance_dag_request_authentication_headers_v1(
+    envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+) -> [(&'static str, String); 8] {
+    [
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[0],
+            GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1.to_string(),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[1],
+            envelope.scope().as_str().to_owned(),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[2],
+            envelope.issued_at_unix_secs().to_string(),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[3],
+            envelope.expires_at_unix_secs().to_string(),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[4],
+            hex::encode(envelope.nonce()),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[5],
+            hex::encode(envelope.request_digest()),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[6],
+            hex::encode(envelope.public_key()),
+        ),
+        (
+            GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1[7],
+            hex::encode(envelope.signature()),
+        ),
+    ]
+}
+
+/// Parse exactly one V1 public authentication-envelope header set.
+///
+/// Ordinary HTTP headers are ignored. Every name using the Governance DAG
+/// authentication prefix is part of this hard-cut contract: aliases,
+/// extensions, case variants, duplicates, and missing fields are rejected.
+/// Parsing alone grants no authority; receivers must pass the result to
+/// [`verify_governance_dag_request_authentication_v1`] before dispatch.
+///
+/// # Errors
+///
+/// Returns a stable, payload-free header rejection without exposing header
+/// values.
+pub fn parse_governance_dag_request_authentication_headers_v1<'a>(
+    headers: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+) -> Result<GovernanceDagRequestAuthenticationEnvelopeV1, GovernanceDagRequestAuthenticationErrorV1>
+{
+    let mut fields: [Option<&[u8]>; 8] = [None; 8];
+    for (name, value) in headers {
+        if !governance_request_auth_header_has_prefix_v1(name) {
+            continue;
+        }
+        let Some(index) = GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1
+            .iter()
+            .position(|candidate| *candidate == name)
+        else {
+            if GOVERNANCE_DAG_REQUEST_AUTH_HEADER_NAMES_V1
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(name))
+            {
+                return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader);
+            }
+            return Err(GovernanceDagRequestAuthenticationErrorV1::UnknownHeader);
+        };
+        if fields[index].replace(value).is_some() {
+            return Err(GovernanceDagRequestAuthenticationErrorV1::DuplicateHeader);
+        }
+    }
+    let [
+        Some(version),
+        Some(scope),
+        Some(issued_at),
+        Some(expires_at),
+        Some(nonce),
+        Some(request_digest),
+        Some(public_key),
+        Some(signature),
+    ] = fields
+    else {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::MissingHeader);
+    };
+    if parse_governance_request_auth_decimal_header_v1(version)?
+        != u64::from(GOVERNANCE_DAG_REQUEST_AUTH_VERSION_V1)
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader);
+    }
+    let scope = match scope {
+        b"ipfs" => GovernanceDagAuthenticationScope::Ipfs,
+        b"signed-head" => GovernanceDagAuthenticationScope::SignedHead,
+        _ => return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader),
+    };
+    Ok(GovernanceDagRequestAuthenticationEnvelopeV1 {
+        scope,
+        issued_at_unix_secs: parse_governance_request_auth_decimal_header_v1(issued_at)?,
+        expires_at_unix_secs: parse_governance_request_auth_decimal_header_v1(expires_at)?,
+        nonce: parse_governance_request_auth_hex_header_v1(nonce)?,
+        request_digest: parse_governance_request_auth_hex_header_v1(request_digest)?,
+        public_key: parse_governance_request_auth_hex_header_v1(public_key)?,
+        signature: parse_governance_request_auth_hex_header_v1(signature)?,
+    })
+}
+
+/// Verify one parsed envelope before forwarding the request to its backend.
+///
+/// `now_unix_secs` is supplied by the receiver so tests and deployment time
+/// sources remain explicit. The nonce is recorded only after every binding,
+/// timing, key, and signature check succeeds.
+///
+/// # Errors
+///
+/// Returns a stable, payload-free rejection and leaves the replay cache
+/// unchanged for every failure preceding nonce consumption.
+pub fn verify_governance_dag_request_authentication_v1(
+    request: &GovernanceDagCanonicalRequestV1,
+    envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
+    expected_scope: GovernanceDagAuthenticationScope,
+    policy: &GovernanceDagRequestAuthenticationPolicyV1,
+    now_unix_secs: u64,
+    replay_cache: &mut GovernanceDagRequestAuthenticationReplayCacheV1,
+) -> Result<(), GovernanceDagRequestAuthenticationErrorV1> {
+    if request.scope() != expected_scope
+        || envelope.scope() != expected_scope
+        || envelope.request_digest() != request.request_digest()
+        || envelope.public_key() != policy.public_key()
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::RequestMismatch);
+    }
+    let issued_at = envelope.issued_at_unix_secs();
+    let expires_at = envelope.expires_at_unix_secs();
+    let lifetime = expires_at
+        .checked_sub(issued_at)
+        .ok_or(GovernanceDagRequestAuthenticationErrorV1::InvalidTiming)?;
+    if issued_at == 0
+        || lifetime == 0
+        || lifetime > policy.max_envelope_lifetime_secs()
+        || issued_at > now_unix_secs.saturating_add(policy.max_future_skew_secs())
+        || expires_at <= now_unix_secs
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::InvalidTiming);
+    }
+    if envelope.nonce().iter().all(|byte| *byte == 0)
+        || envelope.request_digest().iter().all(|byte| *byte == 0)
+        || envelope.public_key().iter().all(|byte| *byte == 0)
+        || envelope.signature().iter().all(|byte| *byte == 0)
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::MalformedEnvelope);
+    }
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &envelope.public_key())
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::MalformedPublicKey)?;
+    let signature = iroha_crypto::ed25519_parse_signature(&envelope.signature())
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::MalformedSignature)?;
+    let signing_payload = GovernanceDagRequestAuthenticationEnvelopeV1::signing_payload(
+        request,
+        issued_at,
+        expires_at,
+        envelope.nonce(),
+        envelope.public_key(),
+    );
+    signature
+        .verify(&public_key, &signing_payload)
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::SignatureVerification)?;
+    replay_cache.consume(envelope.nonce(), expires_at, now_unix_secs)
+}
+
+fn parse_governance_request_auth_decimal_header_v1(
+    value: &[u8],
+) -> Result<u64, GovernanceDagRequestAuthenticationErrorV1> {
+    if value.is_empty()
+        || (value.len() > 1 && value[0] == b'0')
+        || !value.iter().all(u8::is_ascii_digit)
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader);
+    }
+    let value = std::str::from_utf8(value)
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader)?
+        .parse::<u64>()
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader)?;
+    Ok(value)
+}
+
+fn parse_governance_request_auth_hex_header_v1<const N: usize>(
+    value: &[u8],
+) -> Result<[u8; N], GovernanceDagRequestAuthenticationErrorV1> {
+    if value.len() != N.saturating_mul(2)
+        || !value
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader);
+    }
+    let mut decoded = [0; N];
+    hex::decode_to_slice(value, &mut decoded)
+        .map_err(|_| GovernanceDagRequestAuthenticationErrorV1::NoncanonicalHeader)?;
+    Ok(decoded)
 }
 
 fn append_governance_request_auth_field(bytes: &mut Vec<u8>, field: &[u8]) {

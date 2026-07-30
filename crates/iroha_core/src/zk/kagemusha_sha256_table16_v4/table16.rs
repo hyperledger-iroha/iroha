@@ -183,6 +183,7 @@ impl<F: PrimeField> Table16Chip<F> {
         meta: &mut ConstraintSystem<F>,
         shared: &Table16SharedConfig,
         advice: [Column<Advice>; 10],
+        lookup_tail: Column<Advice>,
     ) -> <Self as Chip<F>>::Config {
         Self::assert_field_size();
         let [
@@ -203,6 +204,7 @@ impl<F: PrimeField> Table16Chip<F> {
             input_tag,
             input_dense,
             input_spread,
+            lookup_tail,
             shared.lookup.clone(),
         );
         let lookup_inputs = lookup.input.clone();
@@ -242,7 +244,8 @@ impl<F: PrimeField> Table16Chip<F> {
         let shared = Self::configure_shared(meta);
         std::array::from_fn(|_| {
             let advice = std::array::from_fn(|_| meta.advice_column());
-            Self::configure_lane(meta, &shared, advice)
+            let lookup_tail = meta.advice_column();
+            Self::configure_lane(meta, &shared, advice, lookup_tail)
         })
     }
 
@@ -458,5 +461,26 @@ trait Table16Assignment<F: PrimeField> {
         )?;
 
         Ok(even)
+    }
+}
+
+#[cfg(test)]
+mod constraint_inventory_tests {
+    use halo2_proofs::{halo2curves::pasta::Fp, plonk::ConstraintSystem};
+
+    use super::Table16Chip;
+
+    #[test]
+    fn five_lane_tail_relation_adds_no_fixed_selector_or_permutation_columns() {
+        let mut meta = ConstraintSystem::<Fp>::default();
+        let _ = Table16Chip::<Fp>::configure_lanes::<5>(&mut meta);
+
+        assert_eq!(meta.num_advice_columns(), 55);
+        assert_eq!(meta.num_fixed_columns(), 4);
+        assert_eq!(meta.num_instance_columns(), 0);
+        assert_eq!(meta.num_selectors(), 110);
+        assert_eq!(meta.permutation().get_columns().len(), 41);
+        assert_eq!(meta.lookups().len(), 20);
+        assert_eq!(meta.degree(), 9);
     }
 }

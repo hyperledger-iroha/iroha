@@ -3038,6 +3038,7 @@ fn minimal_config_snapshot() {
                 scheduler_min_threads: 0,
                 scheduler_max_threads: 0,
                 rayon_global_threads: 0,
+                tokio_stack_bytes: 8388608,
                 scheduler_stack_bytes: 33554432,
                 prover_stack_bytes: 33554432,
                 sumeragi_stack_bytes: 67108864,
@@ -3101,6 +3102,7 @@ fn minimal_config_snapshot() {
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,
+                    kagemusha_catalog_qualification_seal_path: None,
                     kagemusha_max_decoded_bytes: 268435456,
                 },
                 router: Router {

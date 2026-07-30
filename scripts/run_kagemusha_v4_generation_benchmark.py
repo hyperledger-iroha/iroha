@@ -418,6 +418,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         report_path=jsonl_path,
                         summary_path=summary_path,
                         memory_limit_bytes=memory_limit,
+                        maximum_memory_bytes=(
+                            candidate_guard.ABSOLUTE_MAX_MEMORY_BYTES
+                        ),
+                        absolute_memory_ceiling_bytes=(
+                            candidate_guard.ABSOLUTE_MAX_MEMORY_BYTES
+                        ),
                         held_lock_descriptors=(heavy_lock, kagemusha_lock),
                         child_directory_descriptors=(scratch.run_descriptor,),
                         sample_interval_seconds=(

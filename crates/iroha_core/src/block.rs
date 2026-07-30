@@ -4925,6 +4925,15 @@ pub(crate) mod valid {
             }
         }
 
+        /// Return whether validation may publish best-effort pipeline recovery metadata.
+        ///
+        /// Signed genesis validation executes against a disposable state overlay before
+        /// consensus. It must not mutate Kura or invalidate the startup replay binding that
+        /// protects the still-empty canonical store.
+        const fn persist_pipeline_recovery_sidecar(&self) -> bool {
+            !matches!(self, Self::SignedGenesis { .. })
+        }
+
         const fn enforce_local_wall_clock(&self) -> bool {
             !matches!(self, Self::SumeragiV2 { .. })
         }
@@ -6790,6 +6799,7 @@ pub(crate) mod valid {
                 false,
                 None,
                 SccpRootValidation::Defer,
+                true,
             )?;
             let _ = crate::sumeragi::witness::drain_exec_witness();
             drop(exec_witness_guard);
@@ -7086,6 +7096,8 @@ pub(crate) mod valid {
                 (!replay_compatibility).then(crate::sumeragi::witness::exec_witness_guard);
             let tx_start = Instant::now();
             let advertised_committed_fragments = block.committed_fragment_count();
+            let persist_pipeline_recovery_sidecar =
+                validation_profile.persist_pipeline_recovery_sidecar();
             if let Err(error) = Self::validate_and_record_transactions_with_prepared(
                 &mut block,
                 &mut state_block,
@@ -7093,6 +7105,7 @@ pub(crate) mod valid {
                 true,
                 Some(&prepared_txs),
                 SccpRootValidation::Enforce,
+                persist_pipeline_recovery_sidecar,
             ) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
@@ -8152,7 +8165,6 @@ pub(crate) mod valid {
                     })?;
                 if height_context.id() != validation_context.context_id
                     || height_context.height != block.header().height().get()
-                    || height_context.epoch != qc.epoch_id
                 {
                     return Err(Self::execution_context_error(
                         "certified merge reference differs from its authenticated Sumeragi v2 height context",
@@ -11159,6 +11171,7 @@ pub(crate) mod valid {
                 skip_stateless_checks,
                 None,
                 SccpRootValidation::Enforce,
+                true,
             )?;
             Self::finalize_committed_fragment_count(
                 block,
@@ -11205,6 +11218,7 @@ pub(crate) mod valid {
             skip_stateless_checks: bool,
             prepared_txs: Option<&[PreparedBlockTransaction]>,
             sccp_root_validation: SccpRootValidation,
+            persist_pipeline_recovery_sidecar: bool,
         ) -> Result<(), BlockValidationError> {
             use rayon::prelude::*;
 
@@ -12703,7 +12717,7 @@ pub(crate) mod valid {
             // Persist admission sets and DAG fingerprint for idempotent recovery (best-effort).
             // Store a compact Norito sidecar for diagnostics.
             #[allow(unused)]
-            {
+            if persist_pipeline_recovery_sidecar {
                 let txs_sidecar: Vec<PipelineTxSnapshot> = prepared_txs
                     .iter()
                     .zip(access.iter())
@@ -16039,7 +16053,9 @@ pub(crate) mod valid {
                 version: 1,
                 entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"weighted-merge-sidecar")),
                 encoded_len: 1,
-                epoch_id: height_context.epoch,
+                // Merge-ledger epochs are independently contiguous and do not
+                // reuse the validator-election epoch from the height context.
+                epoch_id: 1,
                 execution_batch_hash: None,
                 entrypoint_count: None,
                 entrypoint_merkle_root: None,
@@ -16048,7 +16064,7 @@ pub(crate) mod valid {
                 base_state_hash: None,
                 merge_qc: MergeQuorumCertificate {
                     view: block.header().view_change_index(),
-                    epoch_id: height_context.epoch,
+                    epoch_id: 1,
                     carrier_height: block.header().height().get(),
                     carrier_parent_hash: parent_hash,
                     chain_id_digest: crate::merge::merge_chain_id_digest(&chain_id),
@@ -16095,7 +16111,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn merge_reference_accepts_exact_count_and_weighted_quorum() {
+        fn merge_reference_accepts_distinct_merge_epoch_with_weighted_quorum() {
             let (state, block, bundle, profile) = weighted_merge_reference_fixture(&[0, 1, 3]);
             let view = state.query_view();
             ValidBlock::validate_execution_context_merge_reference(
@@ -16105,7 +16121,10 @@ pub(crate) mod valid {
                 &bundle,
                 &profile,
             )
-            .expect("three signers holding 68/100 voting power satisfy both strict quorums");
+            .expect(
+                "an independently contiguous merge epoch with three signers holding 68/100 \
+                 voting power satisfies both strict quorums",
+            );
         }
 
         struct AutonomousAnchorFixture {
@@ -24947,8 +24966,9 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn validate_keep_voting_block_accepts_ordered_genesis_parameter_transactions() {
+        fn signed_genesis_validation_is_storage_side_effect_free() {
             use iroha_data_model::{
+                block::consensus_v2::ConsensusMode,
                 parameter::{Parameter, system::SumeragiParameter},
                 peer::PeerId,
                 prelude::*,
@@ -24983,7 +25003,7 @@ pub(crate) mod valid {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(
                 World::with([genesis_domain], [genesis_account_model], []),
-                kura,
+                Arc::clone(&kura),
                 query_handle,
             );
             install_test_lane_manifests_for_keypairs(
@@ -24999,7 +25019,7 @@ pub(crate) mod valid {
             let time_source = TimeSource::new_system();
             let mut voting_block = None;
 
-            let result = ValidBlock::validate_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
                 genesis_block,
                 &topology,
                 &chain_id,
@@ -25007,7 +25027,7 @@ pub(crate) mod valid {
                 &time_source,
                 &state,
                 &mut voting_block,
-                false,
+                ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
 
@@ -25020,6 +25040,11 @@ pub(crate) mod valid {
                     "ordered genesis parameter transactions should validate: {err}; results={results:?}"
                 );
             }
+            assert_eq!(
+                kura.pipeline_sidecar_queue_len_for_testing(),
+                0,
+                "disposable signed-genesis validation must not publish pipeline recovery metadata"
+            );
         }
 
         #[test]
