@@ -1300,7 +1300,7 @@ fn state_height_for_routing(state: &State) -> u64 {
     u64::try_from(state.committed_height()).unwrap_or(u64::MAX)
 }
 
-fn queue_plan_authoritative_peers_in_view_at_height(
+pub(crate) fn queue_plan_authoritative_peers_in_view_at_height(
     state_view: &impl StateReadOnly,
     route: RoutingDecision,
     proposal_height: u64,

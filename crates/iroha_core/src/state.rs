@@ -33766,8 +33766,9 @@ impl State {
                     ));
                 }
                 if validate_live_authority
-                    && self.authoritative_lane_peer_ids_at_height(
-                        route.leg.route.lane_id,
+                    && crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                        &self.view(),
+                        route.leg.route,
                         context.proposal_height,
                     ) != route.validator_set
                 {
@@ -121008,8 +121009,11 @@ seiyaku IdentitylessRawCallback {
             .legs()
             .into_iter()
             .map(|leg| {
-                let validator_set =
-                    state.authoritative_lane_peer_ids_at_height(leg.route.lane_id, proposal_height);
+                let validator_set = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                    &state.view(),
+                    leg.route,
+                    proposal_height,
+                );
                 assert!(
                     !validator_set.is_empty(),
                     "fixture route must have authoritative validators"
@@ -121712,6 +121716,51 @@ seiyaku IdentitylessRawCallback {
                 .queue_plan_admission_registry_entrypoint_present(binding.entrypoint_hash)
                 .is_err(),
             "a malformed marker must not be treated as an absent or canonical admission"
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy QueuePlan route");
+        let validator_keypairs = configure_commit_topology(&state, 1);
+
+        let parent = empty_global_block_after(None);
+        kura.store_block(Arc::new(parent.clone()))
+            .expect("store legacy QueuePlan carrier parent");
+        commit_block_metadata_to_state(&state, &parent);
+
+        let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        assert!(
+            state
+                .authoritative_lane_peer_ids_at_height(route.lane_id, 2)
+                .is_empty(),
+            "disabled Nexus has no lane-registry authority; QueuePlan must use commit topology"
+        );
+        let routing_plan = crate::queue::RoutingPlan::single(route);
+        let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+            &state,
+            routing_plan,
+            &validator_keypairs,
+            1,
+            0x62,
+        );
+
+        assert_eq!(
+            state
+                .classify_pending_queue_plan_admission(&certificate, 2)
+                .expect("legacy QueuePlan certificate is classifiable")
+                .1,
+            PendingQueuePlanAdmissionDisposition::EligibleAbsent
         );
     }
 

@@ -4338,14 +4338,30 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
-        if self.pending_kura_apply_recovery_evidence().is_some() && effects.len() != 1 {
-            return Err(self.close(
-                EffectExecutorError::Contract(
+        if let Some(stage) = self
+            .pending_kura_apply_recovery_evidence()
+            .map(PendingKuraApplyRecoveryEvidence::stage)
+        {
+            let is_effect_stage = matches!(
+                stage,
+                PendingKuraApplyRecoveryStage::CertifiedFetch
+                    | PendingKuraApplyRecoveryStage::DurableStore
+                    | PendingKuraApplyRecoveryStage::DeterministicValidation
+                    | PendingKuraApplyRecoveryStage::Apply
+            );
+            let invalid_count = if is_effect_stage {
+                effects.len() != 1
+            } else {
+                !effects.is_empty()
+            };
+            if invalid_count {
+                let reason = if is_effect_stage {
                     "interrupted-tip recovery must emit exactly one effect for its current stage"
-                        .to_owned(),
-                ),
-                services,
-            ));
+                } else {
+                    "completed interrupted-tip recovery must not emit another effect"
+                };
+                return Err(self.close(EffectExecutorError::Contract(reason.to_owned()), services));
+            }
         }
         for effect in &effects {
             if let Err(error) = self.ensure_pending_tip_recovery_effect_is_local(effect) {
