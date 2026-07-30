@@ -614,16 +614,33 @@ pub mod content {
 
 /// Oracle pipeline defaults.
 pub mod oracle {
-    use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::Name;
 
     use super::*;
 
-    fn deterministic_account(seed: &[u8], domain: &str) -> AccountId {
-        let _domain_id = DomainId::parse_fully_qualified(domain).expect("default oracle domain");
-        let keypair = KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
-            .expect("fixed oracle Ed25519 account seed must derive");
-        AccountId::new(keypair.public_key().clone())
+    /// Public-only custody identity for the oracle reward pool.
+    ///
+    /// The compressed point is the first canonical prime-order Ed25519 point
+    /// produced by `SHA-256("iroha:oracle:reward-pool:v1" || counter_le_u32)`
+    /// for counters starting at zero (counter 12). It is constructed directly
+    /// as a point, not by multiplying a known private scalar. Protocol
+    /// instructions move funds from this account; no signing key is required.
+    pub const REWARD_POOL_PUBLIC_KEY: &str =
+        "ed01202F616CC1D79D5638D1078788B2A4C3B0C404530B447E565517FBAB4F49E47CDB";
+    /// Public-only sink identity for oracle penalties.
+    ///
+    /// The compressed point is the first canonical prime-order Ed25519 point
+    /// produced by `SHA-256("iroha:oracle:slash-receiver:v1" || counter_le_u32)`
+    /// for counters starting at zero (counter 0). It is constructed directly
+    /// as a point, not by multiplying a known private scalar.
+    pub const SLASH_RECEIVER_PUBLIC_KEY: &str =
+        "ed0120A05C4A4595ECE6697D86BD4957572BA94DF6C6441D96B781EBEA87A38A934DF1";
+
+    fn protocol_custody_account(public_key: &str) -> AccountId {
+        let public_key: iroha_crypto::PublicKey = public_key
+            .parse()
+            .expect("default oracle custody public key");
+        AccountId::new(public_key)
     }
 
     /// Fixed reward amount for an inlier observation.
@@ -643,7 +660,7 @@ pub mod oracle {
 
     /// Account debited to fund oracle provider rewards.
     pub fn reward_pool() -> AccountId {
-        deterministic_account(b"oracle-reward-pool", "sora.universal")
+        protocol_custody_account(REWARD_POOL_PUBLIC_KEY)
     }
 
     /// Asset debited when slashing oracle providers.
@@ -653,7 +670,7 @@ pub mod oracle {
 
     /// Account credited when penalties are collected.
     pub fn slash_receiver() -> AccountId {
-        deterministic_account(b"oracle-slash-receiver", "sora.universal")
+        protocol_custody_account(SLASH_RECEIVER_PUBLIC_KEY)
     }
 
     /// Penalty applied to outlier observations.
@@ -865,7 +882,9 @@ pub mod network {
     pub const TRANSACTION_GOSSIP_PERIOD: Duration = Duration::from_secs(1);
     /// Number of gossip ticks to wait before re-sending the same transactions.
     pub const TRANSACTION_GOSSIP_RESEND_TICKS: NonZeroU32 = nonzero!(3u32);
-    /// Maximum number of transactions sent or accepted in one gossip batch.
+    /// Canonical wire maximum for transactions and aligned metadata in one gossip batch.
+    pub const TRANSACTION_GOSSIP_MAX_SIZE: NonZeroU32 = nonzero!(512u32);
+    /// Default maximum number of transactions sent or accepted in one gossip batch.
     pub const TRANSACTION_GOSSIP_SIZE: NonZeroU32 = nonzero!(500u32);
     /// Drop transaction gossip for dataspaces that are missing from the lane catalog instead of
     /// falling back to restricted targeting.
@@ -4799,21 +4818,40 @@ mod tests {
     }
 
     #[test]
-    fn oracle_fixed_accounts_use_checked_ed25519_derivation() {
-        let reward_pool_keypair =
+    fn oracle_custody_defaults_are_public_only_and_not_legacy_seeded() {
+        let legacy_reward_pool_keypair =
             KeyPair::try_from_seed(b"oracle-reward-pool".to_vec(), Algorithm::Ed25519)
-                .expect("fixed reward-pool seed must derive");
-        let slash_receiver_keypair =
+                .expect("legacy reward-pool seed derives");
+        let legacy_slash_receiver_keypair =
             KeyPair::try_from_seed(b"oracle-slash-receiver".to_vec(), Algorithm::Ed25519)
-                .expect("fixed slash-receiver seed must derive");
+                .expect("legacy slash-receiver seed derives");
+        let reward_pool = oracle::reward_pool();
+        let slash_receiver = oracle::slash_receiver();
 
         assert_eq!(
-            oracle::reward_pool(),
-            AccountId::new(reward_pool_keypair.public_key().clone())
+            reward_pool,
+            AccountId::new(
+                oracle::REWARD_POOL_PUBLIC_KEY
+                    .parse()
+                    .expect("reward-pool public key")
+            )
         );
         assert_eq!(
-            oracle::slash_receiver(),
-            AccountId::new(slash_receiver_keypair.public_key().clone())
+            slash_receiver,
+            AccountId::new(
+                oracle::SLASH_RECEIVER_PUBLIC_KEY
+                    .parse()
+                    .expect("slash-receiver public key")
+            )
+        );
+        assert_ne!(reward_pool, slash_receiver);
+        assert_ne!(
+            reward_pool,
+            AccountId::new(legacy_reward_pool_keypair.public_key().clone())
+        );
+        assert_ne!(
+            slash_receiver,
+            AccountId::new(legacy_slash_receiver_keypair.public_key().clone())
         );
     }
 }

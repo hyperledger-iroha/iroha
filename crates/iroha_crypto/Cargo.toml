@@ -137,13 +137,11 @@ time = { workspace = true, features = ["formatting", "parsing"] }
 
 # pqcrypto-mldsa's NEON C backend is not compatible with MSVC. Keep ML-DSA
 # enabled on Windows/AArch64 through its portable clean C implementation.
-# Keep the version exact and aligned workspace-wide: `soranet_pq` generates its
-# private clean-backend bindings from this release's headers.
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-pqcrypto-mldsa = { version = "=0.1.2", default-features = false, features = ["std"], optional = true }
+pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
-pqcrypto-mldsa = { version = "=0.1.2", optional = true }
+pqcrypto-mldsa = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

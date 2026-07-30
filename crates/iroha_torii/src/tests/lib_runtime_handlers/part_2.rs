@@ -1,11 +1,13 @@
     #[tokio::test]
-    async fn handler_post_transaction_entrypoint_uses_api_token_rate_limit_key() {
+    async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_limit_key() {
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             app_mut.high_load_tx_threshold = usize::MAX;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
             app_mut.fee_policy = FeePolicy::Disabled;
+            app_mut.require_api_token = true;
+            app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
         }
 
         let first_keypair = checked_torii_test_keypair_from_seed_byte(
@@ -460,6 +462,8 @@
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             app_mut.high_load_tx_threshold = usize::MAX;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+            app_mut.require_api_token = true;
+            app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
         }
 
         let keypair = checked_torii_test_keypair_from_seed_byte(
@@ -510,12 +514,14 @@
     }
 
     #[tokio::test]
-    async fn handler_post_transactions_batch_uses_api_token_key_for_distinct_authorities() {
+    async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_authorities() {
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             app_mut.high_load_tx_threshold = usize::MAX;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(2));
+            app_mut.require_api_token = true;
+            app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-distinct-token".to_owned()]));
         }
 
         let chain = (*app.chain_id).clone();
@@ -728,6 +734,38 @@
         let json: norito::json::Value = norito::json::from_slice(&body).expect("valid policy json");
         assert_eq!(
             json.get("rate_limit_enforced"),
+            Some(&norito::json::Value::Bool(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_policy_reports_required_token_even_when_configuration_is_unavailable() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.require_api_token = true;
+            app_mut.api_tokens_set = Arc::new(HashSet::new());
+            app_mut.allow_nets = Arc::new(vec![
+                limits::parse_cidr("127.0.0.0/8").expect("loopback CIDR"),
+            ]);
+        }
+
+        let response =
+            super::handler_policy(State(app), HeaderMap::new(), crate::loopback_connect_info())
+                .await
+                .expect("allowlisted policy response")
+                .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("policy body");
+        let json: norito::json::Value = norito::json::from_slice(&body).expect("valid policy JSON");
+        assert_eq!(
+            json.get("require_api_token"),
+            Some(&norito::json::Value::Bool(true))
+        );
+        assert_eq!(
+            json.get("token_required"),
             Some(&norito::json::Value::Bool(true))
         );
     }

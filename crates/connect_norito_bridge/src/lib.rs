@@ -45,8 +45,8 @@ use iroha_data_model::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         decode_instruction_from_pair, framed_instruction_payload,
         governance::{
-            CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
+            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+            PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
         },
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
@@ -10953,7 +10953,9 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_lineage_query_create
         }?)
         .map_err(|_| BridgeError::KagemushaProve)?;
         let query = kagemusha_recipient_lineage_query_create_v2(
-            ChainId::from(chain_id),
+            chain_id
+                .parse::<ChainId>()
+                .map_err(|_| BridgeError::KagemushaProve)?,
             parse_account_id_for_chain(recipient, chain_discriminant)?,
             receiver_device_id,
             parse_asset_definition(asset)?,
@@ -14821,7 +14823,8 @@ mod detached_transaction_scaffold_tests {
             let mut metadata = Metadata::default();
             metadata.insert(
                 "nested".parse().expect("metadata key"),
-                Json::from("{\"z\":2,\"a\":[true,null]}"),
+                Json::from_raw_json("{\"z\":2,\"a\":[true,null]}".to_owned())
+                    .expect("valid nested JSON fixture"),
             );
             metadata
         });
@@ -27341,8 +27344,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
     ttl_ms: u64,
     ttl_present: c_uchar,
     epoch: u64,
-    candidates_count: u32,
-    derived_by: u8,
     members_json_ptr: *const c_uchar,
     members_json_len: c_ulong,
     fee_payment_json_ptr: *const c_uchar,
@@ -27371,11 +27372,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
-        let derived_by = match derived_by {
-            0 => CouncilDerivationKind::Vrf,
-            1 => CouncilDerivationKind::Fallback,
-            _ => return Err(BridgeError::Governance),
-        };
 
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -27384,9 +27380,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             epoch,
             members,
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count,
-            derived_by,
         };
 
         let fee_payment =
@@ -27419,8 +27412,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
     ttl_ms: u64,
     ttl_present: c_uchar,
     epoch: u64,
-    candidates_count: u32,
-    derived_by: u8,
     members_json_ptr: *const c_uchar,
     members_json_len: c_ulong,
     fee_payment_json_ptr: *const c_uchar,
@@ -27451,11 +27442,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
-        let derived_by = match derived_by {
-            0 => CouncilDerivationKind::Vrf,
-            1 => CouncilDerivationKind::Fallback,
-            _ => return Err(BridgeError::Governance),
-        };
 
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -27464,9 +27450,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             epoch,
             members,
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count,
-            derived_by,
         };
 
         let fee_payment =
@@ -35019,7 +35002,9 @@ fn java_native_kagemusha_prepare_recipient_request_v2(
     java_kagemusha_archive_array_result(env, "recipient request preparation", |env| {
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let chain_id = ChainId::from(java_kagemusha_text(env, &chain_id, "chainId")?);
+        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")?
+            .parse::<ChainId>()
+            .map_err(|error| format!("chainId must be canonical: {error}"))?;
         let asset = parse_asset_definition(java_kagemusha_text(env, &asset, "asset")?)
             .map_err(|_| "asset must be a canonical asset-definition address".to_owned())?;
         let amount = java_kagemusha_amount(env, &atomic_units, scale)?;
@@ -35364,7 +35349,9 @@ fn java_native_kagemusha_create_recipient_lineage_query_v2(
     java_kagemusha_archive_array_result(env, "recipient lineage query creation", |env| {
         let chain_discriminant = u16::try_from(chain_discriminant)
             .map_err(|_| "chainDiscriminant must fit in u16".to_owned())?;
-        let chain_id = ChainId::from(java_kagemusha_text(env, &chain_id, "chainId")?);
+        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")?
+            .parse::<ChainId>()
+            .map_err(|error| format!("chainId must be canonical: {error}"))?;
         let recipient = parse_account_id_for_chain(
             java_kagemusha_text(env, &recipient, "recipient")?,
             chain_discriminant,
@@ -38730,8 +38717,10 @@ fn java_native_kagemusha_prepare_top_up_v4(
         let _permit = try_preacquire_kagemusha_heavy_proof_permit_v4()
             .map_err(|error| java_kagemusha_bridge_failure("top-up", error))?;
         let invalid = |message: String| JavaKagemushaLifecycleFailure::Invalid(message);
-        let chain_id =
-            ChainId::from(java_kagemusha_text(env, &chain_id, "chainId").map_err(invalid)?);
+        let chain_id = java_kagemusha_text(env, &chain_id, "chainId")
+            .map_err(invalid)?
+            .parse::<ChainId>()
+            .map_err(|error| invalid(format!("chainId must be canonical: {error}")))?;
         let (asset_definition, balance_scope) = parse_asset_definition_with_balance_scope(
             java_kagemusha_text(env, &asset_definition, "assetDefinitionId").map_err(invalid)?,
         )

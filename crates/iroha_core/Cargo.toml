@@ -135,7 +135,9 @@ zk-proof-tags = []
 # Test/developer helper: scale Sumeragi timers inside tests to accelerate timeouts
 dev-tests = []
 
-# Enable internal test helpers (e.g., Topology fixtures) when building core tests.
+# Enable internal test helpers (e.g., Topology and synthetic executor fixtures)
+# when building core tests. Production node builds must leave this disabled so
+# every user-provided executor path runs the admitted guest bytecode.
 iroha-core-tests = []
 # Permit dependent-crate finality-ledger fixtures. Requiring this in addition to
 # `iroha-core-tests` keeps raw finality mutation out of broad tooling builds.

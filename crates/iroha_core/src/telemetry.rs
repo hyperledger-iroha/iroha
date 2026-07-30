@@ -3832,9 +3832,6 @@ impl StateTelemetry {
         self.metrics
             .governance_council_candidates
             .set(u64::from(payload.candidates_count));
-        self.metrics
-            .governance_council_verified
-            .set(u64::from(payload.verified));
         self.metrics.governance_council_epoch.set(payload.epoch);
     }
 
@@ -13230,16 +13227,14 @@ mod tests {
                 epoch: 4,
                 members_count: 3,
                 alternates_count: 1,
-                verified: 2,
                 candidates_count: 5,
-                derived_by: CouncilDerivationKind::Vrf,
+                derived_by: CouncilDerivationKind::Sortition,
             },
         ));
 
         assert_eq!(metrics.governance_council_members.get(), 3);
         assert_eq!(metrics.governance_council_alternates.get(), 1);
         assert_eq!(metrics.governance_council_candidates.get(), 5);
-        assert_eq!(metrics.governance_council_verified.get(), 2);
         assert_eq!(metrics.governance_council_epoch.get(), 4);
     }
 

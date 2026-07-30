@@ -17,8 +17,8 @@ use crate::{
 
 #[path = "mldsa_backend.rs"]
 mod backend;
-#[path = "mldsa_pqclean_bindings.rs"]
-mod pqclean_bindings;
+#[path = "mldsa_primitives.rs"]
+mod mldsa_primitives;
 
 /// Maximum context length accepted by FIPS 204 ML-DSA signing and verification.
 pub const ML_DSA_CONTEXT_MAX_LEN: usize = 255;
@@ -212,14 +212,6 @@ pub enum MlDsaError {
     /// Signature verification failed.
     #[error("signature verification failed: {0}")]
     VerificationFailed(VerificationError),
-    /// Key generation failed.
-    #[error("{suite:?} key generation failed with status {status}")]
-    KeyGenerationFailed {
-        /// Suite identifier.
-        suite: MlDsaSuite,
-        /// Status code returned by `PQClean`.
-        status: i32,
-    },
     /// Context exceeded the FIPS 204 one-byte context length field.
     #[error("ML-DSA context length must be at most 255 bytes, found {len}")]
     ContextTooLong {
@@ -322,9 +314,8 @@ pub struct MlDsaEncodingError {
 ///
 /// # Errors
 ///
-/// Returns [`MlDsaError::KeyGenerationFailed`] if the underlying `PQClean`
-/// routines report a failure, or [`MlDsaError::BadEncoding`] when the produced
-/// key material cannot be converted into the Norito-friendly encoding.
+/// Returns an error when generated material fails strict FIPS 204 encoding and
+/// consistency validation.
 pub fn generate_mldsa_keypair(
     suite: MlDsaSuite,
     rng: &mut HedgedChaCha20Rng,
@@ -758,10 +749,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_keypair_rejects_all_zero_coin_material() {
+    fn direct_fips_keypair_rejects_all_zero_seed_material() {
         let suite = MlDsaSuite::MlDsa44;
-        let err = generate_mldsa_keypair_from_coins(suite, &[0_u8; 32])
-            .expect_err("all-zero ML-DSA keypair coins must be rejected");
+        let err = generate_mldsa_keypair_from_fips_seed(suite, &[0_u8; 32])
+            .expect_err("all-zero ML-DSA FIPS keypair seed must be rejected");
 
         match err {
             MlDsaError::InertKeyMaterial {
@@ -769,9 +760,9 @@ mod tests {
                 kind,
             } => {
                 assert_eq!(actual.suite_id(), suite.suite_id());
-                assert_eq!(kind, "ML-DSA keypair coins");
+                assert_eq!(kind, "ML-DSA keypair seed");
             }
-            other => panic!("expected ML-DSA inert keypair coin error, got {other:?}"),
+            other => panic!("expected ML-DSA inert FIPS keypair seed error, got {other:?}"),
         }
     }
 

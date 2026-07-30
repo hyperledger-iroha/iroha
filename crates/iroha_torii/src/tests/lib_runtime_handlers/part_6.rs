@@ -346,6 +346,150 @@
         );
     }
 
+    #[test]
+    fn signed_query_preauth_key_ignores_unauthenticated_api_token_text() {
+        let remote = Some(
+            "203.0.113.17"
+                .parse::<std::net::IpAddr>()
+                .expect("valid test client address"),
+        );
+        let mut first = HeaderMap::new();
+        first.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_static("attacker-token-1"),
+        );
+        let mut second = HeaderMap::new();
+        second.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_static("attacker-token-2"),
+        );
+
+        assert_eq!(
+            signed_query_preauth_rate_limit_key(&first, remote, false),
+            signed_query_preauth_rate_limit_key(&second, remote, false),
+            "raw API-token text must not choose a pre-verification rate bucket"
+        );
+        assert_ne!(
+            signed_query_preauth_rate_limit_key(&first, remote, true),
+            signed_query_preauth_rate_limit_key(&second, remote, true),
+            "an already-validated API credential may identify its own caller budget"
+        );
+    }
+
+    #[test]
+    fn signed_query_authority_keys_are_canonical_and_namespaced() {
+        let first = checked_torii_test_account_id(0x71, "derive first query-admission authority");
+        let second = checked_torii_test_account_id(0x72, "derive second query-admission authority");
+        let first_key = signed_query_authority_rate_limit_key(&first);
+        let second_key = signed_query_authority_rate_limit_key(&second);
+
+        assert_eq!(first_key, signed_query_authority_rate_limit_key(&first));
+        assert_ne!(first_key, second_key);
+        assert!(first_key.starts_with("v1/query:authority:"));
+    }
+
+    #[tokio::test]
+    async fn signed_query_authority_admission_isolated_by_verified_identity() {
+        let first =
+            checked_torii_test_account_id(0x74, "derive first enforced query-admission authority");
+        let second =
+            checked_torii_test_account_id(0x75, "derive second enforced query-admission authority");
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique query-authority admission fixture")
+            .query_authority_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
+
+        admit_signed_query_authority(app.as_ref(), &first)
+            .await
+            .expect("first authority consumes its own budget");
+        admit_signed_query_authority(app.as_ref(), &second)
+            .await
+            .expect("second authority has an independent budget");
+        let error = admit_signed_query_authority(app.as_ref(), &first)
+            .await
+            .expect_err("first authority cannot exceed its budget");
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+    }
+
+    #[tokio::test]
+    async fn signed_query_token_rotation_cannot_escape_origin_and_authority_budgets() {
+        use iroha_data_model::query::{
+            QueryRequest, SingularQueryBox, runtime::prelude::FindAbiVersion,
+        };
+
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x73,
+            "derive signed-query admission fixture authority",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let app_mut = Arc::get_mut(&mut app).expect("unique signed-query admission fixture");
+        app_mut.query_preauth_rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(2));
+        app_mut.query_authority_rate_limiter =
+            limits::RateLimiter::new_per_minute(Some(1), Some(2));
+        let signed_query = || {
+            QueryRequest::Singular(SingularQueryBox::FindAbiVersion(FindAbiVersion))
+                .with_authority(authority.clone())
+                .sign(&key_pair)
+        };
+
+        for token in ["attacker-token-1", "attacker-token-2"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                HEADER_API_TOKEN,
+                HeaderValue::from_str(token).expect("valid test header"),
+            );
+            let response = handler_signed_query(
+                State(Arc::clone(&app)),
+                headers,
+                crate::loopback_connect_info(),
+                None,
+                crate::NoritoQuery(QueryOptions::default()),
+                versioned_query_for_test(signed_query()),
+            )
+            .await
+            .expect("requests within both signed-query budgets must execute");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(
+            app.query_preauth_rate_limiter.bucket_count().await,
+            1,
+            "rotated raw tokens must share one effective-origin bucket"
+        );
+        assert_eq!(
+            app.query_authority_rate_limiter.bucket_count().await,
+            1,
+            "replayed requests from one signer must share one authority bucket"
+        );
+
+        let mut rotated = HeaderMap::new();
+        rotated.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_static("attacker-token-3"),
+        );
+        let error = handler_signed_query(
+            State(app),
+            rotated,
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(QueryOptions::default()),
+            versioned_query_for_test(signed_query()),
+        )
+        .await
+        .expect_err("rotating raw token text must not create a fresh query budget");
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
+            ))
+        ));
+    }
+
     #[tokio::test]
     async fn zero_query_queue_timeout_is_fail_fast_and_does_not_reserve_general_capacity() {
         let mut app = mk_app_state_for_tests();

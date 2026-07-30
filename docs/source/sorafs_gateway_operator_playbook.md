@@ -15,6 +15,9 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 
 1. Enable storage and stream-token issuance with bounded defaults:
    ```toml
+   [torii]
+   api_tokens = ["<runtime-provisioned-stream-token-issuer-credential>"]
+
    [sorafs.storage]
    enabled = true
 
@@ -28,6 +31,9 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    default_rate_limit_bytes = 104857600
    default_requests_per_minute = 60
    ```
+   At least one Torii API token is mandatory for this issuance route.
+   `require_api_token = true` remains the recommended listener-wide posture,
+   but this route validates its credential independently.
 2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
    `sorafs.storage.native_transaction_signers`, and inject all four matching
    live providers. Storage startup requires them even when the corresponding
@@ -53,8 +59,10 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
 ### Token Issuance
 
 - Use the authenticated `POST /v1/sorafs/storage/token` route with
-  `X-SoraFS-Client`, a unique `X-SoraFS-Nonce`, and the manifest/provider JSON
-  body described in `sorafs_gateway_chunk_range.md`.
+  exactly one configured `X-API-Token`, `X-SoraFS-Client`, a unique
+  `X-SoraFS-Nonce`, and the manifest/provider JSON body described in
+  `sorafs_gateway_chunk_range.md`. The API credential, not the client label,
+  owns the issuance budget.
 - Store only token ID, key version, and expiry in the operator dashboard. Keep
   the encoded bearer token in a secret manager and redact it from logs.
 - Rotate tokens proactively before TTL when running 24/7 workloads.
@@ -108,6 +116,7 @@ umask 077
 curl --fail --silent --show-error \
   -X POST https://gateway.example.com/v1/sorafs/storage/token \
   -H "Content-Type: application/json" \
+  -H "X-API-Token: ${TORII_API_TOKEN}" \
   -H "X-SoraFS-Client: ${CLIENT_ID}" \
   -H "X-SoraFS-Nonce: ${UNIQUE_NONCE}" \
   --data-binary "{\"manifest_id_hex\":\"${MANIFEST_ID}\",\"provider_id_hex\":\"${PROVIDER_ID}\"}" \
@@ -116,8 +125,9 @@ curl --fail --silent --show-error \
 
 Required automation behaviour:
 
-- Authenticate at the Torii perimeter; client ID and nonce headers alone are
-  not credentials.
+- Supply one `torii.api_tokens` credential. The issuance handler validates it
+  even when the listener-wide `torii.require_api_token` setting is false;
+  client ID and nonce headers are never credentials.
 - Compare `X-SoraFS-Verifying-Key` with the independently approved gateway key,
   verify the domain-separated token signature, provider/manifest/profile
   bindings, issuance time, and expiry, then deploy the exact approved key as

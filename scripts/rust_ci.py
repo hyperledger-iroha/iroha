@@ -561,6 +561,7 @@ def commands_for_checks(
                     "clippy",
                     "--locked",
                     "--all-targets",
+                    "--all-features",
                     *package_args,
                     "--",
                     "-D",
@@ -575,7 +576,14 @@ def commands_for_checks(
             )
         elif check == "doc":
             commands.append(
-                ["cargo", "doc", "--locked", "--no-deps", *package_args]
+                [
+                    "cargo",
+                    "doc",
+                    "--locked",
+                    "--no-deps",
+                    "--all-features",
+                    *package_args,
+                ]
             )
         else:
             raise ClassificationError(

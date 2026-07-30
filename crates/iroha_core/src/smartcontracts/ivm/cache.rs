@@ -175,13 +175,19 @@ impl PreparedContractCache {
     /// Cache hits reuse the loaded program and restore only memory chunks
     /// dirtied by the previous invocation. Re-entrant calls allocate another
     /// runtime when the matching pool is temporarily empty rather than
-    /// aliasing mutable VM state.
+    /// aliasing mutable VM state. `heap_limit` is part of the runtime identity,
+    /// so governance changes cannot reuse a VM carrying stale heap authority.
     pub fn checkout_runtime(
         &self,
         contract: &ivm::PreparedContract,
         gas_limit: u64,
+        heap_limit: u64,
     ) -> Result<PreparedRuntimeLease, ivm::VMError> {
-        let key = RuntimeKey::new(contract.code_hash(), stack_limit_for_gas(gas_limit));
+        let key = RuntimeKey::new(
+            contract.code_hash(),
+            stack_limit_for_gas(gas_limit),
+            heap_limit,
+        );
         let cached = {
             let mut store = self.inner.lock();
             let cached = store.nested_runtimes.get_mut(&key).and_then(|pool| {
@@ -209,6 +215,7 @@ impl PreparedContractCache {
 
         let mut vm = ivm::IVM::new(gas_limit);
         vm.set_zk_trace_enabled(false);
+        vm.memory.set_heap_max_limit(heap_limit)?;
         vm.load_prepared(contract)?;
         vm.set_gas_limit(gas_limit);
         let mut store = self.inner.lock();
@@ -371,13 +378,15 @@ impl SummaryKey {
 struct RuntimeKey {
     code_hash: Hash,
     stack_limit: u64,
+    heap_limit: u64,
 }
 
 impl RuntimeKey {
-    fn new(code_hash: Hash, stack_limit: u64) -> Self {
+    fn new(code_hash: Hash, stack_limit: u64, heap_limit: u64) -> Self {
         Self {
             code_hash,
             stack_limit,
+            heap_limit,
         }
     }
 
@@ -539,10 +548,14 @@ impl ProgramSummary {
     ///
     /// # Errors
     /// Returns [`ivm::VMError`] if a cold runtime cannot load the validated
-    /// prepared contract.
-    pub fn checkout_runtime(&self, gas_limit: u64) -> Result<PreparedRuntimeLease, ivm::VMError> {
+    /// prepared contract or `heap_limit` lies outside the ABI heap window.
+    pub fn checkout_runtime(
+        &self,
+        gas_limit: u64,
+        heap_limit: u64,
+    ) -> Result<PreparedRuntimeLease, ivm::VMError> {
         self.prepared_cache
-            .checkout_runtime(self.prepared_contract(), gas_limit)
+            .checkout_runtime(self.prepared_contract(), gas_limit, heap_limit)
     }
 }
 
@@ -1015,14 +1028,16 @@ impl IvmCache {
     /// exit path. Callers should attach a fresh host before execution.
     ///
     /// # Errors
-    /// Propagates [`ivm::VMError`] when loading the runtime fails.
+    /// Propagates [`ivm::VMError`] when loading the runtime or applying the
+    /// governed heap ceiling fails.
     pub fn checkout_runtime<'a>(
         &'a mut self,
         summary: &ProgramSummary,
         _bytecode: &[u8],
         gas_limit: u64,
+        heap_limit: u64,
     ) -> Result<RuntimeLease<'a>, ivm::VMError> {
-        let (key, baseline, vm) = self.take_runtime(summary, gas_limit)?;
+        let (key, baseline, vm) = self.take_runtime(summary, gas_limit, heap_limit)?;
         Ok(RuntimeLease {
             cache: self,
             key,
@@ -1038,14 +1053,16 @@ impl IvmCache {
     /// interface, identity, or entrypoint metadata is synthesized.
     ///
     /// # Errors
-    /// Propagates [`ivm::VMError`] if the validated program cannot be loaded.
+    /// Propagates [`ivm::VMError`] if the validated program cannot be loaded
+    /// or its governed heap ceiling is outside the ABI address window.
     pub fn checkout_generic_runtime<'a>(
         &'a mut self,
         summary: &GenericProgramSummary,
         gas_limit: u64,
+        heap_limit: u64,
     ) -> Result<RuntimeLease<'a>, ivm::VMError> {
         let stack_limit = stack_limit_for_gas(gas_limit);
-        let key = RuntimeKey::new(summary.code_hash, stack_limit);
+        let key = RuntimeKey::new(summary.code_hash, stack_limit, heap_limit);
         let cached = self.runtime_templates.get_mut(&key).and_then(|pool| {
             pool.available
                 .pop()
@@ -1060,6 +1077,7 @@ impl IvmCache {
             self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
             let mut vm = ivm::IVM::new(gas_limit);
             vm.set_zk_trace_enabled(false);
+            vm.memory.set_heap_max_limit(heap_limit)?;
             vm.load_program(summary.program())?;
             self.stats.prepared_loads = self.stats.prepared_loads.saturating_add(1);
             vm.set_gas_limit(gas_limit);
@@ -1093,9 +1111,10 @@ impl IvmCache {
         &mut self,
         summary: &ProgramSummary,
         gas_limit: u64,
+        heap_limit: u64,
     ) -> Result<(RuntimeKey, Arc<ivm::RuntimeTemplate>, ivm::IVM), ivm::VMError> {
         let stack_limit = stack_limit_for_gas(gas_limit);
-        let key = RuntimeKey::new(summary.code_hash, stack_limit);
+        let key = RuntimeKey::new(summary.code_hash, stack_limit, heap_limit);
         let cached = self.runtime_templates.get_mut(&key).and_then(|pool| {
             pool.available
                 .pop()
@@ -1111,6 +1130,7 @@ impl IvmCache {
         self.stats.runtime_misses = self.stats.runtime_misses.saturating_add(1);
         let mut vm = ivm::IVM::new(gas_limit);
         vm.set_zk_trace_enabled(false);
+        vm.memory.set_heap_max_limit(heap_limit)?;
         vm.load_prepared(summary.prepared_contract())?;
         self.stats.prepared_loads = self.stats.prepared_loads.saturating_add(1);
         if gas_limit > 0 {
@@ -1257,6 +1277,8 @@ mod tests {
 
     use super::*;
 
+    const HEAP_LIMIT: u64 = ivm::Memory::HEAP_MAX_SIZE;
+
     /// Assemble a minimal program containing only a HALT instruction.
     fn minimal_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata::default().encode();
@@ -1324,6 +1346,7 @@ mod tests {
     #[test]
     fn generic_runtime_is_validated_reset_and_reused() {
         const GAS_LIMIT: u64 = 10_000;
+        const GOVERNED_HEAP_LIMIT: u64 = 64;
         let program = minimal_generic_program();
         let mut cache = IvmCache::with_capacity(2);
         let summary = cache
@@ -1331,16 +1354,19 @@ mod tests {
             .expect("generic summary");
         {
             let mut runtime = cache
-                .checkout_generic_runtime(&summary, GAS_LIMIT)
+                .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
                 .expect("generic runtime");
+            assert_eq!(runtime.memory.heap_limit(), GOVERNED_HEAP_LIMIT);
+            assert_eq!(runtime.memory.heap_max_limit(), GOVERNED_HEAP_LIMIT);
             runtime.set_register(3, 77);
             runtime.run().expect("generic HALT program");
         }
         let runtime = cache
-            .checkout_generic_runtime(&summary, GAS_LIMIT)
+            .checkout_generic_runtime(&summary, GAS_LIMIT, GOVERNED_HEAP_LIMIT)
             .expect("reused generic runtime");
         assert_eq!(runtime.register(3), 0);
         assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
+        assert_eq!(runtime.memory.heap_max_limit(), GOVERNED_HEAP_LIMIT);
         drop(runtime);
         assert_eq!(cache.stats().runtime_hits, 1);
     }
@@ -1437,7 +1463,7 @@ mod tests {
         let summary = cache.summarize_program(&program).expect("summary");
         let memory_allocation = {
             let mut runtime = cache
-                .checkout_runtime(&summary, &program, GAS_LIMIT)
+                .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("VM should be created");
             let allocation = runtime
                 .memory
@@ -1462,7 +1488,7 @@ mod tests {
         // Second transaction should reuse the cached template and preserve code load.
         let summary = cache.summarize_program(&program).expect("cached summary");
         let runtime2 = cache
-            .checkout_runtime(&summary, &program, GAS_LIMIT)
+            .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
             .expect("VM should be reused");
         assert_eq!(runtime2.register(TEST_REGISTER), 0);
         assert_eq!(
@@ -1503,7 +1529,7 @@ mod tests {
 
         {
             let mut runtime = cache
-                .checkout_runtime(&summary, &program, GAS_LIMIT)
+                .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("cold runtime");
             runtime.memory = ivm::Memory::new_with_stack_limit(0, ivm::Memory::STACK_ALIGNMENT);
         }
@@ -1517,7 +1543,7 @@ mod tests {
 
         {
             let runtime = cache
-                .checkout_runtime(&summary, &program, GAS_LIMIT)
+                .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("replacement runtime");
             assert_ne!(runtime.memory.stack_limit(), ivm::Memory::STACK_ALIGNMENT);
         }
@@ -1525,6 +1551,39 @@ mod tests {
         assert_eq!(after_replacement.runtime_misses, 2);
         assert_eq!(after_replacement.runtime_hits, 0);
         assert_eq!(after_replacement.dirty_resets, 1);
+    }
+
+    #[test]
+    fn runtime_pool_never_reuses_stale_heap_authority() {
+        const GAS_LIMIT: u64 = 10_000;
+        const SMALL_HEAP_LIMIT: u64 = 64;
+        const LARGE_HEAP_LIMIT: u64 = 128;
+        let program = minimal_program();
+        let mut cache = IvmCache::with_capacity(2);
+        let summary = cache.summarize_program(&program).expect("summary");
+
+        {
+            let runtime = cache
+                .checkout_runtime(&summary, &program, GAS_LIMIT, SMALL_HEAP_LIMIT)
+                .expect("small governed runtime");
+            assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
+        }
+        {
+            let runtime = cache
+                .checkout_runtime(&summary, &program, GAS_LIMIT, LARGE_HEAP_LIMIT)
+                .expect("large governed runtime");
+            assert_eq!(runtime.memory.heap_max_limit(), LARGE_HEAP_LIMIT);
+        }
+        let after_distinct_limits = cache.stats();
+        assert_eq!(after_distinct_limits.runtime_misses, 2);
+        assert_eq!(after_distinct_limits.runtime_hits, 0);
+
+        let runtime = cache
+            .checkout_runtime(&summary, &program, GAS_LIMIT, SMALL_HEAP_LIMIT)
+            .expect("warm small governed runtime");
+        assert_eq!(runtime.memory.heap_max_limit(), SMALL_HEAP_LIMIT);
+        drop(runtime);
+        assert_eq!(cache.stats().runtime_hits, 1);
     }
 
     #[test]
@@ -1537,7 +1596,7 @@ mod tests {
         assert_eq!(summary.prepared_contract().code_hash(), summary.code_hash);
         assert_eq!(summary.prepared_contract().artifact(), program.as_slice());
         let runtime = summary
-            .checkout_runtime(GAS_LIMIT)
+            .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
             .expect("summary owns initialized prepared runtime state");
         assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
     }
@@ -1554,7 +1613,7 @@ mod tests {
             .expect("first preparation");
         let memory_allocation = {
             let mut runtime = cache
-                .checkout_runtime(&summary, &program, GAS_LIMIT)
+                .checkout_runtime(&summary, &program, GAS_LIMIT, HEAP_LIMIT)
                 .expect("first runtime");
             let allocation = runtime
                 .memory
@@ -1582,7 +1641,7 @@ mod tests {
             .expect("summary cache hit");
         {
             let runtime = cache
-                .checkout_runtime(&summary, &[], GAS_LIMIT)
+                .checkout_runtime(&summary, &[], GAS_LIMIT, HEAP_LIMIT)
                 .expect("warm runtime");
             assert_eq!(runtime.register(7), 0);
             assert_eq!(
@@ -1656,7 +1715,9 @@ mod tests {
             .summarize_program_with_hash(code_hash, &program)
             .expect("first worker preparation");
         let allocation = {
-            let runtime = first.checkout_runtime(GAS_LIMIT).expect("first runtime");
+            let runtime = first
+                .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
+                .expect("first runtime");
             runtime
                 .memory
                 .load_region(0, 1)
@@ -1669,7 +1730,9 @@ mod tests {
         let second = second_worker
             .summarize_program_with_hash(code_hash, &[])
             .expect("shared prepared hit");
-        let runtime = second.checkout_runtime(GAS_LIMIT).expect("warm runtime");
+        let runtime = second
+            .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
+            .expect("warm runtime");
         assert_eq!(
             runtime
                 .memory
@@ -1728,6 +1791,7 @@ mod tests {
     #[test]
     fn nested_runtime_pool_reuses_allocation_and_dirty_resets_memory() {
         const GAS_LIMIT: u64 = 10_000;
+        const GOVERNED_HEAP_LIMIT: u64 = 96;
         let program = minimal_program();
         let code_hash = ivm::contract_code_hash(&program);
         let cache = PreparedContractCache::with_capacity(2);
@@ -1737,8 +1801,9 @@ mod tests {
 
         let memory_allocation = {
             let mut runtime = cache
-                .checkout_runtime(prepared.as_ref(), GAS_LIMIT)
+                .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
                 .expect("cold nested runtime");
+            assert_eq!(runtime.memory.heap_max_limit(), GOVERNED_HEAP_LIMIT);
             let allocation = runtime
                 .memory
                 .load_region(0, 1)
@@ -1759,10 +1824,11 @@ mod tests {
 
         {
             let runtime = cache
-                .checkout_runtime(prepared.as_ref(), GAS_LIMIT)
+                .checkout_runtime(prepared.as_ref(), GAS_LIMIT, GOVERNED_HEAP_LIMIT)
                 .expect("warm nested runtime");
             assert_eq!(runtime.register(7), 0);
             assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
+            assert_eq!(runtime.memory.heap_max_limit(), GOVERNED_HEAP_LIMIT);
             assert_eq!(
                 runtime
                     .memory
@@ -1811,7 +1877,7 @@ mod tests {
 
         fn dirty_then_return(summary: &ProgramSummary) -> Result<(), *const u8> {
             let mut runtime = summary
-                .checkout_runtime(GAS_LIMIT)
+                .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
                 .expect("prepared runtime");
             let allocation = runtime
                 .memory
@@ -1830,7 +1896,9 @@ mod tests {
         let after_error = prepared_cache.stats();
         assert_eq!(after_error.runtime_dirty_resets, 1);
 
-        let runtime = summary.checkout_runtime(GAS_LIMIT).expect("warm runtime");
+        let runtime = summary
+            .checkout_runtime(GAS_LIMIT, HEAP_LIMIT)
+            .expect("warm runtime");
         assert_eq!(runtime.register(7), 0);
         assert_eq!(runtime.remaining_gas(), GAS_LIMIT);
         assert_eq!(
@@ -1918,12 +1986,12 @@ mod tests {
 
         {
             let vm1 = cache
-                .checkout_runtime(&summary1, &program, 1_000)
+                .checkout_runtime(&summary1, &program, 1_000, HEAP_LIMIT)
                 .expect("runtime for first variant");
             assert_eq!(vm1.metadata().max_cycles, 1);
         }
         let vm2 = cache
-            .checkout_runtime(&summary2, &program2, 1_000)
+            .checkout_runtime(&summary2, &program2, 1_000, HEAP_LIMIT)
             .expect("runtime for second variant");
         assert_eq!(vm2.metadata().max_cycles, 2);
     }
@@ -1938,7 +2006,7 @@ mod tests {
         let summary = cache.summarize_program(&program).expect("summary");
         let gas_limit = 100_000;
         let vm = cache
-            .checkout_runtime(&summary, &program, gas_limit)
+            .checkout_runtime(&summary, &program, gas_limit, HEAP_LIMIT)
             .expect("runtime");
 
         let expected = IvmConfig::new(gas_limit).stack_limit_for_gas();
@@ -1959,7 +2027,7 @@ mod tests {
         let summary1 = cache.summarize_program(&program1).expect("summary1");
         {
             let _runtime = cache
-                .checkout_runtime(&summary1, &program1, gas_limit)
+                .checkout_runtime(&summary1, &program1, gas_limit, HEAP_LIMIT)
                 .expect("runtime1");
         }
 
@@ -1972,15 +2040,23 @@ mod tests {
         assert!(!cache.summaries.contains_key(&summary1_key));
         assert!(cache.summaries.contains_key(&summary2_key));
 
-        let runtime1_key = RuntimeKey::new(summary1.code_hash, stack_limit_for_gas(gas_limit));
+        let runtime1_key = RuntimeKey::new(
+            summary1.code_hash,
+            stack_limit_for_gas(gas_limit),
+            HEAP_LIMIT,
+        );
         assert!(!cache.runtime_templates.contains_key(&runtime1_key));
 
         {
             let _runtime = cache
-                .checkout_runtime(&summary2, &program2, gas_limit)
+                .checkout_runtime(&summary2, &program2, gas_limit, HEAP_LIMIT)
                 .expect("runtime2");
         }
-        let runtime2_key = RuntimeKey::new(summary2.code_hash, stack_limit_for_gas(gas_limit));
+        let runtime2_key = RuntimeKey::new(
+            summary2.code_hash,
+            stack_limit_for_gas(gas_limit),
+            HEAP_LIMIT,
+        );
         assert!(cache.runtime_templates.contains_key(&runtime2_key));
     }
 }

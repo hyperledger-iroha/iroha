@@ -11,11 +11,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-iroha_data_model = { workspace = true, features = ["http"] }
+iroha_data_model = { workspace = true, features = ["application-model", "http"], default-features = false }
 iroha_executor_data_model = { workspace = true }
 
 iroha_primitives = { workspace = true }
 iroha_genesis = { workspace = true }
-iroha_crypto = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_schema = { workspace = true }
 iroha_telemetry = { workspace = true }

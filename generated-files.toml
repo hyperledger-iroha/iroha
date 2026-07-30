@@ -167,17 +167,6 @@ inputs = [
 ]
 check = "bash scripts/tests/consistency.sh"
 
-[[generated]]
-name = "soranet-pqclean-mldsa-bindings"
-kind = "file"
-outputs = ["crates/soranet_pq/src/mldsa_pqclean_bindings.rs"]
-generator = "bindgen over pqcrypto-mldsa 0.1.2 PQClean clean-backend headers"
-generator_sources = []
-inputs = ["crates/soranet_pq/Cargo.toml"]
-check = "cargo test --locked -p soranet_pq"
-external = true
-provenance = "pqcrypto-mldsa 0.1.2, exact-pinned in crates/soranet_pq/Cargo.toml"
-
 # TODO: Restore scripts/etenraku_analysis.py and the licensed reference
 # recording so this historical trace can be reproduced inside the repository.
 [[generated]]

@@ -23,9 +23,9 @@ clap = { workspace = true, features = ["derive"] }
 eyre = { workspace = true }
 hex = { workspace = true }
 iroha = { workspace = true }
-iroha_data_model = { workspace = true }
-ivm = { workspace = true }
-norito = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+ivm = { workspace = true, default-features = false, features = ["runtime"] }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }

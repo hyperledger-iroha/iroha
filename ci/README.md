@@ -47,6 +47,26 @@ structural simplification is intended to control. Run the exact CI command when
 intentionally refreshing the baseline, review the JSON evidence, and never
 raise the baseline merely to make an unexplained regression pass.
 
+## Repository structure ratchets
+
+Three fast, read-only checks keep structural debt from returning:
+
+- `python3 scripts/check_source_file_budget.py` caps new production and test
+  source files and applies an exact no-growth ratchet to legacy files that are
+  still above the limit. Intentional splits should lower
+  `ci/source_file_budget.json`; unexplained growth must not refresh it.
+- `python3 scripts/check_cargo_feature_hygiene.py` rejects workspace-wide
+  feature injection and implicit default-feature ownership across every
+  workspace member. Capability bundles belong to the crate or binary that
+  consumes them.
+- `python3 scripts/check_generated_artifacts.py` validates
+  `generated-files.toml`, requires reproducible ownership for checked-in
+  generated source, and rejects tracked build, cache, package, and `dist`
+  outputs.
+
+Their focused regression tests live under `scripts/tests/` and
+`pytests/scripts/`; the PR classifier runs them before selecting Rust lanes.
+
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_nexus_cross_dataspace_localnet.sh` – runs the Nexus 12-peer cross-dataspace proof on ten fresh deterministic seeds (`nexus-cross-dataspace-v1-seed-00` through `-09`). Each seed is a separate network/test process with no retry, and the launcher rejects missing or zero-test transcripts before publishing exact 10/10 completion accounting. Production release also invokes the launcher's ignored `--cross-dataspace-fault-soak` path, whose validated duration is exactly 7,200 seconds.

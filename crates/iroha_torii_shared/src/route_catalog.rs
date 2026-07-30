@@ -66,12 +66,15 @@ pub enum Listener {
 /// Authentication contract enforced by the route boundary.
 ///
 /// Most policies are middleware-backed. Protocol exchanges and explicitly
-/// reviewed canonical-account handlers may enforce their credential while
-/// entering the handler, before parsing or acting on protected request data.
+/// reviewed handlers may enforce their credential at the handler boundary,
+/// before invoking a protected capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
+    /// The route requires exactly one configured Torii API token regardless
+    /// of the listener-wide API-token setting.
+    RequiredApiToken,
     /// The listener's configured API-token policy applies and the route also
     /// requires exactly one dedicated signer-backed onboarding token.
     OnboardingToken,
@@ -1184,26 +1187,6 @@ pub mod operator_authentication {
         LOGIN_OPTIONS,
         LOGIN_VERIFY,
     ];
-}
-
-/// Feature-gated governance VRF helper descriptors.
-pub mod governance_vrf {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
-
-    /// Derive deterministic governance-council VRF inputs.
-    pub const DERIVE_COUNCIL: RouteDescriptor = RouteDescriptor::new(
-        "governance.council.derive_vrf",
-        HttpMethod::Post,
-        "/v1/gov/council/derive-vrf",
-        ApiSurface::Public,
-        Listener::Torii,
-    )
-    .with_feature_gate(FeatureGate::Feature("gov_vrf"))
-    .with_projections(RouteProjections::ALL)
-    .with_cors_options(true);
-
-    /// Governance VRF routes registered when `gov_vrf` is compiled.
-    pub const ROUTES: &[RouteDescriptor] = &[DERIVE_COUNCIL];
 }
 
 /// Core node information and operator configuration descriptors.
@@ -2862,18 +2845,6 @@ pub mod runtime_governance {
     /// Read citizenship status for one account.
     pub const GOV_CITIZEN_STATUS: RouteDescriptor =
         app_get("governance.citizen.status", "/v1/gov/citizens/{account_id}");
-    /// Read council derivation audit metadata.
-    pub const GOV_COUNCIL_AUDIT: RouteDescriptor =
-        app_get("governance.council.audit", "/v1/gov/council/audit");
-    /// Persist a VRF-derived council.
-    pub const GOV_COUNCIL_PERSIST: RouteDescriptor =
-        app_post("governance.council.persist", "/v1/gov/council/persist")
-            .with_feature_gate(FeatureGate::All(&["app_api", "gov_vrf"]));
-    /// Replace a council member with the next alternate.
-    pub const GOV_COUNCIL_REPLACE: RouteDescriptor =
-        app_post("governance.council.replace", "/v1/gov/council/replace")
-            .with_feature_gate(FeatureGate::All(&["app_api", "gov_vrf"]));
-
     /// Complete route family registered by `add_runtime_governance_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         ZK_ROOTS,
@@ -2935,9 +2906,6 @@ pub mod runtime_governance {
         GOV_COUNCIL_CURRENT,
         GOV_CITIZENS_COUNT,
         GOV_CITIZEN_STATUS,
-        GOV_COUNCIL_AUDIT,
-        GOV_COUNCIL_PERSIST,
-        GOV_COUNCIL_REPLACE,
     ];
 }
 
@@ -3373,7 +3341,8 @@ pub mod sorafs {
         documented_post("sorafs.storage.fetch", "/v1/sorafs/storage/fetch");
     /// Request a storage access token.
     pub const STORAGE_TOKEN: RouteDescriptor =
-        documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token");
+        documented_post("sorafs.storage_token.issue", "/v1/sorafs/storage/token")
+            .with_authentication(AuthenticationPolicy::RequiredApiToken);
     /// Read CAR bytes for a stored manifest.
     pub const STORAGE_CAR: RouteDescriptor = documented_get(
         "sorafs.storage_car.read",
@@ -4336,7 +4305,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     operator_authentication::REGISTRATION_VERIFY,
     operator_authentication::LOGIN_OPTIONS,
     operator_authentication::LOGIN_VERIFY,
-    governance_vrf::DERIVE_COUNCIL,
     core::API_VERSION,
     core::PEERS,
     core::HEALTH,
@@ -4522,9 +4490,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::GOV_COUNCIL_CURRENT,
     runtime_governance::GOV_CITIZENS_COUNT,
     runtime_governance::GOV_CITIZEN_STATUS,
-    runtime_governance::GOV_COUNCIL_AUDIT,
-    runtime_governance::GOV_COUNCIL_PERSIST,
-    runtime_governance::GOV_COUNCIL_REPLACE,
     sorafs::STORAGE_PEERS,
     sorafs::PROVIDERS,
     sorafs::PROVIDER_ADVERT,
@@ -5268,6 +5233,25 @@ mod tests {
     }
 
     #[test]
+    fn stream_token_api_token_authentication_is_exactly_scoped() {
+        assert_eq!(
+            sorafs::STORAGE_TOKEN.authentication(),
+            AuthenticationPolicy::RequiredApiToken,
+            "stream-token issuance must advertise its unconditional API credential"
+        );
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| {
+                    route.authentication() == AuthenticationPolicy::RequiredApiToken
+                })
+                .count(),
+            1,
+            "no unrelated route may inherit the stream-token credential policy"
+        );
+    }
+
+    #[test]
     fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
         let routes = [
             application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
@@ -5465,7 +5449,6 @@ mod tests {
             .iter()
             .chain(fees::ROUTES)
             .chain(operator_authentication::ROUTES)
-            .chain(governance_vrf::ROUTES)
             .chain(iso20022::ROUTES)
             .chain(data_availability::ROUTES)
             .chain(musubi::ROUTES)

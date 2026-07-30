@@ -18360,7 +18360,10 @@ mod protocol {
                         .provider_ingest_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = iroha_data_model::ChainId::from(load.chain_id);
+                    let chain_id = load
+                        .chain_id
+                        .parse::<iroha_data_model::ChainId>()
+                        .map_err(|_| BrokerError::BindingMismatch)?;
                     let record = authority.load_latest(&chain_id).map_err(|error| {
                         match error {
                         iroha_core::query::provider_ingest_finalized::
@@ -18412,7 +18415,10 @@ mod protocol {
                         .provider_ingest_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = iroha_data_model::ChainId::from(compare.chain_id);
+                    let chain_id = compare
+                        .chain_id
+                        .parse::<iroha_data_model::ChainId>()
+                        .map_err(|_| BrokerError::BindingMismatch)?;
                     let current = authority.load_latest(&chain_id).map_err(|error| {
                         match error {
                         iroha_core::query::provider_ingest_finalized::
@@ -18491,7 +18497,10 @@ mod protocol {
                         .reputation_finalized_archive_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = iroha_data_model::ChainId::from(load.chain_id);
+                    let chain_id = load
+                        .chain_id
+                        .parse::<iroha_data_model::ChainId>()
+                        .map_err(|_| BrokerError::BindingMismatch)?;
                     let record = authority.load_latest(&chain_id).map_err(|error| {
                         match error {
                         iroha_core::query::reputation_finalized::
@@ -18561,7 +18570,10 @@ mod protocol {
                         .reputation_finalized_archive_retention_authority
                         .as_ref()
                         .ok_or(BrokerError::BindingMismatch)?;
-                    let chain_id = iroha_data_model::ChainId::from(compare.chain_id);
+                    let chain_id = compare
+                        .chain_id
+                        .parse::<iroha_data_model::ChainId>()
+                        .map_err(|_| BrokerError::BindingMismatch)?;
                     let current = authority.load_latest(&chain_id).map_err(|error| {
                         match error {
                         iroha_core::query::reputation_finalized::
@@ -32654,7 +32666,9 @@ mod protocol {
                 authority: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 iroha_data_model::transaction::TransactionBuilder::new(
-                    iroha_data_model::ChainId::from(chain_id),
+                    chain_id
+                        .parse::<iroha_data_model::ChainId>()
+                        .expect("native signer test chain id must be canonical"),
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
@@ -32736,7 +32750,9 @@ mod protocol {
                 executable: iroha_data_model::transaction::Executable,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 iroha_data_model::transaction::TransactionBuilder::new(
-                    iroha_data_model::ChainId::from(chain_id),
+                    chain_id
+                        .parse::<iroha_data_model::ChainId>()
+                        .expect("provider-ingest test chain id must be canonical"),
                     authority,
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )

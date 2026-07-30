@@ -2742,8 +2742,65 @@
         assert_eq!(payload.code, "permission_denied");
     }
 
-    #[tokio::test]
-    async fn validate_api_token_rejects_missing_or_unconfigured() {
+    #[test]
+    fn api_token_evaluator_has_one_exact_header_policy() {
+        let configured = HashSet::from(["secret".to_owned()]);
+        let empty = HashSet::new();
+        let no_headers = HeaderMap::new();
+        let mut supplied = HeaderMap::new();
+        supplied.insert(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
+        assert_eq!(
+            evaluate_api_token(false, &empty, &no_headers),
+            ApiTokenEvaluation::Disabled
+        );
+        assert!(
+            evaluate_api_token(false, &configured, &supplied)
+                .authenticated_token()
+                .is_none(),
+            "an unauthenticated header must not become a rate-limit principal"
+        );
+        assert_eq!(
+            evaluate_api_token(true, &empty, &supplied),
+            ApiTokenEvaluation::Unavailable
+        );
+        assert_eq!(
+            evaluate_api_token(true, &configured, &no_headers),
+            ApiTokenEvaluation::Invalid
+        );
+
+        let mut invalid_utf8 = HeaderMap::new();
+        invalid_utf8.insert(
+            HEADER_API_TOKEN,
+            HeaderValue::from_bytes(&[0xff]).expect("opaque token fixture"),
+        );
+        assert_eq!(
+            evaluate_api_token(true, &configured, &invalid_utf8),
+            ApiTokenEvaluation::Invalid
+        );
+
+        let mut duplicate_valid = HeaderMap::new();
+        duplicate_valid.append(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
+        duplicate_valid.append(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
+        assert_eq!(
+            evaluate_api_token(true, &configured, &duplicate_valid),
+            ApiTokenEvaluation::Invalid
+        );
+
+        let mut mixed_duplicate = HeaderMap::new();
+        mixed_duplicate.append(HEADER_API_TOKEN, HeaderValue::from_static("secret"));
+        mixed_duplicate.append(HEADER_API_TOKEN, HeaderValue::from_static("other"));
+        assert_eq!(
+            evaluate_api_token(true, &configured, &mixed_duplicate),
+            ApiTokenEvaluation::Invalid
+        );
+        assert_eq!(
+            evaluate_api_token(true, &configured, &supplied),
+            ApiTokenEvaluation::Authenticated("secret")
+        );
+    }
+
+    #[test]
+    fn validate_api_token_rejects_missing_or_unconfigured() {
         let mut app = mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -2760,119 +2817,83 @@
         assert!(validate_api_token(state, &configured_headers).is_ok());
     }
 
+    fn assert_unconfigured_api_token_error(error: Error) {
+        match error {
+            Error::Query(ValidationFail::NotPermitted(message)) => {
+                assert!(
+                    message.contains("none are configured"),
+                    "unexpected API-token rejection: {message}"
+                );
+            }
+            other => panic!("unexpected API-token rejection: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "app_api")]
     #[tokio::test]
-    #[cfg(feature = "telemetry")]
-    async fn norito_rpc_gate_records_metrics() {
-        let cfg = actual::NoritoRpcTransport {
-            enabled: true,
-            require_mtls: false,
-            stage: actual::NoritoRpcStage::Canary,
-            allowed_clients: vec!["ok".into()],
-            mtls_trusted_proxy_cidrs:
-                iroha_config::parameters::defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
-        };
-        let (app, metrics) = mk_norito_rpc_test_harness(cfg.clone()).await;
-        let trusted_remote = Some("127.0.0.1".parse().expect("trusted proxy"));
-        let untrusted_remote = Some("198.51.100.10".parse().expect("untrusted proxy"));
+    async fn direct_result_handler_fails_closed_with_no_configured_api_tokens() {
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::new());
 
-        let mut headers = HeaderMap::new();
-        headers.insert(HEADER_API_TOKEN, HeaderValue::from_static("ok"));
-        app.check_norito_rpc_allowed(&headers, trusted_remote)
-            .expect("canary token should be allowed");
-        assert_eq!(
-            metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[cfg.stage.label(), "allowed"])
-                .get(),
-            1
-        );
+        let error =
+            handler_soracloud_status(State(app), HeaderMap::new(), loopback_connect_info(), None)
+                .await
+                .expect_err("handler-local API-token validation must fail closed");
+        assert_unconfigured_api_token_error(error);
+    }
 
-        let missing_token_headers = HeaderMap::new();
-        assert!(
-            app.check_norito_rpc_allowed(&missing_token_headers, trusted_remote)
-                .is_err()
-        );
-        assert_eq!(
-            metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[cfg.stage.label(), "canary_missing_token"])
-                .get(),
-            1
-        );
+    #[tokio::test]
+    async fn direct_response_handler_fails_closed_before_consensus_dispatch() {
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::new());
 
-        let mut wrong_token_headers = HeaderMap::new();
-        wrong_token_headers.insert(HEADER_API_TOKEN, HeaderValue::from_static("wrong"));
-        assert!(
-            app.check_norito_rpc_allowed(&wrong_token_headers, trusted_remote)
-                .is_err()
-        );
-        assert_eq!(
-            metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[cfg.stage.label(), "canary_denied"])
-                .get(),
-            1
-        );
+        let error = handler_sumeragi_evidence_submit(
+            State(app),
+            HeaderMap::new(),
+            loopback_connect_info(),
+            NoritoJson(routing::EvidenceSubmitRequestDto {
+                evidence_hex: String::new(),
+            }),
+        )
+        .await
+        .expect_err("handler-local API-token validation must precede consensus dispatch");
+        assert_unconfigured_api_token_error(error);
+    }
 
-        let mtls_cfg = actual::NoritoRpcTransport {
-            enabled: true,
-            require_mtls: true,
-            stage: actual::NoritoRpcStage::Ga,
-            allowed_clients: Vec::new(),
-            mtls_trusted_proxy_cidrs:
-                iroha_config::parameters::defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
-        };
-        let (mtls_app, mtls_metrics) = mk_norito_rpc_test_harness(mtls_cfg.clone()).await;
-        assert!(
-            mtls_app
-                .check_norito_rpc_allowed(&HeaderMap::new(), trusted_remote)
-                .is_err()
+    #[tokio::test]
+    async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
+        let mut app = mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique app state");
+        state.require_api_token = true;
+        state.api_tokens_set = Arc::new(HashSet::new());
+        let keypair = checked_torii_test_ed25519_keypair(
+            0xd1,
+            "derive fail-closed transaction ingress fixture key",
         );
-        assert_eq!(
-            mtls_metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[mtls_cfg.stage.label(), "mtls_required"])
-                .get(),
-            1
-        );
-        let mut mtls_headers = HeaderMap::new();
-        mtls_headers.insert(HEADER_MTLS_FORWARD, HeaderValue::from_static("present"));
-        mtls_app
-            .check_norito_rpc_allowed(&mtls_headers, trusted_remote)
-            .expect("mtls header should allow RPC");
-        assert_eq!(
-            mtls_metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[mtls_cfg.stage.label(), "allowed"])
-                .get(),
-            1
-        );
-        assert!(
-            mtls_app
-                .check_norito_rpc_allowed(&mtls_headers, untrusted_remote)
-                .is_err()
-        );
-        assert_eq!(
-            mtls_metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[mtls_cfg.stage.label(), "mtls_required"])
-                .get(),
-            2
-        );
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            AccountId::new(keypair.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(keypair.private_key());
+        let queue_len = app.queue.active_len();
 
-        let disabled_cfg = actual::NoritoRpcTransport::default();
-        let (disabled_app, disabled_metrics) =
-            mk_norito_rpc_test_harness(disabled_cfg.clone()).await;
-        assert!(
-            disabled_app
-                .check_norito_rpc_allowed(&HeaderMap::new(), trusted_remote)
-                .is_err()
-        );
+        let error = submit_signed_transaction_for_ingress_globally_synced(
+            Arc::clone(&app),
+            HeaderMap::new(),
+            None,
+            transaction,
+        )
+        .await
+        .expect_err("direct transaction ingress must fail closed");
+        assert_unconfigured_api_token_error(error);
         assert_eq!(
-            disabled_metrics
-                .torii_norito_rpc_gate_total
-                .with_label_values(&[actual::NoritoRpcStage::Disabled.label(), "disabled"])
-                .get(),
-            1
+            app.queue.active_len(),
+            queue_len,
+            "authentication failure must not mutate queue state"
         );
     }

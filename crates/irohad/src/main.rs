@@ -886,43 +886,35 @@ mod handshake_payload_tests {
     #[test]
     fn decode_crypto_manifest_meta_rejects_raw_quoted_legacy_payload() {
         let raw = r#""{"allowed_curve_ids":[1,3,4],"allowed_signing":["ed25519","secp256k1","bls_normal"],"default_hash":"blake2b-256","sm2_distid_default":"1234567812345678","sm_openssl_preview":false}""#;
-        let payload = Json::from_string_unchecked(raw.to_owned());
-        let err = decode_crypto_manifest_meta(&payload)
-            .expect_err("raw-quoted compatibility payload must be rejected");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(raw.to_owned()).is_err(),
+            "raw-quoted compatibility payload must be rejected at construction"
         );
     }
 
     #[test]
     fn decode_crypto_manifest_meta_rejects_backslash_escaped_object_payload() {
         let raw = r#"{\"allowed_curve_ids\":[1,3,4],\"allowed_signing\":[\"ed25519\",\"secp256k1\",\"bls_normal\"],\"default_hash\":\"blake2b-256\",\"sm2_distid_default\":\"1234567812345678\",\"sm_openssl_preview\":false}"#;
-        let payload = Json::from_string_unchecked(raw.to_owned());
-        let err = decode_crypto_manifest_meta(&payload)
-            .expect_err("backslash-escaped compatibility payload must be rejected");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(raw.to_owned()).is_err(),
+            "backslash-escaped compatibility payload must be rejected at construction"
         );
     }
 
     #[test]
     fn decode_crypto_manifest_meta_rejects_mangled_key_value_separators() {
         let raw = r#"{"allowed_curve_ids""[1,3,4],"allowed_signing""["ed25519","secp256k1","bls_normal"],"default_hash""blake2b-256","sm2_distid_default""1234567812345678","sm_openssl_preview"false}"#;
-        let payload = Json::from_string_unchecked(raw.to_owned());
-        let err = decode_crypto_manifest_meta(&payload)
-            .expect_err("mangled compatibility payload must be rejected");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(raw.to_owned()).is_err(),
+            "mangled compatibility payload must be rejected at construction"
         );
     }
 
     #[test]
     fn decode_confidential_registry_meta_handles_normal_json() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\":\"{hash}\"}}"));
+        let payload = Json::from_raw_json(format!("{{\"vk_set_hash\":\"{hash}\"}}"))
+            .expect("valid confidential registry JSON");
         let decoded =
             decode_confidential_registry_meta(&payload).expect("decode confidential payload");
         assert_eq!(decoded.vk_set_hash.as_deref(), Some(hash));
@@ -931,18 +923,16 @@ mod handshake_payload_tests {
     #[test]
     fn decode_confidential_registry_meta_rejects_mangled_key_value_separators() {
         let hash = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-        let payload = Json::from_string_unchecked(format!("{{\"vk_set_hash\"\"{hash}\"}}"));
-        let err = decode_confidential_registry_meta(&payload)
-            .expect_err("mangled compatibility payload must fail");
         assert!(
-            err.to_string().contains("failed to decode"),
-            "unexpected error: {err}"
+            Json::from_raw_json(format!("{{\"vk_set_hash\"\"{hash}\"}}")).is_err(),
+            "mangled compatibility payload must fail at construction"
         );
     }
 
     #[test]
     fn parse_confidential_registry_hash_treats_json_null_as_absent() {
-        let payload = Json::from_string_unchecked("{\"vk_set_hash\":null}".to_string());
+        let payload = Json::from_raw_json("{\"vk_set_hash\":null}".to_string())
+            .expect("valid null confidential registry JSON");
         let decoded =
             parse_confidential_registry_hash(&payload).expect("decode null confidential payload");
         assert_eq!(decoded, None);
@@ -15925,6 +15915,7 @@ fn build_consensus_config_caps(
         // before the handshake is exposed to peers.
         v2_config_fingerprint: [0; 32],
         nexus_policy_digest,
+        ivm_gas_schedule_hash: ivm::gas::schedule_hash().into(),
     })
 }
 
@@ -20361,6 +20352,10 @@ mod tests {
 
             assert_eq!(caps.v2_config_fingerprint, [0; 32]);
             assert_eq!(caps.nexus_policy_digest, expected_nexus_policy_digest);
+            assert_eq!(
+                caps.ivm_gas_schedule_hash,
+                <[u8; 32]>::from(ivm::gas::schedule_hash())
+            );
         }
 
         #[test]

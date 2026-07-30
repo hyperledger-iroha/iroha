@@ -112,6 +112,7 @@ range of at most 8 MiB and receive `206` plus `Content-Range`.
 1. Generate a stream token for the new gateway (stage) host:
    ```bash
    curl -sS -X POST https://stage-gw.example/token \
+     -H "X-API-Token: ${TORII_API_TOKEN}" \
      -H "X-SoraFS-Client: stage-orchestrator" \
      -H "X-SoraFS-Nonce: $(uuidgen)" \
      --data-binary @admission_envelope.to \

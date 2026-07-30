@@ -1112,7 +1112,8 @@ pub(crate) mod tests {
 
     fn consensus_binding(seed: u8) -> PrivacyNativeConsensusBindingV1 {
         let context = PrivacyStatementContextV1 {
-            chain_id: ChainId::from(format!("orchard-native-test-{seed}")),
+            chain_id: ChainId::try_from(format!("orchard-native-test-{seed}"))
+                .expect("canonical Orchard test chain id"),
             action_index: 0,
             transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([seed; 32]),
             parameter_id: PrivacyParameterIdV1::new([seed.wrapping_add(1); 32]),

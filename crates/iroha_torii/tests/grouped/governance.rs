@@ -2,10 +2,6 @@
 
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-#[path = "../gov_council_persist_integration.rs"]
-mod gov_council_persist_integration;
-#[path = "../gov_council_vrf.rs"]
-mod gov_council_vrf;
 #[path = "../gov_enact_handler.rs"]
 mod gov_enact_handler;
 #[path = "../gov_mode_mismatch_and_autoclose.rs"]

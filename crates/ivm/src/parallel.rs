@@ -21,6 +21,14 @@ use rayon::ThreadPool;
 
 use crate::vector::{SimdChoice, set_thread_forced_simd};
 
+struct ThreadSimdOverrideGuard(Option<SimdChoice>);
+
+impl Drop for ThreadSimdOverrideGuard {
+    fn drop(&mut self) {
+        set_thread_forced_simd(self.0);
+    }
+}
+
 #[cfg(all(
     feature = "htm",
     target_arch = "x86_64",
@@ -623,10 +631,8 @@ impl Scheduler {
 
     fn run_with_simd_override<T, F: FnOnce() -> T>(&self, f: F) -> T {
         let forced = Self::decode_simd(self.forced_simd.load(Ordering::SeqCst));
-        let prev = set_thread_forced_simd(forced);
-        let result = f();
-        set_thread_forced_simd(prev);
-        result
+        let _restore_override = ThreadSimdOverrideGuard(set_thread_forced_simd(forced));
+        f()
     }
 
     /// Number of GPUs detected when the scheduler was created.
@@ -649,19 +655,8 @@ impl Scheduler {
         self.current_threads.load(Ordering::SeqCst)
     }
 
-    fn execute_tx<F>(&self, func: F) -> TxResult
-    where
-        F: FnOnce() -> TxResult + std::panic::UnwindSafe,
-    {
-        self.run_with_simd_override(|| {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
-                Ok(r) => r,
-                Err(_) => TxResult {
-                    success: false,
-                    gas_used: 0,
-                },
-            }
-        })
+    fn execute_tx<F: FnOnce() -> TxResult>(&self, func: F) -> TxResult {
+        self.run_with_simd_override(func)
     }
 
     /// Execute all transactions in `block` respecting dependencies derived from
@@ -669,12 +664,7 @@ impl Scheduler {
     /// parallel on the thread pool. Results are returned in block order.
     pub fn schedule_block<F>(&self, block: Block, exec: F) -> BlockResult
     where
-        F: Copy
-            + Fn(Transaction) -> TxResult
-            + Send
-            + Sync
-            + std::panic::RefUnwindSafe
-            + std::panic::UnwindSafe,
+        F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
     {
         let graph = DependencyGraph::build_from_block(&block);
         let tx_count = graph.tx_count;
@@ -697,12 +687,7 @@ impl Scheduler {
                 // Cycle in graph or unexpected state; execute sequentially
                 let idx = *pending.iter().next().unwrap();
                 let tx = txs[idx].clone();
-                let exec_fn = exec;
-                let tx_clone = tx.clone();
-                let res = self.execute_tx(move || {
-                    let exec_fn = std::panic::AssertUnwindSafe(exec_fn);
-                    (*exec_fn)(tx_clone.clone())
-                });
+                let res = self.execute_tx(move || exec(tx));
                 result_buf.store(idx, res);
 
                 if let Some((i, r)) = result_buf.take_ready() {
@@ -776,12 +761,7 @@ impl Scheduler {
     /// no internal conflicts in the provided `block`.
     pub fn schedule_block_conflict_free<F>(&self, block: Block, exec: F) -> BlockResult
     where
-        F: Copy
-            + Fn(Transaction) -> TxResult
-            + Send
-            + Sync
-            + std::panic::RefUnwindSafe
-            + std::panic::UnwindSafe,
+        F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
     {
         let txs = block.transactions;
         let tx_count = txs.len();
@@ -1088,12 +1068,7 @@ impl Default for TransactionGroup {
 /// deterministically with [`TransactionGroup::group_block`].
 pub fn execute_block_grouped<F>(scheduler: &Scheduler, block: Block, exec: F) -> BlockResult
 where
-    F: Copy
-        + Fn(Transaction) -> TxResult
-        + Send
-        + Sync
-        + std::panic::RefUnwindSafe
-        + std::panic::UnwindSafe,
+    F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
 {
     let groups = TransactionGroup::group_block(block);
     let mut results = Vec::new();
@@ -1115,12 +1090,7 @@ where
 /// Execute a block using greedy conflict prediction to reduce serialization.
 pub fn execute_block_predicted<F>(scheduler: &Scheduler, block: Block, exec: F) -> BlockResult
 where
-    F: Copy
-        + Fn(Transaction) -> TxResult
-        + Send
-        + Sync
-        + std::panic::RefUnwindSafe
-        + std::panic::UnwindSafe,
+    F: Copy + Fn(Transaction) -> TxResult + Send + Sync,
 {
     let groups = TransactionGroup::group_block_predicted(block);
     let mut results = Vec::new();
@@ -1227,5 +1197,21 @@ mod tests {
             },
         );
         assert_eq!(r.tx_results[0].gas_used, 1);
+    }
+
+    #[test]
+    fn scheduler_propagates_panics_and_restores_thread_simd_override() {
+        let _simd_guard = crate::vector::forced_simd_test_lock();
+        let scheduler = Scheduler::new_with_htm_flag(1, false);
+        scheduler.set_forced_simd(Some(SimdChoice::Scalar));
+
+        let previous_override = set_thread_forced_simd(Some(SimdChoice::Sse2));
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            scheduler.execute_tx(|| panic!("executor panic must propagate"));
+        }));
+        let restored_override = set_thread_forced_simd(previous_override);
+
+        assert!(panic.is_err());
+        assert_eq!(restored_override, Some(SimdChoice::Sse2));
     }
 }

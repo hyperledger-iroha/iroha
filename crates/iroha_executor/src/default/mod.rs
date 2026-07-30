@@ -581,7 +581,7 @@ mod contract_deployment_bootstrap_tests {
 
         let malformed_permission = Permission::new(
             "CanRegisterSmartContractCode".into(),
-            Json::from_string_unchecked("{\"unexpected\":true}".to_owned()),
+            Json::from_raw_json("{\"unexpected\":true}".to_owned()).expect("valid JSON fixture"),
         );
         let malformed_grant = bootstrap_prefix(
             Account::new(authority.clone()),

@@ -127,6 +127,11 @@ impl<C: BlsConfiguration> zeroize::Zeroize for SecretKey<C> {
 pub struct BlsImpl<C: BlsConfiguration + ?Sized>(PhantomData<C>);
 
 impl<C: BlsConfiguration> BlsImpl<C> {
+    /// Return the exact canonical signature length for this BLS orientation.
+    pub const fn signature_len() -> usize {
+        if C::NORMAL { 96 } else { 48 }
+    }
+
     #[allow(clippy::similar_names)]
     pub fn keypair(
         option: KeyGenOption<SecretKey<C>>,
@@ -237,7 +242,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         }
     }
 
-    pub fn verify_aggregate_same_message(
+    pub(crate) fn verify_aggregate_same_message(
         message: &[u8],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
@@ -267,7 +272,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     /// Verify a pre-aggregated signature for the same-message case.
-    pub fn verify_preaggregated_same_message(
+    pub(crate) fn verify_preaggregated_same_message(
         message: &[u8],
         aggregated_signature: &[u8],
         public_keys: &[&[u8]],
@@ -287,19 +292,19 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         }
     }
 
+    /// Verify every signature against its paired distinct message and public key.
+    ///
+    /// This intentionally preserves per-signature validity instead of deriving
+    /// a verdict from only the sum of the supplied signature points.
     pub fn verify_aggregate_multi_message(
         messages: &[&[u8]],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
     ) -> Result<(), Error> {
         if C::NORMAL {
-            verify_aggregate_multi_message_w3f::<w3f_bls::ZBLS>(messages, signatures, public_keys)
+            verify_multi_message_w3f::<w3f_bls::ZBLS>(messages, signatures, public_keys)
         } else {
-            verify_aggregate_multi_message_w3f::<w3f_bls::TinyBLS381>(
-                messages,
-                signatures,
-                public_keys,
-            )
+            verify_multi_message_w3f::<w3f_bls::TinyBLS381>(messages, signatures, public_keys)
         }
     }
 
@@ -484,7 +489,7 @@ fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
     Ok(())
 }
 
-fn verify_aggregate_multi_message_w3f<E: EngineBLS>(
+fn verify_multi_message_w3f<E: EngineBLS>(
     messages: &[&[u8]],
     signatures: &[&[u8]],
     public_keys: &[&[u8]],
@@ -496,49 +501,14 @@ fn verify_aggregate_multi_message_w3f<E: EngineBLS>(
     }
     ensure_distinct_messages(messages)?;
 
-    let signature = aggregate_w3f_signatures::<E>(signatures)?;
-    let mut decoded_messages = Vec::with_capacity(messages.len());
-    let mut decoded_public_keys = Vec::with_capacity(messages.len());
-    for (message, public_key) in messages.iter().zip(public_keys.iter()) {
-        decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
-        decoded_public_keys.push(parse_w3f_public_key::<E>(public_key)?);
+    for ((message, signature), public_key) in messages
+        .iter()
+        .zip(signatures.iter())
+        .zip(public_keys.iter())
+    {
+        verify_w3f::<E>(message, signature, public_key)?;
     }
-
-    let batch = MultiMessageBatch {
-        signature,
-        messages: decoded_messages,
-        public_keys: decoded_public_keys,
-    };
-
-    if w3f_bls::verifiers::verify_with_distinct_messages(&batch, false) {
-        Ok(())
-    } else {
-        Err(Error::BadSignature)
-    }
-}
-
-struct MultiMessageBatch<E: EngineBLS> {
-    signature: W3fSignature<E>,
-    messages: Vec<w3f_bls::Message>,
-    public_keys: Vec<W3fPublicKey<E>>,
-}
-
-impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
-    type E = E;
-    type M = &'a w3f_bls::Message;
-    type PKG = &'a W3fPublicKey<E>;
-    type PKnM = std::iter::Zip<
-        std::slice::Iter<'a, w3f_bls::Message>,
-        std::slice::Iter<'a, W3fPublicKey<E>>,
-    >;
-
-    fn signature(&self) -> W3fSignature<E> {
-        W3fSignature(self.signature.0)
-    }
-
-    fn messages_and_publickeys(self) -> Self::PKnM {
-        self.messages.iter().zip(self.public_keys.iter())
-    }
+    Ok(())
 }
 
 const PUBKEY_CACHE_MAX: usize = 4096;

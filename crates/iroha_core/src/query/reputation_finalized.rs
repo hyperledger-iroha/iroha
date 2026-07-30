@@ -12149,14 +12149,7 @@ mod tests {
                 .latest_journal_event_by_source_at_or_before(&floor.key.chain_id, 0, source_id,),
             Err(ReputationFinalizedArchiveError::InvalidKey { .. })
         ));
-        assert!(matches!(
-            reopened.latest_journal_event_by_source_at_or_before(
-                &ChainId::from(""),
-                floor.key.height,
-                source_id,
-            ),
-            Err(ReputationFinalizedArchiveError::InvalidKey { .. })
-        ));
+        assert!("".parse::<ChainId>().is_err());
     }
 
     #[test]

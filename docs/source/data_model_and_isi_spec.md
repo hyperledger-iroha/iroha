@@ -14,6 +14,10 @@ Determinism: All instruction semantics are pure state transitions without hardwa
 ## Entities and Identifiers
 IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules forbid whitespace and the reserved `@ # $` characters.
 
+- `ChainId` — exact, case-sensitive ASCII identifying one deployment/replay
+  domain. It is 1–128 bytes, starts and ends with an ASCII alphanumeric, and
+  otherwise permits alphanumerics plus `.`, `_`, `:`, and `-`. All safe
+  constructors and Norito/JSON/config decoders enforce the same invariant.
 - `Name` — validated textual identifier. Rules: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Domain: `{ id, logo, metadata, owned_by }`. Builders: `NewDomain`. Code: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — canonical addresses are produced via `AccountAddress` as I105 and Torii normalises inputs through `AccountAddress::parse_encoded`. Strict runtime parsing accepts only canonical I105. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values; they are not accepted by strict `AccountId` parsers. Account: `{ id, metadata }`. Code: `crates/iroha_data_model/src/account.rs`.
@@ -44,8 +48,20 @@ Events: Every entity has events emitted on mutations (create/delete/owner change
 ---
 
 ## Parameters (Chain Configuration)
-- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
+- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
 - Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
+- `smart_contract.memory` and `executor.memory` are exact IVM heap ceilings in
+  bytes for contract and runtime-executor invocations respectively. ABI V1
+  admits values through 1 MiB, the complete `0x0010_0000..0x0020_0000` heap
+  window. Cold, warm, generic, nested, view/simulation, trigger,
+  proved-execution derivation/replay, and executor runtimes all apply the
+  current governed value; runtime caches include it in their identity so a
+  parameter change cannot retain stale memory authority.
+- `transaction.max_time_to_live_ms` is the deterministic upper bound for a
+  signature-bound transaction lifetime. The first-release default is one day
+  (`86_400_000` ms). Safe builders use a 100-second TTL when callers do not
+  choose one; signed payloads with no TTL, zero TTL, or a lifetime above the
+  current governed bound fail stateless admission.
 
 Setting parameters (ISI): `SetParameter(Parameter)` updates the corresponding field and emits `ConfigurationEvent::Changed`. Code: `crates/iroha_data_model/src/isi/transparent.rs`, executor in `crates/iroha_core/src/smartcontracts/isi/world.rs`.
 

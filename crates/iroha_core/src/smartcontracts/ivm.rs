@@ -436,7 +436,7 @@ mod tests {
             let mut metadata = Metadata::default();
             metadata.insert(
                 key.parse::<Name>().expect("static metadata key"),
-                Json::from_string_unchecked("malformed-reserved-value".to_owned()),
+                Json::new("malformed-reserved-value"),
             );
 
             let error = validate_generic_execution_metadata(&metadata)

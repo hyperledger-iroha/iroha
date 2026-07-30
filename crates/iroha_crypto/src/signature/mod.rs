@@ -376,16 +376,32 @@ impl Signature {
             }
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
             PublicKeyFull::BlsSmall { key, .. } => {
+                if self.payload.len() != bls::BlsSmall::signature_len() {
+                    return Err(Error::BadSignature);
+                }
                 bls::BlsSmall::verify(payload, &self.payload, key)
             }
             #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
             PublicKeyFull::BlsNormal { key, .. } => {
+                if self.payload.len() != bls::BlsNormal::signature_len() {
+                    return Err(Error::BadSignature);
+                }
                 bls::BlsNormal::verify(payload, &self.payload, key)
             }
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PublicKeyFull::BlsSmall(pk) => bls::BlsSmall::verify(payload, &self.payload, pk),
+            PublicKeyFull::BlsSmall(pk) => {
+                if self.payload.len() != bls::BlsSmall::signature_len() {
+                    return Err(Error::BadSignature);
+                }
+                bls::BlsSmall::verify(payload, &self.payload, pk)
+            }
             #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
-            PublicKeyFull::BlsNormal(pk) => bls::BlsNormal::verify(payload, &self.payload, pk),
+            PublicKeyFull::BlsNormal(pk) => {
+                if self.payload.len() != bls::BlsNormal::signature_len() {
+                    return Err(Error::BadSignature);
+                }
+                bls::BlsNormal::verify(payload, &self.payload, pk)
+            }
             #[cfg(feature = "sm")]
             PublicKeyFull::Sm2(pk) => {
                 if self.payload.len() != Sm2Signature::LENGTH {
@@ -840,6 +856,33 @@ mod tests {
         signature
             .verify(wrong_key.public_key(), message)
             .expect_err("BLS small signature rejects wrong key");
+    }
+
+    #[test]
+    #[cfg(all(feature = "rand", feature = "bls"))]
+    fn signature_verify_rejects_noncanonical_bls_lengths() {
+        for algorithm in [Algorithm::BlsNormal, Algorithm::BlsSmall] {
+            let key_pair = checked_random_keypair(algorithm);
+            let message = b"BLS signature length boundary";
+            let signature = checked_signature(&key_pair, message);
+            let expected_len = match algorithm {
+                Algorithm::BlsNormal => bls::BlsNormal::signature_len(),
+                Algorithm::BlsSmall => bls::BlsSmall::signature_len(),
+                _ => unreachable!("loop contains only BLS algorithms"),
+            };
+            assert_eq!(signature.payload().len(), expected_len);
+
+            let shortened = Signature::from_bytes(&signature.payload()[1..]);
+            shortened
+                .verify(key_pair.public_key(), message)
+                .expect_err("short BLS signature must fail at the public boundary");
+
+            let mut extended = signature.payload().to_vec();
+            extended.push(0x01);
+            Signature::from_bytes(&extended)
+                .verify(key_pair.public_key(), message)
+                .expect_err("long BLS signature must fail at the public boundary");
+        }
     }
 
     #[test]

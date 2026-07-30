@@ -28556,7 +28556,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         ]
         let requiredFields: Set<String> = [
             "chain", "authority", "creation_time_ms", "instructions",
-            "fee_payment", "metadata",
+            "time_to_live_ms", "fee_payment", "metadata",
         ]
         guard Set(unsignedPayload.keys).isSubset(of: allowedFields),
               requiredFields.isSubset(of: Set(unsignedPayload.keys)) else {
@@ -28589,7 +28589,15 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         _ = try feeValue.decode(as: FeePaymentIntent.self)
-        for optionalInteger in ["time_to_live_ms", "nonce"] {
+        guard case let .number(timeToLiveMs)? = unsignedPayload["time_to_live_ms"],
+              timeToLiveMs.isFinite,
+              timeToLiveMs > 0,
+              timeToLiveMs.rounded(.towardZero) == timeToLiveMs else {
+            throw ToriiClientError.invalidPayload(
+                "unsignedPayload.time_to_live_ms must be a positive integer."
+            )
+        }
+        for optionalInteger in ["nonce"] {
             guard let value = unsignedPayload[optionalInteger] else { continue }
             switch value {
             case .null:

@@ -523,15 +523,13 @@ pub mod test_utils;
 // Governance selection
 #[cfg(feature = "app_api")]
 pub use gov::{
-    AtWindowDto, CouncilDeriveVrfRequest, EnactDto, GovernedContractResponse, LocksGetResponse,
-    ProposalGetResponse, ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse,
-    handle_gov_capabilities, handle_gov_citizen_draft, handle_gov_citizen_status,
-    handle_gov_contract_get, handle_gov_council_current, handle_gov_enact, handle_gov_get_locks,
-    handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
-    handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
+    AtWindowDto, EnactDto, GovernedContractResponse, LocksGetResponse, ProposalGetResponse,
+    ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse, handle_gov_capabilities,
+    handle_gov_citizen_draft, handle_gov_citizen_status, handle_gov_contract_get,
+    handle_gov_council_current, handle_gov_enact, handle_gov_get_locks, handle_gov_get_proposal,
+    handle_gov_get_referendum, handle_gov_get_tally, handle_gov_protected_get,
+    handle_gov_protected_set, handle_gov_unlock_stats,
 };
-#[cfg(all(feature = "app_api", feature = "gov_vrf"))]
-pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_council_persist};
 // Routing helpers used by tests
 pub use routing::event::handle_events_stream;
 // Additional public re-exports of app endpoints used by tests
@@ -1986,6 +1984,8 @@ struct AppState {
     query_heavy_inflight: Arc<tokio::sync::Semaphore>,
     query_queue_timeout: Duration,
     rate_limiter: limits::RateLimiter,
+    query_preauth_rate_limiter: limits::RateLimiter,
+    query_authority_rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
@@ -3037,7 +3037,10 @@ impl AppState {
         &self.norito_rpc
     }
 
-    /// Returns true when API tokens are required and at least one token is configured.
+    /// Returns whether a validated API token may identify the caller for rate limiting.
+    ///
+    /// Callers must validate the request with [`validate_api_token`] before
+    /// allowing the header value to contribute to a rate-limit key.
     fn api_token_enforced(&self) -> bool {
         self.require_api_token && !self.api_tokens_set.is_empty()
     }
@@ -4256,51 +4259,60 @@ mod preauth_connection_lifetime_tests {
     }
 
     #[tokio::test]
-    async fn missing_required_api_token_configuration_fails_closed() {
+    async fn missing_required_api_token_configuration_fails_closed_across_router() {
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
         state.api_tokens_set = Arc::new(HashSet::new());
         let router = Router::new()
             .route("/protected", get(|| async { StatusCode::OK }))
+            .route("/also-protected", post(|| async { StatusCode::OK }))
             .layer(axum::middleware::from_fn_with_state(
                 Arc::clone(&app),
                 enforce_api_token,
             ))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
 
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/protected")
-                    .header(header::ACCEPT, "application/json")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("authentication response");
+        for (method, path) in [
+            (axum::http::Method::GET, "/protected"),
+            (axum::http::Method::POST, "/also-protected"),
+            (axum::http::Method::GET, "/not-mounted"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::ACCEPT, "application/json")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("authentication response");
 
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            response.headers().get(header::RETRY_AFTER),
-            Some(&HeaderValue::from_static("1"))
-        );
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect authentication response")
-            .to_bytes();
-        let envelope: ErrorEnvelope =
-            norito::json::from_slice(&body).expect("decode authentication response");
-        assert_eq!(envelope.code(), "api_token_unavailable");
-        assert_eq!(
-            envelope
-                .details
-                .as_ref()
-                .and_then(|details| details.retry_after_seconds),
-            Some(1)
-        );
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response.headers().get(header::RETRY_AFTER),
+                Some(&HeaderValue::from_static("1"))
+            );
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect authentication response")
+                .to_bytes();
+            let envelope: ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode authentication response");
+            assert_eq!(envelope.code(), "api_token_unavailable");
+            assert_eq!(
+                envelope
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.retry_after_seconds),
+                Some(1)
+            );
+        }
     }
 
     #[tokio::test]
@@ -4564,53 +4576,96 @@ mod preauth_connection_lifetime_tests {
     }
 }
 
-fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
-    if !app.require_api_token {
-        return None;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApiTokenEvaluation<'headers> {
+    Disabled,
+    Unavailable,
+    Invalid,
+    Authenticated(&'headers str),
+}
+
+impl<'headers> ApiTokenEvaluation<'headers> {
+    /// Returns a rate-limit principal only after successful authentication.
+    ///
+    /// A caller-supplied header is deliberately ignored in [`Self::Disabled`]
+    /// mode so rotating arbitrary token text cannot evade authority-based
+    /// quotas.
+    fn authenticated_token(self) -> Option<&'headers str> {
+        match self {
+            Self::Authenticated(token) => Some(token),
+            Self::Disabled | Self::Unavailable | Self::Invalid => None,
+        }
     }
-    let format = early_rejection_response_format(headers);
-    if app.api_tokens_set.is_empty() {
-        let payload = ErrorEnvelope::new(
-            "api_token_unavailable",
-            "Torii requires an API token, but no tokens are configured.",
-        )
-        .with_details(ErrorDetails {
-            retry_after_seconds: Some(1),
-            ..Default::default()
-        });
-        let mut response =
-            utils::respond_with_status_and_format(StatusCode::SERVICE_UNAVAILABLE, payload, format);
-        response.headers_mut().insert(
-            axum::http::header::RETRY_AFTER,
-            HeaderValue::from_static("1"),
-        );
-        append_vary_accept(response.headers_mut());
-        return Some(response);
+}
+
+fn evaluate_api_token<'headers>(
+    require_api_token: bool,
+    configured_tokens: &HashSet<String>,
+    headers: &'headers HeaderMap,
+) -> ApiTokenEvaluation<'headers> {
+    if !require_api_token {
+        return ApiTokenEvaluation::Disabled;
     }
-    let mut token_values = headers.get_all(HEADER_API_TOKEN).iter();
-    let valid = token_values
-        .next()
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|token| app.api_tokens_set.contains(token))
-        && token_values.next().is_none();
-    if valid {
-        return None;
+    if configured_tokens.is_empty() {
+        return ApiTokenEvaluation::Unavailable;
     }
 
-    let mut response = utils::respond_with_status_and_format(
-        StatusCode::UNAUTHORIZED,
-        ErrorEnvelope::new(
-            "api_token_required",
-            "A valid Torii API token is required for this request.",
-        ),
-        format,
-    );
-    response.headers_mut().insert(
-        axum::http::header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
-    );
-    append_vary_accept(response.headers_mut());
-    Some(response)
+    let mut values = headers.get_all(HEADER_API_TOKEN).iter();
+    let Some(value) = values.next() else {
+        return ApiTokenEvaluation::Invalid;
+    };
+    if values.next().is_some() {
+        return ApiTokenEvaluation::Invalid;
+    }
+    match value.to_str() {
+        Ok(token) if configured_tokens.contains(token) => ApiTokenEvaluation::Authenticated(token),
+        _ => ApiTokenEvaluation::Invalid,
+    }
+}
+
+fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
+    match evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers) {
+        ApiTokenEvaluation::Disabled | ApiTokenEvaluation::Authenticated(_) => None,
+        ApiTokenEvaluation::Unavailable => {
+            let format = early_rejection_response_format(headers);
+            let payload = ErrorEnvelope::new(
+                "api_token_unavailable",
+                "Torii requires an API token, but no tokens are configured.",
+            )
+            .with_details(ErrorDetails {
+                retry_after_seconds: Some(1),
+                ..Default::default()
+            });
+            let mut response = utils::respond_with_status_and_format(
+                StatusCode::SERVICE_UNAVAILABLE,
+                payload,
+                format,
+            );
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                HeaderValue::from_static("1"),
+            );
+            append_vary_accept(response.headers_mut());
+            Some(response)
+        }
+        ApiTokenEvaluation::Invalid => {
+            let format = early_rejection_response_format(headers);
+            let mut response = utils::respond_with_status_and_format(
+                StatusCode::UNAUTHORIZED,
+                ErrorEnvelope::new(
+                    "api_token_required",
+                    "A valid Torii API token is required for this request.",
+                ),
+                format,
+            );
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                HeaderValue::from_static("IrohaApiToken realm=\"torii\""),
+            );
+            append_vary_accept(response.headers_mut());
+            Some(response)
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -5172,6 +5227,17 @@ async fn enforce_soracloud_signed_mutation_request(
     }
 
     let (mut parts, body) = req.into_parts();
+    // These headers are an internal middleware-to-handler channel. Strip all
+    // client values before authentication so a future serialization failure
+    // can only leave the header absent, never preserve attacker-supplied
+    // identity material.
+    for header in [
+        soracloud::VERIFIED_ACCOUNT_HEADER,
+        soracloud::VERIFIED_SIGNER_HEADER,
+        soracloud::VERIFIED_SIGNERS_HEADER,
+    ] {
+        parts.headers.remove(header);
+    }
     let body_limit = soracloud_signed_mutation_body_limit(&app, &path);
     let body = match axum::body::to_bytes(body, body_limit).await {
         Ok(body) => body,
@@ -8930,30 +8996,25 @@ async fn check_access_with_rate_limiter(
     Ok(())
 }
 
-fn validate_api_token(app: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Error> {
-    if app.require_api_token {
-        if app.api_tokens_set.is_empty() {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted(
-                    "Torii requires an API token but none are configured".to_string(),
-                ),
-            ));
-        }
-        let mut values = headers.get_all(HEADER_API_TOKEN).iter();
-        let ok = values
-            .next()
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|token| app.api_tokens_set.contains(token))
-            && values.next().is_none();
-        if !ok {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::NotPermitted(
-                    "missing or invalid API token".to_string(),
-                ),
-            ));
-        }
+fn validate_api_token<'headers>(
+    app: &AppState,
+    headers: &'headers axum::http::HeaderMap,
+) -> Result<ApiTokenEvaluation<'headers>, Error> {
+    let evaluation =
+        evaluate_api_token(app.require_api_token, app.api_tokens_set.as_ref(), headers);
+    match evaluation {
+        ApiTokenEvaluation::Disabled | ApiTokenEvaluation::Authenticated(_) => Ok(evaluation),
+        ApiTokenEvaluation::Unavailable => Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "Torii requires an API token but none are configured".to_string(),
+            ),
+        )),
+        ApiTokenEvaluation::Invalid => Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "missing or invalid API token".to_string(),
+            ),
+        )),
     }
-    Ok(())
 }
 
 async fn check_access_enforced(
@@ -9063,6 +9124,87 @@ fn rate_limit_key(
     use_api_token: bool,
 ) -> String {
     limits::key_from_headers(headers, remote, Some(hint), use_api_token)
+}
+
+fn signed_query_preauth_rate_limit_key(
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+    use_authenticated_api_token: bool,
+) -> String {
+    // API-token text is attacker-controlled unless token authentication is
+    // enabled and validated. Otherwise ingress middleware has already replaced
+    // the internal remote-address header with the accepted socket address or a
+    // value from a configured trusted proxy.
+    let caller = limits::key_from_headers(
+        headers,
+        remote,
+        Some("unknown"),
+        use_authenticated_api_token,
+    );
+    format!("v1/query:preauth:{caller}")
+}
+
+fn signed_query_authority_rate_limit_key(authority: &AccountId) -> String {
+    format!("v1/query:authority:{authority}")
+}
+
+async fn consume_signed_query_rate(
+    rate_limiter: &limits::RateLimiter,
+    key: &str,
+) -> Result<(), Error> {
+    if rate_limiter.allow(key).await {
+        return Ok(());
+    }
+    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    )))
+}
+
+async fn admit_signed_query_preauth(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+) -> Result<(), Error> {
+    validate_api_token(app, headers)?;
+    let key = signed_query_preauth_rate_limit_key(headers, remote, app.api_token_enforced());
+    consume_signed_query_rate(&app.query_preauth_rate_limiter, &key).await
+}
+
+async fn admit_signed_query_authority(app: &AppState, authority: &AccountId) -> Result<(), Error> {
+    let key = signed_query_authority_rate_limit_key(authority);
+    consume_signed_query_rate(&app.query_authority_rate_limiter, &key).await
+}
+
+async fn acquire_signed_query_physical_admission(
+    app: &AppState,
+    request: &iroha_data_model::query::QueryRequestWithAuthority,
+) -> Result<QueryAdmissionPermit, Error> {
+    acquire_query_admission(
+        app,
+        matches!(
+            &request.request,
+            iroha_data_model::query::QueryRequest::Start(_)
+        ),
+    )
+    .await
+}
+
+async fn execute_admitted_signed_query_with_opts(
+    app: &SharedAppState,
+    request: iroha_data_model::query::QueryRequestWithAuthority,
+    opts: QueryOptions,
+) -> Result<iroha_data_model::query::QueryResponse, Error> {
+    admit_signed_query_authority(app.as_ref(), &request.authority).await?;
+    let admission = acquire_signed_query_physical_admission(app.as_ref(), &request).await?;
+    routing::execute_admitted_verified_query_with_opts(
+        app.query_service.clone(),
+        app.state.clone(),
+        request,
+        app.telemetry.clone(),
+        opts,
+        admission,
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -11384,7 +11526,6 @@ async fn handler_proofs_query(
     NoritoJson(dto): NoritoJson<crate::routing::ProofFindByIdQueryDto>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let tel = app.telemetry.clone();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -11392,15 +11533,11 @@ async fn handler_proofs_query(
 
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-        return routing::handle_queries_with_opts(
-            app.query_service.clone(),
-            app.state.clone(),
-            signed,
-            tel,
-            crate::NoritoQuery(QueryOptions::default()),
-            format,
-        )
-        .await;
+        let verified = routing::verify_signed_query_request(signed)?;
+        let query_response =
+            execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default())
+                .await?;
+        return Ok(crate::utils::respond_with_format(query_response, format));
     }
 
     let enforce =
@@ -11408,15 +11545,10 @@ async fn handler_proofs_query(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
-    routing::handle_queries_with_opts(
-        app.query_service.clone(),
-        app.state.clone(),
-        signed,
-        tel,
-        crate::NoritoQuery(QueryOptions::default()),
-        format,
-    )
-    .await
+    let verified = routing::verify_signed_query_request(signed)?;
+    let query_response =
+        execute_admitted_signed_query_with_opts(&app, verified, QueryOptions::default()).await?;
+    Ok(crate::utils::respond_with_format(query_response, format))
 }
 
 #[cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
@@ -11431,15 +11563,7 @@ async fn handler_proof_tags(
         return routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await;
     }
 
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -16477,15 +16601,7 @@ async fn handler_confidential_relay_submit(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::ConfidentialRelaySubmitRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = token_hdr
         .map(str::to_owned)
         .unwrap_or_else(|| remote.ip().to_string());
@@ -17322,67 +17438,6 @@ fn _assert_app_state_sync() {
     assert_sync::<SharedAppState>();
 }
 
-#[cfg(feature = "app_api")]
-async fn handler_gov_council_audit(
-    State(app): State<SharedAppState>,
-    AxQuery(q): AxQuery<crate::gov::CouncilAuditQuery>,
-) -> Result<JsonBody<crate::gov::CouncilAuditResponse>, Error> {
-    crate::gov::handle_gov_council_audit(app.state.clone(), AxQuery(q)).await
-}
-
-#[cfg(all(feature = "app_api", feature = "gov_vrf"))]
-async fn handler_gov_council_persist(
-    State(app): State<SharedAppState>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::CouncilPersistRequest>,
-) -> Result<JsonBody<crate::gov::CouncilPersistResponse>, Error> {
-    crate::gov::handle_gov_council_persist(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
-}
-
-#[cfg(all(feature = "app_api", feature = "gov_vrf"))]
-async fn handler_gov_council_replace(
-    State(app): State<SharedAppState>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::CouncilReplaceRequest>,
-) -> Result<JsonBody<crate::gov::CouncilReplaceResponse>, Error> {
-    crate::gov::handle_gov_council_replace(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
-}
-
-#[cfg(all(feature = "app_api", feature = "gov_vrf"))]
-async fn handler_gov_council_derive_vrf(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: crate::utils::extractors::NoritoJson<crate::gov::CouncilDeriveVrfRequest>,
-) -> Result<crate::utils::JsonBody<crate::gov::CouncilDeriveVrfResponse>, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/gov/council/derive-vrf",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/council/derive-vrf").await?;
-    crate::gov::handle_gov_council_derive_vrf(app.state.clone(), body).await
-}
-
 // -------------- Runtime (AppState-based) --------------
 
 /// GET /v1/runtime/abi/active — wrapper that enforces Torii access policy, then delegates.
@@ -17852,15 +17907,7 @@ async fn handler_schema(
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
         return Ok(routing::handle_schema().await);
     }
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote.ip()),
@@ -20313,20 +20360,7 @@ async fn handler_status_tail(
         .await;
     }
     // Token gate
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     // Conditional rate limiting based on load/fees
     let key = rate_limit_key(
         &headers,
@@ -20380,20 +20414,7 @@ async fn handler_status_root(
         )
         .await;
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote.ip()),
@@ -20431,20 +20452,7 @@ async fn handler_metrics(
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
         return routing::handle_metrics(&app.telemetry, nexus_enabled).await;
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote.ip()),
@@ -25358,15 +25366,9 @@ async fn execute_torii_verified_query_locally(
     app: &SharedAppState,
     request: iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<iroha_data_model::query::QueryResponse, Response> {
-    routing::execute_verified_query_with_opts(
-        app.query_service.clone(),
-        app.state.clone(),
-        request,
-        app.telemetry.clone(),
-        QueryOptions::default(),
-    )
-    .await
-    .map_err(IntoResponse::into_response)
+    execute_admitted_signed_query_with_opts(app, request, QueryOptions::default())
+        .await
+        .map_err(IntoResponse::into_response)
 }
 
 #[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
@@ -25388,11 +25390,27 @@ async fn execute_torii_verified_query_exhaustive_locally(
     request: iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<iroha_data_model::query::QueryResponse, Response> {
     let authority = request.authority.clone();
+    admit_signed_query_authority(app.as_ref(), &authority)
+        .await
+        .map_err(IntoResponse::into_response)?;
     let mut current_request = request;
     let mut accumulated_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
 
     loop {
-        match execute_torii_verified_query_locally(app, current_request).await? {
+        let admission = acquire_signed_query_physical_admission(app.as_ref(), &current_request)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        match routing::execute_admitted_verified_query_with_opts(
+            app.query_service.clone(),
+            app.state.clone(),
+            current_request,
+            app.telemetry.clone(),
+            QueryOptions::default(),
+            admission,
+        )
+        .await
+        .map_err(IntoResponse::into_response)?
+        {
             iroha_data_model::query::QueryResponse::Singular(output) => {
                 if accumulated_batch.is_some() {
                     return Err(unsupported_routed_query_response(
@@ -32756,15 +32774,7 @@ async fn execute_incoming_torii_proxy_request(
                             .await
                         } else {
                             let format = response_format_from_torii_proxy(response_format);
-                            match routing::execute_verified_query_with_opts(
-                                app.query_service.clone(),
-                                app.state.clone(),
-                                verified_query,
-                                app.telemetry.clone(),
-                                QueryOptions::default(),
-                            )
-                            .await
-                            {
+                            match execute_torii_verified_query_locally(app, verified_query).await {
                                 Ok(query_response) => {
                                     let mut response =
                                         crate::utils::respond_with_format(query_response, format);
@@ -34654,20 +34664,7 @@ async fn handler_soracloud_status(
     accept: Option<utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
 
     let key = rate_limit_key(
         &headers,
@@ -34911,20 +34908,7 @@ async fn handler_kaigi_call_events_sse(
         .into_response());
     }
 
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
 
     let key = rate_limit_key(
         &headers,
@@ -35075,20 +35059,7 @@ async fn handler_kaigi_relays_sse(
         );
     }
 
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
 
     let key = rate_limit_key(
         &headers,
@@ -35139,20 +35110,7 @@ async fn handler_soradns_directory_events(
             routing::handle_v1_soradns_directory_events_sse(app.events.clone()).into_response(),
         );
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -35905,20 +35863,7 @@ async fn handler_gov_stream(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response());
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -35950,20 +35895,7 @@ async fn handler_telemetry_live(
         )?
         .into_response());
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -35999,20 +35931,7 @@ async fn handler_explorer_transactions_stream(
         )
         .into_response());
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36043,20 +35962,7 @@ async fn handler_explorer_blocks_stream(
                 .into_response(),
         );
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36088,20 +35994,7 @@ async fn handler_explorer_instructions_stream(
         )
         .into_response());
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36241,20 +36134,7 @@ async fn handler_sumeragi_params(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36283,20 +36163,7 @@ async fn handler_sumeragi_bls_keys(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36375,20 +36242,7 @@ async fn handler_get_contract_code(
         .await
         .map(axum::response::IntoResponse::into_response);
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36432,20 +36286,7 @@ async fn handler_get_contract_code_view(
         .await
         .map(axum::response::IntoResponse::into_response);
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36731,20 +36572,7 @@ async fn handler_get_vk_by_backend_name(
         .await
         .map(axum::response::IntoResponse::into_response);
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36823,20 +36651,7 @@ async fn handler_list_vk(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_list_vk(app.state.clone(), AxQuery(q)).await;
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36939,20 +36754,7 @@ async fn handler_debug_axt_cache(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37057,20 +36859,7 @@ async fn handler_debug_witness(
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37111,20 +36900,7 @@ async fn handler_sumeragi_evidence(
     AxQuery(q): AxQuery<routing::EvidenceListQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37159,20 +36935,11 @@ async fn handler_sumeragi_evidence_submit(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     use axum::response::IntoResponse;
+    validate_api_token(app.as_ref(), &headers)?;
 
     let Some(handle) = app.sumeragi.clone() else {
         return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|token| app.api_tokens_set.contains(*token));
-        if !ok {
-            return Ok(axum::http::StatusCode::FORBIDDEN.into_response());
-        }
-    }
 
     let key = rate_limit_key(
         &headers,
@@ -37209,20 +36976,7 @@ async fn handler_sumeragi_status(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37262,17 +37016,7 @@ async fn handler_sumeragi_diagnostics(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let token = headers
-        .get("x-api-token")
-        .and_then(|value| value.to_str().ok());
-    if app.require_api_token
-        && !app.api_tokens_set.is_empty()
-        && token.is_none_or(|token| !app.api_tokens_set.contains(token))
-    {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote.ip()),
@@ -37309,20 +37053,7 @@ async fn handler_sumeragi_status_sse(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37360,20 +37091,7 @@ async fn handler_sumeragi_telemetry(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37403,20 +37121,7 @@ async fn handler_sumeragi_vrf_penalties(
     AxPath(epoch): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37446,20 +37151,7 @@ async fn handler_sumeragi_vrf_epoch(
     AxPath(epoch): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37508,20 +37200,7 @@ async fn handler_pacemaker_status(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37550,20 +37229,7 @@ async fn handler_sumeragi_phases(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37592,20 +37258,7 @@ async fn handler_sumeragi_leader(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37634,20 +37287,7 @@ async fn handler_sumeragi_qc(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37678,20 +37318,7 @@ async fn handler_sumeragi_checkpoints(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37723,20 +37350,7 @@ async fn handler_sumeragi_commit_qcs(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -37747,7 +37361,7 @@ async fn handler_sumeragi_commit_qcs(
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
-            &api_token,
+            api_token,
             "v1/sumeragi/commit-certificates",
         );
     }
@@ -38218,20 +37832,7 @@ async fn handler_sumeragi_validator_sets(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -38241,7 +37842,7 @@ async fn handler_sumeragi_validator_sets(
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
-            &api_token,
+            api_token,
             iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,
         );
     }
@@ -38260,20 +37861,7 @@ async fn handler_sumeragi_validator_set_by_height(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -38283,7 +37871,7 @@ async fn handler_sumeragi_validator_set_by_height(
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
-            &api_token,
+            api_token,
             iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SET_BY_HEIGHT,
         );
     }
@@ -38303,20 +37891,7 @@ async fn handler_sumeragi_consensus_keys(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -38327,7 +37902,7 @@ async fn handler_sumeragi_consensus_keys(
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
-            &api_token,
+            api_token,
             "v1/sumeragi/consensus-keys",
         );
     }
@@ -38344,20 +37919,7 @@ async fn handler_sumeragi_key_lifecycle(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -38368,7 +37930,7 @@ async fn handler_sumeragi_key_lifecycle(
     if let Some(api_token) = token_hdr {
         crate::telemetry::report_torii_api_hit(
             &app.telemetry,
-            &api_token,
+            api_token,
             "v1/sumeragi/key-lifecycle",
         );
     }
@@ -38387,20 +37949,7 @@ async fn handler_commit_qc(
     AxPath(hash): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -39084,21 +38633,10 @@ async fn handler_post_contract_call_multisig_propose(
     request: NoritoJson<crate::routing::MultisigContractCallProposeDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_propose"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_propose"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39139,21 +38677,10 @@ async fn handler_post_contract_call_multisig_approve(
     request: NoritoJson<crate::routing::MultisigContractCallApproveDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_approve"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("call_multisig_approve"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39247,21 +38774,10 @@ async fn handler_post_multisig_propose(
     request: NoritoJson<crate::routing::MultisigProposeDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_propose"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_propose"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39302,21 +38818,10 @@ async fn handler_post_multisig_approve(
     request: NoritoJson<crate::routing::MultisigApproveDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approve"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approve"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39357,21 +38862,10 @@ async fn handler_post_multisig_cancel(
     request: NoritoJson<crate::routing::MultisigCancelRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_cancel"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_cancel"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39567,21 +39061,10 @@ async fn handler_post_sorafs_register_manifest(
     >,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39624,21 +39107,10 @@ async fn handler_post_sorafs_capacity_declare(
     JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39680,21 +39152,10 @@ async fn handler_post_sorafs_capacity_telemetry(
     JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39805,21 +39266,10 @@ async fn handler_post_sorafs_capacity_por_proof(
 ) -> Result<AxResponse, Error> {
     let authenticated_signer = authenticated_por_operator_signer(&app, &headers)?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -39866,21 +39316,10 @@ async fn handler_post_sorafs_capacity_por_verdict(
 ) -> Result<AxResponse, Error> {
     let authenticated_signer = authenticated_por_operator_signer(&app, &headers)?;
     let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+        return Err(error);
     }
     let key = rate_limit_key(
         &headers,
@@ -41765,20 +41204,7 @@ async fn handler_post_vk_register(
         .await
         .map(IntoResponse::into_response);
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -41822,20 +41248,7 @@ async fn handler_post_vk_update(
         .await
         .map(IntoResponse::into_response);
     }
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -41949,15 +41362,7 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
@@ -42070,15 +41475,7 @@ async fn handler_post_transaction_entrypoint(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     routing::reject_ingress_if_queue_capacity_saturated(app.queue.as_ref(), app.state.as_ref(), 1)?;
     if let Some(token) = token_hdr {
         if !app.tx_rate_limiter.allow(token).await {
@@ -42876,15 +42273,7 @@ async fn handler_post_transactions_batch(
     headers: axum::http::HeaderMap,
     crate::utils::extractors::NoritoBytes(body): crate::utils::extractors::NoritoBytes,
 ) -> Result<Response, Error> {
-    let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr.is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
     validate_transaction_batch_body_size(&body, app.transaction_batch_max_bytes)?;
     let compute_permit =
         try_acquire_transaction_ingress_compute(&app.transaction_ingress_compute_inflight)?;
@@ -44147,7 +43536,7 @@ async fn handler_policy(
     }
 
     let queue_len = app.queue.active_len() as u64;
-    let token_required = app.require_api_token && !app.api_tokens_set.is_empty();
+    let token_required = app.require_api_token;
 
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
         return Ok(build_policy_body(
@@ -44161,20 +43550,7 @@ async fn handler_policy(
         ));
     }
 
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
+    validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
         Some(remote.ip()),
@@ -44208,33 +43584,13 @@ async fn handler_signed_query(
         iroha_data_model::query::SignedQuery,
     >,
 ) -> Result<Response, Error> {
-    let tel = app.telemetry.clone();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
 
     if !limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.allow_nets) {
-        let token_hdr = headers
-            .get("x-api-token")
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-        if app.require_api_token && !app.api_tokens_set.is_empty() {
-            let ok = token_hdr
-                .as_ref()
-                .is_some_and(|t| app.api_tokens_set.contains(t));
-            if !ok {
-                return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                    iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-                )));
-            }
-        }
-        let key = token_hdr.unwrap_or_else(|| "query".to_string());
-        if !limits::allow_conditionally(&app.rate_limiter, &key, true).await {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
+        admit_signed_query_preauth(app.as_ref(), &headers, Some(remote.ip())).await?;
     }
 
     let query_bytes = iroha_version::codec::EncodeVersioned::encode_versioned(&query_request);
@@ -44273,23 +43629,8 @@ async fn handler_signed_query(
         );
     }
 
-    let _query_permit = acquire_query_admission(
-        app.as_ref(),
-        matches!(
-            &verified_query.request,
-            iroha_data_model::query::QueryRequest::Start(_)
-        ),
-    )
-    .await?;
-
-    let query_response = routing::execute_verified_query_with_opts(
-        app.query_service.clone(),
-        app.state.clone(),
-        verified_query,
-        tel,
-        query_options,
-    )
-    .await?;
+    let query_response =
+        execute_admitted_signed_query_with_opts(&app, verified_query, query_options).await?;
     let mut response = crate::utils::respond_with_format(query_response, format);
     if let Some(routing_decision) = routing_decision {
         insert_routing_headers(&mut response, routing_decision, "local");
@@ -48155,20 +47496,11 @@ async fn handler_sumeragi_vrf_commit(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     use axum::response::IntoResponse;
+    validate_api_token(app.as_ref(), &headers)?;
 
     let Some(handle) = app.sumeragi.clone() else {
         return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|token| app.api_tokens_set.contains(*token));
-        if !ok {
-            return Ok(axum::http::StatusCode::FORBIDDEN.into_response());
-        }
-    }
 
     let key = rate_limit_key(
         &headers,
@@ -48193,20 +47525,11 @@ async fn handler_sumeragi_vrf_reveal(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     use axum::response::IntoResponse;
+    validate_api_token(app.as_ref(), &headers)?;
 
     let Some(handle) = app.sumeragi.clone() else {
         return Ok(axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let token_hdr = headers.get("x-api-token").and_then(|v| v.to_str().ok());
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|token| app.api_tokens_set.contains(*token));
-        if !ok {
-            return Ok(axum::http::StatusCode::FORBIDDEN.into_response());
-        }
-    }
 
     let key = rate_limit_key(
         &headers,
@@ -50179,6 +49502,8 @@ pub struct Torii {
     soracloud_mutation_max_body_bytes: usize,
     soracloud_upload_max_body_bytes: usize,
     rate_limiter: limits::RateLimiter,
+    query_preauth_rate_limiter: limits::RateLimiter,
+    query_authority_rate_limiter: limits::RateLimiter,
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
@@ -52258,24 +51583,6 @@ impl Torii {
     #[cfg(not(feature = "profiling"))]
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, _builder: &mut RouterBuilder) {
-        let _ = self;
-    }
-
-    // ---------------- Additional route-group helpers (extracted) ----------------
-
-    /// Governance VRF helpers (feature-gated)
-    #[cfg(feature = "gov_vrf")]
-    fn add_gov_vrf_routes(&self, builder: &mut RouterBuilder) {
-        let _ = self;
-        builder.route(
-            &route_catalog::governance_vrf::DERIVE_COUNCIL,
-            catalog_post(handler_gov_council_derive_vrf),
-        );
-    }
-
-    /// Governance VRF helpers are omitted when the feature is not compiled.
-    #[cfg(not(feature = "gov_vrf"))]
-    fn add_gov_vrf_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
 
@@ -54501,7 +53808,12 @@ impl Torii {
         );
         capacity_get!(STORAGE_PLAN, sorafs::api::handle_get_sorafs_storage_plan);
         capacity_post!(STORAGE_FETCH, sorafs::api::handle_post_sorafs_storage_fetch);
-        capacity_post!(STORAGE_TOKEN, sorafs::api::handle_post_sorafs_storage_token);
+        builder.route(
+            &route_catalog::sorafs::STORAGE_TOKEN,
+            catalog_post(sorafs::api::handle_post_sorafs_storage_token)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_in_handler(HandlerAuthentication::RequiredApiToken),
+        );
         capacity_get!(
             STORAGE_CAR,
             sorafs::api::handle_get_sorafs_storage_car_range
@@ -54840,13 +54152,6 @@ impl Torii {
             mount_get!(GOV_COUNCIL_CURRENT, handler_gov_council_current);
             mount_get!(GOV_CITIZENS_COUNT, handler_gov_citizen_count);
             mount_get!(GOV_CITIZEN_STATUS, handler_gov_citizen_status);
-            mount_get!(GOV_COUNCIL_AUDIT, handler_gov_council_audit);
-
-            #[cfg(feature = "gov_vrf")]
-            {
-                mount_post!(GOV_COUNCIL_PERSIST, handler_gov_council_persist);
-                mount_post!(GOV_COUNCIL_REPLACE, handler_gov_council_replace);
-            }
         }
     }
 
@@ -55157,14 +54462,19 @@ impl Torii {
             );
             crate::zk_prover::start_worker();
         }
-        let rl = limits::RateLimiter::new(
-            config
-                .query_rate_per_authority_per_sec
-                .map(std::num::NonZeroU32::get),
-            config
-                .query_burst_per_authority
-                .map(std::num::NonZeroU32::get),
-        );
+        let query_rate = config
+            .query_rate_per_authority_per_sec
+            .map(std::num::NonZeroU32::get);
+        let query_burst = config
+            .query_burst_per_authority
+            .map(std::num::NonZeroU32::get);
+        let rl = limits::RateLimiter::new(query_rate, query_burst);
+        // Keep the two signed-query security dimensions in independent maps.
+        // Authority churn must not evict and refill a pre-auth caller bucket,
+        // while unrelated REST reads must not evict a verified-authority
+        // bucket.
+        let query_preauth_rl = limits::RateLimiter::new(query_rate, query_burst);
+        let query_authority_rl = limits::RateLimiter::new(query_rate, query_burst);
         // Pipeline-status reads retain one burst slot even when the generic
         // query limiter is disabled. This is a Torii ingress invariant, not a
         // mutable consensus-resilience parameter.
@@ -55929,6 +55239,7 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let stream_token_issuer = match sorafs::StreamTokenIssuer::from_config(
             &config.sorafs_storage.stream_tokens,
+            &config.api_tokens,
             shared_sorafs_stream_token_signer,
         ) {
             Ok(Some(issuer)) => Some(Arc::new(issuer)),
@@ -56139,6 +55450,8 @@ impl Torii {
             )
             .unwrap_or(usize::MAX),
             rate_limiter: rl,
+            query_preauth_rate_limiter: query_preauth_rl,
+            query_authority_rate_limiter: query_authority_rl,
             pipeline_status_rate_limiter: pipeline_status_rl,
             tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
@@ -56569,6 +55882,8 @@ impl Torii {
             query_heavy_inflight,
             query_queue_timeout: self.query_queue_timeout,
             rate_limiter: self.rate_limiter.clone(),
+            query_preauth_rate_limiter: self.query_preauth_rate_limiter.clone(),
+            query_authority_rate_limiter: self.query_authority_rate_limiter.clone(),
             pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
@@ -56869,8 +56184,6 @@ impl Torii {
         .unwrap_or_else(|error| panic!("invalid Torii route catalog: {error:?}"));
 
         self.add_sumeragi_routes(&mut builder);
-        // VRF governance helper route(s)
-        self.add_gov_vrf_routes(&mut builder);
         // Core info and introspection
         self.add_telemetry_routes(&mut builder);
         self.add_core_info_routes(&mut builder);

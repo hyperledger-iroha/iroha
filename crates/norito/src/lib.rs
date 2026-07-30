@@ -3090,6 +3090,52 @@ pub mod json {
         }
 
         #[test]
+        fn finite_f64_json_roundtrips_exact_bits_and_overflow_is_rejected() {
+            for value in [
+                0.0,
+                -0.0,
+                1.0,
+                -1.0,
+                f64::from_bits(1),
+                f64::MIN_POSITIVE,
+                core::f64::consts::PI,
+                f64::MAX,
+                f64::MIN,
+            ] {
+                let encoded = to_json(&value).expect("finite float must serialize");
+                let decoded =
+                    from_json::<f64>(&encoded).expect("serialized finite float must decode");
+                assert_eq!(
+                    decoded.to_bits(),
+                    value.to_bits(),
+                    "float JSON changed exact bits for {value:?} via {encoded}"
+                );
+
+                let mut walker = TapeWalker::new(&encoded);
+                let fast_decoded = walker
+                    .parse_f64_inline()
+                    .expect("fast parser must accept serialized finite float");
+                assert_eq!(
+                    fast_decoded.to_bits(),
+                    value.to_bits(),
+                    "fast float JSON changed exact bits for {value:?} via {encoded}"
+                );
+            }
+
+            for overflow in ["1e309", "-1e309"] {
+                assert!(
+                    from_json::<f64>(overflow).is_err(),
+                    "typed parser accepted non-finite overflow {overflow}"
+                );
+                let mut walker = TapeWalker::new(overflow);
+                assert!(
+                    walker.parse_f64_inline().is_err(),
+                    "fast parser accepted non-finite overflow {overflow}"
+                );
+            }
+        }
+
+        #[test]
         fn fast_writer_handles_reference_fields() {
             use crate::derive::JsonSerialize;
 
@@ -5461,6 +5507,15 @@ pub mod json {
             let v: f64 = num_str
                 .parse()
                 .map_err(|e| Error::Message(format!("failed to parse float `{num_str}`: {e}")))?;
+            if !v.is_finite() {
+                let (byte, line, col) = pos_from_offset(p.input(), start);
+                return Err(Error::WithPos {
+                    msg: "non-finite float",
+                    byte,
+                    line,
+                    col,
+                });
+            }
             p.i = i;
             Ok(v)
         }
@@ -8190,6 +8245,15 @@ pub mod json {
                     col,
                 }
             })?;
+            if !v.is_finite() {
+                let (byte, line, col) = pos_from_offset(self.input, self.raw);
+                return Err(Error::WithPos {
+                    msg: "non-finite float",
+                    byte,
+                    line,
+                    col,
+                });
+            }
             self.raw = end;
             self.skip_ws();
             Ok(v)

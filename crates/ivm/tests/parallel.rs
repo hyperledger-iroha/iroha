@@ -908,6 +908,30 @@ fn test_execute_block_parallel_ops() {
 }
 
 #[test]
+fn parallel_instruction_batch_reserves_gas_before_work() {
+    use ivm::{IVM, Instruction};
+
+    let block: [Instruction; 16] = std::array::from_fn(|index| Instruction::AddImm {
+        rd: (index + 1) as u16,
+        rs: 0,
+        imm: 1,
+    });
+    let mut underfunded = IVM::new(15);
+
+    assert_eq!(
+        underfunded.execute_block_parallel(&block),
+        Err(VMError::OutOfGas)
+    );
+    assert_eq!(underfunded.gas_remaining, 15);
+    assert!((1..=16).all(|register| underfunded.register(register) == 0));
+
+    let mut funded = IVM::new(16);
+    funded.execute_block_parallel(&block).unwrap();
+    assert_eq!(funded.gas_remaining, 0);
+    assert!((1..=16).all(|register| funded.register(register) == 1));
+}
+
+#[test]
 fn test_scheduler_dynamic_scaling() {
     let make_tx = || Transaction {
         code: vec![],

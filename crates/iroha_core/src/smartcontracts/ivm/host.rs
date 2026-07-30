@@ -1232,6 +1232,9 @@ pub struct SubscriptionContext {
 
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Return the governed smart-contract heap ceiling in bytes.
+    fn smart_contract_heap_limit(&self) -> u64;
+
     /// Parse and canonicalize an account alias literal using the current dataspace catalog.
     ///
     /// # Errors
@@ -1639,6 +1642,24 @@ fn visit_storage_keys_with_text_prefix(
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn smart_contract_heap_limit(&self) -> u64 {
+        match *self {
+            QueryStateRef::View(view) => view.world().parameters().smart_contract().memory().get(),
+            QueryStateRef::QueryView(view) => {
+                view.world().parameters().smart_contract().memory().get()
+            }
+            QueryStateRef::Block(block) => {
+                block.world().parameters().smart_contract().memory().get()
+            }
+            QueryStateRef::Transaction(transaction) => transaction
+                .world()
+                .parameters()
+                .smart_contract()
+                .memory()
+                .get(),
+        }
+    }
+
     fn parse_account_alias(&self, alias_literal: &str) -> Result<AccountAlias, ivm::VMError> {
         match *self {
             QueryStateRef::View(view) => {
@@ -7197,7 +7218,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let permission =
             crate::executor::nested_contract_entrypoint_permission(descriptor, &entrypoint)
                 .map_err(|error| ivm::VMError::metered(request_gas, map_validation_fail(&error)))?;
-        {
+        let child_heap_limit = {
             let state_ref = self.query_state.get().ok_or_else(|| {
                 ivm::VMError::metered(request_gas, ivm::VMError::PermissionDenied)
             })?;
@@ -7220,7 +7241,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                         ivm::VMError::metered(request_gas, map_validation_fail(&error))
                     })?;
             }
-        }
+            state_ref.smart_contract_heap_limit()
+        };
         // The target identity, lifecycle state, and selected permission are authoritative before
         // the potentially attacker-sized argument record is copied or canonically decoded.
         let argument_record = if argument_pointer == 0 {
@@ -7278,7 +7300,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .and_then(|descriptor| descriptor.return_schema.clone());
         let mut child_vm = self
             .prepared_contract_cache
-            .checkout_runtime(prepared_contract.as_ref(), child_gas_limit)
+            .checkout_runtime(
+                prepared_contract.as_ref(),
+                child_gas_limit,
+                child_heap_limit,
+            )
             .map_err(|_| ivm::VMError::metered(request_gas, ivm::VMError::DecodeError))?;
         if let Some(entrypoint_pc) = call_context.entrypoint_pc() {
             let code_len = child_vm.memory.code_len();
@@ -8024,6 +8050,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             }
             "transaction.max_metadata_depth" => Parameter::Transaction(
                 TransactionParameter::MaxMetadataDepth(params.transaction().max_metadata_depth()),
+            ),
+            "transaction.max_time_to_live_ms" => Parameter::Transaction(
+                TransactionParameter::MaxTimeToLiveMs(params.transaction().max_time_to_live_ms()),
             ),
             "transaction.require_height_ttl" => Parameter::Transaction(
                 TransactionParameter::RequireHeightTtl(params.transaction().require_height_ttl()),
@@ -8932,6 +8961,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
+    /// Return the authority recorded on ledger effects emitted by the active frame.
+    ///
+    /// A contract or proved-contract frame must always retain
+    /// `current_contract_runtime_context`; falling back to the transaction authority
+    /// inside such a frame would silently re-author contract effects. Generic/view
+    /// setup therefore clears the frame and its execution class together, while every
+    /// admitted contract binder installs both together.
     fn effect_authority(&self) -> AccountId {
         self.current_contract_runtime_context.as_ref().map_or_else(
             || self.authority.clone(),

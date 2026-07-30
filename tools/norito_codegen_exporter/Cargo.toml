@@ -15,11 +15,11 @@ blake3 = { workspace = true }
 clap = { version = "4.5.51", features = ["derive"] }
 eyre = { workspace = true }
 hex = { workspace = true, features = ["alloc", "std"] }
-iroha_crypto = { workspace = true }
-iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["json", "governance"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_primitives = { workspace = true, features = ["json"] }
 iroha_schema = { path = "../../crates/iroha_schema" }
-norito = { path = "../../crates/norito", features = ["json"] }
+norito = { path = "../../crates/norito", features = ["node-codec"], default-features = false }
 tempfile = { workspace = true }
 time = { version = "0.3.44", default-features = false, features = ["std", "macros", "formatting"] }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }

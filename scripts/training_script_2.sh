@@ -801,13 +801,21 @@ generate_client_configs() {
   local base_config="$1"
   local out_dir="$2"
   local domain="$3"
-  local seed_prefix="$4"
+  local seed_material="$4"
   local names_csv="$5"
+  local seed_hex
+  seed_hex="$(python3 - "$seed_material" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())
+PY
+)"
   "$KAGAMI_BIN" advanced client-configs \
     --base-config "$base_config" \
     --out-dir "$out_dir" \
     --domain "$domain" \
-    --seed-prefix "$seed_prefix" \
+    --seed-hex "$seed_hex" \
     --names "$names_csv"
 }
 
@@ -1132,9 +1140,9 @@ for run in $(seq 1 "$RUNS"); do
   else
     rm -rf "$clients_dir"
     mkdir -p "$clients_dir"
-    client_seed_prefix="${SEED}-clients-${run}"
+    client_seed_material="${SEED}-clients-${run}"
     client_names="recipient,sig1,sig2,sig3,multisig"
-    if ! generate_client_configs "$client_cfg" "$clients_dir" "$domain" "$client_seed_prefix" "$client_names"; then
+    if ! generate_client_configs "$client_cfg" "$clients_dir" "$domain" "$client_seed_material" "$client_names"; then
       echo "[run $run] kagami client-configs failed" >&2
       stop_localnet "$run_dir"
       cleanup_run_dir=""

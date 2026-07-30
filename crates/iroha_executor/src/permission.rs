@@ -2839,7 +2839,7 @@ mod tests {
             "CanPublishSpaceDirectoryManifest"
                 .parse()
                 .expect("permission ident"),
-            Json::from_string_unchecked("null".to_string()),
+            Json::from_raw_json("null".to_owned()).expect("valid JSON fixture"),
         )]);
 
         let result = token.validate_grant(&authority, &context, &Iroha);

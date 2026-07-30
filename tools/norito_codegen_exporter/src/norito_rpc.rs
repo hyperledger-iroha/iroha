@@ -709,7 +709,8 @@ impl RawPayloadFixture {
 
 impl RawPayload {
     fn to_builder(&self) -> Result<TransactionBuilder> {
-        let chain_id = ChainId::from_str(&self.chain).expect("ChainId parsing must be infallible");
+        let chain_id = ChainId::from_str(&self.chain)
+            .with_context(|| format!("invalid canonical chain id '{}'", self.chain))?;
         let authority = parse_account_id(&self.authority)
             .with_context(|| format!("invalid authority id '{}'", self.authority))?;
 
@@ -1647,10 +1648,7 @@ mod tests {
         invocation.insert("entrypoint".to_owned(), Value::String("run".to_owned()));
         invocation.insert("arguments".to_owned(), Value::Null);
         let mut contract_item = Map::new();
-        contract_item.insert(
-            "ContractCall".to_owned(),
-            Value::Object(invocation),
-        );
+        contract_item.insert("ContractCall".to_owned(), Value::Object(invocation));
         let mut executable = Map::new();
         executable.insert(
             "Batch".to_owned(),
@@ -1972,6 +1970,29 @@ mod tests {
         signed
             .verify_signature()
             .expect("checked fixture transaction signature verifies");
+    }
+
+    #[test]
+    fn raw_payload_rejects_invalid_chain_id() {
+        let payload = RawPayload {
+            chain: String::new(),
+            authority: String::new(),
+            creation_time_ms: 0,
+            executable: RawExecutable::Instructions(Vec::new()),
+            ttl_ms: None,
+            nonce: None,
+            fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            metadata: Vec::new(),
+        };
+
+        let error = payload
+            .to_builder()
+            .err()
+            .expect("an empty chain id must be rejected");
+        assert!(
+            error.to_string().contains("invalid canonical chain id ''"),
+            "unexpected chain id error: {error}"
+        );
     }
 
     #[test]

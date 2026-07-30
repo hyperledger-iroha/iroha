@@ -109,7 +109,9 @@ fn make_client(
     torii_request_timeout_ms: u64,
 ) -> Result<Client> {
     let config = Config {
-        chain: ChainId::from(chain_id),
+        chain: chain_id
+            .parse::<ChainId>()
+            .wrap_err("--chain-id must be canonical")?,
         account: authority,
         account_chain_discriminant: chain_discriminant,
         key_pair,

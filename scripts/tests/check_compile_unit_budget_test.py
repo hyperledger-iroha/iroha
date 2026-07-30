@@ -156,3 +156,36 @@ def test_focused_command_is_locked_and_library_only() -> None:
         "iroha_data_model",
         "--lib",
     ]
+
+
+def test_workspace_scope_excludes_registry_artifacts() -> None:
+    workspace_members = {"path+file:///repo/crates/model#iroha_data_model@0.1.0"}
+    member = next(iter(workspace_members))
+    registry = "registry+https://github.com/rust-lang/crates.io-index#syn@2.0.0"
+
+    assert MODULE.artifact_in_scope(member, "workspace", workspace_members)
+    assert not MODULE.artifact_in_scope(registry, "workspace", workspace_members)
+    assert MODULE.artifact_in_scope(registry, "all", workspace_members)
+    with pytest.raises(ValueError, match="unsupported artifact scope"):
+        MODULE.artifact_in_scope(member, "host-dependent", workspace_members)
+
+
+def test_compiler_diagnostics_are_retained_for_failed_builds() -> None:
+    message = {
+        "reason": "compiler-message",
+        "message": {
+            "rendered": "error[E0001]: first line\n  --> src/lib.rs:2:3\n",
+        },
+    }
+
+    assert MODULE.compiler_diagnostic_lines(message) == (
+        "error[E0001]: first line",
+        "  --> src/lib.rs:2:3",
+    )
+    assert MODULE.compiler_diagnostic_lines({"reason": "compiler-artifact"}) == ()
+    assert (
+        MODULE.compiler_diagnostic_lines(
+            {"reason": "compiler-message", "message": {"rendered": None}}
+        )
+        == ()
+    )

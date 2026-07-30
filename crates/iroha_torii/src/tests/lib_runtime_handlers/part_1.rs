@@ -1888,6 +1888,8 @@
             )),
             query_queue_timeout: Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS),
             rate_limiter: limits::RateLimiter::new(None, None),
+            query_preauth_rate_limiter: limits::RateLimiter::new(None, None),
+            query_authority_rate_limiter: limits::RateLimiter::new(None, None),
             pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
             tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
@@ -2604,13 +2606,15 @@
     }
 
     #[tokio::test]
-    async fn handler_post_transaction_uses_api_token_rate_limit_key() {
+    async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() {
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             app_mut.high_load_tx_threshold = usize::MAX;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
             app_mut.fee_policy = FeePolicy::Disabled;
+            app_mut.require_api_token = true;
+            app_mut.api_tokens_set = Arc::new(HashSet::from(["shared-token".to_owned()]));
         }
 
         let first_keypair = checked_torii_test_keypair_from_seed_byte(

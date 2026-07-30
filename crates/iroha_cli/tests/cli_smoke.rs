@@ -1648,262 +1648,6 @@ fn gov_governance_queries_against_mock() {
 
 #[test]
 #[allow(clippy::too_many_lines)]
-fn gov_council_vrf_commands_against_mock() {
-    use std::fs;
-
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
-    };
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!("skipping gov_council_vrf_commands_against_mock: mock server unavailable");
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-    let guardian = account_literal_for("guardian-0");
-
-    let member = Value::Object({
-        let mut map = Map::new();
-        map.insert("account_id".to_string(), Value::String(guardian.clone()));
-        map
-    });
-    let derive_response = Value::Object({
-        let mut map = Map::new();
-        map.insert("epoch".to_string(), Value::from(42_u64));
-        map.insert("verified".to_string(), Value::from(1_u64));
-        map.insert("members".to_string(), Value::Array(vec![member.clone()]));
-        map
-    });
-    let persist_response = Value::Object({
-        let mut map = Map::new();
-        map.insert("ok".to_string(), Value::Bool(true));
-        map.insert("epoch".to_string(), Value::from(42_u64));
-        map.insert("verified".to_string(), Value::from(1_u64));
-        map.insert("members".to_string(), Value::Array(vec![member]));
-        map
-    });
-    let config_payload = norito::json!({
-        "council_derive_response": derive_response,
-        "council_persist_response": persist_response,
-    });
-    configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
-    let temp_dir = TempDir::new("gov_council_vrf").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let candidates_path = temp_dir.path().join("candidates.json");
-    let candidates_json = Value::Array(vec![Value::Object({
-        let mut map = Map::new();
-        map.insert("account_id".to_string(), Value::String(guardian.clone()));
-        map.insert("variant".to_string(), Value::String("Normal".to_string()));
-        map.insert("pk_b64".to_string(), Value::String("UEtCQjQ=".to_string()));
-        map.insert(
-            "proof_b64".to_string(),
-            Value::String("UFJPT0Y=".to_string()),
-        );
-        map
-    })]);
-    let candidate_bytes = norito::json::to_vec(&candidates_json).expect("serialize candidates");
-    fs::write(&candidates_path, candidate_bytes).expect("write candidates file");
-
-    let derive = command()
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--output-format")
-        .arg("text")
-        .args([
-            "app",
-            "gov",
-            "council",
-            "derive-vrf",
-            "--committee-size",
-            "1",
-            "--candidates-file",
-            candidates_path.to_str().expect("utf8 path"),
-        ])
-        .output()
-        .expect("invoke iroha app gov council derive-vrf");
-    assert!(
-        derive.status.success(),
-        "expected council derive-vrf to succeed, stderr: {}",
-        String::from_utf8_lossy(&derive.stderr)
-    );
-    let derive_out = String::from_utf8_lossy(&derive.stdout);
-    let expected_derive = format!(
-        "council derive-vrf: epoch=42 verified=1 members=[{}] alternates=[]",
-        guardian
-    );
-    assert_eq!(derive_out.trim_end(), expected_derive);
-
-    let persist = command()
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--output-format")
-        .arg("text")
-        .args([
-            "app",
-            "gov",
-            "council",
-            "persist",
-            "--committee-size",
-            "1",
-            "--candidates-file",
-            candidates_path.to_str().expect("utf8 path"),
-            "--authority",
-            guardian.as_str(),
-            "--private-key",
-            "deadbeef",
-        ])
-        .output()
-        .expect("invoke iroha app gov council persist");
-    assert!(
-        persist.status.success(),
-        "expected council persist to succeed, stderr: {}",
-        String::from_utf8_lossy(&persist.stderr)
-    );
-    let persist_out = String::from_utf8_lossy(&persist.stdout);
-    assert_eq!(
-        persist_out.trim_end(),
-        "council persist: epoch=42 members=1 alternates=0 verified=1"
-    );
-
-    let combined = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "app",
-            "gov",
-            "council",
-            "derive-and-persist",
-            "--committee-size",
-            "1",
-            "--candidates-file",
-            candidates_path.to_str().expect("utf8 path"),
-            "--authority",
-            guardian.as_str(),
-            "--private-key",
-            "cafebabe",
-        ])
-        .output()
-        .expect("invoke iroha app gov council derive-and-persist");
-    assert!(
-        combined.status.success(),
-        "expected council derive-and-persist to succeed, stderr: {}",
-        String::from_utf8_lossy(&combined.stderr)
-    );
-    let combined_json: norito::json::Value =
-        norito::json::from_slice(&combined.stdout).expect("parse derive-and-persist JSON");
-    assert!(combined_json.get("derived").is_some());
-    assert!(combined_json.get("persisted").is_some());
-}
-
-#[test]
-fn gov_council_gen_vrf_outputs_expected_candidate() {
-    use iroha_core::governance::parliament;
-    use iroha_crypto::{BlsNormal, KeyGenOption, KeyPair, vrf::VrfProof};
-    use torii_mock_support::{TempDir, write_client_config};
-    fn expected_normal_candidate(seed: &[u8; 64], chain_id: &str) -> (String, String, String) {
-        let alias = format!("node{}@{}", 0, "wonderland");
-        let account_seed = iroha_crypto::Hash::new(alias.as_bytes());
-        let account_keypair = fixture_key_pair_from_seed(account_seed.as_ref().to_vec());
-        let (account_public_key, _) = account_keypair.into_parts();
-        let account_id = iroha::data_model::account::AccountId::new(account_public_key);
-        let account_id_str = account_id.to_string();
-
-        let mut attempt = 0u32;
-        let (pk_b64, proof_b64) = loop {
-            let bls_seed =
-                iroha_crypto::Hash::new(format!("{alias}|normal|0|{attempt}").as_bytes());
-            let (pk, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(bls_seed.as_ref().to_vec()))
-                .expect("deterministic BLS normal keypair");
-            let (pubkey, _) = KeyPair::from((pk, sk.clone())).into_parts();
-            let input = parliament::build_input(seed, &account_id);
-            if let Ok((_y, proof)) =
-                iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id.as_bytes(), &input)
-            {
-                let (_alg, pk_payload) = pubkey.to_bytes();
-                let proof_bytes = match proof {
-                    VrfProof::SigInG2(bytes) => bytes,
-                    _ => unreachable!("normal variant uses G2 proof"),
-                };
-                break (BASE64.encode(pk_payload), BASE64.encode(proof_bytes));
-            }
-            attempt += 1;
-            assert!(
-                attempt <= 16,
-                "expected deterministic VRF helper to succeed within retries"
-            );
-        };
-        (account_id_str, pk_b64, proof_b64)
-    }
-
-    let temp_dir = TempDir::new("gov_gen_vrf").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, "http://localhost").expect("write config");
-
-    let seed_hex = "11".repeat(64);
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "app",
-            "gov",
-            "council",
-            "gen-vrf",
-            "--count",
-            "1",
-            "--seed-hex",
-            &seed_hex,
-            "--chain-id",
-            "chain::demo",
-            "--account-prefix",
-            "node",
-            "--domain",
-            "wonderland",
-        ])
-        .output()
-        .expect("invoke iroha app gov council gen-vrf");
-    assert!(
-        output.status.success(),
-        "expected council gen-vrf to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse gen-vrf JSON");
-    let candidates = value.as_array().expect("candidates array");
-    assert_eq!(candidates.len(), 1, "expected one candidate in output");
-    let candidate = candidates.first().expect("candidate");
-
-    let pk_b64 = candidate
-        .get("pk_b64")
-        .and_then(|v| v.as_str())
-        .expect("pk_b64");
-    let proof_b64 = candidate
-        .get("proof_b64")
-        .and_then(|v| v.as_str())
-        .expect("proof_b64");
-    let seed_bytes = hex::decode(&seed_hex).expect("seed hex");
-    let seed_array: [u8; 64] = seed_bytes.try_into().expect("64-byte seed");
-    let expected = expected_normal_candidate(&seed_array, "chain::demo");
-    assert_eq!(
-        candidate.get("account_id").and_then(|v| v.as_str()),
-        Some(expected.0.as_str())
-    );
-    assert_eq!(
-        candidate.get("variant").and_then(|v| v.as_str()),
-        Some("Normal")
-    );
-    assert_eq!(pk_b64, expected.1);
-    assert_eq!(proof_b64, expected.2);
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
 fn gov_vote_plain_against_mock() {
     use iroha::data_model::isi::{InstructionBox, governance::CastPlainBallot};
     use torii_mock_support::{
@@ -2892,8 +2636,6 @@ fn gov_council_summary_against_mock() {
     let guardian_0 = account_literal_for("guardian-0");
     let guardian_1 = account_literal_for("guardian-1");
 
-    let seed_hex = "11".repeat(32);
-    let beacon_hex = "22".repeat(32);
     let council_members = Value::Array(vec![
         Value::Object({
             let mut map = Map::new();
@@ -2915,21 +2657,13 @@ fn gov_council_summary_against_mock() {
                 let mut current = Map::new();
                 current.insert("epoch".to_string(), Value::from(64_u64));
                 current.insert("members".to_string(), council_members);
-                current
-            }),
-        );
-        map.insert(
-            "council_audit".to_string(),
-            Value::Object({
-                let mut audit = Map::new();
-                audit.insert("epoch".to_string(), Value::from(64_u64));
-                audit.insert("seed_hex".to_string(), Value::String(seed_hex));
-                audit.insert(
-                    "chain_id".to_string(),
-                    Value::String("00000000-0000-0000-0000-000000000000".to_string()),
+                current.insert("alternates".to_string(), Value::Array(Vec::new()));
+                current.insert("candidate_count".to_string(), Value::from(2_u64));
+                current.insert(
+                    "derived_by".to_string(),
+                    Value::String("Manual".to_string()),
                 );
-                audit.insert("beacon_hex".to_string(), Value::String(beacon_hex));
-                audit
+                current
             }),
         );
         map
@@ -2951,7 +2685,7 @@ fn gov_council_summary_against_mock() {
     );
     let summary_line = String::from_utf8(summary.stdout).expect("summary output utf8");
     let expected_summary = format!(
-        "council: epoch=64 members_count=2 alternates_count=0 verified=0 derived_by=unknown members=[{}, {}] alternates=[]",
+        "council: epoch=64 members_count=2 alternates_count=0 candidate_count=2 derived_by=Manual members=[{}, {}] alternates=[]",
         guardian_0, guardian_1
     );
     assert_eq!(summary_line.trim(), expected_summary);

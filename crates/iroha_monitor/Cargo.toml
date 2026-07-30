@@ -16,7 +16,7 @@ attohttpc = { version = "0.30.1", default-features = false }
 axum = { workspace = true, features = ["json", "tokio", "http1"] }
 crossterm = { version = "0.29" }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 unicode-width = "0.2"
 
 [features]

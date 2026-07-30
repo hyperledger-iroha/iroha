@@ -183,9 +183,11 @@ jobs:
           python3 scripts/rust_ci.py validate
           python3 -m pytest -q pytests/scripts/rust_ci_test.py
           python3 -m pytest -q \
+            pytests/scripts/check_cargo_feature_hygiene_test.py \
             scripts/tests/check_source_file_budget_test.py \
             scripts/tests/check_compile_unit_budget_test.py \
             scripts/tests/check_generated_artifacts_test.py
+          python3 scripts/check_cargo_feature_hygiene.py
           python3 scripts/check_source_file_budget.py
           python3 scripts/check_generated_artifacts.py
       - name: Classify the PR reverse-dependency closure

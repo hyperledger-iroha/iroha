@@ -19,8 +19,10 @@ pub struct Args {
     /// specifies its algorithm.
     #[clap(long, short, group = "generate_from")]
     private_key: Option<String>,
-    /// The Unicode `seed` string to generate the key-pair from
-    #[clap(long, short, group = "generate_from")]
+    /// A 32-byte secret key-generation seed encoded as 64 hexadecimal characters.
+    ///
+    /// This is for reproducible fixtures. Omit it for OS-random production keys.
+    #[clap(long = "seed-hex", group = "generate_from", value_name = "HEX")]
     seed: Option<String>,
     /// Output the key-pair in JSON format
     #[clap(long, short, group = "format")]
@@ -187,7 +189,7 @@ impl Args {
                     .wrap_err("Failed to derive key pair from private key")?
             }
             (Some(seed), None) => {
-                let seed: Vec<u8> = seed.as_bytes().into();
+                let seed = parse_keygen_seed_hex(&seed)?;
                 KeyPair::try_from_seed(seed, algorithm)
                     .wrap_err("Failed to derive seeded key pair")?
             }
@@ -196,6 +198,19 @@ impl Args {
 
         Ok(key_pair)
     }
+}
+
+pub(crate) fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
+    let seed = seed.strip_prefix("0x").unwrap_or(seed);
+    if seed.len() != 64 {
+        color_eyre::eyre::bail!(
+            "key-generation seed must be exactly 32 bytes encoded as 64 hexadecimal characters"
+        );
+    }
+    let mut decoded = vec![0u8; 32];
+    hex::decode_to_slice(seed, &mut decoded)
+        .wrap_err("key-generation seed must contain exactly 64 hexadecimal characters")?;
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -261,7 +276,7 @@ mod tests {
         let args = Args {
             algorithm: AlgorithmArg(Algorithm::Ed25519),
             private_key: None,
-            seed: Some("checked-formatters".to_owned()),
+            seed: Some("11".repeat(32)),
             json: true,
             json_mh_prefixed: true,
             compact: false,
@@ -311,5 +326,18 @@ mod tests {
 
         let key_pair = args.key_pair().expect("checked random keypair");
         assert_eq!(key_pair.algorithm(), Algorithm::Ed25519);
+    }
+
+    #[test]
+    fn seeded_key_generation_requires_exact_secret_hex() {
+        let err = parse_keygen_seed_hex("human password")
+            .expect_err("human-readable seed must be rejected");
+        assert!(err.to_string().contains("exactly 32 bytes"));
+        assert_eq!(
+            parse_keygen_seed_hex(&"a5".repeat(32))
+                .expect("32-byte hex seed")
+                .len(),
+            32
+        );
     }
 }

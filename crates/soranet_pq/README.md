@@ -52,11 +52,10 @@ verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_by
   inconsistent secret material before signing draws randomness.
 - ML-KEM and ML-DSA entry points now require explicit hedged RNG objects or the
   fallible `_from_os` convenience helpers.
-- The low-level backend uses bindings generated from the exact, pinned
-  `pqcrypto-mldsa` PQClean headers. Polynomial dimensions and foreign function
-  signatures are kept in that single generated module; higher layers exchange
-  only canonical FIPS 204 byte encodings and never redeclare PQClean's private
-  C layout.
+- ML-DSA key generation, secret-key recovery, and signing use a safe portable
+  Rust implementation of the FIPS 204 polynomial operations. The
+  `pqcrypto-mldsa` dependency is used only through its public byte-oriented
+  verification API; no private PQClean C structures cross into Rust.
 
 ## C FFI
 

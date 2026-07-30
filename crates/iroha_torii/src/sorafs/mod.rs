@@ -99,7 +99,8 @@ pub use sorafs_node::{
     PotrAdmissionPolicyBindingError, PotrAdmissionPolicyBindingV1, PotrAdmissionPolicyProgressError,
 };
 pub(crate) use token::{
-    MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES, MAX_TOKEN_FUTURE_SKEW_SECS,
+    MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
+    MAX_TOKEN_FUTURE_SKEW_SECS, StreamTokenQuotaSubject,
 };
 pub use token::{
     StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, StreamTokenRuntimeSigner,

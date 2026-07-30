@@ -9,7 +9,7 @@ environment variables.
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 try:
@@ -122,9 +122,75 @@ def _dependency_tables(document: dict[str, Any]) -> Iterable[tuple[str, dict[str
                 yield f"target.{target_name}.{section}", table
 
 
-def _member_manifest(root: Path, member: str) -> Path:
+def _member_manifest(root: Path, member: str | Path) -> Path:
     path = root / member
     return path if path.name == "Cargo.toml" else path / "Cargo.toml"
+
+
+def _workspace_patterns(workspace: dict[str, Any], field: str) -> list[str]:
+    raw_patterns = workspace.get(field, [])
+    if not isinstance(raw_patterns, list):
+        raise ValueError(f"`workspace.{field}` must be an array")
+
+    patterns: list[str] = []
+    for raw_pattern in raw_patterns:
+        if not isinstance(raw_pattern, str):
+            raise ValueError(f"`workspace.{field}` paths must be strings")
+        normalized = raw_pattern.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if (
+            not normalized
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.as_posix() != normalized
+        ):
+            raise ValueError(
+                f"`workspace.{field}` contains an invalid path: {raw_pattern!r}"
+            )
+        patterns.append(normalized)
+    return patterns
+
+
+def _expand_member_patterns(
+    root: Path,
+    patterns: Iterable[str],
+    *,
+    require_match: bool,
+) -> set[Path]:
+    manifests: set[Path] = set()
+    root = root.resolve()
+    for pattern in patterns:
+        matched_manifests: set[Path] = set()
+        for candidate in root.glob(pattern):
+            manifest = _member_manifest(root, candidate)
+            if not manifest.is_file():
+                continue
+            resolved = manifest.resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError as error:
+                raise ValueError(
+                    f"workspace member resolves outside the repository: {manifest}"
+                ) from error
+            matched_manifests.add(resolved)
+        if require_match and not matched_manifests:
+            raise ValueError(f"workspace member pattern matches no manifests: {pattern}")
+        manifests.update(matched_manifests)
+    return manifests
+
+
+def workspace_member_manifests(
+    root: Path, workspace: dict[str, Any]
+) -> tuple[Path, ...]:
+    """Expand, exclude, and deduplicate every Cargo workspace member manifest."""
+
+    members = _workspace_patterns(workspace, "members")
+    if not members:
+        raise ValueError("`workspace.members` must contain at least one path")
+    excludes = _workspace_patterns(workspace, "exclude")
+    included = _expand_member_patterns(root, members, require_match=True)
+    excluded = _expand_member_patterns(root, excludes, require_match=False)
+    return tuple(sorted(included - excluded))
 
 
 def _check_expected_features(
@@ -161,7 +227,11 @@ def check_repository(root: Path) -> list[str]:
     root_manifest_path = root / "Cargo.toml"
     root_manifest = _load_toml(root_manifest_path)
     workspace = root_manifest.get("workspace", {})
+    if not isinstance(workspace, dict):
+        return [f"{root_manifest_path}: missing [workspace] table"]
     workspace_dependencies = workspace.get("dependencies", {})
+    if not isinstance(workspace_dependencies, dict):
+        return [f"{root_manifest_path}: `workspace.dependencies` must be a table"]
 
     errors: list[str] = []
     for dependency in sorted(FOUNDATIONAL_DEPENDENCIES):
@@ -183,18 +253,12 @@ def check_repository(root: Path) -> list[str]:
                 "must not inject features"
             )
 
-    default_members = workspace.get("default-members", [])
-    if not isinstance(default_members, list):
-        return [*errors, f"{root_manifest_path}: `workspace.default-members` must be an array"]
+    try:
+        member_manifests = workspace_member_manifests(root, workspace)
+    except ValueError as error:
+        return [*errors, f"{root_manifest_path}: {error}"]
 
-    for member in default_members:
-        if not isinstance(member, str):
-            errors.append(f"{root_manifest_path}: default member paths must be strings")
-            continue
-        manifest_path = _member_manifest(root, member)
-        if not manifest_path.is_file():
-            errors.append(f"{manifest_path}: default-member manifest does not exist")
-            continue
+    for manifest_path in member_manifests:
         document = _load_toml(manifest_path)
         errors.extend(_check_expected_features(document, manifest_path))
         for section, dependencies in _dependency_tables(document):
@@ -217,7 +281,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Reject workspace-level feature injection and implicit defaults in "
-            "the default Cargo development surface."
+            "every Cargo workspace member."
         )
     )
     parser.add_argument(

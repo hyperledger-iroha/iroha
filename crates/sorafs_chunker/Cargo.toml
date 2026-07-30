@@ -8,6 +8,6 @@ description = "Deterministic content-defined chunking primitives for SoraFS."
 [dependencies]
 sha3 = "0.10.8"
 blake3 = "1.8.2"
-norito = { workspace = true }
-iroha_crypto = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
 hex = "0.4.3"

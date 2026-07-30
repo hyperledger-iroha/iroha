@@ -128,7 +128,7 @@ pub const PQ_MASP_MAX_OUTPUTS_V1: u32 = 2;
 /// Maximum genesis commitments in one typed proof-managed pool bootstrap.
 pub const PRIVACY_MAX_INITIAL_POOL_COMMITMENTS_V1: usize = 4_096;
 /// Maximum UTF-8 byte length admitted for a privacy transcript chain id.
-pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = 255;
+pub const PRIVACY_MAX_CHAIN_ID_BYTES_V1: u32 = crate::id::MAX_CHAIN_ID_BYTES as u32;
 
 /// Explicit chain and governed-artifact binding shared by every statement.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -3235,4 +3235,3 @@ pub fn validate_zk_x509_crl_revocation_v1(
     }
     Ok(())
 }
-

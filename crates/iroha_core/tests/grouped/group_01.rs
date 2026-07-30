@@ -56,12 +56,8 @@ mod gov_citizen_service;
 mod gov_citizenship;
 #[path = "../gov_council_gate.rs"]
 mod gov_council_gate;
-#[path = "../gov_draw.rs"]
-mod gov_draw;
 #[path = "../gov_draw_replace.rs"]
 mod gov_draw_replace;
-#[path = "../gov_draw_selector.rs"]
-mod gov_draw_selector;
 #[path = "../gov_enact_deploy.rs"]
 mod gov_enact_deploy;
 #[path = "../gov_finalize_real_vk.rs"]

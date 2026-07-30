@@ -1,6 +1,138 @@
 
+    #[test]
+    fn handler_local_api_token_checks_use_the_canonical_evaluator() {
+        let source = include_str!("../../lib.rs");
+        let fail_open_empty_set_check = ["!app.api_tokens_", "set.is_empty()"].concat();
+        let direct_membership_check = ["app.api_tokens_set.", "contains"].concat();
+        assert!(
+            !source.contains(&fail_open_empty_set_check),
+            "handler-local API-token checks must not make an empty required token set fail open"
+        );
+        assert!(
+            !source.contains(&direct_membership_check),
+            "handler-local API-token checks must use evaluate_api_token"
+        );
+    }
+
     #[tokio::test]
-    async fn soracloud_signed_mutation_middleware_requires_headers_and_rejects_replay() {
+    #[cfg(feature = "telemetry")]
+    async fn norito_rpc_gate_records_metrics() {
+        let cfg = actual::NoritoRpcTransport {
+            enabled: true,
+            require_mtls: false,
+            stage: actual::NoritoRpcStage::Canary,
+            allowed_clients: vec!["ok".into()],
+            mtls_trusted_proxy_cidrs:
+                iroha_config::parameters::defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
+        };
+        let (app, metrics) = mk_norito_rpc_test_harness(cfg.clone()).await;
+        let trusted_remote = Some("127.0.0.1".parse().expect("trusted proxy"));
+        let untrusted_remote = Some("198.51.100.10".parse().expect("untrusted proxy"));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_API_TOKEN, HeaderValue::from_static("ok"));
+        app.check_norito_rpc_allowed(&headers, trusted_remote)
+            .expect("canary token should be allowed");
+        assert_eq!(
+            metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[cfg.stage.label(), "allowed"])
+                .get(),
+            1
+        );
+
+        let missing_token_headers = HeaderMap::new();
+        assert!(
+            app.check_norito_rpc_allowed(&missing_token_headers, trusted_remote)
+                .is_err()
+        );
+        assert_eq!(
+            metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[cfg.stage.label(), "canary_missing_token"])
+                .get(),
+            1
+        );
+
+        let mut wrong_token_headers = HeaderMap::new();
+        wrong_token_headers.insert(HEADER_API_TOKEN, HeaderValue::from_static("wrong"));
+        assert!(
+            app.check_norito_rpc_allowed(&wrong_token_headers, trusted_remote)
+                .is_err()
+        );
+        assert_eq!(
+            metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[cfg.stage.label(), "canary_denied"])
+                .get(),
+            1
+        );
+
+        let mtls_cfg = actual::NoritoRpcTransport {
+            enabled: true,
+            require_mtls: true,
+            stage: actual::NoritoRpcStage::Ga,
+            allowed_clients: Vec::new(),
+            mtls_trusted_proxy_cidrs:
+                iroha_config::parameters::defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
+        };
+        let (mtls_app, mtls_metrics) = mk_norito_rpc_test_harness(mtls_cfg.clone()).await;
+        assert!(
+            mtls_app
+                .check_norito_rpc_allowed(&HeaderMap::new(), trusted_remote)
+                .is_err()
+        );
+        assert_eq!(
+            mtls_metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[mtls_cfg.stage.label(), "mtls_required"])
+                .get(),
+            1
+        );
+        let mut mtls_headers = HeaderMap::new();
+        mtls_headers.insert(HEADER_MTLS_FORWARD, HeaderValue::from_static("present"));
+        mtls_app
+            .check_norito_rpc_allowed(&mtls_headers, trusted_remote)
+            .expect("mtls header should allow RPC");
+        assert_eq!(
+            mtls_metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[mtls_cfg.stage.label(), "allowed"])
+                .get(),
+            1
+        );
+        assert!(
+            mtls_app
+                .check_norito_rpc_allowed(&mtls_headers, untrusted_remote)
+                .is_err()
+        );
+        assert_eq!(
+            mtls_metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[mtls_cfg.stage.label(), "mtls_required"])
+                .get(),
+            2
+        );
+
+        let disabled_cfg = actual::NoritoRpcTransport::default();
+        let (disabled_app, disabled_metrics) =
+            mk_norito_rpc_test_harness(disabled_cfg.clone()).await;
+        assert!(
+            disabled_app
+                .check_norito_rpc_allowed(&HeaderMap::new(), trusted_remote)
+                .is_err()
+        );
+        assert_eq!(
+            disabled_metrics
+                .torii_norito_rpc_gate_total
+                .with_label_values(&[actual::NoritoRpcStage::Disabled.label(), "disabled"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn soracloud_signed_mutation_middleware_strips_internal_identity_and_rejects_replay() {
         use axum::{Router, body::Bytes, routing::post};
         use http_body_util::BodyExt as _;
         use tower::ServiceExt as _;
@@ -16,12 +148,27 @@
                     soracloud::VERIFIED_SIGNER_HEADER,
                 ))
                 .and_then(|value| value.to_str().ok());
+            let verified_signers = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_SIGNERS_HEADER,
+                ))
+                .and_then(|value| value.to_str().ok());
+            let client_identity_was_removed = [verified_account, verified_signer, verified_signers]
+                .into_iter()
+                .flatten()
+                .all(|value| value != "attacker");
             axum::response::Response::builder()
-                .status(if verified_account.is_some() && verified_signer.is_some() {
-                    StatusCode::OK
-                } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })
+                .status(
+                    if verified_account.is_some()
+                        && verified_signer.is_some()
+                        && verified_signers.is_some()
+                        && client_identity_was_removed
+                    {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    },
+                )
                 .body(Body::from(body))
                 .expect("response")
         }
@@ -74,7 +221,10 @@
         );
         let mut signed_builder = axum::http::Request::builder()
             .method(method.clone())
-            .uri(uri.to_string());
+            .uri(uri.to_string())
+            .header(soracloud::VERIFIED_ACCOUNT_HEADER, "attacker")
+            .header(soracloud::VERIFIED_SIGNER_HEADER, "attacker")
+            .header(soracloud::VERIFIED_SIGNERS_HEADER, "attacker");
         for (name, value) in &headers {
             signed_builder = signed_builder.header(name, value);
         }

@@ -15,11 +15,31 @@ view of that canonical mapping.
   budget in canonical input order; the transaction settles gas once rather
   than once per item. State changes remain atomic if an item exhausts the
   shared limit.
+- Proposal-queue accounting charges every runtime-dependent executable (raw or
+  proved IVM, deployed contract calls, and mixed batches) its complete
+  signature-bound gas limit. Missing bounds fail queue admission instead of
+  becoming zero-cost work. Native-only executables retain deterministic ISI
+  metering. Lane selection applies these costs to the on-chain
+  `ivm_gas_limit_per_block` budget; no environment-derived gas fallback
+  exists.
 - A trigger batch likewise uses one shared deterministic budget: the remaining
   block budget when it is configured, or the existing default trigger cap when
   block gas is unlimited. The cap applies to the batch as a whole, not once per
   contract-call item, and an item failure rolls back the trigger batch.
 - ISO 20022 opcodes are reserved in ABI v1 and do not carry gas entries yet.
+
+## Heap governance
+
+Gas and heap memory are independent deterministic limits. The on-chain
+`smart_contract.memory` parameter is the exact heap ceiling in bytes for raw,
+generic, deployed, nested, trigger, view, simulated, and mandatory
+proved-execution derivation/replay. `executor.memory` applies the same rule to
+user-provided runtime-executor validation and migration. Both default to the
+ABI V1 maximum of 1 MiB and `SetParameter` rejects larger values because the
+next address begins the INPUT region. The ceiling also bounds `GROW_HEAP`; a
+guest cannot expand past governance. Warm-runtime keys contain the heap
+ceiling, so changing either parameter deterministically selects a matching
+runtime baseline.
 
 ## Determinism and schedule hash
 
@@ -43,8 +63,10 @@ The hash is exposed by:
 - `ivm::gas::schedule_hash()` (canonical schedule hash)
 - `ivm::limits::schedule_hash()` (host-facing alias)
 
-Use this digest to verify that all peers share the same schedule when wiring
-config or telemetry checks.
+Every node advertises this digest in its signed consensus handshake. Peer
+admission requires an exact match, so validators with different executable gas
+schedules reject one another before exchanging consensus traffic. Telemetry
+exposes the same digest for operator diagnosis.
 
 ## Ledger-query host gas
 
@@ -94,6 +116,33 @@ host-dependent work, derive one shared item-and-byte execution budget from
 these constants, and reject work that cannot fit that budget before returning
 guest-visible output. Changing any value or semantic rule above requires a
 formula-version increment and produces a different gas-schedule hash.
+
+## Ed25519 batch-verification gas
+
+`ED25519BATCHVERIFY` accepts a Norito-encoded
+`Ed25519BatchRequest { entries }` containing 1–512 entries. The encoded payload
+is capped at 512 KiB and decoded with explicit per-sequence, per-field,
+cumulative-element, cumulative-allocation, and nesting-depth limits. The
+complete formula is:
+
+```text
+gas = 500
+    + encoded_payload_bytes
+    + 1,000 * admitted_entries
+```
+
+The 500-unit opcode base is charged first. For an in-range owned public
+envelope, the byte charge is debited before checksum hashing or Norito
+decoding. After a valid request passes the entry-count bound, the complete
+entry charge is debited before verification. The opcode then performs one
+strict Ed25519 verification per entry in canonical input order and reports the
+first failure index; GPU availability cannot change acceptance or duplicate
+work through a fallback pass.
+
+The schedule descriptor commits the formula version, both rates, both request
+bounds, and every Norito decode limit. A change to any of those values or to
+the charge-point ordering therefore changes `ivm::gas::schedule_hash()` and is
+rejected by the signed peer handshake when validators disagree.
 
 ## Vector scaling and HTM retries
 

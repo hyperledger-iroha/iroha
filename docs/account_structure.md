@@ -437,9 +437,11 @@ lives in [`docs/source/references/address_norm_v1.md`](source/references/address
 the summary below captures the steps that wallets, Torii, SDKs, and governance
 tools must implement.
 
-1. **Input validation.** Reject empty strings, whitespace, and the reserved
-   delimiters `@`, `#`, `$`. This matches the invariants enforced by
-   `Name::validate_str`.
+1. **Input validation.** Reject empty strings, UTF-8 inputs longer than 255
+   bytes, whitespace, Unicode control characters (including NUL), Unicode
+   bidirectional controls, and the reserved delimiters `@`, `#`, `$`. These
+   are protocol-level `Name` invariants, enforced identically by constructors
+   and Norito/JSON decoders before an identifier or metadata key is returned.
 2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
    equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
 3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
@@ -447,7 +449,9 @@ tools must implement.
    DNS-length enforcement enabled. The result is a lower-case A-label sequence;
    inputs that violate STD3 rules fail here.
 4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
-   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3. SDKs
+   should apply the same UTF-8 byte bound and character exclusions before
+   signing; node-side decoding remains authoritative.
 5. **Optional confusable policy.** UTS‑39 script checks are tracked for
    Norm v2; operators can enable them early, but failing the check must abort
    processing.

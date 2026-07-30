@@ -2548,7 +2548,10 @@ fn qualify_provider_ingest_dependencies(
             Ok(qualification)
         };
         let expected_qualification = observe()?;
-        let chain_id = iroha_data_model::ChainId::from(bindings.chain_id().to_owned());
+        let chain_id = bindings
+            .chain_id()
+            .parse::<iroha_data_model::ChainId>()
+            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
         if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
             match error {
             iroha_core::query::provider_ingest_finalized::
@@ -2617,7 +2620,10 @@ fn qualify_reputation_retention_dependency(
         Ok(qualification)
     };
     let expected_qualification = observe()?;
-    let chain_id = iroha_data_model::ChainId::from(bindings.chain_id().to_owned());
+    let chain_id = bindings
+        .chain_id()
+        .parse::<iroha_data_model::ChainId>()
+        .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
     if let Some(record) = authority.load_latest(&chain_id).map_err(|error| {
         match error {
         iroha_core::query::reputation_finalized::

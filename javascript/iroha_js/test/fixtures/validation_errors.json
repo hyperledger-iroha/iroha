@@ -129,21 +129,6 @@
     "path": "waitForIsoMessageStatus.options.retryProfile",
     "message": "waitForIsoMessageStatus.options.retryProfile must not be empty"
   },
-  "governanceDeriveCouncilVrf_candidates_array": {
-    "code": "ERR_INVALID_OBJECT",
-    "path": "governanceDeriveCouncilVrf.payload.candidates",
-    "message": "governanceDeriveCouncilVrf payload.candidates must be a non-empty array"
-  },
-  "governanceDeriveCouncilVrf_candidate_pk": {
-    "code": "ERR_INVALID_STRING",
-    "path": "governanceDeriveCouncilVrf.payload.candidates[0].pk",
-    "message": "governanceDeriveCouncilVrf payload.candidates[0].pk is required"
-  },
-  "governanceDeriveCouncilVrf_variant_value": {
-    "code": "ERR_INVALID_STRING",
-    "path": "governanceDeriveCouncilVrf.payload.candidates[0].variant",
-    "message": "governanceDeriveCouncilVrf payload.candidates[0].variant must be \"Normal\" or \"Small\""
-  },
   "governanceFinalizeReferendum_referendum_required": {
     "code": "ERR_INVALID_STRING",
     "path": "governanceFinalizeReferendum.referendum_id",

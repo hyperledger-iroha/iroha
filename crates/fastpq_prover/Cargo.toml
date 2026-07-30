@@ -12,11 +12,11 @@ fastpq-gpu = ["dep:block", "dep:metal"]
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 fastpq_isi = { path = "../fastpq_isi" }
-iroha_crypto = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 iroha_primitives = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
-norito = { workspace = true, features = ["json"] }
+norito = { workspace = true, features = ["base-codec"], default-features = false }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 tracing = { workspace = true }

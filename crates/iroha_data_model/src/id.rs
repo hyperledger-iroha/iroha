@@ -1,26 +1,86 @@
+use std::borrow::Borrow;
+
 use derive_more::Display;
 use iroha_data_model_derive::{EnumRef, model};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
+use norito::core::{DecodeFromSlice, Error as NoritoError};
 
 pub use self::model::*;
+use crate::error::ParseError;
 use crate::{
     account, asset, domain, nexus, nft, parameter, peer, permission, repo, role, rwa, trigger,
 };
+
+/// Maximum byte length of a canonical [`ChainId`].
+///
+/// Chain identifiers are ASCII, so this is also the maximum character count.
+/// The bound keeps every signed, configured, and peer-advertised chain identity
+/// small before any allocation is performed.
+pub const MAX_CHAIN_ID_BYTES: usize = 128;
 
 #[model]
 mod model {
     use super::*;
 
-    /// Unique id of blockchain
-    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+    /// Canonical, deployment-selected identifier of a blockchain.
+    ///
+    /// The value is exact, case-sensitive ASCII. It starts and ends with an
+    /// alphanumeric byte and may otherwise contain ASCII alphanumerics plus
+    /// `.`, `_`, `:`, or `-`.
+    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(feature = "json", norito(transparent))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
     pub struct ChainId(Box<str>);
 
     impl ChainId {
+        fn parse(value: &str) -> Result<Self, ParseError> {
+            if value.is_empty() {
+                return Err(ParseError::new("`ChainId` must not be empty"));
+            }
+            if value.len() > MAX_CHAIN_ID_BYTES {
+                return Err(ParseError::new(
+                    "`ChainId` exceeds the 128-byte ASCII limit",
+                ));
+            }
+            let bytes = value.as_bytes();
+            if !bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+                || !bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+                || bytes.iter().any(|byte| {
+                    !byte.is_ascii_alphanumeric() && !matches!(byte, b'.' | b'_' | b':' | b'-')
+                })
+            {
+                return Err(ParseError::new(
+                    "`ChainId` must be exact ASCII text beginning and ending with an \
+                     alphanumeric byte and containing only alphanumerics, `.`, `_`, `:`, or `-`",
+                ));
+            }
+            Ok(Self(value.into()))
+        }
+
+        pub(super) fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
+            let (len, header_len) = norito::core::inspect_len_from_slice(bytes)?;
+            if len > MAX_CHAIN_ID_BYTES {
+                return Err(NoritoError::Message(
+                    "`ChainId` exceeds the 128-byte ASCII limit".into(),
+                ));
+            }
+            let end = header_len
+                .checked_add(len)
+                .ok_or(NoritoError::LengthMismatch)?;
+            let raw = bytes
+                .get(header_len..end)
+                .ok_or(NoritoError::LengthMismatch)?;
+            let value = core::str::from_utf8(raw).map_err(|_| NoritoError::InvalidUtf8)?;
+            norito::core::reserve_decode_allocation(len)?;
+            let chain =
+                Self::parse(value).map_err(|error| NoritoError::Message(error.reason.into()))?;
+            norito::core::note_payload_access(bytes, end);
+            Ok((chain, end))
+        }
+
         /// Access inner string (owned).
         pub fn into_inner(self) -> Box<str> {
             self.0
@@ -31,20 +91,45 @@ mod model {
         }
     }
 
-    impl<T> From<T> for ChainId
-    where
-        T: Into<Box<str>>,
-    {
-        fn from(value: T) -> Self {
-            ChainId(value.into())
+    impl From<&'static str> for ChainId {
+        fn from(value: &'static str) -> Self {
+            Self::parse(value).expect("static chain id must be canonical")
         }
     }
 
     impl core::str::FromStr for ChainId {
-        type Err = core::convert::Infallible;
+        type Err = ParseError;
 
         fn from_str(value: &str) -> Result<Self, Self::Err> {
-            Ok(value.into())
+            Self::parse(value)
+        }
+    }
+
+    impl TryFrom<String> for ChainId {
+        type Error = ParseError;
+
+        fn try_from(value: String) -> Result<Self, Self::Error> {
+            Self::parse(&value)
+        }
+    }
+
+    impl TryFrom<Box<str>> for ChainId {
+        type Error = ParseError;
+
+        fn try_from(value: Box<str>) -> Result<Self, Self::Error> {
+            Self::parse(&value)
+        }
+    }
+
+    impl AsRef<str> for ChainId {
+        fn as_ref(&self) -> &str {
+            self.as_str()
+        }
+    }
+
+    impl Borrow<str> for ChainId {
+        fn borrow(&self) -> &str {
+            self.as_str()
         }
     }
 
@@ -61,7 +146,7 @@ mod model {
             parser: &mut norito::json::Parser<'_>,
         ) -> Result<Self, norito::json::Error> {
             let value = parser.parse_string()?;
-            Ok(value.into())
+            Self::parse(&value).map_err(|error| norito::json::Error::Message(error.reason.into()))
         }
     }
 
@@ -109,6 +194,47 @@ mod model {
         CustomParameterId(parameter::CustomParameterId),
         /// [`RepoAgreementId`](`repo::RepoAgreementId`) variant.
         RepoAgreementId(repo::RepoAgreementId),
+    }
+}
+
+impl norito::core::NoritoSerialize for ChainId {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        <&str as norito::core::NoritoSerialize>::serialize(&self.as_str(), writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        <&str as norito::core::NoritoSerialize>::encoded_len_hint(&self.as_str())
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        <&str as norito::core::NoritoSerialize>::encoded_len_exact(&self.as_str())
+    }
+}
+
+impl<'a> norito::core::NoritoDeserialize<'a> for ChainId {
+    fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived)
+            .expect("ChainId deserialization must succeed for valid archives")
+    }
+
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
+            return ChainId::decode_wire(payload).map(|(chain, _)| chain);
+        }
+
+        let string = norito::core::NoritoDeserialize::deserialize(archived.cast::<String>());
+        string
+            .parse()
+            .map_err(|error: ParseError| norito::core::Error::Message(error.reason.into()))
+    }
+}
+
+impl<'a> DecodeFromSlice<'a> for ChainId {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), NoritoError> {
+        Self::decode_wire(bytes)
     }
 }
 
@@ -215,11 +341,105 @@ impl_encode_as_id_box! {
 
 #[cfg(test)]
 mod tests {
+    use norito::core::DecodeFromSlice as _;
+
     use super::*;
 
     #[test]
     fn chain_id_from_str() {
         let id: ChainId = "test".parse().expect("valid chain id");
         assert_eq!(id, ChainId::from("test"));
+    }
+
+    #[test]
+    fn chain_id_enforces_canonical_ascii_and_byte_limit() {
+        let boundary = format!("a{}z", "0".repeat(MAX_CHAIN_ID_BYTES - 2));
+        assert_eq!(
+            boundary
+                .parse::<ChainId>()
+                .expect("boundary chain id")
+                .as_str(),
+            boundary
+        );
+
+        for invalid in [
+            String::new(),
+            "-leading".to_owned(),
+            "trailing-".to_owned(),
+            "white space".to_owned(),
+            "control\u{0000}".to_owned(),
+            "unicode-é".to_owned(),
+            "a".repeat(MAX_CHAIN_ID_BYTES + 1),
+        ] {
+            assert!(
+                invalid.parse::<ChainId>().is_err(),
+                "invalid chain id was accepted: {invalid:?}"
+            );
+            assert!(
+                ChainId::try_from(invalid.clone()).is_err(),
+                "owned invalid chain id was accepted: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn chain_id_norito_decoders_cannot_bypass_validation() {
+        for invalid in [
+            String::new(),
+            "bidi\u{202e}".to_owned(),
+            "x".repeat(MAX_CHAIN_ID_BYTES + 1),
+        ] {
+            // `ChainId` has the same transparent wire layout as `String`.
+            // Encode the invalid representation directly so the public
+            // constructor remains the only way to create a `ChainId`.
+            let encoded = invalid.encode();
+            let mut cursor = encoded.as_slice();
+            assert!(
+                ChainId::decode(&mut cursor).is_err(),
+                "codec accepted invalid ChainId: {invalid:?}"
+            );
+            assert!(
+                ChainId::decode_from_slice(&encoded).is_err(),
+                "slice decoder accepted invalid ChainId: {invalid:?}"
+            );
+            let (payload, flags) = norito::codec::encode_with_header_flags(&invalid);
+            let framed = norito::core::frame_bare_with_header_flags::<ChainId>(&payload, flags)
+                .expect("frame invalid transparent ChainId fixture");
+            assert!(
+                norito::decode_from_bytes::<ChainId>(&framed).is_err(),
+                "framed decoder accepted invalid ChainId: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn chain_id_decoder_rejects_declared_oversize_before_body_access() {
+        let mut declared_oversize = Vec::new();
+        norito::core::write_len_to_vec(
+            &mut declared_oversize,
+            u64::try_from(MAX_CHAIN_ID_BYTES + 1).expect("chain id limit fits u64"),
+        );
+
+        let error = ChainId::decode_from_slice(&declared_oversize)
+            .expect_err("oversized declared ChainId must fail before reading the body");
+        assert!(
+            error.to_string().contains("128-byte"),
+            "decoder reached a generic truncation error before the ChainId limit: {error}"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn chain_id_json_decoder_enforces_the_same_invariant() {
+        for invalid in [
+            "\"\"".to_owned(),
+            "\"white space\"".to_owned(),
+            format!("\"{}\"", "x".repeat(MAX_CHAIN_ID_BYTES + 1)),
+        ] {
+            assert!(
+                norito::json::from_str::<ChainId>(&invalid).is_err(),
+                "JSON accepted invalid ChainId: {invalid}"
+            );
+        }
     }
 }

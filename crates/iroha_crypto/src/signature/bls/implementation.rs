@@ -92,9 +92,24 @@ impl VerifyOkCache {
 
 fn verify_ok_cache_key(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
     let mut h = Blake2b::<U32>::new();
-    h.update(b"iroha:bls:verify_ok_cache:v1");
+    h.update(b"iroha:bls:verify_ok_cache:v2");
+    h.update(
+        u64::try_from(pk_bytes.len())
+            .expect("supported slice lengths fit u64")
+            .to_le_bytes(),
+    );
     h.update(pk_bytes);
+    h.update(
+        u64::try_from(message.len())
+            .expect("supported slice lengths fit u64")
+            .to_le_bytes(),
+    );
     h.update(message);
+    h.update(
+        u64::try_from(signature.len())
+            .expect("supported slice lengths fit u64")
+            .to_le_bytes(),
+    );
     h.update(signature);
     h.finalize().into()
 }
@@ -307,6 +322,8 @@ fn parse_canonical_bls_signature<E: EngineBLS>(
     if canonical.as_slice() != signature_bytes {
         return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
     }
+    // Arkworks accepts the encoded point at infinity before running its
+    // subgroup check, so this explicit identity rejection is load-bearing.
     let identity_sig = BlsSignature::<E>(Default::default()).to_bytes();
     if canonical == identity_sig {
         return Err(ParseError("BLS signature is identity".to_string()).into());
@@ -332,6 +349,11 @@ pub trait BlsConfiguration {
 pub struct BlsImpl<C: BlsConfiguration + ?Sized>(PhantomData<C>);
 
 impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
+    /// Return the exact canonical signature length for this BLS orientation.
+    pub const fn signature_len() -> usize {
+        C::Engine::SIGNATURE_SERIALIZED_SIZE
+    }
+
     // the names are from an RFC, not a good idea to change them
     #[allow(clippy::similar_names)]
     pub fn keypair(
@@ -420,16 +442,18 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     {
         ensure_bls_signature_material_not_all_zero(signature_bytes)?;
         let pk_bytes = pk.to_bytes();
-        let cache_key = verify_ok_cache_key(&pk_bytes, message, signature_bytes);
-        if C::with_verify_ok_cache(|cache| cache.contains(&cache_key)) {
-            return Ok(());
-        }
         let identity_pk = PublicKey::<C::Engine>(Default::default());
         if pk_bytes == identity_pk.to_bytes() {
             return Err(ParseError("BLS public key is identity".to_string()).into());
         }
-
+        // Parse before consulting the positive cache. Besides pinning canonical
+        // subgroup-checked material, this prevents malformed signatures from
+        // borrowing a cached verdict through variable-length tuple splicing.
         let signature = parse_canonical_bls_signature::<C::Engine>(signature_bytes)?;
+        let cache_key = verify_ok_cache_key(&pk_bytes, message, signature_bytes);
+        if C::with_verify_ok_cache(|cache| cache.contains(&cache_key)) {
+            return Ok(());
+        }
 
         let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         let prepared_pk = C::with_cache(|cache| cache.get_or_insert(pk, &pk_bytes));
@@ -454,7 +478,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     /// same message. When the optimized multi-pairing backend is unavailable this falls back to
     /// w3f's POP-aware aggregator, so callers still pay only a single pairing check.
     /// Rejects aggregates whose combined signature or public key is the identity element.
-    pub fn verify_aggregate_same_message(
+    pub(crate) fn verify_aggregate_same_message(
         message: &[u8],
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
@@ -542,7 +566,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     /// Verify a pre-aggregated signature for the case where all signers signed the
     /// same message. Public keys are aggregated inside this function and a single pairing
     /// check is performed.
-    pub fn verify_preaggregated_same_message(
+    pub(crate) fn verify_preaggregated_same_message(
         message: &[u8],
         aggregated_signature: &[u8],
         public_keys: &[&[u8]],
@@ -593,6 +617,8 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
                 "non-canonical BLS public key encoding".to_string(),
             ));
         }
+        // Arkworks accepts the encoded point at infinity before running its
+        // subgroup check, so this explicit identity rejection is load-bearing.
         let identity = PublicKey::<C::Engine>(Default::default());
         if canonical == identity.to_bytes() {
             return Err(ParseError("BLS public key is identity".to_string()));
@@ -610,9 +636,11 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     }
 }
 
-impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
-    /// Aggregate verification across distinct messages using the w3f verifier so hashing and
-    /// domain separation match signatures produced by this backend.
+impl<C: BlsConfiguration + PreparedPublicKeyCacheAccess + ?Sized> BlsImpl<C> {
+    /// Verify each signature against its paired distinct message and public key.
+    ///
+    /// A sum-only aggregate verdict is insufficient for a slice API because it
+    /// does not prove that each supplied signature is valid on its own.
     pub fn verify_aggregate_multi_message(
         messages: &[&[u8]],
         signatures: &[&[u8]],
@@ -625,65 +653,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         ensure_distinct_messages(messages)?;
 
-        let parse_signature = |bytes: &[u8]| -> Result<BlsSignature<C::Engine>, Error> {
-            parse_canonical_bls_signature::<C::Engine>(bytes)
-        };
-        let identity_sig = BlsSignature::<C::Engine>(Default::default()).to_bytes();
-        let mut aggregated_group = <C::Engine as EngineBLS>::SignatureGroup::default();
-        let mut decoded_messages = Vec::with_capacity(messages.len());
-        let mut decoded_public_keys = Vec::with_capacity(messages.len());
-
         for ((message, signature_bytes), public_key_bytes) in messages
             .iter()
             .zip(signatures.iter())
             .zip(public_keys.iter())
         {
-            let signature = parse_signature(signature_bytes)?;
-            aggregated_group += signature.0;
-
             let public_key = Self::parse_public_key(public_key_bytes)?;
-            decoded_public_keys.push(public_key);
-            decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
+            Self::verify(message, signature_bytes, &public_key)?;
         }
-
-        let aggregated_signature = BlsSignature(aggregated_group);
-        if aggregated_signature.to_bytes() == identity_sig {
-            return Err(Error::BadSignature);
-        }
-
-        let batch = MultiMessageBatch {
-            signature: aggregated_signature,
-            messages: decoded_messages,
-            public_keys: decoded_public_keys,
-        };
-
-        if w3f_bls::verifiers::verify_with_distinct_messages(&batch, false) {
-            Ok(())
-        } else {
-            Err(Error::BadSignature)
-        }
-    }
-}
-
-struct MultiMessageBatch<E: EngineBLS> {
-    signature: BlsSignature<E>,
-    messages: Vec<w3f_bls::Message>,
-    public_keys: Vec<PublicKey<E>>,
-}
-
-impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
-    type E = E;
-    type M = &'a w3f_bls::Message;
-    type PKG = &'a PublicKey<E>;
-    type PKnM =
-        std::iter::Zip<std::slice::Iter<'a, w3f_bls::Message>, std::slice::Iter<'a, PublicKey<E>>>;
-
-    fn signature(&self) -> BlsSignature<E> {
-        BlsSignature(self.signature.0)
-    }
-
-    fn messages_and_publickeys(self) -> Self::PKnM {
-        self.messages.iter().zip(self.public_keys.iter())
+        Ok(())
     }
 }
 

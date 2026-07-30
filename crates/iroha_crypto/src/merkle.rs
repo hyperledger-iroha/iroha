@@ -153,15 +153,35 @@ impl<T> norito::core::NoritoSerialize for MerkleProof<T> {
 
 impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleProof<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        #[allow(unsafe_code)]
-        let (leaf_index, audit_path) = norito::core::NoritoDeserialize::deserialize(unsafe {
-            &*core::ptr::from_ref(archived)
-                .cast::<norito::core::Archived<(u32, Vec<Option<HashOf<T>>>)>>()
-        });
-        MerkleProof {
-            leaf_index,
-            audit_path,
+        Self::try_deserialize(archived).expect("MerkleProof decode")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
+        let payload =
+            norito::core::payload_slice_from_ptr(core::ptr::from_ref(archived).cast::<u8>())?;
+        let (proof, used) = <Self as norito::core::DecodeFromSlice>::decode_from_slice(payload)?;
+        if used != payload.len() {
+            return Err(norito::core::Error::LengthMismatch);
         }
+        Ok(proof)
+    }
+}
+
+impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleProof<T> {
+    fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let ((leaf_index, audit_path), used) =
+            <(u32, Vec<Option<HashOf<T>>>) as norito::core::DecodeFromSlice>::decode_from_slice(
+                bytes,
+            )?;
+        Ok((
+            Self {
+                leaf_index,
+                audit_path,
+            },
+            used,
+        ))
     }
 }
 
@@ -1567,6 +1587,46 @@ mod tests {
         let archived = norito::from_bytes::<MerkleProof<()>>(&bytes).expect("failed to decode");
         let decoded = norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(proof, decoded);
+    }
+
+    #[test]
+    fn merkle_proof_try_deserialize_rejects_malformed_archive_without_panicking() {
+        struct MalformedMerkleProof;
+
+        impl norito::core::NoritoSerialize for MalformedMerkleProof {
+            fn schema_hash() -> [u8; 16] {
+                <MerkleProof<()> as norito::core::NoritoSerialize>::schema_hash()
+            }
+
+            fn serialize<W: std::io::Write>(
+                &self,
+                mut writer: W,
+            ) -> Result<(), norito::core::Error> {
+                let minimum =
+                    core::mem::size_of::<norito::core::Archived<MerkleProof<()>>>().max(16);
+                let mut payload = vec![0_u8; minimum];
+                payload[..8].copy_from_slice(&u64::MAX.to_le_bytes());
+                writer.write_all(&payload)?;
+                Ok(())
+            }
+        }
+
+        let bytes = norito::to_bytes(&MalformedMerkleProof).expect("encode malformed fixture");
+        let archived =
+            norito::from_bytes::<MerkleProof<()>>(&bytes).expect("validate outer archive");
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            <MerkleProof<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+        }));
+
+        let error = outcome
+            .expect("fallible Merkle proof decoding must not unwind")
+            .expect_err("malformed Merkle proof must be rejected");
+        assert!(matches!(
+            error,
+            norito::core::Error::LengthMismatch
+                | norito::core::Error::SequenceLengthExceeded { .. }
+                | norito::core::Error::AllocationFailed { .. }
+        ));
     }
 
     #[cfg(feature = "rayon")]

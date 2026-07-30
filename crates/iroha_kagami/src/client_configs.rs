@@ -43,12 +43,12 @@ pub struct Args {
     /// Account scope for generated client configs (`dataspace` or `domain.dataspace`).
     #[arg(long, default_value = "acme.universal", value_name = "SCOPE")]
     domain: String,
-    /// Seed prefix for deterministic key generation (`<prefix>-<name>`).
-    #[arg(long, conflicts_with = "fresh_random_keys", value_name = "SEED")]
-    seed_prefix: Option<String>,
-    /// Generate an independent OS-random key for every requested client.
-    #[arg(long, conflicts_with = "seed_prefix")]
-    fresh_random_keys: bool,
+    /// A 32-byte secret master seed encoded as 64 hexadecimal characters.
+    ///
+    /// Per-client keys are derived with an explicit domain and client name.
+    /// Omit this option for independent operating-system-random keys.
+    #[arg(long, value_name = "HEX")]
+    seed_hex: Option<String>,
     /// Comma-separated list of client names.
     #[arg(long, value_delimiter = ',', required = true, value_name = "NAME")]
     names: Vec<String>,
@@ -59,13 +59,15 @@ impl<T: Write> RunArgs<T> for Args {
         let base = load_base_config(&self.base_config)?;
         let out_dir = resolve_out_dir(&self.base_config, self.out_dir)?;
         let names = normalize_names(self.names)?;
-        if self.fresh_random_keys {
-            crate::secure_fs::prepare_empty_private_directory(&out_dir)
-                .wrap_err("prepare fresh client-config private output directory")?;
-        } else {
-            fs::create_dir_all(&out_dir)
-                .wrap_err_with(|| format!("failed to create {}", out_dir.display()))?;
-        }
+        let master_seed = self
+            .seed_hex
+            .map(|seed_hex| {
+                let seed_hex = Zeroizing::new(seed_hex);
+                crate::crypto::parse_keygen_seed_hex(seed_hex.as_str()).map(Zeroizing::new)
+            })
+            .transpose()?;
+        crate::secure_fs::prepare_empty_private_directory(&out_dir)
+            .wrap_err("prepare client-config private output directory")?;
 
         tui::status(format!(
             "Generating {} client configs in {}",
@@ -74,30 +76,40 @@ impl<T: Write> RunArgs<T> for Args {
         ));
 
         for name in names {
-            let key_pair = if self.fresh_random_keys {
+            let key_pair = if let Some(master_seed) = master_seed.as_ref() {
+                derive_client_key_pair(master_seed.as_slice(), &name)?
+            } else {
                 KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
                     .wrap_err("failed to generate an OS-random client key pair")?
-            } else {
-                let prefix = self.seed_prefix.as_deref().unwrap_or("demo");
-                let seed = Zeroizing::new(format!("{prefix}-{name}"));
-                KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
-                    .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))?
             };
             let rendered = render_client_config(&base, &self.domain, &key_pair);
             let path = out_dir.join(format!("{name}.toml"));
-            if self.fresh_random_keys {
-                crate::secure_fs::write_private_file_atomic(&path, rendered.as_bytes())
-                    .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-            } else {
-                fs::write(&path, rendered.as_bytes())
-                    .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-            }
+            crate::secure_fs::write_private_file_atomic(&path, rendered.as_bytes())
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
             writeln!(writer, "wrote {}", path.display())?;
         }
 
         tui::success("Client configs ready");
         Ok(())
     }
+}
+
+fn derive_client_key_pair(master_seed: &[u8], name: &str) -> Result<KeyPair> {
+    if master_seed.len() != 32 {
+        return Err(eyre!("client-config master seed must be exactly 32 bytes"));
+    }
+    let name_len =
+        u64::try_from(name.len()).map_err(|_| eyre!("client name length exceeds u64"))?;
+    const DOMAIN: &[u8] = b"iroha:kagami:client-config:v1";
+    let mut seed_material = Zeroizing::new(Vec::with_capacity(
+        DOMAIN.len() + master_seed.len() + core::mem::size_of::<u64>() + name.len(),
+    ));
+    seed_material.extend_from_slice(DOMAIN);
+    seed_material.extend_from_slice(master_seed);
+    seed_material.extend_from_slice(&name_len.to_le_bytes());
+    seed_material.extend_from_slice(name.as_bytes());
+    KeyPair::try_from_seed(std::mem::take(&mut *seed_material), Algorithm::Ed25519)
+        .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))
 }
 
 fn load_base_config(path: &Path) -> Result<BaseConfig> {
@@ -270,6 +282,21 @@ web_login = "demo"
     }
 
     #[test]
+    fn deterministic_client_derivation_requires_secret_master_and_separates_names() {
+        let master = [0xA5; 32];
+        let alice = derive_client_key_pair(&master, "alice").expect("derive Alice");
+        let alice_again = derive_client_key_pair(&master, "alice").expect("derive Alice again");
+        let bob = derive_client_key_pair(&master, "bob").expect("derive Bob");
+
+        assert_eq!(alice.public_key(), alice_again.public_key());
+        assert_ne!(alice.public_key(), bob.public_key());
+        assert!(
+            derive_client_key_pair(b"human password", "alice").is_err(),
+            "low-entropy, wrong-length master material must be rejected"
+        );
+    }
+
+    #[test]
     fn render_client_config_contains_expected_fields() {
         let base = BaseConfig {
             chain: "demo-chain".to_owned(),
@@ -383,8 +410,7 @@ web_login = "demo"
             base_config: base_path.clone(),
             out_dir: Some(out_dir.clone()),
             domain: "acme.universal".to_owned(),
-            seed_prefix: Some("demo".to_owned()),
-            fresh_random_keys: false,
+            seed_hex: Some("11".repeat(32)),
             names: vec!["admin1".to_owned()],
         };
 
@@ -397,7 +423,7 @@ web_login = "demo"
 
     #[cfg(unix)]
     #[test]
-    fn fresh_run_uses_distinct_keys_and_owner_only_atomic_outputs() {
+    fn random_default_uses_distinct_keys_and_owner_only_atomic_outputs() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let temp = tempfile::tempdir().expect("temp dir");
@@ -408,8 +434,7 @@ web_login = "demo"
             base_config: base_path,
             out_dir: Some(out_dir.clone()),
             domain: "cbuae".to_owned(),
-            seed_prefix: None,
-            fresh_random_keys: true,
+            seed_hex: None,
             names: vec!["sender".to_owned(), "sponsor".to_owned()],
         };
         let mut writer = BufWriter::new(Vec::new());

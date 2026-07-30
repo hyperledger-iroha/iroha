@@ -246,8 +246,8 @@ def test_manifest_rejects_missing_duplicate_and_stale_packages(
     assert "absent from workspace" in message
 
 
-def test_cargo_commands_are_locked_and_package_scoped() -> None:
-    """Every routed build, lint, test, and documentation command is locked."""
+def test_cargo_commands_are_locked_package_scoped_and_feature_complete() -> None:
+    """Routed lint and docs retain feature coverage without widening package scope."""
 
     commands = rust_ci.commands_for_checks(
         ("base", "node"), ("clippy", "build", "test", "doc")
@@ -259,8 +259,11 @@ def test_cargo_commands_are_locked_and_package_scoped() -> None:
         assert "--workspace" not in command
         assert command.count("-p") == 2
     assert commands[0][-3:] == ["--", "-D", "warnings"]
+    assert "--all-targets" in commands[0]
+    assert "--all-features" in commands[0]
     assert "--no-fail-fast" in commands[2]
     assert "--no-deps" in commands[3]
+    assert "--all-features" in commands[3]
 
 
 def test_cargo_command_rejects_untrusted_package_text() -> None:

@@ -17,13 +17,13 @@ path = "src/bin/kagami_mock.rs"
 color-eyre = { workspace = true }
 eyre = { workspace = true }
 axum = { workspace = true, features = ["http1", "macros", "tokio", "ws"] }
-iroha_crypto = { workspace = true, features = ["std"] }
-iroha_data_model = { workspace = true, features = ["json"] }
+iroha_crypto = { workspace = true, features = ["consensus"], default-features = false }
+iroha_data_model = { workspace = true, features = ["application-model"], default-features = false }
 iroha_telemetry = { workspace = true }
 iroha_torii_shared = { workspace = true }
 mochi-core = { path = "../mochi-core" }
 parking_lot = { workspace = true }
-norito = { workspace = true, features = ["json", "json-std-io"] }
+norito = { workspace = true, features = ["node-codec"], default-features = false }
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]

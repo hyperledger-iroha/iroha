@@ -490,7 +490,8 @@ mod tests {
         let mut permissions = Permissions::new();
         permissions.insert(Permission::new(
             MANIFEST_PERMISSION.parse().expect("permission ident"),
-            iroha_primitives::json::Json::from_string_unchecked("null".to_string()),
+            iroha_primitives::json::Json::from_raw_json("null".to_string())
+                .expect("valid null JSON fixture"),
         ));
 
         assert!(!permissions_allow_manifest(

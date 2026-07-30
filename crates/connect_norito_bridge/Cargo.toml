@@ -28,23 +28,23 @@ privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]
 kagemusha-candidate-evidence-lab = ["iroha_core/kagemusha-candidate-evidence-lab"]
 
 [dependencies]
-norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }
+norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec", "std"] }
 # Keep the bridge feature closure explicit so it does not silently inherit a
 # daemon consensus mode. Core currently requires BLS and unconditionally uses
 # its JSON/FAST-DSL surfaces; the production bridge additionally needs the
 # complete Halo2/IPA circuit-parameter and STARK/FRI verifier paths.
-iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "zk-stark", "circuit-params"] }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["node"] }
 iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["std", "bls", "gost", "sm"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost", "sm"] }
 # The bridge ships the exact-12 KAT generator/validator, but must not expose the
 # data model's general fixture constructors or block-tampering helpers.
-iroha_data_model = { workspace = true, features = ["sm", "privacy-exact12-conformance"] }
+iroha_data_model = { workspace = true, features = ["application-model", "sm", "privacy-exact12-conformance"], default-features = false }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_version = { workspace = true }
-ivm = { workspace = true }
+ivm = { workspace = true, default-features = false, features = ["runtime"] }
 libc = "0.2.177"
 blake3.workspace = true
 base64 = { workspace = true }
@@ -62,7 +62,7 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 tempfile = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { path = "../iroha_core", default-features = false, features = ["iroha-core-tests", "json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "zk-stark", "circuit-params"] }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["node", "iroha-core-tests"] }
 sorafs_chunker = { workspace = true }
 
 [build-dependencies]

@@ -9194,14 +9194,11 @@ mod tests {
             outbox.claim_completion_signing(job_id, wrong_chain, 102),
             Err(ProviderIngestOutboxError::InvalidSigningContext)
         );
-        let mut oversized_chain = valid.clone();
-        oversized_chain.chain_id = ChainId::from(
-            "x".repeat(provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1 + 1),
-        );
-        oversized_chain.expected_payload.chain = oversized_chain.chain_id.clone();
-        assert_eq!(
-            outbox.claim_completion_signing(job_id, oversized_chain, 102),
-            Err(ProviderIngestOutboxError::InvalidSigningContext)
+        assert!(
+            "x".repeat(provider_ingest_outbox_defaults::COMPLETION_CHAIN_ID_MAX_BYTES_V1 + 1)
+                .parse::<ChainId>()
+                .is_err(),
+            "oversized chain id must fail before reaching the signing context"
         );
         let mut wrong_owner = valid.clone();
         wrong_owner.provider_owner = completed_by(0x77);

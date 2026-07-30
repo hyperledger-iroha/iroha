@@ -34,7 +34,9 @@ All of the above share the same validation and consensus pipeline once they beco
 
 1) Admission (Torii)
 - Client submits a signed transaction to `iroha_torii`.
-- Torii performs basic checks: format/encoding (Norito decode), presence of signatures, chain ID and TTL range, and request size limits.
+- Torii performs basic checks: format/encoding (Norito decode), presence of
+  signatures, canonical chain ID, mandatory positive TTL, and request size
+  limits. Safe builders assign a 100-second TTL when callers omit a choice.
 - If admission checks pass, the tx is forwarded to Core and enqueued in the local mempool (pending set). Torii returns an acknowledgement (not a finality signal).
 
 2) Gossip (P2P)
@@ -80,13 +82,22 @@ All of the above share the same validation and consensus pipeline once they beco
 - Update telemetry metrics, logs, and any plug‑in indexers.
 - Clear included transactions from mempool; decrement TTL on remaining transactions and purge expired ones.
 - If the block contains an executor upgrade, the new IVM bytecode becomes active at the defined point (typically next block), and the node updates the executor cache (`IvmCache`).
+- Executor migration is guest-defined: every production upgrade runs the admitted
+  IVM program and accepts only its canonical Norito migration result. Header
+  fields, vector length, bytecode size, and other artifact shape do not select
+  host-side migration or permission behavior. Synthetic executor emulation is
+  available only in builds that explicitly enable the non-default
+  `iroha-core-tests` feature.
 
 ## Validation Details
 
 Stateless validation (performed by any peer before including or voting on a tx):
 - Norito decode and schema checks of transaction, instructions, and metadata.
 - Signatures present and valid for the authority.
-- Chain ID matches, TTL is within limits, no overflow in counts/lengths.
+- Chain ID matches exactly. TTL must be present in the signature-bound payload,
+  must not be expired, and must not exceed the current governed
+  `transaction.max_time_to_live_ms` value (one day by default). Counts and
+  lengths must not overflow.
 - Instruction existence in the instruction registry and parameter wire IDs are valid.
 
 Stateful validation (performed in a transient `StateBlock` view):

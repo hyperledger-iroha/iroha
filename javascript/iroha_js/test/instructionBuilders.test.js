@@ -2939,36 +2939,21 @@ test("buildFinalizeReferendumInstruction encodes proposal id", () => {
   assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
-test("buildPersistCouncilForEpochInstruction validates members and derivation", () => {
+test("buildPersistCouncilForEpochInstruction validates members", () => {
   const instruction = buildPersistCouncilForEpochInstruction({
     epoch: 10,
     members: [ACCOUNT_ID],
-    candidatesCount: 5,
-    derivedBy: "Vrf",
   });
   const expected = {
     PersistCouncilForEpoch: {
       epoch: 10,
       members: [ACCOUNT_ID_CANONICAL],
       alternates: [],
-      verified: 0,
-      candidates_count: 5,
-      derived_by: "Vrf",
     },
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
-  assert.throws(
-    () =>
-      buildPersistCouncilForEpochInstruction({
-        epoch: 10,
-        members: [ACCOUNT_ID],
-        candidatesCount: 5,
-        derivedBy: "Manual",
-      }),
-    /derivedBy must be Vrf/,
-  );
 });
 
 test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload", () => {

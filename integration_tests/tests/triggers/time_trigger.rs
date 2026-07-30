@@ -420,7 +420,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                 let sample_isi = SetKeyValue::account(
                     account_id.clone(),
                     "key".parse::<Name>()?,
-                    "value".parse::<Json>()?,
+                    Json::from("value"),
                 );
                 // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
                 let submit_client = leader_client_for_submit(network, &test_client).await;

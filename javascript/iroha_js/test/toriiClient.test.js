@@ -7558,29 +7558,10 @@ test("governance helpers validate options", async () => {
     proposal_id: "ab".repeat(32),
   };
   const enactPayload = { proposal_id: "cd".repeat(32) };
-  const councilPayload = {
-    committee_size: 1,
-    candidates: [
-      {
-        account_id: SAMPLE_ACCOUNT_FORMS.i105,
-        variant: "Normal",
-        pk_b64: Buffer.from("pk").toString("base64"),
-        proof_b64: Buffer.from("proof").toString("base64"),
-      },
-    ],
-  };
 
   await assert.rejects(
     () => client.getGovernanceCouncilCurrent("invalid"),
     /getGovernanceCouncilCurrent options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit("invalid"),
-    /getGovernanceCouncilAudit options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit({ epoch: 1, extra: true }),
-    /getGovernanceCouncilAudit options contains unsupported fields: extra/,
   );
   await assert.rejects(
     () => client.governanceFinalizeReferendum(finalizePayload, { signal: "nope" }),
@@ -7614,16 +7595,6 @@ test("governance helpers validate options", async () => {
       () => client.getGovernanceTally("ref-1", "invalid"),
       /getGovernanceTally options must be an object/,
     ],
-    [
-      "governanceDeriveCouncilVrf",
-      () => client.governanceDeriveCouncilVrf(councilPayload, "invalid"),
-      /governanceDeriveCouncilVrf options must be an object/,
-    ],
-    [
-      "governancePersistCouncil",
-      () => client.governancePersistCouncil(councilPayload, "invalid"),
-      /governancePersistCouncil options must be an object/,
-    ],
   ];
   for (const [_label, invoke, error] of optionTypeCases) {
     // eslint-disable-next-line no-await-in-loop
@@ -7645,16 +7616,6 @@ test("governance helpers validate options", async () => {
       () => client.getGovernanceTally("ref-1", { signal: "nope" }),
       /getGovernanceTally options.signal must be an AbortSignal/,
     ],
-    [
-      "governanceDeriveCouncilVrf",
-      () => client.governanceDeriveCouncilVrf(councilPayload, { signal: "nope" }),
-      /governanceDeriveCouncilVrf options.signal must be an AbortSignal/,
-    ],
-    [
-      "governancePersistCouncil",
-      () => client.governancePersistCouncil(councilPayload, { signal: "nope" }),
-      /governancePersistCouncil options.signal must be an AbortSignal/,
-    ],
   ];
   for (const [_label, invoke, error] of invalidSignalCases) {
     // eslint-disable-next-line no-await-in-loop
@@ -7675,16 +7636,6 @@ test("governance helpers validate options", async () => {
       "getGovernanceTally",
       () => client.getGovernanceTally("ref-1", { extra: true }),
       /getGovernanceTally options contains unsupported fields: extra/,
-    ],
-    [
-      "governanceDeriveCouncilVrf",
-      () => client.governanceDeriveCouncilVrf(councilPayload, { extra: true }),
-      /governanceDeriveCouncilVrf options contains unsupported fields: extra/,
-    ],
-    [
-      "governancePersistCouncil",
-      () => client.governancePersistCouncil(councilPayload, { extra: true }),
-      /governancePersistCouncil options contains unsupported fields: extra/,
     ],
   ];
   for (const [_label, invoke, error] of extraFieldCases) {
@@ -15612,139 +15563,6 @@ test("getGovernanceCouncilCurrent rejects non-object options", async () => {
   );
 });
 
-test("governanceDeriveCouncilVrf encodes candidate payload", async () => {
-  let captured;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      captured = JSON.parse(init.body);
-      const payload = cloneFixture(toriiFixtures.governance.councilDerive);
-      if (Array.isArray(payload.members) && payload.members.length > 0) {
-        payload.members[0].account_id = FIXTURE_VALIDATOR_TEST_ID;
-      }
-      return createResponse({
-        status: 200,
-        jsonData: payload,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const payload = await client.governanceDeriveCouncilVrf({
-    committeeSize: "3",
-    epoch: "9",
-    candidates: [
-      {
-        accountId: FIXTURE_VALIDATOR_TEST_ID,
-        variant: "small",
-        pk_b64: Buffer.alloc(48, 0xaa),
-        proof_b64: Buffer.alloc(96, 0xbb),
-      },
-    ],
-  });
-  assert.equal(captured.committee_size, 3);
-  assert.equal(captured.epoch, 9);
-  assert.equal(captured.candidates.length, 1);
-  assert.equal(captured.candidates[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
-  assert.equal(captured.candidates[0].variant, "Small");
-  assert.match(captured.candidates[0].pk_b64, /^[A-Za-z0-9+/]+=*$/);
-  assert.match(captured.candidates[0].proof_b64, /^[A-Za-z0-9+/]+=*$/);
-  assert.equal(payload.members[0].account_id, FIXTURE_VALIDATOR_TEST_ID);
-  assert.equal(payload.total_candidates, 1);
-  assert.equal(payload.verified, 1);
-  assert.equal(payload.derived_by, "Vrf");
-});
-
-test("governancePersistCouncil forwards credentials and validates pairing", async () => {
-  let captured;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (_url, init) => {
-      captured = JSON.parse(init.body);
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.councilPersist),
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const response = await client.governancePersistCouncil({
-    committeeSize: 1,
-    candidates: [
-      {
-        accountId: FIXTURE_VALIDATOR_TEST_ID,
-        variant: "Normal",
-        pk_b64: Buffer.alloc(48).toString("base64"),
-        proof_b64: Buffer.alloc(96).toString("base64"),
-      },
-    ],
-    authority: FIXTURE_COUNCIL_TEST_ID,
-    privateKey: "ed25519:deadbeef",
-  });
-  assert.equal(captured.authority, FIXTURE_COUNCIL_TEST_ID);
-  assert.equal(captured.private_key, "ed25519:deadbeef");
-  assert.equal(response.derived_by, "Vrf");
-  await assert.rejects(
-    () =>
-      client.governancePersistCouncil({
-        committeeSize: 1,
-        candidates: [
-          {
-            accountId: FIXTURE_VALIDATOR_TEST_ID,
-            variant: "Normal",
-            pk_b64: Buffer.alloc(48).toString("base64"),
-            proof_b64: Buffer.alloc(96).toString("base64"),
-          },
-        ],
-        authority: FIXTURE_COUNCIL_TEST_ID,
-      }),
-    /requires both authority and privateKey/,
-  );
-});
-
-test("getGovernanceCouncilAudit forwards query parameters", async () => {
-  let capturedUrl;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url) => {
-      capturedUrl = url;
-      return createResponse({
-        status: 200,
-        jsonData: cloneFixture(toriiFixtures.governance.councilAudit),
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const audit = await client.getGovernanceCouncilAudit({ epoch: 10 });
-  assert.equal(
-    capturedUrl,
-    `${BASE_URL}/v1/gov/council/audit?epoch=10`,
-  );
-  assert.equal(audit.epoch, 10);
-  assert.equal(audit.members_count, 5);
-  assert.equal(audit.candidate_count, 8);
-  assert.equal(audit.chain_id, "chain");
-});
-
-test("getGovernanceCouncilAudit validates options and signal", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit("bad"),
-    /getGovernanceCouncilAudit options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit(null),
-    /getGovernanceCouncilAudit options must be an object/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit({ signal: {} }),
-    /getGovernanceCouncilAudit options\.signal must be an AbortSignal/,
-  );
-  await assert.rejects(
-    () => client.getGovernanceCouncilAudit({ epoch: 1, extra: true }),
-    /getGovernanceCouncilAudit options contains unsupported fields: extra/,
-  );
-});
-
 test("governanceFinalizeReferendum validates required fields", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 204 }),
@@ -15889,44 +15707,6 @@ test("governance helpers surface structured hex validation", async () => {
       return true;
     });
   }
-});
-
-test("governance council candidate validation emits structured errors", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: () => {
-      throw new Error("governanceDeriveCouncilVrf should not perform network requests");
-    },
-  });
-  const validCandidate = {
-    account_id: SAMPLE_ACCOUNT_ID,
-    variant: "Normal",
-    pk_b64: Buffer.from("candidate-pk").toString("base64"),
-    proof_b64: Buffer.from("candidate-proof").toString("base64"),
-  };
-  await assert.rejects(
-    () =>
-      client.governanceDeriveCouncilVrf({
-        committeeSize: 1,
-        candidates: null,
-      }),
-    (error) => expectValidationErrorFixture(error, "governanceDeriveCouncilVrf_candidates_array"),
-  );
-  await assert.rejects(
-    () =>
-      client.governanceDeriveCouncilVrf({
-        committeeSize: 1,
-        candidates: [{ ...validCandidate, pk_b64: undefined }],
-      }),
-    (error) => expectValidationErrorFixture(error, "governanceDeriveCouncilVrf_candidate_pk"),
-  );
-  await assert.rejects(
-    () =>
-      client.governanceDeriveCouncilVrf({
-        committeeSize: 1,
-        candidates: [{ ...validCandidate, variant: "unknown" }],
-      }),
-    (error) => expectValidationErrorFixture(error, "governanceDeriveCouncilVrf_variant_value"),
-  );
 });
 
 test("setProtectedNamespaces posts trimmed namespace list", async () => {

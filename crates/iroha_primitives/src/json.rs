@@ -16,6 +16,16 @@ use norito::{
 
 const HEX_DIGITS: &[u8; 16] = b"0123456789ABCDEF";
 
+/// Maximum UTF-8 byte length of one [`Json`] document.
+///
+/// This fixed V1 protocol bound matches the ledger's default metadata-value
+/// ceiling and applies before a value can enter the data model, independently
+/// of any lower context-specific limit.
+pub const MAX_JSON_BYTES: usize = 1_048_576;
+
+/// Maximum structural nesting depth of one [`Json`] document.
+pub const MAX_JSON_NESTING_DEPTH: usize = json::MAX_JSON_VALUE_NESTING_DEPTH;
+
 /// A wrapper around immutable, reference-counted text that is guaranteed to
 /// contain a valid JSON document.
 ///
@@ -110,17 +120,73 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Json {
     fn try_deserialize(
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        if let Ok(payload) = norito::core::payload_slice_from_ptr(ptr) {
+            let (value, _) = Self::decode_wire_text(payload)?;
+            return Ok(Self::from_validated_string(value));
+        }
+
         let wire = <JsonWireOwned as norito::core::NoritoDeserialize>::try_deserialize(
             archived.cast::<JsonWireOwned>(),
         )?;
-        json::validate_json(&wire.value).map_err(|error| {
+        Self::validate_text(&wire.value).map_err(|error| {
             norito::core::Error::Message(format!("invalid Json payload: {error}"))
         })?;
-        Ok(Self(Arc::new(wire.value)))
+        Ok(Self::from_validated_string(wire.value))
     }
 }
 
 impl Json {
+    fn ensure_size(value: &str) -> Result<(), norito::Error> {
+        if value.len() > MAX_JSON_BYTES {
+            return Err(norito::Error::from(format!(
+                "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_text(value: &str) -> Result<(), norito::Error> {
+        Self::ensure_size(value)?;
+        json::validate_json(value).map_err(|error| norito::Error::from(error.to_string()))
+    }
+
+    fn from_validated_string(value: String) -> Self {
+        Self(Arc::new(value))
+    }
+
+    fn decode_wire_text(bytes: &[u8]) -> Result<(String, usize), norito::core::Error> {
+        let (field_len, field_header_len) = norito::core::inspect_len_from_slice(bytes)?;
+        let field_end = field_header_len
+            .checked_add(field_len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let field = bytes
+            .get(field_header_len..field_end)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let (len, header_len) = norito::core::inspect_len_from_slice(field)?;
+        if len > MAX_JSON_BYTES {
+            return Err(norito::core::Error::Message(format!(
+                "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
+            )));
+        }
+        let end = header_len
+            .checked_add(len)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        if end != field.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        let raw = field
+            .get(header_len..end)
+            .ok_or(norito::core::Error::LengthMismatch)?;
+        let value = core::str::from_utf8(raw).map_err(|_| norito::core::Error::InvalidUtf8)?;
+        Self::validate_text(value).map_err(|error| {
+            norito::core::Error::Message(format!("invalid Json payload: {error}"))
+        })?;
+        norito::core::reserve_decode_allocation(len)?;
+        norito::core::note_payload_access(bytes, field_end);
+        Ok((value.to_owned(), field_end))
+    }
+
     fn escape_json_string_plain(s: &str, out: &mut String) {
         out.push('"');
         for ch in s.chars() {
@@ -227,7 +293,8 @@ impl Json {
     /// for example if it contains non-string map keys.
     ///
     /// # Panics
-    /// Panics if serialization fails.
+    /// Panics if serialization fails or if the serializer produces a document
+    /// that violates the [`Json`] size or structural-depth invariant.
     #[allow(clippy::needless_pass_by_value)]
     pub fn new<T: JsonSerialize>(payload: T) -> Self {
         Self::try_new(payload).expect("serialization of Json always succeeds")
@@ -254,23 +321,26 @@ impl Json {
     /// Fallible constructor: serialize `payload` to JSON using Norito's helper.
     ///
     /// # Errors
-    /// Returns an error if `payload` cannot be converted into JSON.
+    /// Returns an error if `payload` cannot be converted into one valid JSON
+    /// document, if that document is too deeply nested, or if it exceeds
+    /// [`MAX_JSON_BYTES`].
     #[allow(clippy::needless_pass_by_value)]
     pub fn try_new<T: JsonSerialize>(payload: T) -> Result<Self, norito::Error> {
         // Primary path: canonical Norito serializer.
         let serialized =
             norito::json::to_json(&payload).map_err(|e| norito::Error::from(e.to_string()))?;
+        Self::ensure_size(&serialized)?;
         if norito::json::validate_json(&serialized).is_ok() {
-            return Ok(Self::from_string_unchecked(serialized));
+            return Ok(Self::from_validated_string(serialized));
         }
 
         // Fallback: materialize a `Value` and serialize it plainly.
         if let Ok(value) = norito::json::to_value(&payload) {
             let plain = Self::serialize_json_value_plain_str(&value);
-            let valid = norito::json::validate_json(&plain).is_ok();
+            let valid = Self::validate_text(&plain).is_ok();
             Self::drop_json_value_iteratively(value);
             if valid {
-                return Ok(Self::from_string_unchecked(plain));
+                return Ok(Self::from_validated_string(plain));
             }
         }
 
@@ -280,22 +350,34 @@ impl Json {
     }
 
     /// Fallible constructor from `&str` using Norito's JSON helper.
-    /// Unlike `FromStr`, this helper is strict and rejects non-JSON text.
+    ///
+    /// Like `FromStr`, this helper is strict and rejects non-JSON text. It
+    /// canonicalizes valid input; use [`Json::from_raw_json`] when insignificant
+    /// whitespace or object-key order must be retained.
     ///
     /// # Errors
-    /// Returns an error if the input string is not valid JSON.
+    /// Returns an error if the input string is not valid, is too deeply
+    /// nested, or exceeds [`MAX_JSON_BYTES`].
     pub fn from_str_norito(s: &str) -> Result<Self, norito::Error> {
+        Self::validate_text(s)?;
         let value = json::parse_value(s).map_err(|e| norito::Error::from(e.to_string()))?;
         let result = Self::from_norito_value_ref(&value);
         Self::drop_json_value_iteratively(value);
         result
     }
 
-    /// Creates a `Json` value without validating that the input is well-formed.
+    /// Creates a [`Json`] value from an already serialized JSON document.
     ///
-    /// The caller must guarantee that `value` contains valid JSON.
-    pub fn from_string_unchecked(value: String) -> Self {
-        Self(Arc::new(value))
+    /// Unlike [`Json::from_str_norito`], this preserves insignificant
+    /// whitespace and object-key order. It still enforces every `Json` type
+    /// invariant before constructing the value.
+    ///
+    /// # Errors
+    /// Returns an error if `value` is not exactly one valid JSON document, is
+    /// too deeply nested, or exceeds [`MAX_JSON_BYTES`].
+    pub fn from_raw_json(value: String) -> Result<Self, norito::Error> {
+        Self::validate_text(&value)?;
+        Ok(Self::from_validated_string(value))
     }
 
     /// Returns a reference to the inner JSON string.
@@ -318,11 +400,12 @@ impl Json {
     /// into a compact string representation.
     ///
     /// # Errors
-    /// Returns an error if serialization of the value to a string fails.
+    /// Returns an error if serialization of the value fails, if the result is
+    /// too deeply nested, or if it exceeds [`MAX_JSON_BYTES`].
     pub fn from_norito_value_ref(v: &Value) -> Result<Self, norito::Error> {
         let plain = Self::serialize_json_value_plain_str(v);
-        norito::json::validate_json(&plain).map_err(|e| norito::Error::from(e.to_string()))?;
-        Ok(Self::from_string_unchecked(plain))
+        Self::validate_text(&plain)?;
+        Ok(Self::from_validated_string(plain))
     }
 }
 
@@ -339,7 +422,8 @@ impl json::JsonDeserialize for Json {
         p.skip_value()?;
         let end = p.position();
         let slice = &p.input()[start..end];
-        Ok(Json::from_string_unchecked(slice.to_owned()))
+        Json::from_raw_json(slice.to_owned())
+            .map_err(|error| json::Error::Message(error.to_string()))
     }
 }
 
@@ -383,9 +467,7 @@ impl From<bool> for Json {
 
 impl From<&str> for Json {
     fn from(value: &str) -> Self {
-        value
-            .parse::<Json>()
-            .unwrap_or_else(|_| panic!("invalid JSON literal: {value}"))
+        Json::new(value)
     }
 }
 
@@ -399,21 +481,13 @@ impl FromStr for Json {
     type Err = norito::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        json::parse_value(s).map_or_else(
-            |_| Json::from_norito_value_ref(&Value::String(s.to_owned())),
-            |value| {
-                let result = Json::from_norito_value_ref(&value);
-                Json::drop_json_value_iteratively(value);
-                result
-            },
-        )
+        Self::from_str_norito(s)
     }
 }
 
 impl Default for Json {
     fn default() -> Self {
-        // NOTE: empty string isn't valid JSON
-        Self::from_string_unchecked("null".to_owned())
+        Self::from_validated_string("null".to_owned())
     }
 }
 
@@ -421,12 +495,8 @@ impl Default for Json {
 // and option fields under Norito's strict-safe path.
 impl<'a> norito::core::DecodeFromSlice<'a> for Json {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (wire, consumed) =
-            <JsonWireOwned as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        json::validate_json(&wire.value).map_err(|error| {
-            norito::core::Error::Message(format!("invalid Json payload: {error}"))
-        })?;
-        Ok((Self(Arc::new(wire.value)), consumed))
+        let (value, consumed) = Self::decode_wire_text(bytes)?;
+        Ok((Self::from_validated_string(value), consumed))
     }
 }
 
@@ -473,9 +543,11 @@ mod tests {
     #[test]
     fn clones_share_immutable_backing() {
         let original =
-            Json::from_string_unchecked(format!("\"{}\"", "shared-json-payload".repeat(64 * 1024)));
+            Json::from_raw_json(format!("\"{}\"", "shared-json-payload".repeat(32 * 1024)))
+                .expect("valid shared JSON fixture");
         let cloned = original.clone();
-        let equal_but_distinct = Json::from_string_unchecked(original.get().clone());
+        let equal_but_distinct =
+            Json::from_raw_json(original.get().clone()).expect("valid shared JSON fixture");
 
         assert!(original.ptr_eq(&cloned));
         assert!(!original.ptr_eq(&equal_but_distinct));
@@ -511,7 +583,7 @@ mod tests {
         ];
 
         for input in inputs {
-            let json = Json::from_string_unchecked(input.clone());
+            let json = Json::from_raw_json(input.clone()).expect("valid JSON wire fixture");
             let encoded = json.encode();
 
             assert_eq!(encoded, LegacyJsonWire(input.clone()).encode());
@@ -530,7 +602,9 @@ mod tests {
         }
 
         assert_eq!(
-            Json::from_string_unchecked("{\"a\":1}".to_owned()).encode(),
+            Json::from_raw_json("{\"a\":1}".to_owned())
+                .expect("valid JSON wire fixture")
+                .encode(),
             [0x08, 0x07, b'{', b'"', b'a', b'"', b':', b'1', b'}']
         );
     }
@@ -540,7 +614,9 @@ mod tests {
         const TRAILING_FIELD: &[u8] = b"\xA5\x5Asecond-field";
 
         let input = "{\"field\":true}".to_owned();
-        let encoded = Json::from_string_unchecked(input.clone()).encode();
+        let encoded = Json::from_raw_json(input.clone())
+            .expect("valid JSON wire fixture")
+            .encode();
         let mut packed_fields = encoded.clone();
         packed_fields.extend_from_slice(TRAILING_FIELD);
 
@@ -555,7 +631,9 @@ mod tests {
 
     #[test]
     fn slice_decode_rejects_truncated_and_invalid_utf8_wire() {
-        let encoded = Json::from_string_unchecked("{\"field\":true}".to_owned()).encode();
+        let encoded = Json::from_raw_json("{\"field\":true}".to_owned())
+            .expect("valid JSON wire fixture")
+            .encode();
 
         for end in 0..encoded.len() {
             assert!(
@@ -575,7 +653,8 @@ mod tests {
 
     #[test]
     fn shared_backing_roundtrips_framed_norito() {
-        let original = Json::from_string_unchecked("{\"framed\":[1,true,null]}".to_owned());
+        let original = Json::from_raw_json("{\"framed\":[1,true,null]}".to_owned())
+            .expect("valid framed JSON fixture");
 
         let encoded = norito::to_bytes(&original).expect("encode framed Json");
         let decoded: Json = norito::decode_from_bytes(&encoded).expect("decode framed Json");
@@ -586,7 +665,7 @@ mod tests {
     #[test]
     fn shared_clone_preserves_exact_json_output() {
         let raw = "{ \"order\": [3, 2, 1], \"escaped\": \"a\\nb\" }";
-        let json = Json::from_string_unchecked(raw.to_owned());
+        let json = Json::from_raw_json(raw.to_owned()).expect("valid raw JSON fixture");
         let cloned = json.clone();
         let mut serialized = String::new();
 
@@ -652,14 +731,20 @@ mod tests {
     }
 
     #[test]
-    fn from_str_normalizes_structured_json_and_wraps_plain_text() {
+    fn from_str_is_strict_and_from_string_value_wraps_plain_text() {
         let structured: Json = r#" { "items": [1, true, null] } "#
             .parse()
             .expect("parse structured JSON");
         assert_eq!(structured.get(), r#"{"items":[1,true,null]}"#);
 
-        let plain_text: Json = "plain text".parse().expect("wrap plain text");
+        assert!(
+            "plain text".parse::<Json>().is_err(),
+            "FromStr must reject non-JSON text"
+        );
+        let plain_text = Json::from("plain text");
         assert_eq!(plain_text.get(), r#""plain text""#);
+        let json_looking_text = Json::from(r#"{"not":"raw"}"#);
+        assert_eq!(json_looking_text.get(), r#""{\"not\":\"raw\"}""#);
     }
 
     #[test]
@@ -778,8 +863,10 @@ mod tests {
                 if consumed != encoded.len() || decoded.get() != &at_255 {
                     return Err("deep Json slice decode changed the wire payload".to_owned());
                 }
-                let framed = norito::to_bytes(&Json::from_string_unchecked(at_255.clone()))
-                    .map_err(|error| error.to_string())?;
+                let framed = norito::to_bytes(
+                    &Json::from_raw_json(at_255.clone()).map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
                 let decoded = norito::decode_from_bytes::<Json>(&framed)
                     .map_err(|error| error.to_string())?;
                 if decoded.get() != &at_255 {
@@ -799,11 +886,8 @@ mod tests {
                     return Err("Json wire decoder accepted a trailing comma".to_owned());
                 }
 
-                let fallback = invalid_256th_wrapper
-                    .parse::<Json>()
-                    .map_err(|error| error.to_string())?;
-                if fallback.as_ref() != invalid_256th_wrapper {
-                    return Err("FromStr plain-text fallback behavior changed".to_owned());
+                if invalid_256th_wrapper.parse::<Json>().is_ok() {
+                    return Err("FromStr accepted an invalid JSON document".to_owned());
                 }
                 Ok(())
             })
@@ -866,13 +950,114 @@ mod tests {
                 "slice decoding accepted invalid Json payload: {invalid}"
             );
 
-            let framed = norito::to_bytes(&Json::from_string_unchecked(invalid.to_owned()))
+            let framed = norito::to_bytes(&Json(Arc::new(invalid.to_owned())))
                 .expect("encode hostile Json wire");
             assert!(
                 norito::decode_from_bytes::<Json>(&framed).is_err(),
                 "framed decoding accepted invalid Json payload: {invalid}"
             );
         }
+    }
+
+    #[test]
+    fn json_size_limit_covers_constructors_and_wire_decoders() {
+        let boundary = format!("\"{}\"", "x".repeat(MAX_JSON_BYTES - 2));
+        let over_limit = format!("\"{}\"", "x".repeat(MAX_JSON_BYTES - 1));
+        assert_eq!(boundary.len(), MAX_JSON_BYTES);
+        assert_eq!(over_limit.len(), MAX_JSON_BYTES + 1);
+
+        let raw =
+            Json::from_raw_json(boundary.clone()).expect("raw constructor accepts byte boundary");
+        assert_eq!(raw.get().len(), MAX_JSON_BYTES);
+        assert!(
+            Json::from_raw_json(over_limit.clone()).is_err(),
+            "raw constructor accepted an oversized document"
+        );
+
+        let parsed = boundary
+            .parse::<Json>()
+            .expect("FromStr accepts byte boundary");
+        assert_eq!(parsed.get().len(), MAX_JSON_BYTES);
+        assert!(
+            over_limit.parse::<Json>().is_err(),
+            "FromStr accepted an oversized document"
+        );
+
+        let direct = norito::json::from_str::<Json>(&boundary)
+            .expect("JSON deserializer accepts byte boundary");
+        assert_eq!(direct.get().len(), MAX_JSON_BYTES);
+        assert!(
+            norito::json::from_str::<Json>(&over_limit).is_err(),
+            "JSON deserializer accepted an oversized document"
+        );
+
+        let serialized = Json::try_new("x".repeat(MAX_JSON_BYTES - 2))
+            .expect("serializer accepts byte boundary");
+        assert_eq!(serialized.get().len(), MAX_JSON_BYTES);
+        assert!(
+            Json::try_new("x".repeat(MAX_JSON_BYTES - 1)).is_err(),
+            "serializer accepted an oversized document"
+        );
+
+        let boundary_wire = JsonWireOwned {
+            value: boundary.clone(),
+        }
+        .encode();
+        let (decoded, consumed) =
+            <Json as norito::core::DecodeFromSlice>::decode_from_slice(&boundary_wire)
+                .expect("slice decoder accepts byte boundary");
+        assert_eq!(decoded.get().len(), MAX_JSON_BYTES);
+        assert_eq!(consumed, boundary_wire.len());
+
+        let oversized_wire = JsonWireOwned {
+            value: over_limit.clone(),
+        }
+        .encode();
+        assert!(
+            <Json as norito::core::DecodeFromSlice>::decode_from_slice(&oversized_wire).is_err(),
+            "slice decoder accepted an oversized document"
+        );
+
+        let mut oversized_inner_header = Vec::new();
+        norito::core::write_len_to_vec(
+            &mut oversized_inner_header,
+            u64::try_from(MAX_JSON_BYTES + 1).expect("JSON limit fits u64"),
+        );
+        let mut declared_oversize = Vec::new();
+        norito::core::write_len_to_vec(
+            &mut declared_oversize,
+            u64::try_from(oversized_inner_header.len()).expect("length header fits u64"),
+        );
+        declared_oversize.extend_from_slice(&oversized_inner_header);
+        let error = <Json as norito::core::DecodeFromSlice>::decode_from_slice(&declared_oversize)
+            .expect_err("oversized declared Json must fail before its missing body is read");
+        assert!(
+            error.to_string().contains("1048576-byte"),
+            "decoder reached a generic truncation error before the Json limit: {error}"
+        );
+
+        let oversized_frame = norito::to_bytes(&Json(Arc::new(over_limit)))
+            .expect("encode oversized hostile Json fixture");
+        assert!(
+            norito::decode_from_bytes::<Json>(&oversized_frame).is_err(),
+            "framed decoder accepted an oversized document"
+        );
+    }
+
+    #[test]
+    fn raw_constructor_enforces_the_structural_depth_limit() {
+        let boundary = format!(
+            "{}null{}",
+            "[".repeat(MAX_JSON_NESTING_DEPTH - 1),
+            "]".repeat(MAX_JSON_NESTING_DEPTH - 1)
+        );
+        let over_limit = format!("[{boundary}]");
+
+        Json::from_raw_json(boundary).expect("raw constructor accepts depth boundary");
+        assert!(
+            Json::from_raw_json(over_limit).is_err(),
+            "raw constructor accepted a document beyond the V1 depth limit"
+        );
     }
 
     #[test]

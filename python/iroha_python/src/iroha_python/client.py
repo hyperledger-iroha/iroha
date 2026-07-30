@@ -20815,45 +20815,6 @@ class ToriiClient(_BaseToriiClient):
             expected_status=(200,),
         )
 
-    def get_governance_council_audit(self, *, epoch: Optional[int] = None) -> Optional[Any]:
-        """GET `/v1/gov/council/audit` (optionally override the audited epoch)."""
-
-        params: Dict[str, Any] = {}
-        if epoch is not None:
-            params["epoch"] = int(epoch)
-        return self.request_json(
-            "GET",
-            "/v1/gov/council/audit",
-            params=params or None,
-            expected_status=(200,),
-        )
-
-    def derive_governance_council_vrf(
-        self,
-        payload: Mapping[str, Any],
-    ) -> Optional[Any]:
-        """POST `/v1/gov/council/derive-vrf` (requires Torii built with `gov_vrf`)."""
-
-        return self.request_json(
-            "POST",
-            "/v1/gov/council/derive-vrf",
-            json_body=dict(payload),
-            expected_status=(200,),
-        )
-
-    def persist_governance_council(
-        self,
-        payload: Mapping[str, Any],
-    ) -> Optional[Any]:
-        """POST `/v1/gov/council/persist` (requires `gov_vrf`)."""
-
-        return self.request_json(
-            "POST",
-            "/v1/gov/council/persist",
-            json_body=dict(payload),
-            expected_status=(200,),
-        )
-
     def get_governance_contract(
         self,
         contract_address: str,

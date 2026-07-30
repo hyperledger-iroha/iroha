@@ -19,10 +19,8 @@ fn harden_process() -> Result<(), ()> {
     )
     .map_err(|_| ())?;
     #[cfg(target_os = "linux")]
-    rustix::process::set_dumpable_behavior(
-        rustix::process::DumpableBehavior::NotDumpable,
-    )
-    .map_err(|_| ())?;
+    rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
+        .map_err(|_| ())?;
     Ok(())
 }
 

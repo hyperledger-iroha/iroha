@@ -58,7 +58,7 @@ bytes = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_config = { workspace = true }
 iroha_config_base = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_primitives = { workspace = true }
 iroha_logger = { workspace = true }
 iroha_telemetry = { workspace = true }
@@ -69,7 +69,7 @@ sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_orchestrator = { workspace = true }
 
-iroha_data_model = { workspace = true, default-features = false, features = ["http", "json"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http"] }
 iroha_executor_data_model = { workspace = true }
 
 reqwest = { workspace = true, features = ["blocking"] }

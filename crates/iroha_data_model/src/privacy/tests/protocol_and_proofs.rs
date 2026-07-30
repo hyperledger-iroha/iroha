@@ -1574,21 +1574,18 @@
     #[test]
     fn context_rejects_unusable_chain_ids_and_action_indexes() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
+        assert!("".parse::<ChainId>().is_err());
+        assert!(
+            "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)
+                .parse::<ChainId>()
+                .is_err()
+        );
         let mut value = context();
-        value.chain_id = ChainId::from("");
-        assert!(matches!(
-            value.validate(&limits),
-            Err(PrivacyStatementValidationError::InvalidChainIdLength { bytes: 0, .. })
-        ));
-
-        value = context();
-        value.chain_id = ChainId::from("x".repeat(255));
-        value.validate(&limits).expect("255-byte chain id");
-        value.chain_id = ChainId::from("x".repeat(256));
-        assert!(matches!(
-            value.validate(&limits),
-            Err(PrivacyStatementValidationError::InvalidChainIdLength { bytes: 256, .. })
-        ));
+        value.chain_id = "x"
+            .repeat(crate::id::MAX_CHAIN_ID_BYTES)
+            .parse()
+            .expect("maximum-length chain id");
+        value.validate(&limits).expect("maximum-length chain id");
 
         value = context();
         value.action_index = 1;
@@ -1732,30 +1729,18 @@
             Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
         );
 
-        let mut invalid_context = context();
-        invalid_context.chain_id = ChainId::from("");
-        assert!(matches!(
-            PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits),
-            Err(
-                PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext(
-                    PrivacyStatementValidationError::InvalidChainIdLength { bytes: 0, .. }
-                )
-            )
-        ));
-
-        invalid_context = context();
-        invalid_context.chain_id = ChainId::from("x".repeat(256));
-        assert!(matches!(
-            PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits),
-            Err(
-                PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext(
-                    PrivacyStatementValidationError::InvalidChainIdLength { bytes: 256, .. }
-                )
-            )
-        ));
-
-        invalid_context.chain_id = ChainId::from("x".repeat(255));
-        PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits)
+        assert!("".parse::<ChainId>().is_err());
+        assert!(
+            "x".repeat(crate::id::MAX_CHAIN_ID_BYTES + 1)
+                .parse::<ChainId>()
+                .is_err()
+        );
+        let mut boundary_context = context();
+        boundary_context.chain_id = "x"
+            .repeat(crate::id::MAX_CHAIN_ID_BYTES)
+            .parse()
+            .expect("maximum-length chain id");
+        PrivacyNativeConsensusBindingV1::new(&boundary_context, raw(200), &limits)
             .expect("maximum-length chain id remains canonical");
     }
 

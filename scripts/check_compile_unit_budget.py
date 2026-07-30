@@ -133,6 +133,29 @@ def package_source(package: dict | None) -> str:
     return "other"
 
 
+def artifact_in_scope(
+    package_id: str, artifact_scope: str, workspace_members: set[str]
+) -> bool:
+    """Return whether a compiler artifact contributes to the enforced count."""
+
+    if artifact_scope == "all":
+        return True
+    if artifact_scope == "workspace":
+        return package_id in workspace_members
+    raise ValueError(f"unsupported artifact scope: {artifact_scope}")
+
+
+def compiler_diagnostic_lines(message: dict[str, Any]) -> tuple[str, ...]:
+    """Extract rendered rustc diagnostics from one Cargo JSON message."""
+
+    if message.get("reason") != "compiler-message":
+        return ()
+    rendered = (message.get("message") or {}).get("rendered")
+    if not isinstance(rendered, str):
+        return ()
+    return tuple(rendered.rstrip().splitlines())
+
+
 def cargo_test_command(args: argparse.Namespace) -> list[str]:
     cmd = [
         "cargo",
@@ -314,13 +337,19 @@ def main() -> int:
         except json.JSONDecodeError:
             cargo_output.append(line)
             continue
+        diagnostic_lines = compiler_diagnostic_lines(message)
+        if diagnostic_lines:
+            cargo_output.extend(diagnostic_lines)
+            continue
         if message.get("reason") != "compiler-artifact":
             continue
         package_id = message.get("package_id")
         target = message.get("target") or {}
         if not package_id or not target:
             continue
-        if args.artifact_scope == "workspace" and package_id not in workspace_members:
+        if not artifact_in_scope(
+            package_id, args.artifact_scope, workspace_members
+        ):
             continue
         key = (
             package_id,

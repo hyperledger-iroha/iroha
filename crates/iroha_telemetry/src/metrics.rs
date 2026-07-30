@@ -6836,8 +6836,6 @@ pub struct Metrics {
     pub governance_council_alternates: GenericGauge<AtomicU64>,
     /// Governance: total candidates considered in the latest draw.
     pub governance_council_candidates: GenericGauge<AtomicU64>,
-    /// Governance: verified VRF proofs in the latest draw.
-    pub governance_council_verified: GenericGauge<AtomicU64>,
     /// Governance: epoch index of the latest persisted council.
     pub governance_council_epoch: GenericGauge<AtomicU64>,
     /// Governance: total registered citizens.
@@ -9451,11 +9449,6 @@ impl Default for Metrics {
         let governance_council_candidates = GenericGauge::new(
             "governance_council_candidates",
             "Total candidates considered in the latest council draw",
-        )
-        .expect("Infallible");
-        let governance_council_verified = GenericGauge::new(
-            "governance_council_verified",
-            "Verified VRF proofs in the latest council draw",
         )
         .expect("Infallible");
         let governance_council_epoch = GenericGauge::new(
@@ -15525,7 +15518,6 @@ impl Default for Metrics {
             governance_council_members,
             governance_council_alternates,
             governance_council_candidates,
-            governance_council_verified,
             governance_council_epoch,
             governance_citizens_total,
             governance_citizen_service_events_total,
@@ -15687,7 +15679,6 @@ impl Default for Metrics {
             governance_council_members,
             governance_council_alternates,
             governance_council_candidates,
-            governance_council_verified,
             governance_council_epoch,
             governance_citizens_total,
             governance_citizen_service_events_total,

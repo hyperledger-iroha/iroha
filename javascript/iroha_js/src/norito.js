@@ -2807,9 +2807,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "epoch",
         "members",
         "alternates",
-        "verified",
-        "candidates_count",
-        "derived_by",
       ]);
       return {
         PersistCouncilForEpoch: {
@@ -2825,15 +2822,6 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
             (entry, index) =>
               decodeAccountIdValue(entry, `PersistCouncilForEpoch.alternates[${index}]`),
             "PersistCouncilForEpoch.alternates",
-          ),
-          verified: decodeU32Value(fields.verified, "PersistCouncilForEpoch.verified"),
-          candidates_count: decodeU32Value(
-            fields.candidates_count,
-            "PersistCouncilForEpoch.candidates_count",
-          ),
-          derived_by: decodeCouncilDerivationKindValue(
-            fields.derived_by,
-            "PersistCouncilForEpoch.derived_by",
           ),
         },
       };
@@ -5252,9 +5240,6 @@ function encodePersistCouncilForEpochPayload(value) {
     [encodeNoritoVec(value.alternates ?? [], (member, index) =>
       encodeAccountIdValue(member, `PersistCouncilForEpoch.alternates[${index}]`),
     )],
-    [encodeU32Value(value.verified ?? 0, "PersistCouncilForEpoch.verified")],
-    [encodeU32Value(value.candidates_count, "PersistCouncilForEpoch.candidates_count")],
-    [encodeCouncilDerivationKindValue(value.derived_by, "PersistCouncilForEpoch.derived_by")],
   ]);
 }
 
@@ -6748,28 +6733,6 @@ function decodeSorafsUriValue(payload, context) {
 function encodeEnumTagValue(index, encodePayload) {
   const payload = encodePayload ? encodeNoritoField(encodePayload()) : Buffer.alloc(0);
   return Buffer.concat([u32ToLittleEndianBuffer(index), payload]);
-}
-
-function encodeCouncilDerivationKindValue(value, context) {
-  const normalized = assertNonEmptyString(value, context).toLowerCase();
-  if (normalized === "vrf") {
-    return encodeEnumTagValue(0);
-  }
-  throw new Error(`${context} must be Vrf`);
-}
-
-function decodeCouncilDerivationKindValue(payload, context) {
-  const reader = new BufferReader(payload, context);
-  const tag = reader.readU32LE("tag");
-  reader.assertEof();
-  switch (tag) {
-    case 0:
-      return "Vrf";
-    case 1:
-      throw new Error(`${context} uses unsupported derivation kind 1`);
-    default:
-      throw new Error(`${context} uses unsupported derivation kind ${tag}`);
-  }
 }
 
 function encodeVotingModeValue(value, context) {
