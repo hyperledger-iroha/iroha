@@ -24350,11 +24350,15 @@ impl SorafsNativeTransactionSignerBindings {
             match (enabled, configured) {
                 (true, false) => emitter.emit(
                     Report::new(ParseError::InvalidSorafsConfig)
-                        .attach(format!("{path} is required when its worker is enabled")),
+                        .attach(format!(
+                            "{path} is required for storage-enabled durable drain or role generation"
+                        )),
                 ),
                 (false, true) => emitter.emit(
                     Report::new(ParseError::InvalidSorafsConfig)
-                        .attach(format!("{path} is forbidden when its worker is disabled")),
+                        .attach(format!(
+                            "{path} is forbidden without storage-enabled durable drain or role generation"
+                        )),
                 ),
                 _ => {}
             }
@@ -25141,9 +25145,9 @@ impl SorafsStorage {
         let native_transaction_signers = self.native_transaction_signers.parse(
             SorafsNativeTransactionSignerEnablement {
                 proof_outcome: storage_enabled,
-                repair: repair_enabled,
-                reserve: reserve_enabled,
-                orderbook: orderbook_enabled,
+                repair: storage_enabled || repair_enabled,
+                reserve: storage_enabled || reserve_enabled,
+                orderbook: storage_enabled || orderbook_enabled,
             },
             emitter,
         );
@@ -27074,7 +27078,10 @@ impl SorafsRuntimeRetentionConfig {
 /// Operational policy for the durable native orderbook transaction worker.
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsOrderbookWorkerConfig {
-    /// Enable finalized-state scanning and native transaction forwarding.
+    /// Enable generation of new supervised orderbook work.
+    ///
+    /// Enabling provider storage independently keeps durable drain and
+    /// finalized reconciliation active.
     #[config(default = "defaults::sorafs::storage::orderbook_worker::ENABLED")]
     pub enabled: bool,
     /// Finalized-state scan cadence in milliseconds.
@@ -27205,8 +27212,8 @@ impl SorafsOrderbookWorkerConfig {
 pub struct SorafsReserveWorkerConfig {
     /// Enable generation of new supervised reserve/rent work.
     ///
-    /// Durable transaction drain and finalized reconciliation cannot be
-    /// disabled by this generation control.
+    /// Enabling provider storage independently keeps durable drain and
+    /// finalized reconciliation active.
     #[config(default = "defaults::sorafs::storage::reserve_worker::ENABLED")]
     pub enabled: bool,
     /// Finalized-state scan cadence in milliseconds.
@@ -31778,6 +31785,39 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
 
+    fn native_signer_bindings_toml(context: &str, seeds: [u8; 4]) -> String {
+        [
+            ("proof_outcome", "proof-outcome"),
+            ("repair", "repair"),
+            ("reserve", "reserve"),
+            ("orderbook", "orderbook"),
+        ]
+        .into_iter()
+        .zip(seeds)
+        .map(|((role, handle_role), seed)| {
+            let signer =
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("native signer");
+            let public_key_hex = hex::encode(signer.public_key().to_bytes().1);
+            let authority = AccountId::new(signer.public_key().clone())
+                .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+                .expect("native signer authority");
+            let policy_digest_hex = hex::encode([seed; 32]);
+            format!(
+                r#"
+[storage.native_transaction_signers.{role}]
+handle = "hsm://sorafs/{handle_role}/{context}-primary"
+authority = "{authority}"
+algorithm = "ed25519"
+public_key_hex = "{public_key_hex}"
+revision = 1
+policy_digest_hex = "{policy_digest_hex}"
+"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+    }
+
     fn table_with_soracloud_hf_values(values: &[(&str, i64)]) -> Table {
         let mut table = base_table();
         let runtime = table
@@ -33060,6 +33100,8 @@ hedging_feed_trust_policy_path = "/run/iroha/sorafs-hedging-policy.to"
     #[test]
     fn sorafs_moderation_screening_authority_config_is_digest_bound_and_fail_closed() {
         let mut table = base_table();
+        let native_signer_bindings =
+            native_signer_bindings_toml("moderation", [0x50, 0x51, 0x52, 0x53]);
         let sorafs: Table = toml::from_str(&format!(
             r#"
 [storage]
@@ -33070,6 +33112,8 @@ moderation_screening_authority_bundle_digest_hex = "{}"
 moderation_quarantine_key_provider_handle = "kms://moderation/quarantine/primary"
 moderation_quarantine_key_provider_revision = 7
 moderation_quarantine_key_provider_policy_digest_hex = "{}"
+
+{native_signer_bindings}
 "#,
             "11".repeat(32),
             "51".repeat(32)
@@ -33286,12 +33330,8 @@ terminal_retention_secs = 7200
     #[test]
     fn sorafs_storage_privacy_aggregate_policy_parses_canonical_query() {
         let mut table = base_table();
-        let proof_signer =
-            KeyPair::try_from_seed(vec![0x60; 32], Algorithm::Ed25519).expect("proof signer");
-        let proof_signer_public_key_hex = hex::encode(proof_signer.public_key().to_bytes().1);
-        let proof_signer_authority = AccountId::new(proof_signer.public_key().clone())
-            .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
-            .expect("proof signer authority");
+        let native_signer_bindings =
+            native_signer_bindings_toml("privacy", [0x60, 0x61, 0x62, 0x63]);
         let sorafs: Table = toml::from_str(&format!(
             r#"
 [storage]
@@ -33309,13 +33349,7 @@ checkpoint_store_handle = "sealed://governance-dag/privacy-checkpoint-primary"
 checkpoint_store_revision = 31
 checkpoint_store_policy_digest_hex = "8181818181818181818181818181818181818181818181818181818181818181"
 
-[storage.native_transaction_signers.proof_outcome]
-handle = "hsm://sorafs/proof-outcome/privacy-primary"
-authority = "{proof_signer_authority}"
-algorithm = "ed25519"
-public_key_hex = "{proof_signer_public_key_hex}"
-revision = 19
-policy_digest_hex = "6161616161616161616161616161616161616161616161616161616161616161"
+{native_signer_bindings}
 
 [storage.privacy_aggregates]
 enabled = true

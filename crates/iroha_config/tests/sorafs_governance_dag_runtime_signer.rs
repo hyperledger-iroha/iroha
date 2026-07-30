@@ -33,25 +33,36 @@ fn public_key_hex(seed: u8) -> String {
     hex::encode(key_pair.public_key().to_bytes().1)
 }
 
-fn native_proof_signer_binding() -> String {
-    let key_pair =
-        KeyPair::try_from_seed(vec![0x60; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
-    let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
-    let authority = AccountId::new(key_pair.public_key().clone())
-        .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
-        .expect("test authority must encode as I105");
-    format!(
-        r#"
-[sorafs.storage.native_transaction_signers.proof_outcome]
-handle = "hsm://sorafs/proof-outcome/primary"
+fn native_signer_bindings() -> String {
+    [
+        ("proof_outcome", "proof-outcome", 0x60),
+        ("repair", "repair", 0x61),
+        ("reserve", "reserve", 0x62),
+        ("orderbook", "orderbook", 0x63),
+    ]
+    .into_iter()
+    .map(|(role, handle_role, seed)| {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 keypair");
+        let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+        let authority = AccountId::new(key_pair.public_key().clone())
+            .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+            .expect("test authority must encode as I105");
+        let policy_digest_hex = hex::encode([seed; 32]);
+        format!(
+            r#"
+[sorafs.storage.native_transaction_signers.{role}]
+handle = "hsm://sorafs/{handle_role}/governance-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
 revision = 1
-policy_digest_hex = "{}"
-"#,
-        "60".repeat(32)
-    )
+policy_digest_hex = "{policy_digest_hex}"
+"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 fn producer_checkpoint_store_binding() -> String {
@@ -108,7 +119,7 @@ governance_dag_dir = "/tmp/sorafs-governance"
         .expect("writing to a String cannot fail");
     }
     source.push_str(&producer_checkpoint_store_binding());
-    source.push_str(&native_proof_signer_binding());
+    source.push_str(&native_signer_bindings());
     source
 }
 

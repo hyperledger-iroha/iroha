@@ -305,11 +305,13 @@ from one finalized state view. Before it claims or signs a ready delivery, it
 also requires the runtime signer's account to hold the exact
 provider-scoped `CanRecordSorafsProofOutcome` permission, directly or through
 a role, in finalized state. A missing or differently scoped grant defers the
-delivery without consuming a retry. The standard `irohad` launcher supplies no
-signer and never adapts its validator node key at this boundary. Reference
-deployments must inject a governed PKCS#11/HSM implementation of
-`SoraFsProofOutcomeTransactionSigner` through `IrohaRuntimeDeps` without giving
-that signer transaction-queue access.
+delivery without consuming a retry. The standard `irohad` launcher never
+derives this signer from validator key material or adapts its node key at this
+boundary. For a configured binding, the launcher resolves the
+governed signer through its authenticated runtime-provider broker and qualifies
+the live public binding before startup. Embeddings may instead inject a
+PKCS#11/HSM implementation of `SoraFsProofOutcomeTransactionSigner` through
+`IrohaRuntimeDeps`; neither path gives the signer transaction-queue access.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
   node uses defaults from the governance registry.

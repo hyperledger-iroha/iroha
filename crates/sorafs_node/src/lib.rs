@@ -16068,17 +16068,6 @@ mod tests {
                 Some(_) => Err(reputation::runtime::ReputationRuntimeError::JournalSourceConflict),
             }
         }
-
-        fn record_stream_token_outcome(
-            &self,
-            _provider_id: ProviderId,
-            _outcome: iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1,
-        ) -> Result<
-            reputation::runtime::CountedStreamTokenProducerOutcomeV1,
-            reputation::runtime::ReputationRuntimeError,
-        > {
-            Err(reputation::runtime::ReputationRuntimeError::RuntimeBindingMismatch)
-        }
     }
 
     fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {
@@ -17276,6 +17265,17 @@ mod tests {
                     .operation_id,
                 operation_id
             );
+            let claimed = node
+                .claim_orderbook_transaction_for_signing(operation_id)
+                .expect("persist signer-only claim before restart");
+            assert_eq!(claimed.operation_id, operation_id);
+            let signing = node
+                .pending_orderbook_transactions(1)
+                .expect("read signing handoff");
+            assert_eq!(
+                signing[0].state,
+                crate::orderbook_transaction_forwarder::OrderbookTransactionDeliveryStateV1::Signing
+            );
             operation_id
         };
 
@@ -17295,6 +17295,15 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation_id, operation_id);
         assert_eq!(pending[0].expected_book_revision, Some(7));
+        assert_eq!(
+            pending[0].state,
+            crate::orderbook_transaction_forwarder::OrderbookTransactionDeliveryStateV1::Ready,
+            "restart must recover an interrupted signer-only claim for handoff"
+        );
+        assert_eq!(
+            pending[0].attempts, 1,
+            "restart recovery must not refund the consumed signing attempt"
+        );
     }
 
     #[test]

@@ -241,11 +241,15 @@ publication authority.
   appends the revision-one `Opened` journal event in the same transaction.
   Telemetry penalties and alerts do not create disputes.
 - `FindSorafsReputationJournalEvents` returns an exclusive-cursor page from one
-  immutable finalized view. Core persistence cross-checks the active and
-  historical policy records, global head, sequence keys, event-id index,
-  source-head index, block/index continuity, and exact source predecessor
-  before returning a page. Hard item, object, decode-depth, event, and page
-  bounds apply.
+  immutable finalized view. `FindSorafsReputationJournalEventBySourceId`
+  resolves the latest canonical event for one nonzero source at the caller's
+  exact finalized height/hash/time, or returns typed authoritative absence only
+  after validating the global terminal and source indexes at that view. Core
+  persistence cross-checks the active and historical policy records, global
+  head, sequence keys, event-id index, source-head index, block/index
+  continuity, exact source predecessor finality, and immutable dispute
+  lifecycle material. Hard item, object, decode-depth, event, and page bounds
+  apply.
 - `CanManageSorafsReputationJournalPolicy`,
   `CanRecordSorafsReputationJournal`, and
   `CanResolveSorafsCapacityDispute` are exact unit permissions wired through
@@ -439,7 +443,8 @@ publication authority.
   - Implemented in the data model/core: governed journal policy activation,
     PoR-terminal and stream-token append instructions, capacity-dispute
     `Opened` integration, `ResolveSorafsCapacityDispute`, typed committed
-    events, and `FindSorafsReputationJournalEvents`.
+    events, `FindSorafsReputationJournalEvents`, and the exact finalized
+    `FindSorafsReputationJournalEventBySourceId` lookup.
   - Generic authenticated signed-transaction and typed-query transport plus
     committed read projections are present. Dedicated authenticated SDK
     journal transaction/query builders remain open; no local snapshot route is
@@ -541,10 +546,11 @@ publication authority.
   clients can resynchronize through `GET /v1/sorafs/reputation/events`.
 - SDK helpers:
   - Rust currently has generic signed native transaction/query submission for
-    the journal ISIs and `FindSorafsReputationJournalEvents`; there is no
-    dedicated `ReputationClient`. Dedicated authenticated native journal
-    mutation/query builders remain release work; the committed read projection
-    itself is implemented.
+    the journal ISIs, `FindSorafsReputationJournalEvents`, and
+    `FindSorafsReputationJournalEventBySourceId`; there is no dedicated
+    `ReputationClient`. Dedicated authenticated native journal mutation/query
+    builders remain release work; the committed read projections are
+    implemented.
   - Implemented locally in JS/TS:
     `getSorafsReputationLatest`, `getSorafsReputationProvider`,
     `getSorafsReputationSnapshot`, `getSorafsReputationWeights`,

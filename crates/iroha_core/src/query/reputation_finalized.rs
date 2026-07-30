@@ -12,8 +12,10 @@
 //! once by content digest. Exact reads reconstruct the public full projection
 //! through the manifest predecessor chain until an explicit, Kura-authenticated
 //! retention fence installs a content-addressed virtual base. Compacted feeds
-//! then expose a rolling prefix commitment plus retained suffix pagination;
-//! full-history reads fail with a typed `HistoryPruned` condition. A
+//! then expose a rolling prefix commitment plus retained suffix pagination,
+//! while a bounded authenticated journal source-head index preserves exact
+//! source replay; full-history reads fail with a typed `HistoryPruned`
+//! condition. A
 //! policy-first crash leaves a
 //! validated, bounded, immutable cache entry: restart retains and accounts for
 //! it, but it cannot qualify an archive without a referenced anchor.
@@ -59,6 +61,7 @@ use iroha_data_model::{
         reputation::{
             REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, ReputationJournalAuthorityPolicyRecordV1,
             ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventV1,
+            ReputationJournalSourceIdV1,
         },
         reserve::{
             RESERVE_MAX_OPEN_APPEALS_V1, RESERVE_MAX_PENDING_MOVEMENTS_V1,
@@ -101,6 +104,8 @@ const ANCHOR_PREFIX_DIGEST_DOMAIN_V1: &[u8] =
 const PROOF_PREFIX_DIGEST_DOMAIN_V1: &[u8] = b"iroha.sorafs.reputation.finalized-proof-prefix.v1\0";
 const JOURNAL_PREFIX_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.reputation.finalized-journal-prefix.v1\0";
+const JOURNAL_PREFIX_SOURCE_HEAD_ROOT_DOMAIN_V1: &[u8] =
+    b"iroha.sorafs.reputation.finalized-journal-prefix-source-head-root.v1\0";
 const REPAIR_PREFIX_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.sorafs.reputation.finalized-repair-prefix.v1\0";
 const ORDERBOOK_PREFIX_DIGEST_DOMAIN_V1: &[u8] =
@@ -302,6 +307,22 @@ pub struct ReputationFinalizedProjectionV1 {
     pub reserve_events: Vec<ReserveFinalizedEventV1>,
     /// Complete provider-id-ordered authoritative reserve projection.
     pub reserve_providers: Vec<ReserveProviderAccountV1>,
+}
+
+/// Source-indexed reputation journal result from one exact finalized archive view.
+///
+/// The `event` is absent only when the selected finalized view authoritatively
+/// contains no event for `source_id`; it is never a capability or history
+/// fallback.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
+pub struct ReputationFinalizedArchiveJournalSourceViewV1 {
+    /// Exact finalized archive identity used for the lookup.
+    pub key: ReputationFinalizedArchiveKeyV1,
+    /// Timestamp of the exact finalized block in Unix milliseconds.
+    pub finalized_at_unix_ms: u64,
+    /// Latest canonical event for the requested source through this view.
+    pub event: Option<ReputationJournalFinalizedEventV1>,
 }
 
 impl ReputationFinalizedProjectionV1 {
@@ -614,6 +635,202 @@ where
     Ok(prefix)
 }
 
+fn merge_journal_source_heads(
+    prefix_heads: &[ReputationJournalFinalizedEventV1],
+    retained_suffix: &[ReputationJournalFinalizedEventV1],
+) -> Result<Vec<ReputationJournalFinalizedEventV1>, ReputationFinalizedArchiveError> {
+    let mut heads = BTreeMap::new();
+    for event in prefix_heads {
+        if heads.insert(event.entry.source_id, event.clone()).is_some() {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal prefix source-head index contains a duplicate source",
+            });
+        }
+    }
+    for event in retained_suffix {
+        event
+            .entry
+            .validate()
+            .map_err(|_| ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal source-head index contains an invalid entry",
+            })?;
+        match heads.get(&event.entry.source_id) {
+            None if event.entry.source_revision == 1
+                && event.entry.predecessor_event_id.is_none() => {}
+            Some(previous)
+                if previous.sequence < event.sequence
+                    && previous.entry.source_kind() == event.entry.source_kind()
+                    && previous.entry.source_revision.checked_add(1)
+                        == Some(event.entry.source_revision)
+                    && event.entry.predecessor_event_id == Some(previous.entry.event_id) => {}
+            _ => {
+                return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                    reason: "journal source-head index is missing, substituted, or lifecycle-discontinuous",
+                });
+            }
+        }
+        heads.insert(event.entry.source_id, event.clone());
+    }
+    Ok(heads.into_values().collect())
+}
+
+fn validate_journal_source_id(
+    source_id: ReputationJournalSourceIdV1,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    if source_id == ReputationJournalSourceIdV1::ZERO {
+        return Err(ReputationFinalizedArchiveError::InvalidKey {
+            reason: "journal source identifier must be non-zero",
+        });
+    }
+    Ok(())
+}
+
+fn validate_journal_prefix_source_heads(
+    prefix: ReputationFeedPrefixSummaryV1,
+    prefix_heads: &[ReputationJournalFinalizedEventV1],
+    retained_suffix: &[ReputationJournalFinalizedEventV1],
+    anchor: &ReputationFinalizedArchiveKeyV1,
+    finalized_at_unix_ms: u64,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    prefix.validate()?;
+    if (prefix.pruned_event_count == 0) != prefix_heads.is_empty() {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "journal prefix source-head index disagrees with the compacted prefix",
+        });
+    }
+    let finalized_cursor = ReputationJournalFinalizedCursorV1 {
+        height: anchor.height,
+        block_hash: anchor.block_hash,
+        finalized_at_unix_ms,
+    };
+    let terminal = prefix.pruned_through.map(position_identity);
+    let mut previous_source_id = None;
+    let mut source_head_sequences = BTreeSet::new();
+    let mut contains_terminal = terminal.is_none();
+    for event in prefix_heads {
+        event.validate(finalized_cursor).map_err(|_| {
+            ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal prefix source-head index contains an invalid finalized event",
+            }
+        })?;
+        let source_id = event.entry.source_id;
+        if previous_source_id.is_some_and(|previous| previous >= source_id)
+            || !source_head_sequences.insert(event.sequence)
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal prefix source-head index is not strictly source ordered and sequence unique",
+            });
+        }
+        let identity = journal_event_identity(event);
+        let Some(terminal) = terminal else {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal prefix source-head index exists without a compacted terminal",
+            });
+        };
+        let position_is_valid = if identity.sequence == terminal.sequence {
+            identity == terminal
+        } else if identity.sequence < terminal.sequence {
+            identity.block_height < terminal.block_height
+                || (identity.block_height == terminal.block_height
+                    && identity.block_hash == terminal.block_hash
+                    && identity.event_index < terminal.event_index)
+        } else {
+            false
+        };
+        if !position_is_valid || identity.sequence > prefix.pruned_event_count {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "journal prefix source head lies outside its compacted prefix",
+            });
+        }
+        contains_terminal |= identity == terminal;
+        previous_source_id = Some(source_id);
+    }
+    if !contains_terminal {
+        return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+            reason: "journal prefix source-head index omits the compacted terminal event",
+        });
+    }
+    merge_journal_source_heads(prefix_heads, retained_suffix)?;
+    Ok(())
+}
+
+fn journal_prefix_source_head_root(
+    prefix_heads: &[ReputationJournalFinalizedEventV1],
+) -> Result<[u8; 32], ReputationFinalizedArchiveError> {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(JOURNAL_PREFIX_SOURCE_HEAD_ROOT_DOMAIN_V1);
+    hasher.update(&bounded_len(prefix_heads.len())?.to_le_bytes());
+    for event in prefix_heads {
+        let bytes = norito::to_bytes(event).map_err(ReputationFinalizedArchiveError::Encode)?;
+        hasher.update(&bounded_len(bytes.len())?.to_le_bytes());
+        hasher.update(&bytes);
+    }
+    Ok(*hasher.finalize().as_bytes())
+}
+
+fn journal_source_head_commitment(
+    prefix_heads: &[ReputationJournalFinalizedEventV1],
+    retained_suffix: &[ReputationJournalFinalizedEventV1],
+) -> Result<(Vec<ReputationJournalFinalizedEventV1>, u64, [u8; 32]), ReputationFinalizedArchiveError>
+{
+    let heads = merge_journal_source_heads(prefix_heads, retained_suffix)?;
+    let count = bounded_len(heads.len())?;
+    let root = journal_prefix_source_head_root(&heads)?;
+    Ok((heads, count, root))
+}
+
+fn validate_journal_source_head_lineage(
+    previous: &ReputationFinalizedVirtualBaseCheckpointV1,
+    current: &ReputationFinalizedVirtualBaseCheckpointV1,
+) -> Result<(), ReputationFinalizedArchiveError> {
+    let previous_high_water = previous.journal_prefix.pruned_event_count;
+    for previous_head in &previous.journal_prefix_source_heads {
+        let current_head = current
+            .journal_prefix_source_heads
+            .binary_search_by_key(&previous_head.entry.source_id, |event| {
+                event.entry.source_id
+            })
+            .ok()
+            .map(|index| &current.journal_prefix_source_heads[index])
+            .ok_or(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-head lineage omitted an existing source",
+            })?;
+        if current_head == previous_head {
+            continue;
+        }
+        if current_head.sequence <= previous_high_water
+            || previous_head.entry.source_kind() != current_head.entry.source_kind()
+            || previous_head.entry.source_revision.checked_add(1)
+                != Some(current_head.entry.source_revision)
+            || current_head.entry.predecessor_event_id != Some(previous_head.entry.event_id)
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-head lineage rolled back or substituted an existing source",
+            });
+        }
+    }
+    for current_head in &current.journal_prefix_source_heads {
+        if previous
+            .journal_prefix_source_heads
+            .binary_search_by_key(&current_head.entry.source_id, |event| {
+                event.entry.source_id
+            })
+            .is_ok()
+        {
+            continue;
+        }
+        if current_head.sequence <= previous_high_water
+            || current_head.entry.source_revision != 1
+            || current_head.entry.predecessor_event_id.is_some()
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "checkpoint source-head lineage introduced a stale or noncanonical source",
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_reserve_provider_account(
     account: &ReserveProviderAccountV1,
     finalized_at_unix_ms: u64,
@@ -669,6 +886,8 @@ struct ReputationFinalizedAnchorManifestV1 {
     policy_record_digest: [u8; 32],
     authority_policy_history_digest: [u8; 32],
     high_water_marks: ReputationFeedHighWaterMarksV1,
+    journal_source_head_count: u64,
+    journal_source_head_root: [u8; 32],
     reserve_provider_count: u64,
     reserve_provider_state_root: [u8; 32],
 }
@@ -680,10 +899,19 @@ impl ReputationFinalizedAnchorManifestV1 {
             || self.finalized_at_unix_ms == u64::MAX
             || self.policy_record_digest == [0; 32]
             || self.authority_policy_history_digest == [0; 32]
+            || self.journal_source_head_root == [0; 32]
             || self.reserve_provider_state_root == [0; 32]
         {
             return Err(ReputationFinalizedArchiveError::InvalidManifest {
                 reason: "anchor manifest contains a zero or invalid commitment",
+            });
+        }
+        if self.journal_source_head_count > self.high_water_marks.journal_events
+            || (self.high_water_marks.journal_events == 0)
+                != (self.journal_source_head_count == 0)
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidManifest {
+                reason: "anchor journal source-head commitment disagrees with its event high-water mark",
             });
         }
         match (&self.predecessor, self.predecessor_anchor_digest) {
@@ -957,6 +1185,8 @@ fn validate_feed_prefixes_against_anchor(
 struct ReputationCheckpointValidationSummaryV1 {
     high_water_marks: ReputationFeedHighWaterMarksV1,
     policy_record_digest: [u8; 32],
+    journal_prefix_source_head_count: u64,
+    journal_prefix_source_head_root: [u8; 32],
     reserve_provider_count: u64,
     reserve_provider_state_root: [u8; 32],
 }
@@ -977,6 +1207,10 @@ struct ReputationFinalizedVirtualBaseCheckpointV1 {
     authority_policy_history_digest: [u8; 32],
     proof_prefix: ReputationFeedPrefixSummaryV1,
     journal_prefix: ReputationFeedPrefixSummaryV1,
+    // TODO: Replace this bounded inline snapshot with authenticated
+    // content-addressed sharded/Merkle source-index artifacts before the
+    // unique-source population can grow indefinitely.
+    journal_prefix_source_heads: Vec<ReputationJournalFinalizedEventV1>,
     repair_prefix: ReputationFeedPrefixSummaryV1,
     orderbook_prefix: ReputationFeedPrefixSummaryV1,
     reserve_prefix: ReputationFeedPrefixSummaryV1,
@@ -1200,6 +1434,7 @@ struct ReputationReconstructionStateV1 {
     authority_policy: ReputationJournalAuthorityPolicyRecordV1,
     proof_outcomes: ReputationRetainedFeedStateV1<ProofOutcomeFinalizedEventV1>,
     journal_events: ReputationRetainedFeedStateV1<ReputationJournalFinalizedEventV1>,
+    journal_prefix_source_heads: Vec<ReputationJournalFinalizedEventV1>,
     repair_events: ReputationRetainedFeedStateV1<RepairFinalizedEventV1>,
     orderbook_events: ReputationRetainedFeedStateV1<OrderbookFinalizedEventV1>,
     reserve_events: ReputationRetainedFeedStateV1<ReserveFinalizedEventV1>,
@@ -1220,6 +1455,7 @@ impl ReputationReconstructionStateV1 {
                 prefix: ReputationFeedPrefixSummaryV1::default(),
                 retained_suffix: projection.journal_events,
             },
+            journal_prefix_source_heads: Vec::new(),
             repair_events: ReputationRetainedFeedStateV1 {
                 prefix: ReputationFeedPrefixSummaryV1::default(),
                 retained_suffix: projection.repair_events,
@@ -1251,6 +1487,7 @@ impl ReputationReconstructionStateV1 {
                 prefix: checkpoint.journal_prefix,
                 retained_suffix: checkpoint.journal_retained_suffix.clone(),
             },
+            journal_prefix_source_heads: checkpoint.journal_prefix_source_heads.clone(),
             repair_events: ReputationRetainedFeedStateV1 {
                 prefix: checkpoint.repair_prefix,
                 retained_suffix: checkpoint.repair_retained_suffix.clone(),
@@ -1342,6 +1579,13 @@ impl ReputationReconstructionStateV1 {
             &self.journal_events.retained_suffix,
             journal_event_identity,
         )?;
+        validate_journal_prefix_source_heads(
+            self.journal_events.prefix,
+            &self.journal_prefix_source_heads,
+            &self.journal_events.retained_suffix,
+            &self.key,
+            self.finalized_at_unix_ms,
+        )?;
         validate_retained_feed(
             self.repair_events.prefix,
             &self.repair_events.retained_suffix,
@@ -1398,6 +1642,11 @@ impl ReputationReconstructionStateV1 {
             .iter()
             .map(proof_event_identity)
             .chain(
+                self.journal_prefix_source_heads
+                    .iter()
+                    .map(journal_event_identity),
+            )
+            .chain(
                 self.journal_events
                     .retained_suffix
                     .iter()
@@ -1452,6 +1701,44 @@ impl ReputationReconstructionStateV1 {
         }
         Ok(())
     }
+}
+
+fn journal_source_view(
+    key: &ReputationFinalizedArchiveKeyV1,
+    finalized_at_unix_ms: u64,
+    prefix_source_heads: &[ReputationJournalFinalizedEventV1],
+    retained_suffix: &[ReputationJournalFinalizedEventV1],
+    source_id: ReputationJournalSourceIdV1,
+) -> ReputationFinalizedArchiveJournalSourceViewV1 {
+    let event = retained_suffix
+        .iter()
+        .rev()
+        .find(|event| event.entry.source_id == source_id)
+        .or_else(|| {
+            prefix_source_heads
+                .binary_search_by_key(&source_id, |event| event.entry.source_id)
+                .ok()
+                .map(|index| &prefix_source_heads[index])
+        })
+        .cloned();
+    ReputationFinalizedArchiveJournalSourceViewV1 {
+        key: key.clone(),
+        finalized_at_unix_ms,
+        event,
+    }
+}
+
+fn journal_source_view_from_state(
+    state: &ReputationReconstructionStateV1,
+    source_id: ReputationJournalSourceIdV1,
+) -> ReputationFinalizedArchiveJournalSourceViewV1 {
+    journal_source_view(
+        &state.key,
+        state.finalized_at_unix_ms,
+        &state.journal_prefix_source_heads,
+        &state.journal_events.retained_suffix,
+        source_id,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -2880,6 +3167,7 @@ impl ReputationFinalizedArchive {
                 reserve_events: reserve_suffix,
                 reserve_providers,
             },
+            &authority_policy_history,
         )?;
         self.insert_captured_state(next_state, authority_policy_history)
     }
@@ -3298,13 +3586,24 @@ impl ReputationFinalizedArchive {
                     latest_height: previous.key.height,
                 });
             }
-            validate_projection_transition_from_state(previous, &projection)?;
+            validate_projection_transition_from_state(
+                previous,
+                &projection,
+                &authority_policy_history,
+            )?;
         }
         validate_projection_against_index(&projection, &index)?;
 
-        let delta = build_anchor_delta_from_state(predecessor.as_ref(), &projection)?;
-        let next_state =
-            reconstruction_state_from_full_successor(predecessor.as_ref(), &projection)?;
+        let delta = build_anchor_delta_from_state(
+            predecessor.as_ref(),
+            &projection,
+            &authority_policy_history,
+        )?;
+        let next_state = reconstruction_state_from_full_successor(
+            predecessor.as_ref(),
+            &projection,
+            &authority_policy_history,
+        )?;
         self.persist_new_state(
             &mut index,
             predecessor.as_ref(),
@@ -3360,7 +3659,11 @@ impl ReputationFinalizedArchive {
                     latest_height: previous.key.height,
                 });
             }
-            validate_reconstruction_state_transition(previous, &next_state)?;
+            validate_reconstruction_state_transition(
+                previous,
+                &next_state,
+                &authority_policy_history,
+            )?;
         }
         validate_reconstruction_state_against_index(&next_state, &index)?;
         let delta =
@@ -3423,6 +3726,11 @@ impl ReputationFinalizedArchive {
                 reason: "latest projection and exact anchor digest disagree",
             });
         }
+        let (_, journal_source_head_count, journal_source_head_root) =
+            journal_source_head_commitment(
+                &next_state.journal_prefix_source_heads,
+                &next_state.journal_events.retained_suffix,
+            )?;
         let manifest = ReputationFinalizedAnchorManifestV1 {
             key: next_state.key.clone(),
             predecessor: predecessor.map(|previous| previous.key.clone()),
@@ -3431,6 +3739,8 @@ impl ReputationFinalizedArchive {
             policy_record_digest: active_policy_record_digest,
             authority_policy_history_digest,
             high_water_marks: next_state.high_water_marks()?,
+            journal_source_head_count,
+            journal_source_head_root,
             reserve_provider_count: bounded_len(next_state.reserve_providers.len())?,
             reserve_provider_state_root: reserve_provider_state_root(
                 &next_state.reserve_providers,
@@ -3960,6 +4270,21 @@ impl ReputationFinalizedArchive {
                 &state.authority_policy,
                 state.finalized_at_unix_ms,
             )?)?;
+        let (
+            journal_prefix_source_heads,
+            journal_source_head_count,
+            journal_source_head_root,
+        ) = journal_source_head_commitment(
+            &state.journal_prefix_source_heads,
+            &state.journal_events.retained_suffix,
+        )?;
+        if journal_source_head_count != target.manifest.journal_source_head_count
+            || journal_source_head_root != target.manifest.journal_source_head_root
+        {
+            return Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
+                reason: "retention target source-head commitment differs from its reconstructed journal history",
+            });
+        }
         let mut checkpoint = ReputationFinalizedVirtualBaseCheckpointV1 {
             original_activation_floor,
             retention_floor: state.key.clone(),
@@ -3983,6 +4308,7 @@ impl ReputationFinalizedArchive {
                 &state.journal_events,
                 journal_event_identity,
             )?,
+            journal_prefix_source_heads,
             repair_prefix: compact_retained_feed(
                 REPAIR_PREFIX_DIGEST_DOMAIN_V1,
                 &state.repair_events,
@@ -4007,6 +4333,8 @@ impl ReputationFinalizedArchive {
             validation_summary: ReputationCheckpointValidationSummaryV1 {
                 high_water_marks: ReputationFeedHighWaterMarksV1::default(),
                 policy_record_digest: [0; 32],
+                journal_prefix_source_head_count: 0,
+                journal_prefix_source_head_root: [0; 32],
                 reserve_provider_count: 0,
                 reserve_provider_state_root: [0; 32],
             },
@@ -4192,6 +4520,118 @@ impl ReputationFinalizedArchive {
             return Ok(None);
         }
         self.reconstruct_projection(&index, entry).map(Some)
+    }
+
+    /// Read the latest journal event for one source at an exact finalized key.
+    ///
+    /// A missing anchor or mismatched hash returns `Ok(None)`. A present view
+    /// with `event: None` is an authoritative source absence at that anchor.
+    /// Unlike full-history projection reads, the active checkpoint floor
+    /// remains queryable through its bounded source-head index.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed invalid-input, history-pruned, storage, bounds, decode,
+    /// canonicality, digest, or reconstruction failure.
+    pub fn journal_event_by_source_at_exact(
+        &self,
+        key: &ReputationFinalizedArchiveKeyV1,
+        source_id: ReputationJournalSourceIdV1,
+    ) -> Result<
+        Option<ReputationFinalizedArchiveJournalSourceViewV1>,
+        ReputationFinalizedArchiveError,
+    > {
+        key.validate()?;
+        validate_journal_source_id(source_id)?;
+        let index = self.read_index()?;
+        self.verify_storage_boundaries()?;
+        if let Some(checkpoint) = index.checkpoints.get(&key.chain_id) {
+            let checkpoint = &checkpoint.persisted.checkpoint;
+            if key.height < checkpoint.retention_floor.height {
+                return Err(history_pruned_error(checkpoint));
+            }
+            if key.height == checkpoint.retention_floor.height {
+                if key != &checkpoint.retention_floor {
+                    return Ok(None);
+                }
+                return Ok(Some(journal_source_view(
+                    &checkpoint.retention_floor,
+                    checkpoint.retention_floor_finalized_at_unix_ms,
+                    &checkpoint.journal_prefix_source_heads,
+                    &checkpoint.journal_retained_suffix,
+                    source_id,
+                )));
+            }
+        }
+        let Some(entry) = index.by_height.get(&(key.chain_id.clone(), key.height)) else {
+            return Ok(None);
+        };
+        if entry.manifest.key.block_hash != key.block_hash {
+            return Ok(None);
+        }
+        let state = self.reconstruct_state(&index, entry)?;
+        Ok(Some(journal_source_view_from_state(&state, source_id)))
+    }
+
+    /// Read the latest journal event for one source at the highest finalized
+    /// archive view at or below `maximum_height`.
+    ///
+    /// A present view with `event: None` authoritatively proves source absence
+    /// at the selected anchor. The active checkpoint floor participates in
+    /// selection even after its full feed history has been compacted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed invalid-input, history-pruned, storage, bounds, decode,
+    /// canonicality, digest, or reconstruction failure.
+    pub fn latest_journal_event_by_source_at_or_before(
+        &self,
+        chain_id: &ChainId,
+        maximum_height: u64,
+        source_id: ReputationJournalSourceIdV1,
+    ) -> Result<
+        Option<ReputationFinalizedArchiveJournalSourceViewV1>,
+        ReputationFinalizedArchiveError,
+    > {
+        if chain_id.as_str().is_empty() || maximum_height == 0 {
+            return Err(ReputationFinalizedArchiveError::InvalidKey {
+                reason: "chain id must be non-empty and maximum height must be non-zero",
+            });
+        }
+        validate_journal_source_id(source_id)?;
+        let index = self.read_index()?;
+        self.verify_storage_boundaries()?;
+        let checkpoint = index
+            .checkpoints
+            .get(chain_id)
+            .map(|entry| &entry.persisted.checkpoint);
+        if let Some(checkpoint) = checkpoint
+            && maximum_height < checkpoint.retention_floor.height
+        {
+            return Err(history_pruned_error(checkpoint));
+        }
+        if let Some(entry) = index
+            .by_height
+            .range((
+                std::ops::Bound::Included((chain_id.clone(), 0)),
+                std::ops::Bound::Included((chain_id.clone(), maximum_height)),
+            ))
+            .next_back()
+            .map(|(_, entry)| entry)
+        {
+            let state = self.reconstruct_state(&index, entry)?;
+            return Ok(Some(journal_source_view_from_state(&state, source_id)));
+        }
+        if let Some(checkpoint) = checkpoint {
+            return Ok(Some(journal_source_view(
+                &checkpoint.retention_floor,
+                checkpoint.retention_floor_finalized_at_unix_ms,
+                &checkpoint.journal_prefix_source_heads,
+                &checkpoint.journal_retained_suffix,
+                source_id,
+            )));
+        }
+        Ok(None)
     }
 
     /// Return the highest archived projection at or below `maximum_height`.
@@ -5006,11 +5446,24 @@ impl ReputationFinalizedArchive {
                     digest: entry.manifest.policy_record_digest,
                 });
             }
+            let authority_policy_history = resolve_authority_policy_history(
+                index,
+                &persisted_policy.record,
+                persisted.manifest.finalized_at_unix_ms,
+            )?;
+            if authority_policy_history_digest(&authority_policy_history)?
+                != persisted.manifest.authority_policy_history_digest
+            {
+                return Err(ReputationFinalizedArchiveError::InvalidManifest {
+                    reason: "anchor authority-policy history commitment was substituted",
+                });
+            }
             state = Some(apply_anchor_delta_to_state(
                 state,
                 predecessor_anchor_digest,
                 &persisted,
                 &persisted_policy.record,
+                &authority_policy_history,
             )?);
             predecessor_anchor_digest = Some(persisted.anchor_digest()?);
         }
@@ -5407,6 +5860,7 @@ impl ReputationFinalizedArchive {
                 predecessor_anchor_digest,
                 persisted,
                 policy,
+                &policy_history,
             )?;
             predecessor_anchor_digests.insert(chain_id.clone(), persisted.anchor_digest()?);
             states.insert(chain_id.clone(), state);
@@ -6244,6 +6698,7 @@ fn append_capture_suffix<T>(
 fn build_captured_successor_state(
     previous: Option<&ReputationReconstructionStateV1>,
     captured: CapturedReputationSuccessorV1,
+    authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<ReputationReconstructionStateV1, ReputationFinalizedArchiveError> {
     let mut next = previous
         .cloned()
@@ -6253,6 +6708,7 @@ fn build_captured_successor_state(
             authority_policy: captured.authority_policy.clone(),
             proof_outcomes: ReputationRetainedFeedStateV1::default(),
             journal_events: ReputationRetainedFeedStateV1::default(),
+            journal_prefix_source_heads: Vec::new(),
             repair_events: ReputationRetainedFeedStateV1::default(),
             orderbook_events: ReputationRetainedFeedStateV1::default(),
             reserve_events: ReputationRetainedFeedStateV1::default(),
@@ -6289,7 +6745,7 @@ fn build_captured_successor_state(
     )?;
     next.validate()?;
     if let Some(previous) = previous {
-        validate_reconstruction_state_transition(previous, &next)?;
+        validate_reconstruction_state_transition(previous, &next, authority_policy_history)?;
     }
     Ok(next)
 }
@@ -6375,6 +6831,12 @@ fn checkpoint_validation_summary(
         policy_record_digest: canonical_domain_digest(
             POLICY_RECORD_DIGEST_DOMAIN_V1,
             &checkpoint.authority_policy,
+        )?,
+        journal_prefix_source_head_count: bounded_len(
+            checkpoint.journal_prefix_source_heads.len(),
+        )?,
+        journal_prefix_source_head_root: journal_prefix_source_head_root(
+            &checkpoint.journal_prefix_source_heads,
         )?,
         reserve_provider_count: bounded_len(checkpoint.reserve_providers.len())?,
         reserve_provider_state_root: reserve_provider_state_root(&checkpoint.reserve_providers)?,
@@ -6511,42 +6973,36 @@ fn is_canonical_digest_file_name(name: &str, suffix: &str) -> bool {
 fn validate_policy_transition(
     previous: Option<&ReputationJournalAuthorityPolicyRecordV1>,
     current: &ReputationJournalAuthorityPolicyRecordV1,
+    current_history: &[ReputationJournalAuthorityPolicyRecordV1],
     predecessor_finalized_at_unix_ms: u64,
     current_finalized_at_unix_ms: u64,
 ) -> Result<(), ReputationFinalizedArchiveError> {
-    current
-        .validate()
-        .map_err(|_| ReputationFinalizedArchiveError::InvalidProjection {
-            reason: "active reputation journal authority policy is invalid",
-        })?;
-    if current.activated_at_unix_ms > current_finalized_at_unix_ms {
-        return Err(ReputationFinalizedArchiveError::InvalidProjection {
-            reason: "authority policy activates after the finalized anchor",
-        });
-    }
+    validate_authority_policy_history(current_history, current, current_finalized_at_unix_ms)?;
     let Some(previous) = previous else {
         return Ok(());
     };
-    if current.policy_digest == previous.policy_digest {
+    let previous_in_current_history = usize::try_from(previous.policy.revision)
+        .ok()
+        .and_then(|revision| revision.checked_sub(1))
+        .and_then(|index| current_history.get(index));
+    if previous_in_current_history != Some(previous) {
+        return Err(ReputationFinalizedArchiveError::InvalidProjection {
+            reason: "authority policy history substitutes the previous active record",
+        });
+    }
+    if current.policy.revision == previous.policy.revision {
         if current != previous {
             return Err(ReputationFinalizedArchiveError::InvalidProjection {
-                reason: "authority policy activation record changed without a new digest",
+                reason: "authority policy activation record changed without a new revision",
             });
         }
         return Ok(());
     }
-    let expected_revision = previous.policy.revision.checked_add(1).ok_or(
-        ReputationFinalizedArchiveError::InvalidProjection {
-            reason: "authority policy revision overflow",
-        },
-    )?;
-    if current.policy.revision != expected_revision
-        || current.policy.predecessor_policy_digest != Some(previous.policy_digest)
+    if current.policy.revision < previous.policy.revision
         || current.activated_at_unix_ms < predecessor_finalized_at_unix_ms
-        || current.activated_at_unix_ms <= previous.activated_at_unix_ms
     {
         return Err(ReputationFinalizedArchiveError::InvalidProjection {
-            reason: "authority policy rotation is not the exact successor",
+            reason: "authority policy rotation regresses its exact predecessor anchor",
         });
     }
     Ok(())
@@ -6800,6 +7256,7 @@ where
 fn validate_projection_transition_from_state(
     previous: &ReputationReconstructionStateV1,
     current: &ReputationFinalizedProjectionV1,
+    authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<(), ReputationFinalizedArchiveError> {
     if current.key.chain_id != previous.key.chain_id
         || current.key.height <= previous.key.height
@@ -6812,6 +7269,7 @@ fn validate_projection_transition_from_state(
     validate_policy_transition(
         Some(&previous.authority_policy),
         &current.authority_policy,
+        authority_policy_history,
         previous.finalized_at_unix_ms,
         current.finalized_at_unix_ms,
     )?;
@@ -6827,6 +7285,20 @@ fn validate_projection_transition_from_state(
         &current.journal_events,
         journal_event_identity,
     )?;
+    let journal_prefix_len = usize::try_from(previous.journal_events.prefix.pruned_event_count)
+        .map_err(|_| ReputationFinalizedArchiveError::InvalidProjection {
+            reason: "compacted journal prefix does not fit this target",
+        })?;
+    let journal_prefix = current.journal_events.get(..journal_prefix_len).ok_or(
+        ReputationFinalizedArchiveError::InvalidDelta {
+            reason: "finalized journal history omits its compacted source-head prefix",
+        },
+    )?;
+    if merge_journal_source_heads(&[], journal_prefix)? != previous.journal_prefix_source_heads {
+        return Err(ReputationFinalizedArchiveError::InvalidDelta {
+            reason: "finalized journal history disagrees with its compacted source-head index",
+        });
+    }
     validate_full_feed_extends_retained_state(
         REPAIR_PREFIX_DIGEST_DOMAIN_V1,
         &previous.repair_events,
@@ -6880,6 +7352,7 @@ fn validate_retained_feed_extension<T: PartialEq>(
 fn validate_reconstruction_state_transition(
     previous: &ReputationReconstructionStateV1,
     current: &ReputationReconstructionStateV1,
+    authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<(), ReputationFinalizedArchiveError> {
     if current.key.chain_id != previous.key.chain_id
         || current.key.height <= previous.key.height
@@ -6892,11 +7365,17 @@ fn validate_reconstruction_state_transition(
     validate_policy_transition(
         Some(&previous.authority_policy),
         &current.authority_policy,
+        authority_policy_history,
         previous.finalized_at_unix_ms,
         current.finalized_at_unix_ms,
     )?;
     validate_retained_feed_extension(&previous.proof_outcomes, &current.proof_outcomes)?;
     validate_retained_feed_extension(&previous.journal_events, &current.journal_events)?;
+    if current.journal_prefix_source_heads != previous.journal_prefix_source_heads {
+        return Err(ReputationFinalizedArchiveError::InvalidDelta {
+            reason: "captured finalized journal suffix substituted its compacted source-head index",
+        });
+    }
     validate_retained_feed_extension(&previous.repair_events, &current.repair_events)?;
     validate_retained_feed_extension(&previous.orderbook_events, &current.orderbook_events)?;
     validate_retained_feed_extension(&previous.reserve_events, &current.reserve_events)?;
@@ -6994,11 +7473,12 @@ fn retained_suffix_start<T>(
 fn build_anchor_delta_from_state(
     previous: Option<&ReputationReconstructionStateV1>,
     current: &ReputationFinalizedProjectionV1,
+    authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<ReputationFinalizedAnchorDeltaV1, ReputationFinalizedArchiveError> {
     let Some(previous) = previous else {
         return build_anchor_delta(None, current);
     };
-    validate_projection_transition_from_state(previous, current)?;
+    validate_projection_transition_from_state(previous, current, authority_policy_history)?;
     let previous_accounts = previous
         .reserve_providers
         .iter()
@@ -7037,13 +7517,14 @@ fn build_anchor_delta_from_state(
 fn reconstruction_state_from_full_successor(
     previous: Option<&ReputationReconstructionStateV1>,
     current: &ReputationFinalizedProjectionV1,
+    authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<ReputationReconstructionStateV1, ReputationFinalizedArchiveError> {
     let Some(previous) = previous else {
         return Ok(ReputationReconstructionStateV1::from_projection(
             current.clone(),
         ));
     };
-    validate_projection_transition_from_state(previous, current)?;
+    validate_projection_transition_from_state(previous, current, authority_policy_history)?;
     let state = ReputationReconstructionStateV1 {
         key: current.key.clone(),
         finalized_at_unix_ms: current.finalized_at_unix_ms,
@@ -7068,6 +7549,7 @@ fn reconstruction_state_from_full_successor(
             })?..]
                 .to_vec(),
         },
+        journal_prefix_source_heads: previous.journal_prefix_source_heads.clone(),
         repair_events: ReputationRetainedFeedStateV1 {
             prefix: previous.repair_events.prefix,
             retained_suffix: current.repair_events[usize::try_from(
@@ -7109,6 +7591,7 @@ fn apply_anchor_delta_to_state(
     previous_anchor_digest: Option<[u8; 32]>,
     persisted: &PersistedReputationFinalizedAnchorV1,
     policy: &ReputationJournalAuthorityPolicyRecordV1,
+    authority_policy_history: &[ReputationJournalAuthorityPolicyRecordV1],
 ) -> Result<ReputationReconstructionStateV1, ReputationFinalizedArchiveError> {
     persisted.validate_standalone()?;
     let manifest = &persisted.manifest;
@@ -7119,7 +7602,13 @@ fn apply_anchor_delta_to_state(
         manifest.predecessor_anchor_digest,
     ) {
         (None, None, None, None) => {
-            validate_policy_transition(None, policy, 0, manifest.finalized_at_unix_ms)?;
+            validate_policy_transition(
+                None,
+                policy,
+                authority_policy_history,
+                0,
+                manifest.finalized_at_unix_ms,
+            )?;
         }
         (
             Some(previous),
@@ -7137,6 +7626,7 @@ fn apply_anchor_delta_to_state(
             validate_policy_transition(
                 Some(&previous.authority_policy),
                 policy,
+                authority_policy_history,
                 previous.finalized_at_unix_ms,
                 manifest.finalized_at_unix_ms,
             )?;
@@ -7195,6 +7685,7 @@ fn apply_anchor_delta_to_state(
         authority_policy: policy.clone(),
         proof_outcomes: ReputationRetainedFeedStateV1::default(),
         journal_events: ReputationRetainedFeedStateV1::default(),
+        journal_prefix_source_heads: Vec::new(),
         repair_events: ReputationRetainedFeedStateV1::default(),
         orderbook_events: ReputationRetainedFeedStateV1::default(),
         reserve_events: ReputationRetainedFeedStateV1::default(),
@@ -7258,6 +7749,18 @@ fn apply_anchor_delta_to_state(
         return Err(ReputationFinalizedArchiveError::ProviderStateRootMismatch);
     }
     state.validate()?;
+    let (_, journal_source_head_count, journal_source_head_root) =
+        journal_source_head_commitment(
+            &state.journal_prefix_source_heads,
+            &state.journal_events.retained_suffix,
+        )?;
+    if journal_source_head_count != manifest.journal_source_head_count
+        || journal_source_head_root != manifest.journal_source_head_root
+    {
+        return Err(ReputationFinalizedArchiveError::InvalidManifest {
+            reason: "anchor journal source-head commitment does not match its reconstructed event history",
+        });
+    }
     Ok(state)
 }
 
@@ -8988,6 +9491,7 @@ mod tests {
             SorafsRepairLedgerEventKind, SorafsReserveLedgerEvent, SorafsReserveLedgerEventKind,
         },
         sorafs::{
+            capacity::{CapacityDisputeId, CapacityDisputeOutcome},
             orderbook::OrderbookFinalizedEventV1,
             pin_registry::{ManifestDigest, StorageClass},
             proof_ledger::{
@@ -8995,7 +9499,8 @@ mod tests {
                 ProofOutcomeProjectionV1, ProofOutcomeRecordV1,
             },
             reputation::{
-                PorTerminalOutcomeV1, PorTerminalStatusV1,
+                PorTerminalOutcomeV1, PorTerminalStatusV1, ProviderDisputeEventV1,
+                ProviderDisputeKindV1, ProviderDisputeResolutionV1, ProviderDisputeStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 REPUTATION_JOURNAL_MAX_SOURCE_AGE_MS_V1, ReputationJournalAuthorityPolicyRecordV1,
                 ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
@@ -9368,6 +9873,19 @@ mod tests {
         projection
     }
 
+    fn rotated_policy_record(
+        predecessor: &ReputationJournalAuthorityPolicyRecordV1,
+        recorder_marker: u8,
+        activated_at_unix_ms: u64,
+    ) -> ReputationJournalAuthorityPolicyRecordV1 {
+        let mut policy = predecessor.policy.clone();
+        policy.revision = policy.revision.checked_add(1).expect("test revision");
+        policy.predecessor_policy_digest = Some(predecessor.policy_digest);
+        policy.por_recorder_authority = account(recorder_marker);
+        ReputationJournalAuthorityPolicyRecordV1::try_new(policy, account(4), activated_at_unix_ms)
+            .expect("rotated authority policy record")
+    }
+
     fn journal_event(
         policy: &ReputationJournalAuthorityPolicyV1,
         sequence: u64,
@@ -9408,6 +9926,83 @@ mod tests {
             block_hash,
             event_index: 0,
             recorded_at_unix_ms: issued_at_unix_ms + 7,
+            entry,
+        }
+    }
+
+    fn opened_dispute_journal_event(
+        policy: &ReputationJournalAuthorityPolicyV1,
+        sequence: u64,
+        block_height: u64,
+        block_hash: [u8; 32],
+        event_index: u32,
+        marker: u8,
+    ) -> ReputationJournalFinalizedEventV1 {
+        let submitted_at_unix_ms = 1_710_100_000_000 + u64::from(marker);
+        let entry = ReputationJournalEntryV1::try_new(
+            ProviderId::new([marker; 32]),
+            policy.canonical_digest().expect("canonical policy digest"),
+            policy.dispute_recorder_authority.clone(),
+            submitted_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
+                dispute_id: CapacityDisputeId::new([marker.wrapping_add(1); 32]),
+                kind: ProviderDisputeKindV1::FeeDispute,
+                evidence_digest: [marker.wrapping_add(2); 32],
+                submitted_at_unix_ms,
+                status: ProviderDisputeStatusV1::Opened,
+            }),
+        )
+        .expect("valid opened dispute journal entry");
+        ReputationJournalFinalizedEventV1 {
+            sequence,
+            block_height,
+            block_hash,
+            event_index,
+            recorded_at_unix_ms: submitted_at_unix_ms + 1,
+            entry,
+        }
+    }
+
+    fn resolved_dispute_journal_event(
+        policy: &ReputationJournalAuthorityPolicyV1,
+        sequence: u64,
+        block_height: u64,
+        block_hash: [u8; 32],
+        event_index: u32,
+        opened: &ReputationJournalFinalizedEventV1,
+    ) -> ReputationJournalFinalizedEventV1 {
+        let ReputationJournalPayloadV1::ProviderDispute(opened_payload) = &opened.entry.payload
+        else {
+            panic!("opened fixture must contain a provider dispute");
+        };
+        let resolved_at_unix_ms = opened_payload.submitted_at_unix_ms + 10;
+        let entry = ReputationJournalEntryV1::try_new(
+            opened.entry.provider_id,
+            policy.canonical_digest().expect("canonical policy digest"),
+            policy.dispute_recorder_authority.clone(),
+            resolved_at_unix_ms,
+            Some(opened.entry.event_id),
+            ReputationJournalPayloadV1::ProviderDispute(ProviderDisputeEventV1 {
+                dispute_id: opened_payload.dispute_id,
+                kind: opened_payload.kind,
+                evidence_digest: opened_payload.evidence_digest,
+                submitted_at_unix_ms: opened_payload.submitted_at_unix_ms,
+                status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
+                    outcome: CapacityDisputeOutcome::Upheld,
+                    resolved_at_unix_ms,
+                    decision_digest: [0xD1; 32],
+                    rationale: Some("canonical retained-source resolution".to_owned()),
+                }),
+            }),
+        )
+        .expect("valid resolved dispute journal entry");
+        ReputationJournalFinalizedEventV1 {
+            sequence,
+            block_height,
+            block_hash,
+            event_index,
+            recorded_at_unix_ms: resolved_at_unix_ms + 1,
             entry,
         }
     }
@@ -9673,6 +10268,11 @@ mod tests {
                 journal_event_identity,
             )
             .expect("compact journal prefix"),
+            journal_prefix_source_heads: merge_journal_source_heads(
+                &state.journal_prefix_source_heads,
+                &state.journal_events.retained_suffix,
+            )
+            .expect("compact journal source-head index"),
             repair_prefix: compact_retained_feed(
                 REPAIR_PREFIX_DIGEST_DOMAIN_V1,
                 &state.repair_events,
@@ -9700,6 +10300,8 @@ mod tests {
             validation_summary: ReputationCheckpointValidationSummaryV1 {
                 high_water_marks: ReputationFeedHighWaterMarksV1::default(),
                 policy_record_digest: [0; 32],
+                journal_prefix_source_head_count: 0,
+                journal_prefix_source_head_root: [0; 32],
                 reserve_provider_count: 0,
                 reserve_provider_state_root: [0; 32],
             },
@@ -9786,6 +10388,232 @@ mod tests {
         )
         .expect("write recommitted test checkpoint");
         replacement_path
+    }
+
+    fn replace_test_checkpoint_with_recomputed_checkpoint_digest(
+        checkpoints: &Path,
+        mut persisted: PersistedReputationFinalizedVirtualBaseCheckpointV1,
+    ) -> PathBuf {
+        let original_digest = persisted.checkpoint_digest;
+        persisted.checkpoint_digest =
+            checkpoint_content_digest(persisted.version, &persisted.checkpoint)
+                .expect("recompute test checkpoint content digest");
+        assert_ne!(
+            persisted.checkpoint_digest, original_digest,
+            "checkpoint mutation must change its content address"
+        );
+
+        let original_path = checkpoints.join(checkpoint_file_name(original_digest));
+        let replacement_path = checkpoints.join(checkpoint_file_name(persisted.checkpoint_digest));
+        fs::remove_file(original_path).expect("remove original test checkpoint");
+        fs::write(
+            &replacement_path,
+            norito::to_bytes(&persisted).expect("encode recommitted test checkpoint"),
+        )
+        .expect("write recommitted test checkpoint");
+        replacement_path
+    }
+
+    fn archive_with_two_source_checkpoint() -> (
+        tempfile::TempDir,
+        PersistedReputationFinalizedVirtualBaseCheckpointV1,
+    ) {
+        let directory = tempdir().expect("create archive directory");
+        let mut projection = sample_projection(7, [0x71; 32]);
+        let first = journal_event(
+            &projection.authority_policy.policy,
+            1,
+            projection.key.height,
+            projection.key.block_hash,
+            0x31,
+        );
+        let mut second = journal_event(
+            &projection.authority_policy.policy,
+            2,
+            projection.key.height,
+            projection.key.block_hash,
+            0x41,
+        );
+        second.event_index = 1;
+        projection.journal_events = vec![first, second];
+        let persisted = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection.clone())
+                .expect("insert two-source checkpoint projection");
+            publish_test_checkpoint(&archive, &projection.key)
+        };
+        (directory, persisted)
+    }
+
+    #[test]
+    fn checkpoint_reopen_rejects_duplicate_and_reordered_source_heads() {
+        let (duplicate_directory, mut duplicate) = archive_with_two_source_checkpoint();
+        let duplicate_head = duplicate.checkpoint.journal_prefix_source_heads[0].clone();
+        duplicate
+            .checkpoint
+            .journal_prefix_source_heads
+            .push(duplicate_head);
+        replace_test_checkpoint_with_recomputed_content_address(
+            &archive_root(&duplicate_directory).join(CHECKPOINTS_DIRECTORY),
+            duplicate,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&duplicate_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
+        ));
+
+        let (reordered_directory, mut reordered) = archive_with_two_source_checkpoint();
+        reordered.checkpoint.journal_prefix_source_heads.swap(0, 1);
+        replace_test_checkpoint_with_recomputed_content_address(
+            &archive_root(&reordered_directory).join(CHECKPOINTS_DIRECTORY),
+            reordered,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&reordered_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_reopen_rejects_substituted_source_head_and_committed_root() {
+        let directory = tempdir().expect("create archive directory");
+        let mut projection = sample_projection(7, [0x71; 32]);
+        projection.journal_events.push(journal_event(
+            &projection.authority_policy.policy,
+            1,
+            projection.key.height,
+            projection.key.block_hash,
+            0x51,
+        ));
+        let mut substituted = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection.clone())
+                .expect("insert one-source checkpoint projection");
+            publish_test_checkpoint(&archive, &projection.key)
+        };
+        let substituted_head = journal_event(
+            &substituted.checkpoint.authority_policy.policy,
+            1,
+            substituted.checkpoint.retention_floor.height,
+            substituted.checkpoint.retention_floor.block_hash,
+            0x52,
+        );
+        substituted.checkpoint.journal_prefix_source_heads[0] = substituted_head;
+        replace_test_checkpoint_with_recomputed_checkpoint_digest(
+            &archive_root(&directory).join(CHECKPOINTS_DIRECTORY),
+            substituted,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch)
+        ));
+
+        let (root_directory, mut substituted_root) = archive_with_two_source_checkpoint();
+        substituted_root
+            .checkpoint
+            .validation_summary
+            .journal_prefix_source_head_root[0] ^= 0xFF;
+        substituted_root.checkpoint.validation_summary_digest = canonical_domain_digest(
+            CHECKPOINT_VALIDATION_DIGEST_DOMAIN_V1,
+            &substituted_root.checkpoint.validation_summary,
+        )
+        .expect("recommit substituted source-head root summary");
+        replace_test_checkpoint_with_recomputed_checkpoint_digest(
+            &archive_root(&root_directory).join(CHECKPOINTS_DIRECTORY),
+            substituted_root,
+        );
+        assert!(matches!(
+            ReputationFinalizedArchive::try_open_unsealed_for_test(
+                archive_root(&root_directory),
+                bounds(),
+            ),
+            Err(ReputationFinalizedArchiveError::CheckpointDigestMismatch)
+        ));
+    }
+
+    #[test]
+    fn source_head_snapshot_record_ceiling_rejects_checkpoint_before_pruning() {
+        let directory = tempdir().expect("create archive directory");
+        let mut projection = sample_projection(7, [0x71; 32]);
+        projection.journal_events = (0_u8..16)
+            .map(|offset| {
+                let mut event = journal_event(
+                    &projection.authority_policy.policy,
+                    u64::from(offset) + 1,
+                    projection.key.height,
+                    projection.key.block_hash,
+                    0x20 + offset,
+                );
+                event.event_index = u32::from(offset);
+                event
+            })
+            .collect();
+        let (persisted, checkpoint_bytes, anchor_bytes) = {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(projection.clone())
+                .expect("insert many-source projection");
+            let (persisted, checkpoint_bytes, _) =
+                test_checkpoint_artifact(&archive, &projection.key);
+            let anchor_bytes = fs::metadata(
+                archive
+                    .record_path(&projection.key)
+                    .expect("derive retained anchor path"),
+            )
+            .expect("read retained anchor metadata")
+            .len();
+            (persisted, checkpoint_bytes, anchor_bytes)
+        };
+        let checkpoint_bytes =
+            u64::try_from(checkpoint_bytes.len()).expect("checkpoint size fits u64");
+        assert!(
+            checkpoint_bytes > anchor_bytes,
+            "inline source-head snapshot must contribute to the checkpoint ceiling"
+        );
+        let tight_bounds = ReputationFinalizedArchiveBounds::try_new(
+            checkpoint_bytes - 1,
+            bounds().max_entries(),
+            bounds().max_total_bytes(),
+        )
+        .expect("construct anchor-fitting checkpoint-rejecting bounds");
+        assert!(anchor_bytes <= tight_bounds.max_record_bytes());
+        let archive = open_archive(&directory, tight_bounds);
+        assert!(matches!(
+            encode_bounded_artifact(&persisted, tight_bounds),
+            Err(ReputationFinalizedArchiveError::RecordTooLarge {
+                size,
+                maximum,
+            }) if size == checkpoint_bytes && maximum == checkpoint_bytes - 1
+        ));
+        assert_eq!(
+            archive
+                .get_exact(&projection.key)
+                .expect("record ceiling failure leaves anchor queryable"),
+            Some(projection.clone())
+        );
+        assert_eq!(
+            archive
+                .retention_floor(&projection.key.chain_id)
+                .expect("record ceiling failure publishes no checkpoint"),
+            None
+        );
+        assert_eq!(
+            fs::read_dir(&archive.anchors)
+                .expect("read retained anchor namespace")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -10218,6 +11046,221 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_source_head_lookup_survives_reopen_and_preserves_absence_boundaries() {
+        let directory = tempdir().expect("create archive directory");
+        let mut floor = sample_projection(7, [0x71; 32]);
+        let opened = opened_dispute_journal_event(
+            &floor.authority_policy.policy,
+            1,
+            floor.key.height,
+            floor.key.block_hash,
+            0,
+            0x51,
+        );
+        let resolved = resolved_dispute_journal_event(
+            &floor.authority_policy.policy,
+            2,
+            floor.key.height,
+            floor.key.block_hash,
+            1,
+            &opened,
+        );
+        let source_id = resolved.entry.source_id;
+        floor.journal_events = vec![opened, resolved.clone()];
+        {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(floor.clone())
+                .expect("insert source-indexed retention floor");
+            publish_test_checkpoint(&archive, &floor.key);
+        }
+
+        let reopened = open_archive(&directory, bounds());
+        let exact = reopened
+            .journal_event_by_source_at_exact(&floor.key, source_id)
+            .expect("query exact checkpoint source head")
+            .expect("checkpoint floor exists");
+        assert_eq!(exact.key, floor.key);
+        assert_eq!(exact.finalized_at_unix_ms, floor.finalized_at_unix_ms);
+        assert_eq!(exact.event, Some(resolved.clone()));
+
+        let latest = reopened
+            .latest_journal_event_by_source_at_or_before(
+                &floor.key.chain_id,
+                floor.key.height,
+                source_id,
+            )
+            .expect("query latest checkpoint source head")
+            .expect("checkpoint floor is selectable");
+        assert_eq!(latest, exact);
+
+        let absent_source = ReputationJournalSourceIdV1::for_por_challenge([0xFE; 32]);
+        let absent = reopened
+            .journal_event_by_source_at_exact(&floor.key, absent_source)
+            .expect("query authoritative checkpoint absence")
+            .expect("checkpoint floor exists");
+        assert_eq!(absent.key, floor.key);
+        assert_eq!(absent.event, None);
+
+        let wrong_hash = ReputationFinalizedArchiveKeyV1::try_new(
+            floor.key.chain_id.clone(),
+            floor.key.height,
+            [0x72; 32],
+        )
+        .expect("construct wrong-hash exact key");
+        assert_eq!(
+            reopened
+                .journal_event_by_source_at_exact(&wrong_hash, source_id)
+                .expect("wrong hash is a missing exact anchor"),
+            None
+        );
+        let missing_successor = ReputationFinalizedArchiveKeyV1::try_new(
+            floor.key.chain_id.clone(),
+            floor.key.height + 1,
+            [0x81; 32],
+        )
+        .expect("construct missing successor key");
+        assert_eq!(
+            reopened
+                .journal_event_by_source_at_exact(&missing_successor, source_id)
+                .expect("missing retained successor is not substituted"),
+            None
+        );
+        let below_floor = ReputationFinalizedArchiveKeyV1::try_new(
+            floor.key.chain_id.clone(),
+            floor.key.height - 1,
+            [0x61; 32],
+        )
+        .expect("construct pre-checkpoint key");
+        assert!(matches!(
+            reopened.journal_event_by_source_at_exact(&below_floor, source_id),
+            Err(ReputationFinalizedArchiveError::HistoryPruned { .. })
+        ));
+        assert!(matches!(
+            reopened.latest_journal_event_by_source_at_or_before(
+                &floor.key.chain_id,
+                floor.key.height - 1,
+                source_id,
+            ),
+            Err(ReputationFinalizedArchiveError::HistoryPruned { .. })
+        ));
+        assert!(matches!(
+            reopened
+                .journal_event_by_source_at_exact(&floor.key, ReputationJournalSourceIdV1::ZERO,),
+            Err(ReputationFinalizedArchiveError::InvalidKey { .. })
+        ));
+        assert!(matches!(
+            reopened
+                .latest_journal_event_by_source_at_or_before(&floor.key.chain_id, 0, source_id,),
+            Err(ReputationFinalizedArchiveError::InvalidKey { .. })
+        ));
+        assert!(matches!(
+            reopened.latest_journal_event_by_source_at_or_before(
+                &ChainId::from(""),
+                floor.key.height,
+                source_id,
+            ),
+            Err(ReputationFinalizedArchiveError::InvalidKey { .. })
+        ));
+    }
+
+    #[test]
+    fn checkpoint_source_index_merges_retained_source_updates_and_new_sources() {
+        let directory = tempdir().expect("create archive directory");
+        let mut floor = sample_projection(7, [0x71; 32]);
+        let opened = opened_dispute_journal_event(
+            &floor.authority_policy.policy,
+            1,
+            floor.key.height,
+            floor.key.block_hash,
+            0,
+            0x61,
+        );
+        let dispute_source_id = opened.entry.source_id;
+        floor.journal_events.push(opened.clone());
+
+        let mut successor = floor.clone();
+        successor.key = ReputationFinalizedArchiveKeyV1::try_new(
+            floor.key.chain_id.clone(),
+            floor.key.height + 1,
+            [0x81; 32],
+        )
+        .expect("construct retained successor key");
+        successor.finalized_at_unix_ms += 1;
+        let resolved = resolved_dispute_journal_event(
+            &successor.authority_policy.policy,
+            2,
+            successor.key.height,
+            successor.key.block_hash,
+            0,
+            &opened,
+        );
+        let mut new_source = journal_event(
+            &successor.authority_policy.policy,
+            3,
+            successor.key.height,
+            successor.key.block_hash,
+            0x62,
+        );
+        new_source.event_index = 1;
+        let new_source_id = new_source.entry.source_id;
+        successor.journal_events.push(resolved.clone());
+        successor.journal_events.push(new_source.clone());
+        {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert(floor.clone())
+                .expect("insert source-indexed checkpoint floor");
+            archive
+                .insert(successor.clone())
+                .expect("insert retained source successor");
+            publish_test_checkpoint(&archive, &floor.key);
+        }
+
+        let reopened = open_archive(&directory, bounds());
+        assert_eq!(
+            reopened
+                .journal_event_by_source_at_exact(&floor.key, dispute_source_id)
+                .expect("read compacted dispute opening")
+                .expect("checkpoint floor exists")
+                .event,
+            Some(opened)
+        );
+        assert_eq!(
+            reopened
+                .journal_event_by_source_at_exact(&successor.key, dispute_source_id)
+                .expect("read retained dispute resolution")
+                .expect("retained successor exists")
+                .event,
+            Some(resolved.clone())
+        );
+        assert_eq!(
+            reopened
+                .latest_journal_event_by_source_at_or_before(
+                    &successor.key.chain_id,
+                    successor.key.height,
+                    dispute_source_id,
+                )
+                .expect("select retained dispute resolution")
+                .expect("retained successor is selectable")
+                .event,
+            Some(resolved)
+        );
+        assert_eq!(
+            reopened
+                .latest_journal_event_by_source_at_or_before(
+                    &successor.key.chain_id,
+                    successor.key.height,
+                    new_source_id,
+                )
+                .expect("select new retained source")
+                .expect("retained successor is selectable")
+                .event,
+            Some(new_source)
+        );
+    }
+
+    #[test]
     fn compacted_capture_accepts_no_new_feed_events_without_querying_pruned_history() {
         let directory = tempdir().expect("create archive directory");
         let first = projection_with_all_feeds(7, [0x71; 32]);
@@ -10342,6 +11385,7 @@ mod tests {
                 reserve_events: Vec::new(),
                 reserve_providers: previous.reserve_providers.clone(),
             },
+            std::slice::from_ref(&previous.authority_policy),
         )
         .expect("capture empty retained suffixes");
         assert_eq!(next.proof_outcomes, previous.proof_outcomes);
@@ -10383,6 +11427,7 @@ mod tests {
             let next = build_captured_successor_state(
                 Some(&previous),
                 captured_all_feed_successor(&previous, 8, [0x81; 32]),
+                std::slice::from_ref(&previous.authority_policy),
             )
             .expect("append every retained feed");
             assert_eq!(next.proof_outcomes.prefix, previous.proof_outcomes.prefix);
@@ -10437,6 +11482,7 @@ mod tests {
         let replay = build_captured_successor_state(
             Some(&previous),
             captured_all_feed_successor(&previous, 8, [0x81; 32]),
+            std::slice::from_ref(&previous.authority_policy),
         )
         .expect("rebuild exact retained capture");
         let authority_policy_history = vec![replay.authority_policy.clone()];
@@ -10472,7 +11518,11 @@ mod tests {
         let mut gapped = captured_all_feed_successor(&previous, 8, [0x81; 32]);
         gapped.journal_events[0].sequence = 3;
         assert!(matches!(
-            build_captured_successor_state(Some(&previous), gapped),
+            build_captured_successor_state(
+                Some(&previous),
+                gapped,
+                std::slice::from_ref(&previous.authority_policy),
+            ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
 
@@ -10481,7 +11531,11 @@ mod tests {
         forked.proof_outcomes[0].block_hash = [0x72; 32];
         forked.proof_outcomes[0].event_index = 1;
         assert!(matches!(
-            build_captured_successor_state(Some(&previous), forked),
+            build_captured_successor_state(
+                Some(&previous),
+                forked,
+                std::slice::from_ref(&previous.authority_policy),
+            ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
 
@@ -10510,7 +11564,11 @@ mod tests {
             reserve_providers: substituted.reserve_providers.clone(),
         };
         assert!(matches!(
-            build_captured_successor_state(Some(&substituted), empty),
+            build_captured_successor_state(
+                Some(&substituted),
+                empty,
+                std::slice::from_ref(&substituted.authority_policy),
+            ),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint { .. })
         ));
 
@@ -10799,6 +11857,123 @@ mod tests {
                 third.authority_policy,
             ]
         );
+    }
+
+    #[test]
+    fn captured_policy_history_accepts_same_block_revision_jump_and_recovers() {
+        let directory = tempdir().expect("create archive directory");
+        let first_projection = sample_projection(7, [0x71; 32]);
+        let first = ReputationReconstructionStateV1::from_projection(first_projection);
+        let rotation_time = first.finalized_at_unix_ms;
+        let second = rotated_policy_record(&first.authority_policy, 0x51, rotation_time);
+        let third = rotated_policy_record(&second, 0x52, rotation_time);
+        let authority_policy_history = vec![
+            first.authority_policy.clone(),
+            second.clone(),
+            third.clone(),
+        ];
+        let next = build_captured_successor_state(
+            Some(&first),
+            CapturedReputationSuccessorV1 {
+                key: ReputationFinalizedArchiveKeyV1::try_new(
+                    first.key.chain_id.clone(),
+                    8,
+                    [0x81; 32],
+                )
+                .expect("construct captured successor key"),
+                finalized_at_unix_ms: first.finalized_at_unix_ms + 1,
+                authority_policy: third,
+                proof_outcomes: Vec::new(),
+                journal_events: Vec::new(),
+                repair_events: Vec::new(),
+                orderbook_events: Vec::new(),
+                reserve_events: Vec::new(),
+                reserve_providers: first.reserve_providers.clone(),
+            },
+            &authority_policy_history,
+        )
+        .expect("capture two same-block rotations");
+        {
+            let archive = open_archive(&directory, bounds());
+            archive
+                .insert_captured_state(first.clone(), vec![first.authority_policy.clone()])
+                .expect("insert revision-one capture");
+            archive
+                .insert_captured_state(next.clone(), authority_policy_history.clone())
+                .expect("insert revision-three capture");
+        }
+
+        let reopened = open_archive(&directory, bounds());
+        assert_eq!(
+            reopened
+                .latest_reconstruction_state_at_or_before(&next.key.chain_id, next.key.height)
+                .expect("reconstruct revision-jump capture")
+                .expect("revision-jump capture exists"),
+            next
+        );
+        let index = reopened.read_index().expect("read recovered policy index");
+        assert_eq!(
+            resolve_authority_policy_history(
+                &index,
+                &authority_policy_history[2],
+                first.finalized_at_unix_ms + 1,
+            )
+            .expect("recover complete authority-policy history"),
+            authority_policy_history
+        );
+    }
+
+    #[test]
+    fn captured_policy_history_rejects_divergent_previous_revision() {
+        let directory = tempdir().expect("create archive directory");
+        let revision_one =
+            ReputationReconstructionStateV1::from_projection(sample_projection(7, [0x71; 32]));
+        let activation_time = revision_one.finalized_at_unix_ms;
+        let canonical_second =
+            rotated_policy_record(&revision_one.authority_policy, 0x61, activation_time);
+        let mut previous = revision_one.clone();
+        previous.authority_policy = canonical_second.clone();
+        let canonical_history = vec![revision_one.authority_policy.clone(), canonical_second];
+        let archive = open_archive(&directory, bounds());
+        archive
+            .insert_captured_state(previous.clone(), canonical_history)
+            .expect("insert canonical revision-two capture");
+
+        let divergent_second =
+            rotated_policy_record(&revision_one.authority_policy, 0x71, activation_time);
+        let divergent_third = rotated_policy_record(&divergent_second, 0x72, activation_time);
+        let divergent_history = vec![
+            revision_one.authority_policy,
+            divergent_second,
+            divergent_third.clone(),
+        ];
+        let error = build_captured_successor_state(
+            Some(&previous),
+            CapturedReputationSuccessorV1 {
+                key: ReputationFinalizedArchiveKeyV1::try_new(
+                    previous.key.chain_id.clone(),
+                    8,
+                    [0x81; 32],
+                )
+                .expect("construct divergent successor key"),
+                finalized_at_unix_ms: previous.finalized_at_unix_ms + 1,
+                authority_policy: divergent_third,
+                proof_outcomes: Vec::new(),
+                journal_events: Vec::new(),
+                repair_events: Vec::new(),
+                orderbook_events: Vec::new(),
+                reserve_events: Vec::new(),
+                reserve_providers: previous.reserve_providers.clone(),
+            },
+            &divergent_history,
+        )
+        .expect_err("divergent revision-two lineage must fail closed");
+        assert!(matches!(
+            error,
+            ReputationFinalizedArchiveError::InvalidProjection {
+                reason: "authority policy history substitutes the previous active record",
+            }
+        ));
     }
 
     #[test]

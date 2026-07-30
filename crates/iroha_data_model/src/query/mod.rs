@@ -1141,6 +1141,10 @@ mod model {
         FindSorafsReputationJournalAuthorityPolicy(
             sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
         ),
+        /// Fetch one finalized reputation-journal event by authoritative source identifier.
+        FindSorafsReputationJournalEventBySourceId(
+            sorafs::prelude::FindSorafsReputationJournalEventBySourceId,
+        ),
         /// Fetch a cursor-bounded page of finalized reputation-journal events.
         FindSorafsReputationJournalEvents(sorafs::prelude::FindSorafsReputationJournalEvents),
         /// Fetch the active authoritative `SoraFS` moderation policy.
@@ -1329,6 +1333,8 @@ mod model {
         SorafsReputationJournalAuthorityPolicy(
             crate::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1,
         ),
+        /// Finalized reputation-journal event resolved by authoritative source.
+        SorafsReputationJournalEvent(crate::sorafs::reputation::ReputationJournalFinalizedEventV1),
         /// Cursor-bounded page of committed reputation-journal events.
         SorafsReputationJournalEventPage(
             crate::sorafs::reputation::ReputationJournalFinalizedEventPageV1,
@@ -5476,6 +5482,7 @@ pub mod sorafs {
             },
             reputation::{
                 ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
+                ReputationJournalSourceIdV1,
             },
             reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
         },
@@ -5793,6 +5800,15 @@ pub mod sorafs {
         /// Fetch the active authoritative reputation-journal authority policy.
         #[derive(Copy)]
         pub struct FindSorafsReputationJournalAuthorityPolicy;
+
+        /// Fetch one finalized reputation-journal event by authoritative source identifier.
+        #[derive(Copy)]
+        pub struct FindSorafsReputationJournalEventBySourceId {
+            /// Domain-separated native source identifier.
+            pub source_id: ReputationJournalSourceIdV1,
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReputationJournalFinalizedCursorV1>,
+        }
 
         /// Fetch an exclusive-cursor page from the one global reputation journal.
         ///
@@ -6228,6 +6244,16 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsReputationJournalEventBySourceId {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find finalized SoraFS reputation-journal event for source `{}`",
+                hex::encode(self.source_id.as_bytes())
+            )
+        }
+    }
+
     impl fmt::Display for FindSorafsReputationJournalEvents {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
@@ -6360,10 +6386,10 @@ pub mod sorafs {
             FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
             FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
             FindSorafsRepairTasks, FindSorafsReputationJournalAuthorityPolicy,
-            FindSorafsReputationJournalEvents, FindSorafsReserveAppealById,
-            FindSorafsReserveAppeals, FindSorafsReserveEvents, FindSorafsReserveMovementById,
-            FindSorafsReserveMovements, FindSorafsReservePolicy, FindSorafsReserveProviderById,
-            FindSorafsReserveProviders,
+            FindSorafsReputationJournalEventBySourceId, FindSorafsReputationJournalEvents,
+            FindSorafsReserveAppealById, FindSorafsReserveAppeals, FindSorafsReserveEvents,
+            FindSorafsReserveMovementById, FindSorafsReserveMovements, FindSorafsReservePolicy,
+            FindSorafsReserveProviderById, FindSorafsReserveProviders,
         };
     }
 }
@@ -6546,6 +6572,10 @@ impl_sorafs_orderbook_singular_query!(
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy
         => crate::sorafs::reputation::ReputationJournalAuthorityPolicyRecordV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReputationJournalEventBySourceId
+        => crate::sorafs::reputation::ReputationJournalFinalizedEventV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsReputationJournalEvents
@@ -7051,6 +7081,8 @@ pub mod error {
             SorafsProofOutcome(SorafsProofOutcomeFindErrorV1),
             /// Failed to find the active authoritative `SoraFS` reputation-journal authority policy
             SorafsReputationJournalAuthorityPolicy,
+            /// Failed to find a finalized `SoraFS` reputation-journal event for source `{0:?}`
+            SorafsReputationJournalEvent(crate::sorafs::reputation::ReputationJournalSourceIdV1),
             /// Failed to find the active authoritative `SoraFS` moderation policy
             SorafsModerationPolicy,
             /// Failed to find authoritative `SoraFS` moderation appeal `{0}`
@@ -7799,6 +7831,11 @@ mod tests {
             )
             .into(),
             sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy.into(),
+            sorafs::prelude::FindSorafsReputationJournalEventBySourceId::new(
+                crate::sorafs::reputation::ReputationJournalSourceIdV1([0x25; 32]),
+                Some(reputation_cursor),
+            )
+            .into(),
             sorafs::prelude::FindSorafsReputationJournalEvents::new(
                 Some(reputation_cursor),
                 Some(

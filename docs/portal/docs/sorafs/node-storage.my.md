@@ -133,8 +133,11 @@ Config plumbing:
   loaded from the node config file.
 - `iroha_core` and `iroha_torii` thread the storage config into the gateway
   builder and chunk store at startup.
-- Dev/test env overrides exist (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), but
-  production deployments should rely on the config file.
+- The retired `SORAFS_*` environment aliases and local pin
+  bearer/rate-limit branch are not part of the V1 schema. Tests that need
+  alternate values supply an explicit in-memory `iroha_config`; production
+  behavior comes only from the reviewed configuration and injected runtime-only
+  security providers.
 
 ### CLI Utilities
 

@@ -17,11 +17,10 @@ use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
     ChainId,
-    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
-    sorafs::{
-        capacity::ProviderId,
-        reputation::{PorTerminalOutcomeV1, StreamTokenValidationOutcomeV1},
+    query::sorafs::prelude::{
+        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
     },
+    sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use sorafs_manifest::{
@@ -38,8 +37,9 @@ use sorafs_node::reputation::{
         ReputationJournalDeliveryFinalizedViewV1, ReputationJournalDeliveryMetricsV1,
         ReputationJournalDeliveryPolicyV1, ReputationJournalDeliveryWorkerV1,
         ReputationJournalProducerOutboxV1, ReputationJournalProducerPolicyV1,
-        ReputationJournalTransactionSubmitterV1, ReputationNativeOutcomeAdmissionApiV1,
-        ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
+        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionSubmitterV1,
+        ReputationNativeOutcomeAdmissionApiV1, ReputationPublicationPolicyV1,
+        ReputationPublicationReconcilerV1, ReputationRuntimeError,
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
         ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
         reputation_journal_submitter_policy_digest_v1,
@@ -439,36 +439,6 @@ impl ReputationRuntimeHandleV1 {
         active.runtime.check_external_bindings()?;
         result
     }
-
-    /// Durably enqueue one provider-attributable stream-token callback.
-    ///
-    /// Unattributable valid outcomes return `NotCounted`; malformed material
-    /// or unavailable durable state fails closed. The stream-token owner must
-    /// be explicitly constructed with this callback by deployment wiring.
-    /// Every call revalidates all active external bindings before and after the
-    /// durable admission.
-    ///
-    /// # Errors
-    ///
-    /// Returns a runtime-binding or durable producer error.
-    pub fn record_stream_token_outcome(
-        &self,
-        provider_id: ProviderId,
-        outcome: StreamTokenValidationOutcomeV1,
-    ) -> Result<
-        sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1,
-        ReputationRuntimeError,
-    > {
-        let active = self.active()?;
-        active.runtime.check_external_bindings()?;
-        let result = active
-            .runtime
-            .counted_stream_token_journal_producer()
-            .ok_or(ReputationRuntimeError::RuntimeBindingMismatch)?
-            .enqueue_counted(provider_id, outcome);
-        active.runtime.check_external_bindings()?;
-        result
-    }
 }
 
 impl ReputationCommittedReadApiV1 for ReputationRuntimeHandleV1 {
@@ -512,17 +482,6 @@ impl ReputationNativeOutcomeAdmissionApiV1 for ReputationRuntimeHandleV1 {
         ReputationRuntimeError,
     > {
         ReputationRuntimeHandleV1::record_por_terminal(self, provider_id, outcome)
-    }
-
-    fn record_stream_token_outcome(
-        &self,
-        provider_id: ProviderId,
-        outcome: StreamTokenValidationOutcomeV1,
-    ) -> Result<
-        sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1,
-        ReputationRuntimeError,
-    > {
-        ReputationRuntimeHandleV1::record_stream_token_outcome(self, provider_id, outcome)
     }
 }
 
@@ -1320,8 +1279,7 @@ mod tests {
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-                ReputationJournalFinalizedEventPageV1, StreamTokenValidationBindingV1,
-                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+                ReputationJournalFinalizedEventPageV1,
             },
             reserve::{
                 ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1,
@@ -1548,6 +1506,32 @@ mod tests {
             if self.malformed_bootstrap_continuation {
                 view.journal_page.has_more = true;
             }
+            Ok(view)
+        }
+
+        fn reputation_journal_event_by_source_id(
+            &self,
+            chain_id: &ChainId,
+            maximum_height: u64,
+            query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
+            let view = ReputationJournalSourceFinalizedViewV1 {
+                anchor: ReputationFinalizedAnchorV1 {
+                    chain_id: chain_id.clone(),
+                    identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
+                        height: 1,
+                        block_hash: [0x81; 32],
+                    },
+                    finalized_at_unix_ms: 1_800_000_000_000,
+                },
+                event: None,
+            };
+            view.validate_for_request(chain_id, maximum_height, query)
+                .map_err(|_| {
+                    ReputationExternalFailureV1::try_new([0x93; 32])
+                        .expect("non-zero source-query failure receipt")
+                })?;
             Ok(view)
         }
 
@@ -2162,46 +2146,6 @@ mod tests {
                 }
             ) if inserted == replay
         ));
-
-        let token = StreamTokenValidationOutcomeV1 {
-            binding: StreamTokenValidationBindingV1 {
-                gateway_id: [0x41; 32],
-                gateway_sequence: 1,
-                request_context_digest: [0x42; 32],
-            },
-            token_body_digest: Some([0x43; 32]),
-            token_key_version: Some(1),
-            validated_at_unix_ms: 1_800_000_001_500,
-            status: StreamTokenValidationStatusV1::Accepted,
-        };
-        assert!(matches!(
-            (
-                admission
-                    .record_stream_token_outcome(ProviderId::new([0x44; 32]), token)
-                    .expect("insert stream-token outcome"),
-                admission
-                    .record_stream_token_outcome(ProviderId::new([0x44; 32]), token)
-                    .expect("replay stream-token outcome"),
-            ),
-            (
-                sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1::Enqueued(
-                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted {
-                        event_id: inserted
-                    }
-                ),
-                sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1::Enqueued(
-                    sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::ExactReplay {
-                        event_id: replay
-                    }
-                )
-            ) if inserted == replay
-        ));
-        let mut substituted = token;
-        substituted.binding.request_context_digest[0] ^= 1;
-        assert!(matches!(
-            admission.record_stream_token_outcome(ProviderId::new([0x44; 32]), substituted),
-            Err(ReputationRuntimeError::JournalSourceConflict)
-        ));
     }
 
     #[test]
@@ -2238,32 +2182,6 @@ mod tests {
         )
         .expect("assemble native admission runtime");
         let admission: &dyn ReputationNativeOutcomeAdmissionApiV1 = &handle;
-
-        let token = StreamTokenValidationOutcomeV1 {
-            binding: StreamTokenValidationBindingV1 {
-                gateway_id: [0x51; 32],
-                gateway_sequence: 1,
-                request_context_digest: [0x52; 32],
-            },
-            token_body_digest: Some([0x53; 32]),
-            token_key_version: Some(1),
-            validated_at_unix_ms: 1_800_000_001_500,
-            status: StreamTokenValidationStatusV1::Accepted,
-        };
-        signer.arm_after(0);
-        assert!(matches!(
-            admission.record_stream_token_outcome(ProviderId::new([0x54; 32]), token),
-            Err(ReputationRuntimeError::RuntimeBindingChanged)
-        ));
-        signer.restore();
-        assert!(matches!(
-            admission
-                .record_stream_token_outcome(ProviderId::new([0x54; 32]), token)
-                .expect("healthy direct stream-token admission"),
-            sorafs_node::reputation::runtime::CountedStreamTokenProducerOutcomeV1::Enqueued(
-                sorafs_node::reputation::runtime::ReputationJournalEnqueueOutcomeV1::Inserted { .. }
-            )
-        ));
 
         let terminal = PorTerminalOutcomeV1 {
             challenge_id: [0x61; 32],

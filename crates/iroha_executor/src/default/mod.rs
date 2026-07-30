@@ -143,6 +143,7 @@ pub use sorafs::{
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
     visit_find_sorafs_reputation_journal_authority_policy,
+    visit_find_sorafs_reputation_journal_event_by_source_id,
     visit_find_sorafs_reputation_journal_events, visit_find_sorafs_reserve_appeal_by_id,
     visit_find_sorafs_reserve_appeals, visit_find_sorafs_reserve_events,
     visit_find_sorafs_reserve_movement_by_id, visit_find_sorafs_reserve_movements,
@@ -1905,8 +1906,9 @@ pub mod sorafs {
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
         FindSorafsRepairTasks, FindSorafsReputationJournalAuthorityPolicy,
-        FindSorafsReputationJournalEvents, FindSorafsReserveAppealById, FindSorafsReserveEvents,
-        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsReputationJournalEventBySourceId, FindSorafsReputationJournalEvents,
+        FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+        FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -1945,6 +1947,17 @@ pub mod sorafs {
     pub fn visit_find_sorafs_reputation_journal_events<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsReputationJournalEvents,
+    ) {
+    }
+
+    /// One payload-free finalized reputation source result is public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_reputation_journal_event_by_source_id<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsReputationJournalEventBySourceId,
     ) {
     }
 
@@ -5829,8 +5842,8 @@ mod sorafs_permission_tests {
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEvents,
-            FindSorafsReserveEvents,
+            FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+            FindSorafsReputationJournalEvents, FindSorafsReserveEvents,
         },
         sorafs::{
             capacity::{
@@ -5852,8 +5865,9 @@ mod sorafs_permission_tests {
                 PorTerminalOutcomeV1, PorTerminalStatusV1,
                 REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
                 ReputationJournalEntryV1, ReputationJournalFinalizedCursorV1,
-                ReputationJournalPayloadV1, StreamTokenValidationBindingV1,
-                StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+                ReputationJournalPayloadV1, ReputationJournalSourceIdV1,
+                StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
+                StreamTokenValidationStatusV1,
             },
             reserve::ReserveFinalizedCursorV1,
         },
@@ -6607,17 +6621,21 @@ mod sorafs_permission_tests {
 
     #[test]
     fn reputation_journal_query_is_public_transparency_state() {
+        let cursor = ReputationJournalFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0x45; 32],
+            finalized_at_unix_ms: 1_700_000_000_000,
+        };
         assert_allowed_without_permission(
-            FindSorafsReputationJournalEvents::new(
-                Some(ReputationJournalFinalizedCursorV1 {
-                    height: 7,
-                    block_hash: [0x45; 32],
-                    finalized_at_unix_ms: 1_700_000_000_000,
-                }),
-                None,
-                16,
-            ),
+            FindSorafsReputationJournalEvents::new(Some(cursor), None, 16),
             sorafs::visit_find_sorafs_reputation_journal_events,
+        );
+        assert_allowed_without_permission(
+            FindSorafsReputationJournalEventBySourceId::new(
+                ReputationJournalSourceIdV1([0x46; 32]),
+                Some(cursor),
+            ),
+            super::visit_find_sorafs_reputation_journal_event_by_source_id,
         );
     }
 

@@ -27,6 +27,14 @@ pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
   por_success_alpha = 0.25
   ```
 
+- Configure distinct proof-outcome, repair, reserve, and orderbook entries under
+  `sorafs.storage.native_transaction_signers`, and inject all four matching live
+  providers. Storage startup requires this durable-drain bundle even when the
+  repair/reserve/orderbook new-work generation flags are disabled. A reserve or
+  orderbook role with both storage and its generation flag disabled is paused
+  before task creation and makes zero external progress. Opening the local
+  `NodeHandle` may still durably normalize an interrupted signer-only `Signing`
+  claim back to `Ready` without refunding its attempt.
 - Ensure the Torii process has read/write access to `data_dir`.
 - Confirm the node advertises the expected capacity via
   `GET /v1/sorafs/capacity/state` once a declaration is recorded.

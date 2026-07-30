@@ -38,7 +38,9 @@ use iroha_core::{
 };
 use iroha_data_model::{
     ChainId,
-    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
+    query::sorafs::prelude::{
+        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+    },
     sorafs::{
         capacity::ProviderId,
         moderation_ledger::{
@@ -62,6 +64,7 @@ use iroha_data_model::{
             ReputationJournalAuthorityPolicyRecordV1 as AuthorityPolicyRecord,
             ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
             ReputationJournalFinalizedEventPageV1, ReputationJournalFinalizedEventV1,
+            ReputationJournalSourceIdV1,
         },
         reserve::{
             RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1,
@@ -76,8 +79,8 @@ use sorafs_node::reputation::{
     runtime::{
         REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1, ReputationExternalFailureV1,
         ReputationFinalizedAnchorV1, ReputationFinalizedQueryV1,
-        ReputationJournalDeliveryFinalizedViewV1, ReputationRuntimeProviderQualificationV1,
-        ReputationRuntimeProviderV1,
+        ReputationJournalDeliveryFinalizedViewV1, ReputationJournalSourceFinalizedViewV1,
+        ReputationRuntimeProviderQualificationV1, ReputationRuntimeProviderV1,
     },
 };
 
@@ -1543,6 +1546,68 @@ impl ReputationFinalizedQueryV1 for ArchivedReputationFinalizedQueryV1 {
         Ok(view)
     }
 
+    fn reputation_journal_event_by_source_id(
+        &self,
+        chain_id: &ChainId,
+        maximum_height: u64,
+        query: FindSorafsReputationJournalEventBySourceId,
+    ) -> ExternalResult<ReputationJournalSourceFinalizedViewV1> {
+        if chain_id.as_str().is_empty()
+            || maximum_height == 0
+            || query.source_id == ReputationJournalSourceIdV1::ZERO
+        {
+            return Err(external_failure(FAILURE_INVALID_REQUEST));
+        }
+        let source_view = match query.expected_finalized_cursor {
+            Some(cursor) => {
+                cursor
+                    .validate()
+                    .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
+                if cursor.height > maximum_height {
+                    return Err(external_failure(FAILURE_PAGE_BOUNDS));
+                }
+                let key = ReputationFinalizedArchiveKeyV1::try_new(
+                    chain_id.clone(),
+                    cursor.height,
+                    cursor.block_hash,
+                )
+                .map_err(|_| external_failure(FAILURE_INVALID_REQUEST))?;
+                let source_view = self
+                    .archive
+                    .journal_event_by_source_at_exact(&key, query.source_id)
+                    .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
+                    .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?;
+                if source_view.finalized_at_unix_ms != cursor.finalized_at_unix_ms {
+                    return Err(external_failure(FAILURE_ANCHOR_MISMATCH));
+                }
+                source_view
+            }
+            None => self
+                .archive
+                .latest_journal_event_by_source_at_or_before(
+                    chain_id,
+                    maximum_height,
+                    query.source_id,
+                )
+                .map_err(|_| external_failure(FAILURE_ARCHIVE_READ))?
+                .ok_or_else(|| external_failure(FAILURE_MISSING_ANCHOR))?,
+        };
+        let view = ReputationJournalSourceFinalizedViewV1 {
+            anchor: ReputationFinalizedAnchorV1 {
+                chain_id: source_view.key.chain_id,
+                identity: ReputationFinalizedIdentityV1 {
+                    height: source_view.key.height,
+                    block_hash: source_view.key.block_hash,
+                },
+                finalized_at_unix_ms: source_view.finalized_at_unix_ms,
+            },
+            event: source_view.event,
+        };
+        view.validate_for_request(chain_id, maximum_height, query)
+            .map_err(|_| external_failure(FAILURE_PAGE_BOUNDS))?;
+        Ok(view)
+    }
+
     fn proof_outcome_page(
         &self,
         anchor: &ReputationFinalizedAnchorV1,
@@ -2321,7 +2386,36 @@ mod tests {
         assert_eq!(delivery.anchor, exact_anchor);
         assert_eq!(delivery.authority_policy, authority_record());
         assert_eq!(delivery.authority_policy_history, vec![authority_record()]);
-        assert_eq!(delivery.journal_page.events, vec![second]);
+        assert_eq!(delivery.journal_page.events, vec![second.clone()]);
+
+        let finalized_cursor = ReputationJournalFinalizedCursorV1 {
+            height: exact_anchor.identity.height,
+            block_hash: exact_anchor.identity.block_hash,
+            finalized_at_unix_ms: exact_anchor.finalized_at_unix_ms,
+        };
+        let source_query = FindSorafsReputationJournalEventBySourceId::new(
+            second.entry.source_id,
+            Some(finalized_cursor),
+        );
+        let source = adapter
+            .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 9, source_query)
+            .expect("source-indexed immutable view");
+        source
+            .validate_for_request(&ChainId::from(CHAIN_ID), 9, source_query)
+            .expect("source response matches request");
+        assert_eq!(source.anchor, exact_anchor);
+        assert_eq!(source.event, Some(second));
+
+        let absent_query = FindSorafsReputationJournalEventBySourceId::new(
+            iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1::for_por_challenge(
+                [0xFE; 32],
+            ),
+            None,
+        );
+        let absent = adapter
+            .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 9, absent_query)
+            .expect("complete archive proves source absence");
+        assert_eq!(absent.event, None);
 
         let mut stale_cursor = first.cursor();
         stale_cursor.block_hash = [0x92; 32];
@@ -2329,6 +2423,55 @@ mod tests {
             adapter
                 .reputation_journal_page(&exact_anchor, Some(stale_cursor), 1)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn source_query_expected_cursor_selects_exact_historical_archive_row() {
+        let historical_hash = [0x81; 32];
+        let latest_hash = [0x91; 32];
+        let historical_event = journal_event(1, 0, 0x31, 8, historical_hash);
+        let latest_event = journal_event(2, 0, 0x32, 9, latest_hash);
+        let (_directory, adapter) = adapter_with([
+            projection(8, historical_hash, vec![historical_event.clone()]),
+            projection(9, latest_hash, vec![historical_event.clone(), latest_event]),
+        ]);
+        let historical_cursor = ReputationJournalFinalizedCursorV1 {
+            height: 8,
+            block_hash: historical_hash,
+            finalized_at_unix_ms: FINALIZED_AT_MS,
+        };
+        let query = FindSorafsReputationJournalEventBySourceId::new(
+            historical_event.entry.source_id,
+            Some(historical_cursor),
+        );
+
+        let view = adapter
+            .reputation_journal_event_by_source_id(&ChainId::from(CHAIN_ID), 9, query)
+            .expect("load exact historical source view");
+
+        assert_eq!(view.anchor, anchor(8, historical_hash));
+        assert_eq!(view.event, Some(historical_event));
+        view.validate_for_request(&ChainId::from(CHAIN_ID), 9, query)
+            .expect("historical response honors the expected cursor");
+
+        let timestamp_substitution = FindSorafsReputationJournalEventBySourceId::new(
+            query.source_id,
+            Some(ReputationJournalFinalizedCursorV1 {
+                finalized_at_unix_ms: historical_cursor.finalized_at_unix_ms + 1,
+                ..historical_cursor
+            }),
+        );
+        assert_eq!(
+            adapter
+                .reputation_journal_event_by_source_id(
+                    &ChainId::from(CHAIN_ID),
+                    9,
+                    timestamp_substitution,
+                )
+                .expect_err("exact archive identity must include finalized time")
+                .receipt(),
+            [FAILURE_ANCHOR_MISMATCH; 32]
         );
     }
 

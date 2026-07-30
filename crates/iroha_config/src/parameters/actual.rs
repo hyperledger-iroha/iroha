@@ -9808,7 +9808,10 @@ pub struct SorafsProviderIngestRuntime {
 /// Operational policy for the durable native orderbook transaction worker.
 #[derive(Debug, Clone, Copy)]
 pub struct SorafsOrderbookWorker {
-    /// Whether finalized-state scanning and transaction forwarding are enabled.
+    /// Whether generation of new supervised orderbook work is enabled.
+    ///
+    /// Enabling provider storage independently keeps durable drain and
+    /// finalized reconciliation active.
     pub enabled: bool,
     /// Finalized-state scan cadence.
     pub scan_interval: Duration,
@@ -9833,8 +9836,8 @@ pub struct SorafsOrderbookWorker {
 pub struct SorafsReserveWorker {
     /// Whether generation of new supervised reserve/rent work is enabled.
     ///
-    /// Finalized reconciliation and drain of the durable outbox remain active
-    /// when this is false.
+    /// Enabling provider storage independently keeps durable drain and
+    /// finalized reconciliation active.
     pub enabled: bool,
     /// Finalized-state scan cadence.
     pub scan_interval: Duration,

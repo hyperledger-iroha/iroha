@@ -1705,7 +1705,7 @@ pub mod sorafs {
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
 
-            /// New orderbook-work generation is opt-in; durable drain is unconditional.
+            /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
             pub const SCAN_INTERVAL_MS: NonZeroU64 = nonzero!(1_000_u64);
@@ -1749,7 +1749,7 @@ pub mod sorafs {
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
 
-            /// The supervised worker is opt-in until runtime signers are injected.
+            /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
             pub const SCAN_INTERVAL_MS: NonZeroU64 = nonzero!(1_000_u64);
