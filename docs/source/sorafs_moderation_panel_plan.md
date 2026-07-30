@@ -94,7 +94,9 @@ settlement/publication, and four-validator recovery scenarios.
   `SoraFsModerationBallotRevealV1`, and `SoraFsModerationVoteChoice` so SoraFS
   cases can bind case ids, evidence bundle digests, appeal finance versions,
   panel roster hashes, policy references, and `uphold`/`overturn`/`modify`/
-  `escalate` choices.
+  `escalate` choices. The sealed-ballot Blake2b commitment is separated from
+  every other moderation digest by the fixed
+  `iroha.sorafs.moderation.ballot.commitment.v1` domain.
 - `iroha_data_model::sorafs::moderation_ledger`, first-class moderation ISIs,
   and typed `FindSorafsModeration*` queries provide the consensus-owned ballot
   source of truth. Appellant-bound intake pins the active moderation policy and

@@ -8696,19 +8696,19 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
 
     let stored = metrics
         .torii_da_receipts_total
-        .with_label_values(&["stored", "7", "3"])
+        .with_label_values(&["stored", "7"])
         .get();
     assert_eq!(stored, 1, "stored counter should increment");
 
     let duplicate = metrics
         .torii_da_receipts_total
-        .with_label_values(&["duplicate", "7", "3"])
+        .with_label_values(&["duplicate", "7"])
         .get();
     assert_eq!(duplicate, 1, "duplicate counter should increment");
 
     let duplicate_fingerprint_conflict = metrics
         .torii_da_receipts_total
-        .with_label_values(&["duplicate_fingerprint_conflict", "7", "3"])
+        .with_label_values(&["duplicate_fingerprint_conflict", "7"])
         .get();
     assert_eq!(
         duplicate_fingerprint_conflict, 1,
@@ -8717,7 +8717,7 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
 
     let receipt_conflict = metrics
         .torii_da_receipts_total
-        .with_label_values(&["receipt_conflict", "7", "3"])
+        .with_label_values(&["receipt_conflict", "7"])
         .get();
     assert_eq!(
         receipt_conflict, 1,
@@ -8726,13 +8726,19 @@ fn record_da_receipt_metrics_tracks_outcomes_and_cursor() {
 
     let sequence_gap = metrics
         .torii_da_receipts_total
-        .with_label_values(&["sequence_gap", "7", "3"])
+        .with_label_values(&["sequence_gap", "7"])
         .get();
     assert_eq!(sequence_gap, 1, "sequence gap counter should increment");
 
+    let epoch = metrics
+        .torii_da_receipt_epoch
+        .with_label_values(&["7"])
+        .get();
+    assert_eq!(epoch, 3, "epoch gauge should reflect the current epoch");
+
     let cursor = metrics
         .torii_da_receipt_highest_sequence
-        .with_label_values(&["7", "3"])
+        .with_label_values(&["7"])
         .get();
     assert_eq!(cursor, 5, "cursor gauge should reflect stored sequence");
 }

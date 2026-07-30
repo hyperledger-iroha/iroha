@@ -101,6 +101,7 @@ pub mod executor;
 pub mod fastpq;
 /// Fraud detection and risk scoring data types.
 pub mod fraud;
+mod governance_fingerprint;
 /// Hijiri reputation system data types.
 pub mod hijiri;
 /// Identifier newtypes and supporting helpers.

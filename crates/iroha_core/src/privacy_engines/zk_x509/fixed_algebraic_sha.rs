@@ -252,6 +252,78 @@ struct NonzeroPointV1 {
     value: F,
 }
 
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShaAtomAccountingV1 {
+    total_atoms: usize,
+    atoms_by_column: Vec<usize>,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SHA_ATOM_ACCOUNTING_V1: std::cell::RefCell<Option<ShaAtomAccountingV1>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn begin_sha_atom_accounting_v1() -> Result<(), ZkX509ShaFixedAlgebraicErrorV1> {
+    SHA_ATOM_ACCOUNTING_V1.with(|accounting| {
+        let mut accounting = accounting.borrow_mut();
+        if accounting.is_some() {
+            return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+        }
+        *accounting = Some(ShaAtomAccountingV1 {
+            total_atoms: 0,
+            atoms_by_column: vec![0; ZK_X509_SHA_FIXED_ALGEBRAIC_WIDTH_V1],
+        });
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+fn record_sha_diagnostic_atom_v1(
+    atom: ZkX509FixedAlgebraicAtomV1,
+) -> Result<bool, ZkX509ShaFixedAlgebraicErrorV1> {
+    SHA_ATOM_ACCOUNTING_V1.with(|accounting| {
+        let mut accounting = accounting.borrow_mut();
+        let Some(accounting) = accounting.as_mut() else {
+            return Ok(false);
+        };
+        accounting.total_atoms = accounting
+            .total_atoms
+            .checked_add(1)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        let column = usize::from(match atom {
+            ZkX509FixedAlgebraicAtomV1::Affine { column, .. }
+            | ZkX509FixedAlgebraicAtomV1::Repeated { column, .. }
+            | ZkX509FixedAlgebraicAtomV1::Sparse { column, .. } => column,
+        });
+        let count = accounting
+            .atoms_by_column
+            .get_mut(column)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)?;
+        *count = count
+            .checked_add(1)
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        Ok(true)
+    })
+}
+
+#[cfg(test)]
+fn sha_atom_accounting_active_v1() -> bool {
+    SHA_ATOM_ACCOUNTING_V1.with(|accounting| accounting.borrow().is_some())
+}
+
+#[cfg(test)]
+fn take_sha_atom_accounting_v1() -> Result<ShaAtomAccountingV1, ZkX509ShaFixedAlgebraicErrorV1> {
+    SHA_ATOM_ACCOUNTING_V1.with(|accounting| {
+        accounting
+            .borrow_mut()
+            .take()
+            .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Topology)
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NonzeroSeriesV1 {
     Empty,
@@ -285,6 +357,10 @@ impl NonzeroSeriesV1 {
         *atom_count = atom_count
             .checked_add(1)
             .ok_or(ZkX509ShaFixedAlgebraicErrorV1::Resource)?;
+        #[cfg(test)]
+        if record_sha_diagnostic_atom_v1(atom)? {
+            return Ok(());
+        }
         if *atom_count > ZK_X509_SHA_FIXED_ALGEBRAIC_MAX_ATOMS_V1 {
             #[cfg(test)]
             eprintln!("zk-X509 SHA algebraic atom limit exceeded at atom {atom_count}: {atom:?}");
@@ -861,6 +937,14 @@ impl StructuralBuilderV1 {
                 &mut self.inner,
                 &mut self.atom_count,
             )?;
+        }
+        #[cfg(test)]
+        if sha_atom_accounting_active_v1() {
+            // Count-only diagnostics deliberately bypass the generic builder
+            // so they can report an exact raw total beyond its unchanged cap.
+            // Close the otherwise empty temporary schedule with one sentinel;
+            // callers discard this schedule and consume only the accounting.
+            self.inner.push_sparse_v1(0, 0, F::ONE)?;
         }
         self.inner.finish_v1().map_err(Into::into)
     }
@@ -2642,6 +2726,22 @@ pub(crate) fn zk_x509_sha_fixed_algebraic_shape_digests_v1()
 }
 
 #[cfg(test)]
+fn compile_sha_atom_accounting_v1(
+    shape: ZkX509ShaCallPublicShapeV1,
+) -> Result<ShaAtomAccountingV1, ZkX509ShaFixedAlgebraicErrorV1> {
+    begin_sha_atom_accounting_v1()?;
+    let compilation = compile_zk_x509_sha_fixed_algebraic_schedule_v1(shape);
+    let accounting = take_sha_atom_accounting_v1()?;
+    let diagnostic_schedule = compilation?;
+    if diagnostic_schedule.atoms_v1().len() != 1
+        || accounting.total_atoms != accounting.atoms_by_column.iter().copied().sum::<usize>()
+    {
+        return Err(ZkX509ShaFixedAlgebraicErrorV1::Topology);
+    }
+    Ok(accounting)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::privacy_engines::zk_x509::sha_call_bus_stark::ZkX509ShaBatchFixedProviderV1;
@@ -2651,6 +2751,37 @@ mod tests {
             disclosed_attributes,
         })
         .expect("closed SHA algebraic schedule")
+    }
+
+    #[test]
+    fn collect_exact_raw_atom_accounting_before_cap_v1() {
+        for disclosed_attributes in 0..=4 {
+            let accounting = compile_sha_atom_accounting_v1(ZkX509ShaCallPublicShapeV1 {
+                disclosed_attributes,
+            })
+            .expect("count-only structural SHA compilation");
+            let segment_atoms: Vec<usize> = accounting
+                .atoms_by_column
+                .chunks_exact(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1)
+                .map(|columns| columns.iter().sum())
+                .collect();
+            let local_column_atoms: Vec<(usize, usize)> = (0..ZK_X509_SHA_BATCH_FIXED_WIDTH_V1)
+                .filter_map(|local| {
+                    let atoms = (0..ZK_X509_SHA_SEGMENT_COUNT_V1)
+                        .map(|segment| {
+                            accounting.atoms_by_column
+                                [segment * ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 + local]
+                        })
+                        .sum();
+                    (atoms != 0).then_some((local, atoms))
+                })
+                .collect();
+            println!(
+                "SHA_RAW_ACCOUNTING shape={disclosed_attributes} total={} segments={segment_atoms:?} \
+                 local_columns={local_column_atoms:?}",
+                accounting.total_atoms,
+            );
+        }
     }
 
     fn expected_combined_row(
