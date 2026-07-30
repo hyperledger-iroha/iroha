@@ -4,11 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-SPEC_PATH="${REPO_ROOT}/docs/portal/static/openapi/torii.json"
-CURRENT_SPEC_PATH="${REPO_ROOT}/docs/portal/static/openapi/versions/current/torii.json"
-MANIFEST_PATH="${REPO_ROOT}/docs/portal/static/openapi/manifest.json"
-CURRENT_MANIFEST_PATH="${REPO_ROOT}/docs/portal/static/openapi/versions/current/manifest.json"
-ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-${REPO_ROOT}/docs/portal/static/openapi/allowed_signers.json}"
+OPENAPI_DIR="${REPO_ROOT}/docs/portal/static/openapi"
+SPEC_PATH="${OPENAPI_DIR}/torii.json"
+CURRENT_SPEC_PATH="${OPENAPI_DIR}/versions/current/torii.json"
+MANIFEST_PATH="${OPENAPI_DIR}/manifest.json"
+CURRENT_MANIFEST_PATH="${OPENAPI_DIR}/versions/current/manifest.json"
+ALLOWED_SIGNERS_PATH="${OPENAPI_ALLOWED_SIGNERS_FILE:-${OPENAPI_DIR}/allowed_signers.json}"
 REQUIRE_SIGNED="${OPENAPI_REQUIRE_SIGNED:-0}"
 
 case "${REQUIRE_SIGNED}" in
@@ -27,10 +28,27 @@ if [[ "${REQUIRE_SIGNED}" == "0" ]]; then
 fi
 
 TMP_DIR="$(mktemp -d)"
+REPLAY_WORKTREES=()
 cleanup() {
+  local worktree
+  for worktree in "${REPLAY_WORKTREES[@]}"; do
+    git -C "${REPO_ROOT}" worktree remove --force "${worktree}" >/dev/null 2>&1 || true
+  done
   rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
+
+case "${CARGO_TARGET_DIR:-}" in
+  "")
+    REPLAY_CARGO_TARGET_DIR="${REPO_ROOT}/target"
+    ;;
+  /*)
+    REPLAY_CARGO_TARGET_DIR="${CARGO_TARGET_DIR}"
+    ;;
+  *)
+    REPLAY_CARGO_TARGET_DIR="${REPO_ROOT}/${CARGO_TARGET_DIR}"
+    ;;
+esac
 
 run_xtask() {
   local -a args=("$@")
@@ -43,6 +61,24 @@ run_xtask() {
     "${args[@]}"
 }
 
+run_xtask_in_repo() {
+  local source_root="$1"
+  shift
+  local -a args=("$@")
+  (
+    cd "${source_root}"
+    NORITO_SKIP_BINDINGS_SYNC=1 \
+      CARGO_TARGET_DIR="${REPLAY_CARGO_TARGET_DIR}" \
+      cargo run \
+        --locked \
+        --offline \
+        -p xtask \
+        --bin xtask \
+        -- \
+        "${args[@]}"
+  )
+}
+
 require_clean_checkout() {
   if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
     echo "error: Torii OpenAPI release generation requires a clean checkout." >&2
@@ -51,12 +87,111 @@ require_clean_checkout() {
   fi
 }
 
-GENERATED_SPEC_FIRST="${TMP_DIR}/torii-first.json"
-GENERATED_SPEC_SECOND="${TMP_DIR}/torii-second.json"
+create_replay_worktree() {
+  local worktree="$1"
+  if [[ ! -f "${REPO_ROOT}/Cargo.lock" || -L "${REPO_ROOT}/Cargo.lock" ]]; then
+    echo "error: complete OpenAPI replay requires the provisioned regular root Cargo.lock." >&2
+    exit 1
+  fi
+  REPLAY_WORKTREES+=("${worktree}")
+  git -C "${REPO_ROOT}" worktree add --quiet --detach "${worktree}" HEAD
+  cp "${REPO_ROOT}/Cargo.lock" "${worktree}/Cargo.lock"
+  if ! cmp -s "${REPO_ROOT}/Cargo.lock" "${worktree}/Cargo.lock"; then
+    echo "error: isolated OpenAPI replay Cargo.lock copy changed bytes." >&2
+    exit 1
+  fi
+  if [[ -n "$(git -C "${worktree}" status --porcelain=v1 --untracked-files=all)" ]]; then
+    echo "error: isolated OpenAPI replay worktree is not clean after Cargo.lock provisioning." >&2
+    exit 1
+  fi
+}
+
+sync_unsigned_replay_bundle() {
+  local source_root="$1"
+  local output_dir="$2"
+  node --input-type=module - "${source_root}" "${output_dir}" <<'NODE'
+import {copyFile, readFile} from 'node:fs/promises';
+import {join, resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
+
+const [sourceRootArgument, outputDirArgument] = process.argv.slice(2);
+if (!sourceRootArgument || !outputDirArgument) {
+  throw new Error('isolated OpenAPI replay source and output roots are required');
+}
+const sourceRoot = resolve(sourceRootArgument);
+const outputDir = resolve(outputDirArgument);
+const versionsDir = join(outputDir, 'versions');
+const generatedSpec = join(outputDir, 'torii.json');
+const syncModule = pathToFileURL(
+  join(sourceRoot, 'docs', 'portal', 'scripts', 'sync-openapi.mjs'),
+).href;
+const {syncOpenApi} = await import(syncModule);
+
+await syncOpenApi(
+  {
+    version: 'current',
+    latest: true,
+    mirrors: [],
+    requireSigned: false,
+  },
+  {
+    repoRoot: sourceRoot,
+    outputDir,
+    versionsDir,
+    allowedSignersFile: join(outputDir, 'allowed_signers.json'),
+    async generateSpec(_repoRoot, outputFile) {
+      await copyFile(generatedSpec, outputFile);
+    },
+  },
+);
+
+for (const relativeManifest of [
+  'manifest.json',
+  join('versions', 'current', 'manifest.json'),
+]) {
+  const manifest = JSON.parse(
+    await readFile(join(outputDir, relativeManifest), 'utf8'),
+  );
+  if (
+    manifest.generator_dirty !== false ||
+    !/^[0-9a-f]{40}$/.test(manifest.generator_commit) ||
+    manifest.artifact?.signature !== null
+  ) {
+    throw new Error(
+      `isolated OpenAPI replay manifest ${relativeManifest} is not clean and unsigned`,
+    );
+  }
+}
+NODE
+}
+
+build_unsigned_replay_bundle() {
+  local source_root="$1"
+  local output_dir="$2"
+  run_xtask_in_repo "${source_root}" openapi --unsigned-manifest
+  mkdir -p "${output_dir}"
+  cp -R "${REPLAY_BASELINE}/." "${output_dir}/"
+  cp "${source_root}/docs/portal/static/openapi/torii.json" "${output_dir}/torii.json"
+  cp "${source_root}/docs/portal/static/openapi/manifest.json" "${output_dir}/manifest.json"
+  sync_unsigned_replay_bundle "${source_root}" "${output_dir}"
+}
+
+REPLAY_WORKTREE="${TMP_DIR}/openapi-replay-source"
+REPLAY_BASELINE="${TMP_DIR}/openapi-replay-baseline"
+REPLAY_BUNDLE_FIRST="${TMP_DIR}/openapi-replay-first"
+REPLAY_BUNDLE_SECOND="${TMP_DIR}/openapi-replay-second"
+GENERATED_SPEC_FIRST="${REPLAY_BUNDLE_FIRST}/torii.json"
 RELEASE_INPUT_SUMMARY_FIRST="${TMP_DIR}/release-inputs-first.json"
 RELEASE_INPUT_SUMMARY_SECOND="${TMP_DIR}/release-inputs-second.json"
 VERSION_MAP_SUMMARY_FIRST="${TMP_DIR}/version-map-first.json"
 VERSION_MAP_SUMMARY_SECOND="${TMP_DIR}/version-map-second.json"
+GENERATED_RELEASE_ARTIFACTS=(
+  "torii.json"
+  "manifest.json"
+  "versions/current/torii.json"
+  "versions/current/manifest.json"
+  "versions.json"
+)
 
 print_refresh_help() {
   cat >&2 <<'EOF'
@@ -102,15 +237,32 @@ fi
   node docs/portal/scripts/verify-openapi-versions.mjs
 )
 
-(
-  cd "${REPO_ROOT}"
-  run_xtask openapi --output "${GENERATED_SPEC_FIRST}"
-  run_xtask openapi --output "${GENERATED_SPEC_SECOND}"
-)
+# xtask intentionally emits manifests only beside the canonical spec path.
+# Generate there in a detached worktree, then assemble each replay from the
+# same immutable checked-in baseline so the caller's tree remains read-only.
+mkdir -p "${REPLAY_BASELINE}"
+cp -R "${OPENAPI_DIR}/." "${REPLAY_BASELINE}/"
+create_replay_worktree "${REPLAY_WORKTREE}"
+build_unsigned_replay_bundle "${REPLAY_WORKTREE}" "${REPLAY_BUNDLE_FIRST}"
+build_unsigned_replay_bundle "${REPLAY_WORKTREE}" "${REPLAY_BUNDLE_SECOND}"
 
-if ! diff -u "${GENERATED_SPEC_FIRST}" "${GENERATED_SPEC_SECOND}" >/dev/null; then
-  diff -u "${GENERATED_SPEC_FIRST}" "${GENERATED_SPEC_SECOND}" || true
-  echo "error: two Torii OpenAPI generation passes produced different bytes." >&2
+for artifact in "${GENERATED_RELEASE_ARTIFACTS[@]}"; do
+  first="${REPLAY_BUNDLE_FIRST}/${artifact}"
+  second="${REPLAY_BUNDLE_SECOND}/${artifact}"
+  if [[ ! -f "${first}" || -L "${first}" || ! -f "${second}" || -L "${second}" ]]; then
+    echo "error: complete OpenAPI replay did not produce regular ${artifact} artifacts." >&2
+    exit 1
+  fi
+  if ! diff -u "${first}" "${second}" >/dev/null; then
+    diff -u "${first}" "${second}" || true
+    echo "error: two complete Torii OpenAPI replay bundles disagreed at ${artifact}." >&2
+    exit 1
+  fi
+done
+
+if ! diff -ru "${REPLAY_BUNDLE_FIRST}" "${REPLAY_BUNDLE_SECOND}" >/dev/null; then
+  diff -ru "${REPLAY_BUNDLE_FIRST}" "${REPLAY_BUNDLE_SECOND}" || true
+  echo "error: two complete Torii OpenAPI replay trees produced different bytes." >&2
   exit 1
 fi
 

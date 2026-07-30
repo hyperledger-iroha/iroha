@@ -1351,8 +1351,9 @@ pub struct Iroha {
 /// role-separated `PoTR` signers, exact-view billing queries, threshold/HSM
 /// signers, immutable publication, acknowledgement, sealed witness storage,
 /// authenticated Governance DAG publication/readback/head updates, sealed
-/// monotonic Governance DAG checkpoints, and the Soracloud mutation/provenance
-/// signer are the reference-node boundaries for
+/// monotonic Governance DAG checkpoints, externally sealed reputation journal
+/// checkpoints, and the Soracloud mutation/provenance signer are the
+/// reference-node boundaries for
 /// ledger access, PKCS#11, managed-KMS, and threshold services. Provider
 /// credentials, unwrapped keys, PRF shares, seeds, and outputs must stay inside
 /// those implementations and must never be sourced from `iroha_config`.
@@ -1418,6 +1419,9 @@ pub struct IrohaRuntimeDeps {
     sorafs_gateway_acme_client: Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
     sorafs_gateway_compliance_feed_transport:
         Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
+    sorafs_reputation_journal_checkpoint_provider: Option<
+        Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
+    >,
     sorafs_reputation_journal_transaction_submitter:
         Option<Arc<dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1>>,
     sorafs_reputation_threshold_signer:
@@ -1498,6 +1502,7 @@ impl IrohaRuntimeDeps {
             && self.sorafs_potr_runtime_signer_roles.is_none()
             && self.sorafs_gateway_acme_client.is_none()
             && self.sorafs_gateway_compliance_feed_transport.is_none()
+            && self.sorafs_reputation_journal_checkpoint_provider.is_none()
             && self
                 .sorafs_reputation_journal_transaction_submitter
                 .is_none()
@@ -1920,6 +1925,17 @@ impl IrohaRuntimeDeps {
         >,
     ) -> Self {
         self.sorafs_reputation_journal_transaction_submitter = Some(submitter);
+        self
+    }
+
+    /// Attach the externally sealed monotonic checkpoint provider for the
+    /// native reputation journal outbox.
+    #[must_use]
+    pub fn with_sorafs_reputation_journal_checkpoint_provider(
+        mut self,
+        provider: Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
+    ) -> Self {
+        self.sorafs_reputation_journal_checkpoint_provider = Some(provider);
         self
     }
 
@@ -8402,22 +8418,25 @@ mod snapshot_read_error_tests {
 
 fn validate_reputation_runtime_provider_presence(
     runtime_enabled: bool,
-    provider_presence: [bool; 3],
+    provider_presence: [bool; 4],
 ) -> Result<(), &'static str> {
     if runtime_enabled {
         match provider_presence {
-            [true, true, true] => Ok(()),
-            [false, _, _] => Err(
+            [true, true, true, true] => Ok(()),
+            [false, _, _, _] => Err(
+                "enabled SoraFS reputation runtime requires an injected monotonic journal-checkpoint provider",
+            ),
+            [true, false, _, _] => Err(
                 "enabled SoraFS reputation runtime requires an injected authenticated journal-transaction submitter",
             ),
-            [true, false, _] => Err(
+            [true, true, false, _] => Err(
                 "enabled SoraFS reputation runtime requires an injected external threshold signer",
             ),
-            [true, true, false] => Err(
+            [true, true, true, false] => Err(
                 "enabled SoraFS reputation runtime requires an injected authenticated Governance DAG adapter",
             ),
         }
-    } else if provider_presence == [false; 3] {
+    } else if provider_presence == [false; 4] {
         Ok(())
     } else {
         Err("disabled SoraFS reputation runtime rejects unexpected runtime providers")
@@ -8770,6 +8789,9 @@ impl Iroha {
         validate_reputation_runtime_provider_presence(
             config.torii.sorafs_storage.reputation_runtime.is_some(),
             [
+                runtime_deps
+                    .sorafs_reputation_journal_checkpoint_provider
+                    .is_some(),
                 runtime_deps
                     .sorafs_reputation_journal_transaction_submitter
                     .is_some(),
@@ -10568,6 +10590,9 @@ impl Iroha {
         let sorafs_reputation_journal_transaction_submitter_override = runtime_deps
             .sorafs_reputation_journal_transaction_submitter
             .clone();
+        let sorafs_reputation_journal_checkpoint_provider = runtime_deps
+            .sorafs_reputation_journal_checkpoint_provider
+            .clone();
         let sorafs_reputation_threshold_signer =
             runtime_deps.sorafs_reputation_threshold_signer.clone();
         let sorafs_reputation_governance_dag =
@@ -10877,6 +10902,7 @@ impl Iroha {
             });
             let dependencies = sorafs_reputation_runtime::ReputationRuntimeDependenciesV1::require(
                 Some(finalized_query),
+                sorafs_reputation_journal_checkpoint_provider,
                 Some(journal_transaction_submitter),
                 sorafs_reputation_threshold_signer,
                 sorafs_reputation_governance_dag,
@@ -16742,11 +16768,12 @@ mod tests {
 
     #[test]
     fn reputation_runtime_provider_presence_fails_closed_in_both_modes() {
-        assert!(validate_reputation_runtime_provider_presence(false, [false; 3]).is_ok());
+        assert!(validate_reputation_runtime_provider_presence(false, [false; 4]).is_ok());
         for provider_presence in [
-            [true, false, false],
-            [false, true, false],
-            [false, false, true],
+            [true, false, false, false],
+            [false, true, false, false],
+            [false, false, true, false],
+            [false, false, false, true],
         ] {
             assert_eq!(
                 validate_reputation_runtime_provider_presence(false, provider_presence),
@@ -16754,20 +16781,24 @@ mod tests {
             );
         }
         assert!(
-            validate_reputation_runtime_provider_presence(true, [true; 3]).is_ok(),
+            validate_reputation_runtime_provider_presence(true, [true; 4]).is_ok(),
             "enabled reputation runtime passes presence validation before exact qualification"
         );
         for (provider_presence, expected_error) in [
             (
-                [false, true, true],
+                [false, true, true, true],
+                "enabled SoraFS reputation runtime requires an injected monotonic journal-checkpoint provider",
+            ),
+            (
+                [true, false, true, true],
                 "enabled SoraFS reputation runtime requires an injected authenticated journal-transaction submitter",
             ),
             (
-                [true, false, true],
+                [true, true, false, true],
                 "enabled SoraFS reputation runtime requires an injected external threshold signer",
             ),
             (
-                [true, true, false],
+                [true, true, true, false],
                 "enabled SoraFS reputation runtime requires an injected authenticated Governance DAG adapter",
             ),
         ] {
@@ -16862,6 +16893,10 @@ mod tests {
             reputation_startup
                 .contains("sorafs_reputation_journal_transaction_submitter_override.ok_or_else"),
             "enabled reputation startup must explicitly require the injected submitter"
+        );
+        assert!(
+            reputation_startup.contains("sorafs_reputation_journal_checkpoint_provider"),
+            "enabled reputation startup must pass the injected monotonic journal checkpoint provider"
         );
     }
 

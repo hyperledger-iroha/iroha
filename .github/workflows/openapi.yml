@@ -32,6 +32,8 @@ on:
       - "kotlin/**"
       - "mochi/**"
       - "python/iroha_python/**"
+      - "python/iroha_torii_client/**"
+      - "release/openapi-cargo-lock-v1.txt"
       - "release/openapi-generator-inputs-v1.txt"
       - "release/version-map.toml"
       - "scripts/android_codegen_docs.py"
@@ -71,6 +73,8 @@ on:
       - "kotlin/**"
       - "mochi/**"
       - "python/iroha_python/**"
+      - "python/iroha_torii_client/**"
+      - "release/openapi-cargo-lock-v1.txt"
       - "release/openapi-generator-inputs-v1.txt"
       - "release/version-map.toml"
       - "scripts/android_codegen_docs.py"
@@ -102,6 +106,10 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: docs/portal/package-lock.json
+      - name: Provision the pinned ignored OpenAPI Cargo lock
+        run: node docs/portal/scripts/provision-openapi-cargo-lock.mjs
+      - name: Verify Cargo lock provisioning keeps the checkout clean
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - name: Install the deterministic portal dependency graph
         working-directory: docs/portal
         run: npm ci --ignore-scripts --no-audit --no-fund
@@ -123,6 +131,7 @@ jobs:
           docs/portal/scripts/__tests__/openapi-release-inputs.test.mjs
           docs/portal/scripts/__tests__/openapi-release-contract.test.mjs
           docs/portal/scripts/__tests__/openapi-safe-file.test.mjs
+          docs/portal/scripts/__tests__/provision-openapi-cargo-lock.test.mjs
           docs/portal/scripts/__tests__/openapi-signature.test.mjs
       - name: Verify unsigned development artifact metadata
         run: |
@@ -158,6 +167,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22"
+      - name: Provision the pinned ignored OpenAPI Cargo lock
+        run: node docs/portal/scripts/provision-openapi-cargo-lock.mjs
+      - name: Verify Cargo lock provisioning keeps the checkout clean
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"

@@ -42,6 +42,11 @@ REQUIRED_PACKAGE_CONTRACTS: dict[str, tuple[str, str, str | None]] = {
         "irohaSdkVersion",
     ),
     "iroha-swift": ("plain-semver", "IrohaSwift/VERSION", None),
+    "iroha-torii-client": (
+        "python",
+        "python/iroha_torii_client/pyproject.toml",
+        None,
+    ),
     "norito-java": (
         "gradle-property",
         "java/norito_java/gradle.properties",

@@ -16,7 +16,7 @@ test('OpenAPI CI uses a locked graph and detached-only signing', async () => {
   assert.match(gate, /--signature-envelope/);
 });
 
-test('OpenAPI CI is clean, ancestor/source-bound, and two-pass', async () => {
+test('OpenAPI CI is clean, ancestor/source-bound, and replays complete bundles twice', async () => {
   const gate = await readFile(join(repoRoot, 'ci', 'check_openapi_spec.sh'), 'utf8');
 
   assert.match(gate, /require_clean_checkout/);
@@ -33,13 +33,40 @@ test('OpenAPI CI is clean, ancestor/source-bound, and two-pass', async () => {
     ).length,
     2,
   );
-  assert.equal(
-    Array.from(gate.matchAll(/run_xtask openapi --output/g)).length,
-    2,
-  );
+  const replayInvocation =
+    /build_unsigned_replay_bundle "\$\{REPLAY_WORKTREE\}" "\$\{REPLAY_BUNDLE_(?:FIRST|SECOND)\}"/g;
+  assert.equal(Array.from(gate.matchAll(replayInvocation)).length, 2);
+  assert.match(gate, /create_replay_worktree "\$\{REPLAY_WORKTREE\}"/);
   assert.match(
     gate,
-    /diff -u "\$\{GENERATED_SPEC_FIRST\}" "\$\{GENERATED_SPEC_SECOND\}"/,
+    /cp -R "\$\{REPLAY_BASELINE\}\/\." "\$\{output_dir\}\/"/,
+  );
+  assert.match(gate, /run_xtask_in_repo "\$\{source_root\}" openapi --unsigned-manifest/);
+  assert.match(gate, /const \{syncOpenApi\} = await import\(syncModule\)/);
+  assert.match(gate, /requireSigned: false/);
+  assert.match(gate, /is not clean and unsigned/);
+  const expectedGeneratedArtifacts = [
+    'torii.json',
+    'manifest.json',
+    'versions/current/torii.json',
+    'versions/current/manifest.json',
+    'versions.json',
+  ];
+  const artifactBlock = gate.match(
+    /GENERATED_RELEASE_ARTIFACTS=\(\n(?<artifacts>[\s\S]*?)\n\)/,
+  );
+  assert.ok(artifactBlock?.groups?.artifacts);
+  assert.deepEqual(
+    Array.from(
+      artifactBlock.groups.artifacts.matchAll(/^\s+"([^"]+)"$/gm),
+      (match) => match[1],
+    ),
+    expectedGeneratedArtifacts,
+  );
+  assert.match(gate, /diff -u "\$\{first\}" "\$\{second\}"/);
+  assert.match(
+    gate,
+    /diff -ru "\$\{REPLAY_BUNDLE_FIRST\}" "\$\{REPLAY_BUNDLE_SECOND\}"/,
   );
   assert.match(
     gate,
@@ -100,6 +127,7 @@ test('OpenAPI workflow actions and tooling tests are pinned', async () => {
     'kotlin/**',
     'mochi/**',
     'python/iroha_python/**',
+    'python/iroha_torii_client/**',
     'release/openapi-generator-inputs-v1.txt',
     'release/version-map.toml',
     'scripts/android_codegen_docs.py',

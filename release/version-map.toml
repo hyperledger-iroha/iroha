@@ -40,6 +40,12 @@ path = "IrohaSwift/VERSION"
 version = "0.1.0"
 
 [[packages]]
+id = "iroha-torii-client"
+ecosystem = "python"
+path = "python/iroha_torii_client/pyproject.toml"
+version = "0.0.1"
+
+[[packages]]
 id = "norito-java"
 ecosystem = "gradle-property"
 path = "java/norito_java/gradle.properties"
