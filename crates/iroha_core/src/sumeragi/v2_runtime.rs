@@ -116,6 +116,12 @@ impl RuntimeLifecycleOrdinalSource {
         self.lock_next().map(|next| *next)
     }
 
+    /// Inspect the next actor-global lifecycle ordinal in tests.
+    #[cfg(test)]
+    pub(crate) fn next_ordinal_for_test(&self) -> Result<Option<u128>, String> {
+        self.next_ordinal()
+    }
+
     fn recognizes_minted(&self, ordinal: u128) -> Result<bool, String> {
         if ordinal == 0 {
             return Ok(false);
@@ -8723,7 +8729,7 @@ mod tests {
             TaggedCommand::with_ingress_ownership(
                 owner_tag,
                 CommandClass::Progress,
-                AuthenticatedConsensusMessage::for_test(message),
+                AdapterCommand::Authenticated(AuthenticatedConsensusMessage::for_test(message)),
                 Instant::now(),
                 ownership,
             )

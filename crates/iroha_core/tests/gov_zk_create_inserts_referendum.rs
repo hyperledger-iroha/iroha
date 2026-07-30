@@ -177,10 +177,11 @@ fn create_election_inserts_referendum_with_configured_window() {
         referendum_count_before + 1
     );
 
+    let election_id = "ref-auto".to_owned();
     for tally_len in [0, 64, 65] {
         stx.world
             .elections_mut()
-            .get_mut("ref-auto")
+            .get_mut(&election_id)
             .expect("bounded election remains present")
             .tally = vec![0; tally_len];
         let finalize = FinalizeElection {

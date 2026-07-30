@@ -8,14 +8,11 @@
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
 
+#[cfg(target_os = "linux")]
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{Read as _, Seek as _, Write as _},
-};
-#[cfg(target_os = "linux")]
-use std::{
-    os::fd::FromRawFd as _,
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
 };
 
 use chacha20poly1305::{
@@ -23,6 +20,8 @@ use chacha20poly1305::{
     aead::{Aead as _, KeyInit as _, Payload},
 };
 use rand::TryRngCore;
+#[cfg(target_os = "linux")]
+use rustix::fs::{MemfdFlags, SealFlags, fcntl_get_seals, memfd_create};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -2209,43 +2208,22 @@ fn create_anonymous_scratch_file_v1() -> Result<std::fs::File, AggregateStarkErr
     });
     #[cfg(target_os = "linux")]
     {
-        unsafe extern "C" {
-            fn memfd_create(
-                name: *const std::ffi::c_char,
-                flags: std::ffi::c_uint,
-            ) -> std::ffi::c_int;
-            fn fcntl(fd: std::ffi::c_int, operation: std::ffi::c_int, ...) -> std::ffi::c_int;
-        }
-        const MFD_CLOEXEC: std::ffi::c_uint = 0x0001;
-        const MFD_NOEXEC_SEAL: std::ffi::c_uint = 0x0008;
-        const F_GET_SEALS: std::ffi::c_int = 1_034;
-        const F_SEAL_EXEC: std::ffi::c_int = 0x0020;
-        // SAFETY: the fixed byte string is NUL-terminated and both flags are
-        // kernel-defined. MFD_NOEXEC_SEAL prohibits executable mappings and
-        // installs F_SEAL_EXEC at creation.
-        let raw_fd = unsafe {
-            memfd_create(
-                b"iroha-aggregate-stark-scratch-v1\0".as_ptr().cast(),
-                MFD_CLOEXEC | MFD_NOEXEC_SEAL,
-            )
-        };
-        if raw_fd < 0 {
-            return Err(AggregateStarkErrorV1::AllocationFailure);
-        }
-        // SAFETY: successful memfd_create returned one newly owned descriptor.
-        let file = unsafe { std::fs::File::from_raw_fd(raw_fd) };
+        let descriptor = memfd_create(
+            "iroha-aggregate-stark-scratch-v1",
+            MemfdFlags::CLOEXEC | MemfdFlags::NOEXEC_SEAL,
+        )
+        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
+        let file = std::fs::File::from(descriptor);
         file.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
         let metadata = file
             .metadata()
             .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        // SAFETY: F_GET_SEALS reads the seal mask of the live owned memfd.
-        let seals = unsafe { fcntl(raw_fd, F_GET_SEALS) };
+        let seals = fcntl_get_seals(&file).map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
         if !metadata.file_type().is_file()
             || metadata.nlink() != 0
             || metadata.mode() & 0o777 != 0o600
-            || seals < 0
-            || seals & F_SEAL_EXEC != F_SEAL_EXEC
+            || !seals.contains(SealFlags::EXEC)
         {
             return Err(AggregateStarkErrorV1::AllocationFailure);
         }
@@ -7952,30 +7930,20 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn encrypted_field_scratch_memfd_is_anonymous_owner_private_and_exec_sealed() {
-        use std::os::fd::{AsRawFd as _, RawFd};
-
-        unsafe extern "C" {
-            fn fchmod(fd: RawFd, mode: std::ffi::c_uint) -> std::ffi::c_int;
-            fn fcntl(fd: RawFd, operation: std::ffi::c_int, ...) -> std::ffi::c_int;
-        }
-        const F_GET_SEALS: std::ffi::c_int = 1_034;
-        const F_SEAL_EXEC: std::ffi::c_int = 0x0020;
+        use rustix::fs::{Mode, fchmod};
 
         let file = create_anonymous_scratch_file_v1().expect("Linux 6.3+ sealed scratch memfd");
         let metadata = file.metadata().expect("scratch metadata");
         assert!(metadata.file_type().is_file());
         assert_eq!(metadata.nlink(), 0);
         assert_eq!(metadata.mode() & 0o777, 0o600);
-        // SAFETY: F_GET_SEALS reads the live owned memfd seal mask.
-        let seals = unsafe { fcntl(file.as_raw_fd(), F_GET_SEALS) };
-        assert!(seals >= 0);
-        assert_eq!(seals & F_SEAL_EXEC, F_SEAL_EXEC);
-        // SAFETY: fchmod receives a live descriptor and a scalar mode. The
-        // kernel must reject adding any execute bit after F_SEAL_EXEC.
-        assert_eq!(unsafe { fchmod(file.as_raw_fd(), 0o700) }, -1);
         assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(1), // EPERM
+            fcntl_get_seals(&file).expect("scratch seals") & SealFlags::EXEC,
+            SealFlags::EXEC
+        );
+        assert_eq!(
+            fchmod(&file, Mode::RWXU).expect_err("F_SEAL_EXEC must reject execute permission"),
+            rustix::io::Errno::PERM
         );
         assert_eq!(
             file.metadata()
