@@ -72,6 +72,30 @@ public_key_hex = "8ba62848cf767d72e7f7f4b9d2d7ba07fee33760f79abe5597a51520e292a0
 revision = 1
 policy_digest_hex = "9191919191919191919191919191919191919191919191919191919191919191"
 
+[sorafs.storage.native_transaction_signers.repair]
+handle = "hsm://sorafs/repair/primary"
+authority = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
+algorithm = "ed25519"
+public_key_hex = "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737"
+revision = 1
+policy_digest_hex = "9292929292929292929292929292929292929292929292929292929292929292"
+
+[sorafs.storage.native_transaction_signers.reserve]
+handle = "hsm://sorafs/reserve/primary"
+authority = "sorauﾛ1NﾛKﾅYRｺYﾇq8MﾇﾜﾏヰSPisヱ81EﾅｾVtﾀuHAtﾄｺ2cWqMLUMDW"
+algorithm = "ed25519"
+public_key_hex = "204040e364c10f2bec9c1fe500a1cd4c247c89d650a01ed7e82caba867877c21"
+revision = 1
+policy_digest_hex = "9393939393939393939393939393939393939393939393939393939393939393"
+
+[sorafs.storage.native_transaction_signers.orderbook]
+handle = "hsm://sorafs/orderbook/primary"
+authority = "sorauﾛ1P7ﾙqFxBeMXxｼﾗﾂﾋ39Kﾊ1ﾄｽｼHｶjTｻaZﾔヱｻﾌqmNjU6VU9RP"
+algorithm = "ed25519"
+public_key_hex = "66cd608b928b88e50e0efeaa33faf1c43cefe07294b0b87e9fe0aba6a3cf7633"
+revision = 1
+policy_digest_hex = "9494949494949494949494949494949494949494949494949494949494949494"
+
 [sorafs.storage.provider_ingest_runtime]
 enabled = false
 scan_interval_ms = 1000

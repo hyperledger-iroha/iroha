@@ -2368,10 +2368,10 @@ fn derive_struct_deserialize(
                             if #field_bitset_enabled_decode_named {
                                 // Hybrid: read bitset, then sizes for needed fields; decode sequentially.
                                 let __bitset_len: usize = (#packed_named_count).div_ceil(8);
-                                let mut __bitset = ::std::vec::Vec::with_capacity(__bitset_len);
-                                unsafe {
-                                    __bitset.extend_from_slice(::std::slice::from_raw_parts(ptr.add(__o), __bitset_len));
-                                }
+                                let __bitset = norito::core::payload_range_from_ptr(
+                                    ptr.wrapping_add(__o),
+                                    __bitset_len,
+                                )?;
                                 if norito::debug_trace_enabled() {
                                     eprintln!(
                                         "decode struct {} bitset bytes={:?}",
@@ -2734,10 +2734,10 @@ fn derive_struct_deserialize(
                             if #field_bitset_enabled_decode_unnamed {
                                 // Read the presence bitset for unnamed fields (hybrid decoding)
                                 let __bitset_len: usize = __count.div_ceil(8);
-                                let mut __bitset = ::std::vec::Vec::with_capacity(__bitset_len);
-                                unsafe {
-                                    __bitset.extend_from_slice(::std::slice::from_raw_parts(ptr.add(__o), __bitset_len));
-                                }
+                                let __bitset = norito::core::payload_range_from_ptr(
+                                    ptr.wrapping_add(__o),
+                                    __bitset_len,
+                                )?;
                                 __o += __bitset_len;
                                 // Read sizes for variable-length fields that are present
                                 let mut __sizes: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
@@ -3572,9 +3572,11 @@ fn derive_enum_deserialize(
 
             fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> ::core::result::Result<Self, norito::core::Error> {
                 let ptr = archived as *const _ as *const u8;
-                // Read tag without assuming alignment
+                // Read the tag through the active, length-bounded payload
+                // context. Constructing a raw slice here would read beyond a
+                // truncated archive before the decoder could return an error.
                 let mut __tag_bytes = [0u8; 4];
-                unsafe { __tag_bytes.copy_from_slice(std::slice::from_raw_parts(ptr, 4)); }
+                __tag_bytes.copy_from_slice(norito::core::payload_range_from_ptr(ptr, 4)?);
                 let tag = u32::from_le_bytes(__tag_bytes);
                 let value = match tag {
                     #(#arms,)*

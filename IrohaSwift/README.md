@@ -1109,13 +1109,17 @@ archive. Do not reconstruct or mutate proof material outside the typed codecs.
 
 ### Native privacy bridge
 
-`PrivacyNativeBridge` is capability-only.
+`PrivacyNativeBridge` is selector-free.
 `capabilitiesArchiveV1()` returns the canonical typed
 `PrivacyCapabilitySnapshotV1` Norito archive, while `protocolsV1` exposes the
-closed `PrivacyProtocolIdV1` enum in exact wire order. ABI 21 availability
-requires only the capability and zeroizing-free symbols plus a valid capability
-probe. Generic request/build/verify dispatch and free-form selectors are absent;
-proofs use protocol-specific typed APIs.
+closed `PrivacyProtocolIdV1` enum in exact wire order.
+`exact12FixtureBundleV1()` returns the byte-complete Rust-derived statements
+and envelopes for all twelve rows; `validateExact12FixtureBundleV1(_:)`
+accepts only the canonical bundle and enforces a 2 MiB input ceiling. ABI 21
+availability requires both capability symbols, both exact-12 fixture symbols,
+the zeroizing-free symbol, and successful typed probes. Generic
+request/build/verify dispatch and free-form selectors are absent; proofs use
+protocol-specific typed APIs.
 
 The enum contains exactly twelve IDs: `zk-ace-pq-authorization-v0`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,

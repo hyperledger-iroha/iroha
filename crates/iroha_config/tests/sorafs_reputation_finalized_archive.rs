@@ -59,25 +59,36 @@ fn ed25519_public_key_hex(seed: u8) -> String {
     hex::encode(key_pair.public_key().to_bytes().1)
 }
 
-fn proof_signer_binding() -> String {
-    let key_pair =
-        KeyPair::try_from_seed(vec![0x72; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
-    let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
-    let authority = AccountId::new(key_pair.public_key().clone())
-        .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
-        .expect("test authority must encode as I105");
-    format!(
-        r#"
-[sorafs.storage.native_transaction_signers.proof_outcome]
-handle = "hsm://sorafs/proof-outcome/reputation-primary"
+fn native_signer_bindings() -> String {
+    [
+        ("proof_outcome", "proof-outcome", 0x72),
+        ("repair", "repair", 0x73),
+        ("reserve", "reserve", 0x74),
+        ("orderbook", "orderbook", 0x75),
+    ]
+    .into_iter()
+    .map(|(role, handle_role, seed)| {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 keypair");
+        let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+        let authority = AccountId::new(key_pair.public_key().clone())
+            .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+            .expect("test authority must encode as I105");
+        let policy_digest_hex = hex::encode([seed; 32]);
+        format!(
+            r#"
+[sorafs.storage.native_transaction_signers.{role}]
+handle = "hsm://sorafs/{handle_role}/reputation-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
 revision = 1
-policy_digest_hex = "{}"
-"#,
-        "72".repeat(32)
-    )
+policy_digest_hex = "{policy_digest_hex}"
+"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 fn enabled_overlay(
@@ -89,7 +100,7 @@ fn enabled_overlay(
     let state_dir = toml_path(&absolute_state_dir());
     let trust_policy_path = toml_path(&absolute_trust_policy_path());
     let publisher_public_key_hex = ed25519_public_key_hex(0x71);
-    let proof_signer = proof_signer_binding();
+    let native_signers = native_signer_bindings();
     format!(
         r#"
 [sorafs.storage]
@@ -117,7 +128,7 @@ finalized_archive_max_record_bytes = {max_record_bytes}
 finalized_archive_max_entries = {max_entries}
 finalized_archive_max_total_bytes = {max_total_bytes}
 finalized_archive_max_kura_tip_lag_blocks = {max_kura_tip_lag_blocks}
-{proof_signer}
+{native_signers}
 "#
     )
 }

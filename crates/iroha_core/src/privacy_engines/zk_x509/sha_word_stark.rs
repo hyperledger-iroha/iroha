@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use super::{
+    credential_pre_aux::ZkX509CredentialPreAuxBindingV1,
     der::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
     sha256_word_air::{
         SHA256_WORD_FIXED_BATCH_SEGMENT_COUNT_V1, SHA256_WORD_FIXED_BATCH_SEGMENT_ROWS_V1,
@@ -297,9 +298,10 @@ fn reconstructed_zk_x509_sha_word_fixed_columns_v1(
         .fold(F::ZERO, F::add);
     [
         F::ZERO,
-        local_operation
-            .sub(expanded[FIX_LOCAL_FIRST])
-            .sub(expanded[FIX_LOCAL_LAST]),
+        // Every local row, including the mandatory first initialization row,
+        // owns exactly one operation. Only the final local row does not
+        // continue.
+        local_operation.sub(expanded[FIX_LOCAL_LAST]),
         expanded[FIX_MEMORY_SAME_NEXT].add(expanded[FIX_MEMORY_NEW_NEXT]),
         F::ZERO,
         F::ZERO,
@@ -451,6 +453,164 @@ pub(crate) struct ZkX509ShaWordStarkBaseV1 {
     pub(crate) local_rows: usize,
     pub(crate) segment_rows: usize,
     pub(crate) active_rows_per_segment: Vec<usize>,
+}
+
+/// Challenge-independent fixed-capacity SHA word material.
+///
+/// This source owns every base and fixed row plus the private word-memory
+/// events needed to derive auxiliary products later. No challenge-dependent
+/// row exists until [`Self::bind_v1`] consumes this source with the opaque
+/// credential pre-auxiliary token.
+pub(crate) struct ZkX509ShaWordCapacityBaseSourceV1 {
+    message_len: usize,
+    maximum_message_len: usize,
+    exact_length: bool,
+    active_blocks: usize,
+    maximum_blocks: usize,
+    maximum_local_rows: usize,
+    maximum_memory_rows: usize,
+    actual_compute_rows: usize,
+    maximum_compute_rows: usize,
+    base_rows: Vec<[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1]>,
+    fixed_rows: Vec<[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1]>,
+    local_events: Vec<Vec<WordMemoryAccessV1>>,
+    execution: Vec<WordMemoryAccessV1>,
+    sorted: Vec<WordMemoryAccessV1>,
+}
+
+impl core::fmt::Debug for ZkX509ShaWordCapacityBaseSourceV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("ZkX509ShaWordCapacityBaseSourceV1")
+            .field("private_material", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ZkX509ShaWordCapacityBaseSourceV1 {
+    /// Exact private message length committed by the base rows.
+    pub(crate) const fn message_len(&self) -> usize {
+        self.message_len
+    }
+
+    /// Verifier-owned maximum message capacity.
+    pub(crate) const fn maximum_message_len(&self) -> usize {
+        self.maximum_message_len
+    }
+
+    /// Whether the manifest requires the private length to fill its capacity.
+    pub(crate) const fn exact_length(&self) -> bool {
+        self.exact_length
+    }
+
+    /// Maximum compression blocks reserved by the fixed schedule.
+    pub(crate) const fn maximum_blocks(&self) -> usize {
+        self.maximum_blocks
+    }
+
+    /// Maximum local word-AIR rows.
+    pub(crate) const fn maximum_local_rows(&self) -> usize {
+        self.maximum_local_rows
+    }
+
+    /// Maximum word-memory rows.
+    pub(crate) const fn maximum_memory_rows(&self) -> usize {
+        self.maximum_memory_rows
+    }
+
+    /// Exact logical row count of this fixed-capacity call.
+    pub(crate) const fn logical_rows(&self) -> usize {
+        self.maximum_local_rows + self.maximum_memory_rows
+    }
+
+    /// Return one already-materialized challenge-independent base row.
+    pub(crate) fn base_row(
+        &self,
+        index: usize,
+    ) -> Result<&[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1], ZkX509ShaWordStarkErrorV1> {
+        self.base_rows
+            .get(index)
+            .ok_or(ZkX509ShaWordStarkErrorV1::Resource)
+    }
+
+    /// Return one verifier-fixed row compiled before challenge sampling.
+    pub(crate) fn fixed_row(
+        &self,
+        index: usize,
+    ) -> Result<&[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1], ZkX509ShaWordStarkErrorV1> {
+        self.fixed_rows
+            .get(index)
+            .ok_or(ZkX509ShaWordStarkErrorV1::Resource)
+    }
+
+    /// Consume the base phase and derive auxiliary rows from the opaque X5B1
+    /// credential token.
+    pub(crate) fn bind_v1(
+        self,
+        binding: ZkX509CredentialPreAuxBindingV1,
+    ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
+        self.bind_challenges_v1(binding.sha_word())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bind_challenges_for_test_v1(
+        self,
+        challenges: ZkX509ShaWordStarkChallengesV1,
+    ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
+        self.bind_challenges_v1(challenges)
+    }
+
+    pub(crate) fn zeroize_private_v1(&mut self) {
+        self.message_len = 0;
+        self.active_blocks = 0;
+        self.actual_compute_rows = 0;
+        for row in &mut self.base_rows {
+            row.fill(F::ZERO);
+        }
+        for row in &mut self.fixed_rows {
+            row.fill(F::ZERO);
+        }
+        for events in &mut self.local_events {
+            for event in events.iter_mut() {
+                *event = WordMemoryAccessV1 {
+                    address: F::ZERO,
+                    value: F::ZERO,
+                    is_write: F::ZERO,
+                };
+            }
+            events.clear();
+        }
+        for event in self.execution.iter_mut().chain(&mut self.sorted) {
+            *event = WordMemoryAccessV1 {
+                address: F::ZERO,
+                value: F::ZERO,
+                is_write: F::ZERO,
+            };
+        }
+        self.base_rows.clear();
+        self.fixed_rows.clear();
+        self.local_events.clear();
+        self.execution.clear();
+        self.sorted.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn private_is_zeroized_v1(&self) -> bool {
+        self.message_len == 0
+            && self.active_blocks == 0
+            && self.actual_compute_rows == 0
+            && self.base_rows.is_empty()
+            && self.fixed_rows.is_empty()
+            && self.local_events.is_empty()
+            && self.execution.is_empty()
+            && self.sorted.is_empty()
+    }
+}
+
+impl Drop for ZkX509ShaWordCapacityBaseSourceV1 {
+    fn drop(&mut self) {
+        self.zeroize_private_v1();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -780,12 +940,10 @@ pub(crate) struct ZkX509ShaWordStarkChallengesV1 {
     pub(crate) base_folding: [F; SHA_WORD_COPY_LANES_V1],
 }
 
-/// Derive the complete SHA-word challenge family after all SHA base
-/// commitments have been transcript-bound.
-pub(crate) fn derive_zk_x509_sha_word_stark_challenges_v1(
+/// Derive the four base-error-folding challenges after word-memory challenges.
+pub(crate) fn derive_zk_x509_sha_word_base_folding_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
-) -> Result<ZkX509ShaWordStarkChallengesV1, TransparentStarkErrorV1> {
-    let memory = derive_sha256_word_memory_challenges_v1(transcript)?;
+) -> Result<[F; SHA_WORD_COPY_LANES_V1], TransparentStarkErrorV1> {
     let mut base_folding = [F::ZERO; SHA_WORD_COPY_LANES_V1];
     for (lane, challenge) in base_folding.iter_mut().enumerate() {
         let lane = u16::try_from(lane)
@@ -794,6 +952,16 @@ pub(crate) fn derive_zk_x509_sha_word_stark_challenges_v1(
         let label = [b"zk-x509-sha-word-base-error-folding-v1".as_slice(), &lane].concat();
         *challenge = transcript.challenge_field(&label)?;
     }
+    Ok(base_folding)
+}
+
+/// Derive the complete SHA-word challenge family after all SHA base
+/// commitments have been transcript-bound.
+pub(crate) fn derive_zk_x509_sha_word_stark_challenges_v1(
+    transcript: &mut TransparentTranscriptV1,
+) -> Result<ZkX509ShaWordStarkChallengesV1, TransparentStarkErrorV1> {
+    let memory = derive_sha256_word_memory_challenges_v1(transcript)?;
+    let base_folding = derive_zk_x509_sha_word_base_folding_challenges_v1(transcript)?;
     Ok(ZkX509ShaWordStarkChallengesV1 {
         memory,
         base_folding,
@@ -878,7 +1046,8 @@ fn validate_challenges(
     Ok(())
 }
 
-fn validate_stark_challenges(
+/// Reject invalid word-memory or base-error-folding challenges.
+pub(crate) fn validate_zk_x509_sha_word_stark_challenges_v1(
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<(), ZkX509ShaWordStarkErrorV1> {
     validate_challenges(challenges.memory)?;
@@ -1130,18 +1299,18 @@ fn capacity_raw_base_row_v1(
         .map_err(|_| ZkX509ShaWordStarkErrorV1::Topology)
 }
 
-/// Build one canonical fixed-capacity SHA call.
+/// Build the challenge-independent phase of one fixed-capacity SHA call.
 ///
 /// The verifier-visible shape depends only on `maximum_message_len`.  The
 /// exact message length, active-block prefix, padding transition, selected
-/// digest state, and memory activity remain committed witness columns.
-pub(crate) fn build_sha_word_capacity_trace_v1(
+/// digest state, and memory activity remain committed witness columns. Word
+/// memory products are intentionally absent until the returned source binds
+/// an opaque X5B1 token.
+pub(crate) fn build_sha_word_capacity_base_source_v1(
     message: &[u8],
     maximum_message_len: usize,
     exact_length: bool,
-    challenges: ZkX509WordMemoryChallengesV1,
-) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
-    validate_challenges(challenges)?;
+) -> Result<ZkX509ShaWordCapacityBaseSourceV1, ZkX509ShaWordStarkErrorV1> {
     if message.len() > maximum_message_len
         || maximum_message_len > ZK_X509_DER_MAX_DOCUMENT_BYTES_V1
     {
@@ -1282,97 +1451,7 @@ pub(crate) fn build_sha_word_capacity_trace_v1(
     }
     drop(fixed_schedule);
 
-    let mut aux_rows = vec![[F::ZERO; SHA_WORD_CAPACITY_AUX_WIDTH_V1]; maximum_logical_rows];
-    let mut local_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
-    for index in 0..maximum_local_rows {
-        let events: &[WordMemoryAccessV1] = if index < actual_compute_rows {
-            actual
-                .local_events
-                .get(index)
-                .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?
-        } else if index >= maximum_compute_rows {
-            actual
-                .local_events
-                .get(actual_compute_rows + index - maximum_compute_rows)
-                .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?
-        } else {
-            &[]
-        };
-        let (row, after) = local_product_row(events, local_product, challenges)?;
-        aux_rows[index][..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1].copy_from_slice(&row);
-        local_product = after;
-    }
-    drop(actual.local_events);
-
-    let mut execution_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
-    let mut sorted_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
-    for memory_index in 0..maximum_memory_rows {
-        let index = maximum_local_rows + memory_index;
-        let mut row = [F::ZERO; SHA_WORD_MEMORY_PRODUCT_WIDTH_V1];
-        row[MEMORY_EXEC_BEFORE..MEMORY_EXEC_BEFORE + SHA_WORD_COPY_LANES_V1]
-            .copy_from_slice(&execution_product);
-        row[MEMORY_SORT_BEFORE..MEMORY_SORT_BEFORE + SHA_WORD_COPY_LANES_V1]
-            .copy_from_slice(&sorted_product);
-        if memory_index < actual.execution.len() {
-            for lane in 0..SHA_WORD_COPY_LANES_V1 {
-                execution_product[lane] = execution_product[lane].mul(compress_access(
-                    actual.execution[memory_index],
-                    challenges.lanes[lane],
-                ));
-                sorted_product[lane] = sorted_product[lane].mul(compress_access(
-                    actual.sorted[memory_index],
-                    challenges.lanes[lane],
-                ));
-            }
-        }
-        row[MEMORY_EXEC_AFTER..MEMORY_EXEC_AFTER + SHA_WORD_COPY_LANES_V1]
-            .copy_from_slice(&execution_product);
-        row[MEMORY_SORT_AFTER..MEMORY_SORT_AFTER + SHA_WORD_COPY_LANES_V1]
-            .copy_from_slice(&sorted_product);
-        aux_rows[index][..SHA_WORD_MEMORY_PRODUCT_WIDTH_V1].copy_from_slice(&row);
-    }
-    drop(actual.execution);
-    drop(actual.sorted);
-    if execution_product != sorted_product || execution_product != local_product {
-        return Err(ZkX509ShaWordStarkErrorV1::LocalCopy);
-    }
-    for row in &mut aux_rows {
-        row[GLOBAL_LOCAL_PRODUCT_END..GLOBAL_LOCAL_PRODUCT_END + SHA_WORD_COPY_LANES_V1]
-            .copy_from_slice(&local_product);
-    }
-
-    let mut message_count = F::ZERO;
-    let mut padding_phase = F::ZERO;
-    let mut active_block_count = F::ZERO;
-    for index in 0..maximum_logical_rows {
-        aux_rows[index][SHA_WORD_CAPACITY_MESSAGE_COUNT_V1] = message_count;
-        aux_rows[index][SHA_WORD_CAPACITY_PADDING_PHASE_V1] = padding_phase;
-        aux_rows[index][SHA_WORD_CAPACITY_ACTIVE_BLOCKS_V1] = active_block_count;
-        if fixed_rows[index][SHA_WORD_CAPACITY_BLOCK_FIRST_V1] == F::ONE {
-            active_block_count =
-                active_block_count.add(base_rows[index][SHA_WORD_CAPACITY_ROW_ACTIVE_V1]);
-        }
-        if fixed_rows[index][SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE
-            && base_rows[index][SHA_WORD_CAPACITY_ROW_ACTIVE_V1] == F::ONE
-        {
-            for byte in 0..4 {
-                message_count =
-                    message_count.add(base_rows[index][SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte]);
-                padding_phase =
-                    padding_phase.add(base_rows[index][SHA_WORD_CAPACITY_MARKER_MASK_V1 + byte]);
-            }
-        }
-    }
-    if message_count
-        != F(u64::try_from(message.len()).map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?)
-        || padding_phase != F::ONE
-        || active_block_count
-            != F(u64::try_from(active_blocks).map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?)
-    {
-        return Err(ZkX509ShaWordStarkErrorV1::Topology);
-    }
-
-    Ok(ZkX509ShaWordCapacityTraceV1 {
+    Ok(ZkX509ShaWordCapacityBaseSourceV1 {
         message_len: message.len(),
         maximum_message_len,
         exact_length,
@@ -1380,10 +1459,142 @@ pub(crate) fn build_sha_word_capacity_trace_v1(
         maximum_blocks,
         maximum_local_rows,
         maximum_memory_rows,
+        actual_compute_rows,
+        maximum_compute_rows,
         base_rows,
-        aux_rows,
         fixed_rows,
+        local_events: actual.local_events,
+        execution: actual.execution,
+        sorted: actual.sorted,
     })
+}
+
+impl ZkX509ShaWordCapacityBaseSourceV1 {
+    fn bind_challenges_v1(
+        self,
+        challenges: ZkX509ShaWordStarkChallengesV1,
+    ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
+        validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
+        self.bind_memory_challenges_v1(challenges.memory)
+    }
+
+    fn bind_memory_challenges_v1(
+        mut self,
+        challenges: ZkX509WordMemoryChallengesV1,
+    ) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
+        validate_challenges(challenges)?;
+        let maximum_logical_rows = self.logical_rows();
+        let mut aux_rows = vec![[F::ZERO; SHA_WORD_CAPACITY_AUX_WIDTH_V1]; maximum_logical_rows];
+        let mut local_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
+        for index in 0..self.maximum_local_rows {
+            let events: &[WordMemoryAccessV1] = if index < self.actual_compute_rows {
+                self.local_events
+                    .get(index)
+                    .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?
+            } else if index >= self.maximum_compute_rows {
+                self.local_events
+                    .get(self.actual_compute_rows + index - self.maximum_compute_rows)
+                    .ok_or(ZkX509ShaWordStarkErrorV1::Topology)?
+            } else {
+                &[]
+            };
+            let (row, after) = local_product_row(events, local_product, challenges)?;
+            aux_rows[index][..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1].copy_from_slice(&row);
+            local_product = after;
+        }
+
+        let mut execution_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
+        let mut sorted_product = [F::ONE; SHA_WORD_COPY_LANES_V1];
+        for memory_index in 0..self.maximum_memory_rows {
+            let index = self.maximum_local_rows + memory_index;
+            let mut row = [F::ZERO; SHA_WORD_MEMORY_PRODUCT_WIDTH_V1];
+            row[MEMORY_EXEC_BEFORE..MEMORY_EXEC_BEFORE + SHA_WORD_COPY_LANES_V1]
+                .copy_from_slice(&execution_product);
+            row[MEMORY_SORT_BEFORE..MEMORY_SORT_BEFORE + SHA_WORD_COPY_LANES_V1]
+                .copy_from_slice(&sorted_product);
+            if memory_index < self.execution.len() {
+                for lane in 0..SHA_WORD_COPY_LANES_V1 {
+                    execution_product[lane] = execution_product[lane].mul(compress_access(
+                        self.execution[memory_index],
+                        challenges.lanes[lane],
+                    ));
+                    sorted_product[lane] = sorted_product[lane].mul(compress_access(
+                        self.sorted[memory_index],
+                        challenges.lanes[lane],
+                    ));
+                }
+            }
+            row[MEMORY_EXEC_AFTER..MEMORY_EXEC_AFTER + SHA_WORD_COPY_LANES_V1]
+                .copy_from_slice(&execution_product);
+            row[MEMORY_SORT_AFTER..MEMORY_SORT_AFTER + SHA_WORD_COPY_LANES_V1]
+                .copy_from_slice(&sorted_product);
+            aux_rows[index][..SHA_WORD_MEMORY_PRODUCT_WIDTH_V1].copy_from_slice(&row);
+        }
+        if execution_product != sorted_product || execution_product != local_product {
+            return Err(ZkX509ShaWordStarkErrorV1::LocalCopy);
+        }
+        for row in &mut aux_rows {
+            row[GLOBAL_LOCAL_PRODUCT_END..GLOBAL_LOCAL_PRODUCT_END + SHA_WORD_COPY_LANES_V1]
+                .copy_from_slice(&local_product);
+        }
+
+        let mut message_count = F::ZERO;
+        let mut padding_phase = F::ZERO;
+        let mut active_block_count = F::ZERO;
+        for index in 0..maximum_logical_rows {
+            aux_rows[index][SHA_WORD_CAPACITY_MESSAGE_COUNT_V1] = message_count;
+            aux_rows[index][SHA_WORD_CAPACITY_PADDING_PHASE_V1] = padding_phase;
+            aux_rows[index][SHA_WORD_CAPACITY_ACTIVE_BLOCKS_V1] = active_block_count;
+            if self.fixed_rows[index][SHA_WORD_CAPACITY_BLOCK_FIRST_V1] == F::ONE {
+                active_block_count =
+                    active_block_count.add(self.base_rows[index][SHA_WORD_CAPACITY_ROW_ACTIVE_V1]);
+            }
+            if self.fixed_rows[index][SHA_WORD_CAPACITY_INPUT_WORD_V1] == F::ONE
+                && self.base_rows[index][SHA_WORD_CAPACITY_ROW_ACTIVE_V1] == F::ONE
+            {
+                for byte in 0..4 {
+                    message_count = message_count
+                        .add(self.base_rows[index][SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte]);
+                    padding_phase = padding_phase
+                        .add(self.base_rows[index][SHA_WORD_CAPACITY_MARKER_MASK_V1 + byte]);
+                }
+            }
+        }
+        if message_count
+            != F(u64::try_from(self.message_len).map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?)
+            || padding_phase != F::ONE
+            || active_block_count
+                != F(u64::try_from(self.active_blocks)
+                    .map_err(|_| ZkX509ShaWordStarkErrorV1::Resource)?)
+        {
+            return Err(ZkX509ShaWordStarkErrorV1::Topology);
+        }
+
+        Ok(ZkX509ShaWordCapacityTraceV1 {
+            message_len: self.message_len,
+            maximum_message_len: self.maximum_message_len,
+            exact_length: self.exact_length,
+            active_blocks: self.active_blocks,
+            maximum_blocks: self.maximum_blocks,
+            maximum_local_rows: self.maximum_local_rows,
+            maximum_memory_rows: self.maximum_memory_rows,
+            base_rows: core::mem::take(&mut self.base_rows),
+            aux_rows,
+            fixed_rows: core::mem::take(&mut self.fixed_rows),
+        })
+    }
+}
+
+/// Test-only focused builder retaining the pre-X5B1 word-memory API.
+#[cfg(test)]
+pub(crate) fn build_sha_word_capacity_trace_v1(
+    message: &[u8],
+    maximum_message_len: usize,
+    exact_length: bool,
+    challenges: ZkX509WordMemoryChallengesV1,
+) -> Result<ZkX509ShaWordCapacityTraceV1, ZkX509ShaWordStarkErrorV1> {
+    build_sha_word_capacity_base_source_v1(message, maximum_message_len, exact_length)?
+        .bind_memory_challenges_v1(challenges)
 }
 
 fn read(address: WordIdV1, value: F) -> Result<WordMemoryAccessV1, ZkX509ShaWordStarkErrorV1> {
@@ -2431,7 +2642,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     fixed: &[F; SHA_WORD_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<F>, ZkX509ShaWordStarkErrorV1> {
-    validate_stark_challenges(challenges)?;
+    validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
     if current
         .iter()
         .chain(next)
@@ -2837,7 +3048,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     fixed: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<F>, ZkX509ShaWordStarkErrorV1> {
-    validate_stark_challenges(challenges)?;
+    validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
     if current
         .iter()
         .chain(next)
@@ -3770,7 +3981,7 @@ mod tests {
             derive_zk_x509_sha_word_stark_challenges_v1(&mut transcript).expect("challenges")
         };
         let challenges = sample(root);
-        validate_stark_challenges(challenges).expect("valid challenges");
+        validate_zk_x509_sha_word_stark_challenges_v1(challenges).expect("valid challenges");
         assert_eq!(challenges, sample(root));
 
         let mut changed_root = root;

@@ -28,6 +28,10 @@ json = [
 ]
 # Expose deterministic fixture constructors to non-shipping release tooling.
 test-fixtures = ["iroha_crypto/rand"]
+# Expose only the deterministic exact-12 privacy conformance generator and
+# bounded validator used by shipping SDK bridges and release evidence. This
+# deliberately does not enable `test-fixtures` or its random-key surface.
+privacy-exact12-conformance = []
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]

@@ -31,7 +31,9 @@ use iroha_data_model::{
     isi::sorafs::{
         AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
     },
-    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
+    query::sorafs::prelude::{
+        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+    },
     sorafs::{
         capacity::ProviderId,
         moderation_ledger::{
@@ -50,8 +52,8 @@ use iroha_data_model::{
             ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
             ReputationJournalEntryV1, ReputationJournalEventIdV1,
             ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
-            ReputationJournalFinalizedEventPageV1, ReputationJournalPayloadV1,
-            ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
+            ReputationJournalFinalizedEventPageV1, ReputationJournalFinalizedEventV1,
+            ReputationJournalPayloadV1, ReputationJournalSourceIdV1, ReputationJournalSourceKindV1,
             StreamTokenValidationBindingV1, StreamTokenValidationOutcomeV1,
         },
         reserve::{
@@ -148,6 +150,8 @@ pub const REPUTATION_JOURNAL_DELIVERY_MAX_SUBMISSIONS_PER_TICK_V1: u32 = 256;
 pub const REPUTATION_JOURNAL_PRODUCER_MAX_POLICY_REVISIONS_V1: usize = 1_024;
 /// Maximum canonical journal-producer checkpoint bytes.
 pub const REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1: u64 = 64 * 1024 * 1024;
+/// Maximum fresh finalized source lookups after concurrent outbox mutation.
+const POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1: usize = 3;
 /// Maximum canonical publication-reconciler checkpoint bytes.
 pub const REPUTATION_PUBLICATION_MAX_CHECKPOINT_BYTES_V1: u64 = 32 * 1024 * 1024;
 /// Minimum accepted checkpoint ceiling for either runtime store.
@@ -268,6 +272,75 @@ impl ReputationFinalizedAnchorV1 {
             || self.finalized_at_unix_ms == u64::MAX
         {
             return Err(ReputationRuntimeError::InvalidFinalizedAnchor);
+        }
+        Ok(())
+    }
+}
+
+/// One source-indexed journal lookup resolved from an immutable finalized view.
+///
+/// `event = None` is authoritative only when the query provider can prove that
+/// the complete source index was available at `anchor`. Providers whose
+/// retained archive cannot distinguish absence from pruned history must fail
+/// externally instead of returning this view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReputationJournalSourceFinalizedViewV1 {
+    /// Exact chain, block identity, and block timestamp of the immutable view.
+    pub anchor: ReputationFinalizedAnchorV1,
+    /// Latest chain-authoritative event for the requested source, when present.
+    pub event: Option<ReputationJournalFinalizedEventV1>,
+}
+
+impl ReputationJournalSourceFinalizedViewV1 {
+    /// Validate this response against the exact source lookup request.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an inert request, another chain or finalized cursor, an anchor
+    /// beyond the requested upper bound, or a malformed/substituted event.
+    pub fn validate_for_request(
+        &self,
+        chain_id: &ChainId,
+        maximum_height: u64,
+        query: FindSorafsReputationJournalEventBySourceId,
+    ) -> Result<(), ReputationRuntimeError> {
+        if chain_id.as_str().is_empty()
+            || maximum_height == 0
+            || query.source_id == ReputationJournalSourceIdV1::ZERO
+        {
+            return Err(ReputationRuntimeError::InvalidQueryPage);
+        }
+        self.anchor.validate()?;
+        if &self.anchor.chain_id != chain_id {
+            return Err(ReputationRuntimeError::ChainIdMismatch);
+        }
+        if self.anchor.identity.height > maximum_height {
+            return Err(ReputationRuntimeError::FinalizedAnchorPastTarget);
+        }
+        let finalized_cursor = ReputationJournalFinalizedCursorV1 {
+            height: self.anchor.identity.height,
+            block_hash: self.anchor.identity.block_hash,
+            finalized_at_unix_ms: self.anchor.finalized_at_unix_ms,
+        };
+        finalized_cursor
+            .validate()
+            .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
+        if let Some(expected) = query.expected_finalized_cursor {
+            expected
+                .validate()
+                .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
+            if expected != finalized_cursor {
+                return Err(ReputationRuntimeError::InvalidQueryPage);
+            }
+        }
+        let Some(event) = &self.event else {
+            return Ok(());
+        };
+        event
+            .validate(finalized_cursor)
+            .map_err(|_| ReputationRuntimeError::InvalidQueryPage)?;
+        if event.entry.source_id != query.source_id {
+            return Err(ReputationRuntimeError::InvalidQueryPage);
         }
         Ok(())
     }
@@ -418,6 +491,19 @@ pub trait ReputationFinalizedQueryV1: ReputationRuntimeProviderV1 {
         after: Option<ReputationJournalFinalizedEventCursorV1>,
         limit: u32,
     ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1>;
+
+    /// Resolve the latest event for one source together with its immutable
+    /// finalized anchor.
+    ///
+    /// The source lookup and anchor selection must occur under one immutable
+    /// state-view/archive-generation guard. A provider that cannot prove
+    /// authoritative absence because history was pruned must fail.
+    fn reputation_journal_event_by_source_id(
+        &self,
+        chain_id: &ChainId,
+        maximum_height: u64,
+        query: FindSorafsReputationJournalEventBySourceId,
+    ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1>;
 
     /// Fetch one proof-outcome page after the exclusive cursor.
     fn proof_outcome_page(
@@ -1573,6 +1659,8 @@ struct ReputationJournalProducerCheckpointV1 {
     observed_journal_after: Option<ReputationJournalFinalizedEventCursorV1>,
     observed_finalized: Option<ReputationJournalFinalizedCursorV1>,
     journal_scan_caught_up: bool,
+    // Highest committing height among count-compacted source tombstones.
+    source_replay_finalized_height_floor: u64,
     last_assigned_sequence: u64,
     next_sequence: u64,
     pending: Vec<StoredReputationJournalDeliveryV1>,
@@ -1597,6 +1685,7 @@ impl ReputationJournalProducerCheckpointV1 {
             observed_journal_after: None,
             observed_finalized: None,
             journal_scan_caught_up: false,
+            source_replay_finalized_height_floor: 0,
             last_assigned_sequence: 0,
             next_sequence: 1,
             pending: Vec::new(),
@@ -1613,6 +1702,8 @@ impl ReputationJournalProducerCheckpointV1 {
 struct JournalProducerRuntimeState {
     checkpoint: ReputationJournalProducerCheckpointV1,
     fingerprint: Option<[u8; 32]>,
+    // Process-local fence; restart safety comes from the persisted height floor.
+    mutation_generation: u64,
 }
 
 /// Durable native PoR journal outbox with a non-deployed token replay foundation.
@@ -1664,6 +1755,7 @@ impl ReputationJournalProducerOutboxV1 {
             state: Mutex::new(JournalProducerRuntimeState {
                 checkpoint,
                 fingerprint,
+                mutation_generation: 0,
             }),
             durability_poisoned: AtomicBool::new(false),
         })
@@ -1734,6 +1826,7 @@ impl ReputationJournalProducerOutboxV1 {
             state: Mutex::new(JournalProducerRuntimeState {
                 checkpoint,
                 fingerprint,
+                mutation_generation: 0,
             }),
             durability_poisoned: AtomicBool::new(false),
         };
@@ -2483,32 +2576,17 @@ impl ReputationJournalProducerOutboxV1 {
         let source_id = payload.source_id();
         let source_material_digest =
             journal_source_material_digest(provider_id, source_time_unix_ms, None, &payload)?;
-        if let Some(retained) = retained_journal_identities(&state.checkpoint)
-            .find(|retained| retained.source_id == source_id)
+        if let Some(outcome) =
+            retained_source_enqueue_outcome(&state.checkpoint, source_id, source_material_digest)
         {
-            return if retained.source_material_digest == source_material_digest {
-                Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay {
-                    event_id: retained.event_id,
-                })
-            } else {
-                Err(ReputationRuntimeError::JournalSourceConflict)
-            };
+            return outcome;
         }
-        let source_policy = journal_authority_policy_at(&state.checkpoint, source_time_unix_ms)?;
-        let source_policy_digest = source_policy
-            .canonical_digest()
-            .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
-        let entry = ReputationJournalEntryV1::try_new(
+        let entry = journal_entry_for_payload(
+            &state.checkpoint,
             provider_id,
-            source_policy_digest,
-            source_policy
-                .recorder_authority(payload.source_kind())
-                .clone(),
             source_time_unix_ms,
-            None,
             payload,
-        )
-        .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)?;
+        )?;
         let entry_digest = journal_entry_digest(&entry)?;
         if let Some(event_id) = inspect_stream_token_gateway_admission(&state.checkpoint, &entry)? {
             return Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id });
@@ -2762,6 +2840,10 @@ impl ReputationJournalProducerOutboxV1 {
         state: &mut JournalProducerRuntimeState,
         candidate: ReputationJournalProducerCheckpointV1,
     ) -> Result<(), ReputationRuntimeError> {
+        let next_mutation_generation = state
+            .mutation_generation
+            .checked_add(1)
+            .ok_or(ReputationRuntimeError::JournalMutationGenerationExhausted)?;
         let (candidate, encoded) = encode_bounded_journal_checkpoint(
             candidate,
             &self.policy,
@@ -2772,6 +2854,7 @@ impl ReputationJournalProducerOutboxV1 {
             Ok(fingerprint) => {
                 state.checkpoint = candidate;
                 state.fingerprint = Some(fingerprint);
+                state.mutation_generation = next_mutation_generation;
                 Ok(())
             }
             Err(CheckpointStoreError::DurabilityUncertain) => {
@@ -2794,13 +2877,48 @@ impl ReputationJournalProducerOutboxV1 {
 #[derive(Debug, Clone)]
 pub struct PorReputationJournalProducerV1 {
     outbox: Arc<ReputationJournalProducerOutboxV1>,
+    query: Arc<dyn ReputationFinalizedQueryV1>,
+    query_policy: ReputationJournalDeliveryPolicyV1,
 }
 
 impl PorReputationJournalProducerV1 {
-    /// Bind the adapter to the durable journal outbox.
-    #[must_use]
-    pub fn new(outbox: Arc<ReputationJournalProducerOutboxV1>) -> Self {
-        Self { outbox }
+    /// Bind the adapter to the durable journal outbox and exact finalized query.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a chain mismatch or a missing, substituted, stale, test-marked,
+    /// or policy-mismatched finalized-query provider.
+    pub fn new(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<dyn ReputationFinalizedQueryV1>,
+        query_policy: ReputationJournalDeliveryPolicyV1,
+    ) -> Result<Self, ReputationRuntimeError> {
+        query_policy.validate()?;
+        if outbox.policy.chain_id != query_policy.chain_id {
+            return Err(ReputationRuntimeError::RuntimeBindingMismatch);
+        }
+        qualify_runtime_provider(
+            &query_policy.finalized_query_handle,
+            query_policy.finalized_query_qualification,
+            query.as_ref(),
+        )?;
+        Ok(Self {
+            outbox,
+            query,
+            query_policy,
+        })
+    }
+
+    fn from_qualified_delivery_worker(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<dyn ReputationFinalizedQueryV1>,
+        query_policy: ReputationJournalDeliveryPolicyV1,
+    ) -> Self {
+        Self {
+            outbox,
+            query,
+            query_policy,
+        }
     }
 
     /// Validate and durably enqueue one terminal PoR projection.
@@ -2818,11 +2936,99 @@ impl PorReputationJournalProducerV1 {
         outcome: PorTerminalOutcomeV1,
     ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
         let source_time_unix_ms = outcome.decided_at_unix_ms;
-        self.outbox.enqueue_payload(
-            provider_id,
-            source_time_unix_ms,
-            ReputationJournalPayloadV1::PorTerminal(outcome),
-        )
+        let payload = ReputationJournalPayloadV1::PorTerminal(outcome);
+        let source_id = payload.source_id();
+        let source_material_digest =
+            journal_source_material_digest(provider_id, source_time_unix_ms, None, &payload)?;
+        let source_query = FindSorafsReputationJournalEventBySourceId::new(source_id, None);
+
+        for _ in 0..POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1 {
+            self.outbox.ensure_durable()?;
+            let (mutation_generation, finalized_height_floor) = {
+                let state = self
+                    .outbox
+                    .state
+                    .lock()
+                    .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+                if let Some(outcome) = retained_source_enqueue_outcome(
+                    &state.checkpoint,
+                    source_id,
+                    source_material_digest,
+                ) {
+                    return outcome;
+                }
+                journal_entry_for_payload(
+                    &state.checkpoint,
+                    provider_id,
+                    source_time_unix_ms,
+                    payload.clone(),
+                )?;
+                (
+                    state.mutation_generation,
+                    state.checkpoint.source_replay_finalized_height_floor,
+                )
+            };
+
+            self.query_policy
+                .revalidate_query_provider(self.query.as_ref())?;
+            let view_result = self.query.reputation_journal_event_by_source_id(
+                &self.query_policy.chain_id,
+                u64::MAX,
+                source_query,
+            );
+            self.query_policy
+                .revalidate_query_provider(self.query.as_ref())?;
+            let view = view_result?;
+            view.validate_for_request(&self.query_policy.chain_id, u64::MAX, source_query)?;
+            if view.anchor.identity.height < finalized_height_floor {
+                return Err(ReputationRuntimeError::FinalizedRollback);
+            }
+            let finalized = view
+                .event
+                .map(|event| {
+                    let digest = journal_source_material_digest(
+                        event.entry.provider_id,
+                        event.entry.source_time_unix_ms,
+                        event.entry.predecessor_event_id,
+                        &event.entry.payload,
+                    )?;
+                    Ok((event.entry.event_id, digest))
+                })
+                .transpose()?;
+
+            self.outbox.ensure_durable()?;
+            let mut state = self
+                .outbox
+                .state
+                .lock()
+                .map_err(|_| ReputationRuntimeError::RuntimePoisoned)?;
+            if state.mutation_generation != mutation_generation {
+                continue;
+            }
+            if view.anchor.identity.height < state.checkpoint.source_replay_finalized_height_floor {
+                return Err(ReputationRuntimeError::FinalizedRollback);
+            }
+            if let Some(outcome) = retained_source_enqueue_outcome(
+                &state.checkpoint,
+                source_id,
+                source_material_digest,
+            ) {
+                return outcome;
+            }
+            return match finalized {
+                Some((event_id, digest)) if digest == source_material_digest => {
+                    Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id })
+                }
+                Some(_) => Err(ReputationRuntimeError::JournalSourceConflict),
+                None => self.outbox.enqueue_payload_locked(
+                    &mut state,
+                    provider_id,
+                    source_time_unix_ms,
+                    payload,
+                ),
+            };
+        }
+        Err(ReputationRuntimeError::JournalReplayRaceExhausted)
     }
 }
 
@@ -2923,6 +3129,24 @@ fn retained_journal_identities(
         )
 }
 
+fn retained_source_enqueue_outcome(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    source_id: ReputationJournalSourceIdV1,
+    source_material_digest: [u8; 32],
+) -> Option<Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError>> {
+    retained_journal_identities(checkpoint)
+        .find(|retained| retained.source_id == source_id)
+        .map(|retained| {
+            if retained.source_material_digest == source_material_digest {
+                Ok(ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                    event_id: retained.event_id,
+                })
+            } else {
+                Err(ReputationRuntimeError::JournalSourceConflict)
+            }
+        })
+}
+
 fn ensure_retained_journal_identities_unique(
     checkpoint: &ReputationJournalProducerCheckpointV1,
 ) -> Result<(), ReputationRuntimeError> {
@@ -2955,14 +3179,18 @@ fn compact_journal_tombstones(
         .ok_or(ReputationRuntimeError::JournalResourceExhausted)?
         > tombstone_limit
     {
-        if !evict_oldest_journal_tombstone(checkpoint) {
-            return Err(ReputationRuntimeError::JournalResourceExhausted);
-        }
+        let evicted_height = evict_oldest_journal_tombstone(checkpoint)
+            .ok_or(ReputationRuntimeError::JournalResourceExhausted)?;
+        checkpoint.source_replay_finalized_height_floor = checkpoint
+            .source_replay_finalized_height_floor
+            .max(evicted_height);
     }
     Ok(())
 }
 
-fn evict_oldest_journal_tombstone(checkpoint: &mut ReputationJournalProducerCheckpointV1) -> bool {
+fn evict_oldest_journal_tombstone(
+    checkpoint: &mut ReputationJournalProducerCheckpointV1,
+) -> Option<u64> {
     let completed_oldest = checkpoint
         .completed
         .iter()
@@ -2975,17 +3203,16 @@ fn evict_oldest_journal_tombstone(checkpoint: &mut ReputationJournalProducerChec
         .map(|entry| entry.committed.sequence);
     match (completed_oldest, observed_oldest) {
         (Some((position, completed)), Some(observed)) if completed <= observed => {
-            checkpoint.completed.remove(position);
+            Some(checkpoint.completed.remove(position).committed.block_height)
         }
         (Some(_), Some(_)) | (None, Some(_)) => {
-            checkpoint.observed.remove(0);
+            Some(checkpoint.observed.remove(0).committed.block_height)
         }
         (Some((position, _)), None) => {
-            checkpoint.completed.remove(position);
+            Some(checkpoint.completed.remove(position).committed.block_height)
         }
-        (None, None) => return false,
+        (None, None) => None,
     }
-    true
 }
 
 fn stream_token_admission_eviction_plan(
@@ -3730,6 +3957,29 @@ fn journal_authority_policy_at(
                 Err(ReputationRuntimeError::InvalidCheckpoint)
             }
         })
+}
+
+fn journal_entry_for_payload(
+    checkpoint: &ReputationJournalProducerCheckpointV1,
+    provider_id: ProviderId,
+    source_time_unix_ms: u64,
+    payload: ReputationJournalPayloadV1,
+) -> Result<ReputationJournalEntryV1, ReputationRuntimeError> {
+    let source_policy = journal_authority_policy_at(checkpoint, source_time_unix_ms)?;
+    let source_policy_digest = source_policy
+        .canonical_digest()
+        .map_err(|_| ReputationRuntimeError::InvalidCheckpoint)?;
+    ReputationJournalEntryV1::try_new(
+        provider_id,
+        source_policy_digest,
+        source_policy
+            .recorder_authority(payload.source_kind())
+            .clone(),
+        source_time_unix_ms,
+        None,
+        payload,
+    )
+    .map_err(|_| ReputationRuntimeError::InvalidJournalEntry)
 }
 
 fn validate_journal_checkpoint(
@@ -4587,7 +4837,11 @@ impl ReputationJournalDeliveryWorkerV1 {
     /// Return a concrete production callback for native PoR terminal owners.
     #[must_use]
     pub fn por_producer(&self) -> PorReputationJournalProducerV1 {
-        PorReputationJournalProducerV1::new(Arc::clone(&self.outbox))
+        PorReputationJournalProducerV1::from_qualified_delivery_worker(
+            Arc::clone(&self.outbox),
+            Arc::clone(&self.query),
+            self.policy.clone(),
+        )
     }
 
     /// Execute one bounded scan, retry, and queue-submission tick.
@@ -7102,6 +7356,12 @@ pub enum ReputationRuntimeError {
     /// One native source id was presented with conflicting canonical material.
     #[error("reputation journal producer source conflicts with retained material")]
     JournalSourceConflict,
+    /// Concurrent durable mutations exhausted the bounded source-replay retry.
+    #[error("reputation journal source replay race retry budget is exhausted")]
+    JournalReplayRaceExhausted,
+    /// The in-memory durable-mutation generation cannot advance.
+    #[error("reputation journal durable mutation generation is exhausted")]
+    JournalMutationGenerationExhausted,
     /// A journal event is not retained in the producer outbox.
     #[error("reputation journal producer event is unknown")]
     UnknownJournalEvent,
@@ -7494,6 +7754,22 @@ mod tests {
             verifier_latency_ms: Some(17),
             status: PorTerminalStatusV1::Verified,
         }
+    }
+
+    fn por_journal_entry(
+        provider_id: ProviderId,
+        outcome: PorTerminalOutcomeV1,
+    ) -> ReputationJournalEntryV1 {
+        let policy = journal_authority_policy();
+        ReputationJournalEntryV1::try_new(
+            provider_id,
+            policy.canonical_digest().expect("authority policy digest"),
+            policy.por_recorder_authority,
+            outcome.decided_at_unix_ms,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(outcome),
+        )
+        .expect("canonical PoR journal entry")
     }
 
     fn counted_token(validation_marker: u8, request_marker: u8) -> StreamTokenValidationOutcomeV1 {
@@ -7944,6 +8220,15 @@ mod tests {
             Err(ReputationExternalFailureV1::try_new([8; 32]).expect("failure"))
         }
 
+        fn reputation_journal_event_by_source_id(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            Err(ReputationExternalFailureV1::try_new([9; 32]).expect("failure"))
+        }
+
         fn proof_outcome_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -8047,6 +8332,15 @@ mod tests {
                 .ok_or_else(|| ReputationExternalFailureV1::try_new([0xE2; 32]).expect("failure"))
         }
 
+        fn reputation_journal_event_by_source_id(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            unreachable!("delivery test does not query one source")
+        }
+
         fn proof_outcome_page(
             &self,
             _anchor: &ReputationFinalizedAnchorV1,
@@ -8100,6 +8394,301 @@ mod tests {
         ) -> Result<ReserveProviderAccountPageV1, ReputationExternalFailureV1> {
             unreachable!("delivery test does not query reserve providers")
         }
+    }
+
+    type ScriptedSourceQueryResult =
+        Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1>;
+    type ScriptedSourceQueryHook = Box<dyn FnOnce() + Send>;
+
+    struct ScriptedSourceQuery {
+        handle: String,
+        qualification: Mutex<ReputationRuntimeProviderQualificationV1>,
+        responses: Mutex<VecDeque<ScriptedSourceQueryResult>>,
+        drift_after_lookup: AtomicBool,
+        lookup_hooks: Mutex<VecDeque<ScriptedSourceQueryHook>>,
+    }
+
+    impl fmt::Debug for ScriptedSourceQuery {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("ScriptedSourceQuery")
+                .field("handle", &self.handle)
+                .field(
+                    "drift_after_lookup",
+                    &self.drift_after_lookup.load(Ordering::Acquire),
+                )
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl ReputationRuntimeProviderV1 for ScriptedSourceQuery {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<ReputationRuntimeProviderQualificationV1, ReputationExternalFailureV1> {
+            Ok(*self.qualification.lock().expect("qualification lock"))
+        }
+    }
+
+    impl ReputationFinalizedQueryV1 for ScriptedSourceQuery {
+        fn finalized_at_or_before(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+        ) -> Result<ReputationFinalizedAnchorV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test uses the combined source view")
+        }
+
+        fn reputation_journal_delivery_view(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _policy_query: FindSorafsReputationJournalAuthorityPolicy,
+            _after: Option<ReputationJournalFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ReputationJournalDeliveryFinalizedViewV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test uses the combined source view")
+        }
+
+        fn reputation_journal_event_by_source_id(
+            &self,
+            _chain_id: &ChainId,
+            _maximum_height: u64,
+            _query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            let response = {
+                let mut responses = self.responses.lock().expect("source responses lock");
+                if responses.len() > 1 {
+                    responses.pop_front().expect("non-empty response queue")
+                } else {
+                    responses
+                        .front()
+                        .expect("source response queue must not be empty")
+                        .clone()
+                }
+            };
+            if let Some(hook) = self
+                .lookup_hooks
+                .lock()
+                .expect("lookup hooks lock")
+                .pop_front()
+            {
+                hook();
+            }
+            if self.drift_after_lookup.load(Ordering::Acquire) {
+                self.qualification
+                    .lock()
+                    .expect("qualification lock")
+                    .revision = REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1 + 1;
+            }
+            response
+        }
+
+        fn proof_outcome_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<ProofOutcomeFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ProofOutcomeFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query proof outcomes")
+        }
+
+        fn reputation_journal_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<ReputationJournalFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ReputationJournalFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test uses the combined source view")
+        }
+
+        fn repair_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<RepairFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<RepairFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query repairs")
+        }
+
+        fn orderbook_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<OrderbookFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<OrderbookFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query orderbook")
+        }
+
+        fn reserve_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after: Option<ReserveFinalizedEventCursorV1>,
+            _limit: u32,
+        ) -> Result<ReserveFinalizedEventPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query reserve events")
+        }
+
+        fn reserve_provider_page(
+            &self,
+            _anchor: &ReputationFinalizedAnchorV1,
+            _after_provider_id: Option<ProviderId>,
+            _limit: u32,
+        ) -> Result<ReserveProviderAccountPageV1, ReputationExternalFailureV1> {
+            unreachable!("source replay test does not query reserve providers")
+        }
+    }
+
+    const SOURCE_QUERY_HANDLE: &str = "ledger.reputation.source.primary";
+    const SOURCE_QUERY_QUALIFICATION: ReputationRuntimeProviderQualificationV1 =
+        ReputationRuntimeProviderQualificationV1::new(
+            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+            [0xC7; 32],
+        );
+
+    fn source_finalized_view(
+        event: Option<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationJournalSourceFinalizedViewV1 {
+        source_finalized_view_at(10, [0xB7; 32], FINALIZED_AT_MS.saturating_add(1_000), event)
+    }
+
+    fn source_finalized_view_at(
+        height: u64,
+        block_hash: [u8; 32],
+        finalized_at_unix_ms: u64,
+        event: Option<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationJournalSourceFinalizedViewV1 {
+        ReputationJournalSourceFinalizedViewV1 {
+            anchor: ReputationFinalizedAnchorV1 {
+                chain_id: ChainId::from("reputation-runtime-test"),
+                identity: ReputationFinalizedIdentityV1 { height, block_hash },
+                finalized_at_unix_ms,
+            },
+            event,
+        }
+    }
+
+    fn scripted_source_query(response: ScriptedSourceQueryResult) -> Arc<ScriptedSourceQuery> {
+        scripted_source_query_sequence([response])
+    }
+
+    fn scripted_source_query_sequence(
+        responses: impl IntoIterator<Item = ScriptedSourceQueryResult>,
+    ) -> Arc<ScriptedSourceQuery> {
+        let responses = responses.into_iter().collect::<VecDeque<_>>();
+        assert!(!responses.is_empty(), "script at least one source response");
+        Arc::new(ScriptedSourceQuery {
+            handle: SOURCE_QUERY_HANDLE.to_owned(),
+            qualification: Mutex::new(SOURCE_QUERY_QUALIFICATION),
+            responses: Mutex::new(responses),
+            drift_after_lookup: AtomicBool::new(false),
+            lookup_hooks: Mutex::new(VecDeque::new()),
+        })
+    }
+
+    fn por_producer_with_query(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+        query: Arc<ScriptedSourceQuery>,
+    ) -> PorReputationJournalProducerV1 {
+        let policy = ReputationJournalDeliveryPolicyV1::strict_v1(
+            outbox.policy.chain_id.clone(),
+            SOURCE_QUERY_HANDLE,
+            SOURCE_QUERY_QUALIFICATION,
+            "queue.reputation.journal",
+        )
+        .expect("source replay query policy");
+        let query: Arc<dyn ReputationFinalizedQueryV1> = query;
+        PorReputationJournalProducerV1::new(outbox, query, policy)
+            .expect("qualified PoR journal producer")
+    }
+
+    fn por_producer(
+        outbox: Arc<ReputationJournalProducerOutboxV1>,
+    ) -> PorReputationJournalProducerV1 {
+        por_producer_with_query(
+            outbox,
+            scripted_source_query(Ok(source_finalized_view(None))),
+        )
+    }
+
+    fn insert_commit_and_compact_por_source(
+        outbox: &ReputationJournalProducerOutboxV1,
+        target_provider: ProviderId,
+        target: PorTerminalOutcomeV1,
+        filler: PorTerminalOutcomeV1,
+    ) -> ReputationJournalEventIdV1 {
+        let target_event_id = match outbox
+            .enqueue_payload(
+                target_provider,
+                target.decided_at_unix_ms,
+                ReputationJournalPayloadV1::PorTerminal(target),
+            )
+            .expect("insert racing target")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id } => event_id,
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { .. } => {
+                panic!("racing target must be a first insert")
+            }
+        };
+        let filler_event_id = match outbox
+            .enqueue_payload(
+                provider(9),
+                filler.decided_at_unix_ms,
+                ReputationJournalPayloadV1::PorTerminal(filler),
+            )
+            .expect("insert racing compaction filler")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id } => event_id,
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { .. } => {
+                panic!("racing compaction filler must be a first insert")
+            }
+        };
+        let baseline = ReputationFinalizedIdentityV1 {
+            height: 9,
+            block_hash: [0xB5; 32],
+        };
+        outbox
+            .begin_submission(target_event_id, baseline)
+            .expect("begin racing target");
+        outbox
+            .begin_submission(filler_event_id, baseline)
+            .expect("begin racing compaction filler");
+        outbox
+            .acknowledge_committed(
+                target_event_id,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 1,
+                    block_height: 10,
+                    block_hash: [0xB7; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("commit racing target");
+        outbox
+            .acknowledge_committed(
+                filler_event_id,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 2,
+                    block_height: 11,
+                    block_hash: [0xB8; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("commit racing compaction filler");
+        target_event_id
+    }
+
+    fn durable_journal_checkpoint_snapshot(
+        root: &Path,
+        outbox: &ReputationJournalProducerOutboxV1,
+    ) -> (Vec<u8>, Option<[u8; 32]>) {
+        let bytes = fs::read(root.join(REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1))
+            .expect("read durable journal checkpoint");
+        let fingerprint = outbox.state.lock().expect("producer state").fingerprint;
+        (bytes, fingerprint)
     }
 
     #[derive(Debug)]
@@ -8411,6 +9000,66 @@ mod tests {
     }
 
     #[test]
+    fn source_finalized_view_validation_rejects_request_and_event_substitution() {
+        let chain_id = ChainId::from("reputation-runtime-test");
+        let outcome = verified_por(0x19);
+        let source_id = ReputationJournalSourceIdV1::for_por_challenge(outcome.challenge_id);
+        let query = FindSorafsReputationJournalEventBySourceId::new(source_id, None);
+        let event = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(7), outcome),
+        );
+        let view = source_finalized_view(Some(event));
+        view.validate_for_request(&chain_id, u64::MAX, query)
+            .expect("exact source response");
+
+        let expected_cursor = ReputationJournalFinalizedCursorV1 {
+            height: view.anchor.identity.height,
+            block_hash: view.anchor.identity.block_hash,
+            finalized_at_unix_ms: view.anchor.finalized_at_unix_ms,
+        };
+        view.validate_for_request(
+            &chain_id,
+            u64::MAX,
+            FindSorafsReputationJournalEventBySourceId::new(source_id, Some(expected_cursor)),
+        )
+        .expect("exact requested finalized cursor");
+
+        let mut wrong_cursor = expected_cursor;
+        wrong_cursor.block_hash[0] ^= 1;
+        assert!(matches!(
+            view.validate_for_request(
+                &chain_id,
+                u64::MAX,
+                FindSorafsReputationJournalEventBySourceId::new(source_id, Some(wrong_cursor),),
+            ),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+        assert!(matches!(
+            view.validate_for_request(
+                &chain_id,
+                9,
+                FindSorafsReputationJournalEventBySourceId::new(source_id, None),
+            ),
+            Err(ReputationRuntimeError::FinalizedAnchorPastTarget)
+        ));
+
+        let substituted_source =
+            ReputationJournalSourceIdV1::for_por_challenge(verified_por(0x1A).challenge_id);
+        assert!(matches!(
+            view.validate_for_request(
+                &chain_id,
+                u64::MAX,
+                FindSorafsReputationJournalEventBySourceId::new(substituted_source, None),
+            ),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+    }
+
+    #[test]
     fn continuation_validation_rejects_replay_and_anchor_substitution() {
         let target = ReputationFinalizedIdentityV1 {
             height: 10,
@@ -8464,10 +9113,591 @@ mod tests {
                 .expect("producer outbox"),
         );
         assert!(matches!(
-            PorReputationJournalProducerV1::new(outbox)
-                .enqueue_terminal(provider(9), verified_por(0x10)),
+            por_producer(outbox).enqueue_terminal(provider(9), verified_por(0x10)),
             Err(ReputationRuntimeError::AuthorityPolicyLineage)
         ));
+    }
+
+    #[test]
+    fn por_source_lookup_releases_outbox_lock_and_rechecks_racing_insert() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let terminal = verified_por(0x11);
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        let raced_outcome = Arc::new(Mutex::new(None));
+        let raced_outcome_for_hook = Arc::clone(&raced_outcome);
+        let outbox_for_hook = Arc::clone(&outbox);
+        let terminal_for_hook = terminal.clone();
+        query
+            .lookup_hooks
+            .lock()
+            .expect("lookup hooks lock")
+            .push_back(Box::new(move || {
+                let outcome = outbox_for_hook
+                    .enqueue_payload(
+                        provider(7),
+                        terminal_for_hook.decided_at_unix_ms,
+                        ReputationJournalPayloadV1::PorTerminal(terminal_for_hook),
+                    )
+                    .expect("racing producer insert");
+                *raced_outcome_for_hook.lock().expect("raced outcome lock") = Some(outcome);
+            }));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        let outcome = producer
+            .enqueue_terminal(provider(7), terminal)
+            .expect("outer replay after racing insert");
+        let raced = raced_outcome
+            .lock()
+            .expect("raced outcome lock")
+            .expect("lookup hook inserted the source");
+        let ReputationJournalEnqueueOutcomeV1::Inserted {
+            event_id: raced_event_id,
+        } = raced
+        else {
+            panic!("the racing first writer must insert");
+        };
+        assert_eq!(
+            outcome,
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: raced_event_id
+            }
+        );
+        assert_eq!(outbox.status().expect("producer status").ready, 1);
+    }
+
+    #[test]
+    fn por_source_lookup_retries_insert_commit_compact_race_as_exact_replay() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let terminal = verified_por(0x51);
+        let authoritative_entry = por_journal_entry(provider(7), terminal.clone());
+        let authoritative_event_id = authoritative_entry.event_id;
+        let authoritative_source_id = authoritative_entry.source_id;
+        let authoritative_event =
+            finalized_journal_event(1, 10, [0xB7; 32], 0, authoritative_entry);
+        let query = scripted_source_query_sequence([
+            Ok(source_finalized_view_at(
+                9,
+                [0xB5; 32],
+                FINALIZED_AT_MS.saturating_add(500),
+                None,
+            )),
+            Ok(source_finalized_view_at(
+                11,
+                [0xB8; 32],
+                FINALIZED_AT_MS.saturating_add(1_000),
+                Some(authoritative_event),
+            )),
+        ]);
+        let post_compaction_snapshot = Arc::new(Mutex::new(None));
+        let post_compaction_snapshot_for_hook = Arc::clone(&post_compaction_snapshot);
+        let outbox_for_hook = Arc::clone(&outbox);
+        let checkpoint_root = temp.path().to_path_buf();
+        let terminal_for_hook = terminal.clone();
+        query
+            .lookup_hooks
+            .lock()
+            .expect("lookup hooks lock")
+            .push_back(Box::new(move || {
+                assert_eq!(
+                    insert_commit_and_compact_por_source(
+                        &outbox_for_hook,
+                        provider(7),
+                        terminal_for_hook,
+                        verified_por(0x52),
+                    ),
+                    authoritative_event_id
+                );
+                *post_compaction_snapshot_for_hook
+                    .lock()
+                    .expect("post-compaction snapshot lock") = Some(
+                    durable_journal_checkpoint_snapshot(&checkpoint_root, &outbox_for_hook),
+                );
+            }));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        assert_eq!(
+            producer
+                .enqueue_terminal(provider(7), terminal)
+                .expect("retry authoritative exact replay after compaction"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay {
+                event_id: authoritative_event_id
+            }
+        );
+        let expected_snapshot = post_compaction_snapshot
+            .lock()
+            .expect("post-compaction snapshot lock")
+            .clone()
+            .expect("race hook captured the durable state");
+        assert_eq!(
+            durable_journal_checkpoint_snapshot(temp.path(), &outbox),
+            expected_snapshot,
+            "authoritative replay must not rewrite durable bytes or fingerprint"
+        );
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != authoritative_source_id)
+        );
+    }
+
+    #[test]
+    fn por_source_lookup_retries_insert_commit_compact_race_as_conflict() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let terminal = verified_por(0x53);
+        let authoritative_entry = por_journal_entry(provider(8), terminal.clone());
+        let authoritative_source_id = authoritative_entry.source_id;
+        let authoritative_event =
+            finalized_journal_event(1, 10, [0xB7; 32], 0, authoritative_entry);
+        let query = scripted_source_query_sequence([
+            Ok(source_finalized_view_at(
+                9,
+                [0xB5; 32],
+                FINALIZED_AT_MS.saturating_add(500),
+                None,
+            )),
+            Ok(source_finalized_view_at(
+                11,
+                [0xB8; 32],
+                FINALIZED_AT_MS.saturating_add(1_000),
+                Some(authoritative_event),
+            )),
+        ]);
+        let post_compaction_snapshot = Arc::new(Mutex::new(None));
+        let post_compaction_snapshot_for_hook = Arc::clone(&post_compaction_snapshot);
+        let outbox_for_hook = Arc::clone(&outbox);
+        let checkpoint_root = temp.path().to_path_buf();
+        let terminal_for_hook = terminal.clone();
+        query
+            .lookup_hooks
+            .lock()
+            .expect("lookup hooks lock")
+            .push_back(Box::new(move || {
+                insert_commit_and_compact_por_source(
+                    &outbox_for_hook,
+                    provider(8),
+                    terminal_for_hook,
+                    verified_por(0x54),
+                );
+                *post_compaction_snapshot_for_hook
+                    .lock()
+                    .expect("post-compaction snapshot lock") = Some(
+                    durable_journal_checkpoint_snapshot(&checkpoint_root, &outbox_for_hook),
+                );
+            }));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), terminal),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        let expected_snapshot = post_compaction_snapshot
+            .lock()
+            .expect("post-compaction snapshot lock")
+            .clone()
+            .expect("race hook captured the durable state");
+        assert_eq!(
+            durable_journal_checkpoint_snapshot(temp.path(), &outbox),
+            expected_snapshot,
+            "authoritative conflict must not rewrite durable bytes or fingerprint"
+        );
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != authoritative_source_id)
+        );
+    }
+
+    #[test]
+    fn por_source_lookup_recovers_exact_replay_after_local_tombstone_eviction() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(temp.path(), policy));
+        let producer = por_producer(Arc::clone(&outbox));
+        let first_terminal = verified_por(0x12);
+        let second_terminal = verified_por(0x13);
+        let first = match producer
+            .enqueue_terminal(provider(7), first_terminal.clone())
+            .expect("first terminal")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let second = match producer
+            .enqueue_terminal(provider(8), second_terminal)
+            .expect("second terminal")
+        {
+            ReputationJournalEnqueueOutcomeV1::Inserted { event_id }
+            | ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id } => event_id,
+        };
+        let baseline = ReputationFinalizedIdentityV1 {
+            height: 9,
+            block_hash: [0xB5; 32],
+        };
+        outbox
+            .begin_submission(first, baseline)
+            .expect("begin first");
+        outbox
+            .begin_submission(second, baseline)
+            .expect("begin second");
+        outbox
+            .acknowledge_committed(
+                first,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 1,
+                    block_height: 10,
+                    block_hash: [0xB7; 32],
+                    event_index: 0,
+                },
+            )
+            .expect("commit first");
+        outbox
+            .acknowledge_committed(
+                second,
+                ReputationCommittedEventIdentityV1 {
+                    sequence: 2,
+                    block_height: 10,
+                    block_hash: [0xB7; 32],
+                    event_index: 1,
+                },
+            )
+            .expect("commit second");
+        let first_source =
+            ReputationJournalSourceIdV1::for_por_challenge(first_terminal.challenge_id);
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert!(
+                retained_journal_identities(&state.checkpoint)
+                    .all(|retained| retained.source_id != first_source),
+                "the first local tombstone must be evicted before authoritative replay"
+            );
+        }
+
+        let finalized = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(7), first_terminal.clone()),
+        );
+        let query = scripted_source_query(Ok(source_finalized_view(Some(finalized))));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before replay");
+        assert_eq!(
+            producer
+                .enqueue_terminal(provider(7), first_terminal)
+                .expect("authoritative exact replay"),
+            ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id: first }
+        );
+        assert_eq!(outbox.status().expect("status after replay"), before);
+    }
+
+    #[test]
+    fn source_replay_height_floor_survives_restart_and_rejects_stale_absence() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            policy.clone(),
+        ));
+        insert_commit_and_compact_por_source(
+            &outbox,
+            provider(7),
+            verified_por(0x55),
+            verified_por(0x56),
+        );
+        {
+            let state = outbox.state.lock().expect("producer state");
+            assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+            assert_ne!(state.mutation_generation, 0);
+        }
+        drop(outbox);
+
+        let restored = Arc::new(
+            ReputationJournalProducerOutboxV1::open(temp.path(), policy)
+                .expect("restore replay-height floor"),
+        );
+        {
+            let state = restored.state.lock().expect("restored producer state");
+            assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+            assert_eq!(
+                state.mutation_generation, 0,
+                "the concurrency generation is intentionally process-local"
+            );
+        }
+        let stale_query = scripted_source_query(Ok(source_finalized_view_at(
+            9,
+            [0xB5; 32],
+            FINALIZED_AT_MS.saturating_add(500),
+            None,
+        )));
+        let producer = por_producer_with_query(Arc::clone(&restored), stale_query);
+        let durable_before = durable_journal_checkpoint_snapshot(temp.path(), &restored);
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(10), verified_por(0x57)),
+            Err(ReputationRuntimeError::FinalizedRollback)
+        ));
+        assert_eq!(
+            durable_journal_checkpoint_snapshot(temp.path(), &restored),
+            durable_before,
+            "a view behind the persisted replay floor must not mutate bytes or fingerprint"
+        );
+        assert_eq!(
+            restored
+                .state
+                .lock()
+                .expect("restored producer state")
+                .mutation_generation,
+            0
+        );
+    }
+
+    #[test]
+    fn observed_tombstone_compaction_advances_source_replay_height_floor() {
+        let temp = TempDir::new().expect("tempdir");
+        let mut policy = producer_policy();
+        policy.max_completed = 1;
+        let outbox = open_initialized_producer_outbox(temp.path(), policy);
+        let block_hash = [0xB9; 32];
+        let first = finalized_journal_event(
+            1,
+            10,
+            block_hash,
+            0,
+            por_journal_entry(provider(7), verified_por(0x58)),
+        );
+        let second = finalized_journal_event(
+            2,
+            10,
+            block_hash,
+            1,
+            por_journal_entry(provider(8), verified_por(0x59)),
+        );
+        let first_source = first.entry.source_id;
+        let second_source = second.entry.source_id;
+
+        assert_eq!(
+            outbox
+                .reconcile_finalized_journal_page(ReputationJournalFinalizedEventPageV1 {
+                    finalized_cursor: ReputationJournalFinalizedCursorV1 {
+                        height: 10,
+                        block_hash,
+                        finalized_at_unix_ms: FINALIZED_AT_MS.saturating_add(100),
+                    },
+                    events: vec![first, second],
+                    has_more: false,
+                    next_after: None,
+                })
+                .expect("reconcile external finalized events"),
+            0
+        );
+
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(state.checkpoint.source_replay_finalized_height_floor, 10);
+        assert_eq!(state.checkpoint.observed.len(), 1);
+        assert_eq!(state.checkpoint.observed[0].source_id, second_source);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != first_source)
+        );
+    }
+
+    #[test]
+    fn por_source_lookup_fails_closed_after_bounded_generation_races() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let initial_generation = outbox
+            .state
+            .lock()
+            .expect("producer state")
+            .mutation_generation;
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        for marker in [0x61, 0x62, 0x63] {
+            let outbox_for_hook = Arc::clone(&outbox);
+            query
+                .lookup_hooks
+                .lock()
+                .expect("lookup hooks lock")
+                .push_back(Box::new(move || {
+                    let terminal = verified_por(marker);
+                    assert!(matches!(
+                        outbox_for_hook.enqueue_payload(
+                            provider(marker),
+                            terminal.decided_at_unix_ms,
+                            ReputationJournalPayloadV1::PorTerminal(terminal),
+                        ),
+                        Ok(ReputationJournalEnqueueOutcomeV1::Inserted { .. })
+                    ));
+                }));
+        }
+        let candidate = verified_por(0x60);
+        let candidate_source =
+            ReputationJournalSourceIdV1::for_por_challenge(candidate.challenge_id);
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), candidate),
+            Err(ReputationRuntimeError::JournalReplayRaceExhausted)
+        ));
+        let state = outbox.state.lock().expect("producer state");
+        assert_eq!(
+            state.mutation_generation,
+            initial_generation
+                + u64::try_from(POR_SOURCE_REPLAY_MAX_QUERY_ATTEMPTS_V1)
+                    .expect("retry bound fits u64")
+        );
+        assert_eq!(state.checkpoint.pending.len(), 3);
+        assert!(
+            retained_journal_identities(&state.checkpoint)
+                .all(|retained| retained.source_id != candidate_source)
+        );
+    }
+
+    #[test]
+    fn failed_durable_commit_does_not_advance_mutation_generation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = open_initialized_producer_outbox(temp.path(), producer_policy());
+        let (generation_before, checkpoint_before, fingerprint_before) = {
+            let state = outbox.state.lock().expect("producer state");
+            (
+                state.mutation_generation,
+                state.checkpoint.clone(),
+                state.fingerprint,
+            )
+        };
+        let checkpoint_path = temp
+            .path()
+            .join(REPUTATION_JOURNAL_PRODUCER_CHECKPOINT_FILE_NAME_V1);
+        let mut concurrent_bytes =
+            fs::read(&checkpoint_path).expect("read producer checkpoint bytes");
+        concurrent_bytes.push(0);
+        fs::write(&checkpoint_path, concurrent_bytes).expect("simulate concurrent durable writer");
+
+        let terminal = verified_por(0x64);
+        assert!(matches!(
+            outbox.enqueue_payload(
+                provider(7),
+                terminal.decided_at_unix_ms,
+                ReputationJournalPayloadV1::PorTerminal(terminal),
+            ),
+            Err(ReputationRuntimeError::CheckpointStale)
+        ));
+        let state = outbox
+            .state
+            .lock()
+            .expect("producer state after stale commit");
+        assert_eq!(state.mutation_generation, generation_before);
+        assert_eq!(state.checkpoint, checkpoint_before);
+        assert_eq!(state.fingerprint, fingerprint_before);
+    }
+
+    #[test]
+    fn por_source_lookup_rejects_authoritative_material_conflict_without_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let terminal = verified_por(0x14);
+        let conflicting = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(8), terminal.clone()),
+        );
+        let query = scripted_source_query(Ok(source_finalized_view(Some(conflicting))));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before conflict");
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), terminal),
+            Err(ReputationRuntimeError::JournalSourceConflict)
+        ));
+        assert_eq!(outbox.status().expect("status after conflict"), before);
+    }
+
+    #[test]
+    fn por_source_lookup_rejects_provider_drift_without_mutation() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let query = scripted_source_query(Ok(source_finalized_view(None)));
+        query.drift_after_lookup.store(true, Ordering::Release);
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before drift");
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), verified_por(0x15)),
+            Err(ReputationRuntimeError::RuntimeBindingChanged)
+        ));
+        assert_eq!(outbox.status().expect("status after drift"), before);
+    }
+
+    #[test]
+    fn por_source_lookup_external_failure_does_not_mutate_outbox() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let failure = ReputationExternalFailureV1::try_new([0xE7; 32]).expect("failure");
+        let query = scripted_source_query(Err(failure));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before failure");
+
+        assert_eq!(
+            producer.enqueue_terminal(provider(7), verified_por(0x16)),
+            Err(ReputationRuntimeError::External(failure))
+        );
+        assert_eq!(outbox.status().expect("status after failure"), before);
+    }
+
+    #[test]
+    fn por_source_lookup_malformed_response_does_not_mutate_outbox() {
+        let temp = TempDir::new().expect("tempdir");
+        let outbox = Arc::new(open_initialized_producer_outbox(
+            temp.path(),
+            producer_policy(),
+        ));
+        let malformed = finalized_journal_event(
+            1,
+            10,
+            [0xB7; 32],
+            0,
+            por_journal_entry(provider(7), verified_por(0x18)),
+        );
+        let query = scripted_source_query(Ok(source_finalized_view(Some(malformed))));
+        let producer = por_producer_with_query(Arc::clone(&outbox), query);
+        let before = outbox.status().expect("status before malformed response");
+
+        assert!(matches!(
+            producer.enqueue_terminal(provider(7), verified_por(0x17)),
+            Err(ReputationRuntimeError::InvalidQueryPage)
+        ));
+        assert_eq!(
+            outbox.status().expect("status after malformed response"),
+            before
+        );
     }
 
     #[test]
@@ -9395,7 +10625,7 @@ mod tests {
             temp.path(),
             policy.clone(),
         ));
-        let producer = PorReputationJournalProducerV1::new(outbox.clone());
+        let producer = por_producer(outbox.clone());
         let mut terminal = verified_por(8);
         terminal.decided_at_unix_ms = FINALIZED_AT_MS - 250;
         let source_time_unix_ms = terminal.decided_at_unix_ms;
@@ -9500,7 +10730,7 @@ mod tests {
             temp.path(),
             producer_policy(),
         ));
-        let producer = PorReputationJournalProducerV1::new(outbox.clone());
+        let producer = por_producer(outbox.clone());
         let event_id = match producer
             .enqueue_terminal(provider(7), verified_por(9))
             .expect("enqueue PoR")
@@ -9590,7 +10820,7 @@ mod tests {
             ReputationJournalProducerOutboxV1::open(temp.path(), policy).expect("restore"),
         );
         assert_eq!(
-            PorReputationJournalProducerV1::new(Arc::clone(&restored))
+            por_producer(Arc::clone(&restored))
                 .enqueue_terminal(provider(7), terminal)
                 .expect("late callback"),
             ReputationJournalEnqueueOutcomeV1::ExactReplay { event_id }
@@ -9611,7 +10841,7 @@ mod tests {
             )
             .expect("producer policy"),
         ));
-        let event_id = match PorReputationJournalProducerV1::new(Arc::clone(&outbox))
+        let event_id = match por_producer(Arc::clone(&outbox))
             .enqueue_terminal(provider(7), verified_por(0x31))
             .expect("enqueue terminal")
         {
@@ -9945,7 +11175,7 @@ mod tests {
                 first_cursor,
             )
             .expect("initialize policy");
-        let producer = PorReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let producer = por_producer(Arc::clone(&outbox));
         let first_id = match producer
             .enqueue_terminal(provider(7), verified_por(0x41))
             .expect("first")
@@ -10219,7 +11449,7 @@ mod tests {
             )
             .expect("restore rotated producer checkpoint"),
         );
-        let restored_producer = PorReputationJournalProducerV1::new(restored);
+        let restored_producer = por_producer(restored);
         assert_eq!(
             restored_producer
                 .enqueue_terminal(provider(7), verified_por(0x41))
@@ -10271,7 +11501,7 @@ mod tests {
             temp.path(),
             policy.clone(),
         ));
-        let producer = PorReputationJournalProducerV1::new(outbox.clone());
+        let producer = por_producer(outbox.clone());
         let first = match producer
             .enqueue_terminal(provider(7), verified_por(0x21))
             .expect("first PoR")
@@ -10392,7 +11622,7 @@ mod tests {
             };
         }
 
-        let por_producer = PorReputationJournalProducerV1::new(Arc::clone(&outbox));
+        let por_producer = por_producer(Arc::clone(&outbox));
         let completed_event_id = match por_producer
             .enqueue_terminal(provider(7), verified_por(0x32))
             .expect("local PoR row")

@@ -3837,7 +3837,9 @@ fn iso_week_bounds(
         .with_hms(0, 0, 0)
         .map_err(|_| PorCoordinatorError::IsoWeekComputation)?
         .assume_utc();
-    let end = start + Duration::weeks(1);
+    let end = start
+        .checked_add(Duration::weeks(1))
+        .ok_or(PorCoordinatorError::IsoWeekComputation)?;
     Ok((start, end))
 }
 
@@ -4933,6 +4935,23 @@ mod tests {
             .expect("report");
         assert_eq!(report.challenges_total, 0);
         assert!(report.top_offenders.is_empty());
+    }
+
+    #[test]
+    fn iso_week_bounds_rejects_unrepresentable_week_end() {
+        assert!(matches!(
+            iso_week_bounds(PorReportIsoWeek {
+                year: 9999,
+                week: 52,
+            }),
+            Err(PorCoordinatorError::IsoWeekComputation)
+        ));
+
+        iso_week_bounds(PorReportIsoWeek {
+            year: 2026,
+            week: 1,
+        })
+        .expect("a valid follow-up ISO week must still compute");
     }
 
     fn record_failed_forced_challenge(

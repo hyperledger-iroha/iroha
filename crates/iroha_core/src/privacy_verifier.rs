@@ -18,10 +18,11 @@ use iroha_data_model::{
         IrohaIvmPrivateNoteStarkStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
         IrohaZkAmsStatementV1, MoneroFcmpPlusPlusStatementV1, OrchardHalo2ActionsStatementV1,
         PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1, PrivacyNullifierV1,
-        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
+        PrivacyFcmpKeyImageV1, PrivacyFcmpOutputTupleV1, PrivacyNamespaceV1,
+        PrivacyNativeConsensusBindingV1, PrivacyNativeConsensusBindingValidationErrorV1,
+        PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
         PrivacyProofEnvelopeValidationError, PrivacyProtocolActivationRecordV1,
         PrivacyProtocolIdV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
         PrivacyStatementV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
@@ -764,13 +765,17 @@ fn verify_zk_x509_certificate_v1(
         ));
     }
 
-    verify_zk_x509_credential_proof_v1(statement, context.genesis_hash, proof.as_bytes()).map_err(
-        |source| {
-            PrivacyVerificationErrorV1::NativeZkX509(Box::new(PrivacyZkX509VerificationFailureV1 {
-                source,
-            }))
-        },
-    )?;
+    verify_zk_x509_credential_proof_v1(
+        statement,
+        verification_state.authoritative_state,
+        context.genesis_hash,
+        proof.as_bytes(),
+    )
+    .map_err(|source| {
+        PrivacyVerificationErrorV1::NativeZkX509(Box::new(PrivacyZkX509VerificationFailureV1 {
+            source,
+        }))
+    })?;
 
     let authoritative_state = verification_state.authoritative_state;
     let trust_anchor = authoritative_state.trust_anchor();
@@ -1013,9 +1018,21 @@ fn verify_ivm_private_note_action_v1(
         PrivacyNamespaceV1::from_statement(&envelope.statement),
         context.proof_managed_state,
     )?;
-    verify_private_note_stark_v1(statement, proof.as_bytes())
-        .map_err(PrivacyIvmPrivateNoteNativeFailureSourceV1::Proof)
-        .map_err(native_ivm_private_note_error)?;
+    let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+        &statement.context,
+        context.genesis_hash,
+        context.consensus_limits,
+    )
+    .map_err(PrivacyIvmPrivateNoteNativeFailureSourceV1::ConsensusBinding)
+    .map_err(native_ivm_private_note_error)?;
+    verify_private_note_stark_v1(
+        statement,
+        &consensus_binding,
+        context.consensus_limits,
+        proof.as_bytes(),
+    )
+    .map_err(PrivacyIvmPrivateNoteNativeFailureSourceV1::Proof)
+    .map_err(native_ivm_private_note_error)?;
     Ok(VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(
         VerifiedProofManagedPoolLedgerEffectV1 {
             namespace: prepared.namespace,
@@ -1135,16 +1152,33 @@ fn verify_pq_masp_action_v1(
         PrivacyNamespaceV1::from_statement(&envelope.statement),
         context.proof_managed_state,
     )?;
+    let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+        &statement.context,
+        context.genesis_hash,
+        context.consensus_limits,
+    )
+    .map_err(PrivacyPqMaspNativeFailureSourceV1::ConsensusBinding)
+    .map_err(native_pq_masp_error)?;
+    let consensus_binding_digest = consensus_binding
+        .digest()
+        .map_err(|_| PrivacyPqMaspNativeFailureSourceV1::ConsensusBindingEncoding)
+        .map_err(native_pq_masp_error)?;
     let authorization = verify_pq_masp_authorization_v1(
         envelope.statement_digest,
+        consensus_binding_digest,
         statement.authorization_key_digest,
         proof.as_bytes(),
     )
     .map_err(PrivacyPqMaspNativeFailureSourceV1::Authorization)
     .map_err(native_pq_masp_error)?;
-    verify_pq_masp_stark_v1(statement, authorization.stark_proof)
-        .map_err(PrivacyPqMaspNativeFailureSourceV1::Proof)
-        .map_err(native_pq_masp_error)?;
+    verify_pq_masp_stark_v1(
+        statement,
+        &consensus_binding,
+        context.consensus_limits,
+        authorization.stark_proof,
+    )
+    .map_err(PrivacyPqMaspNativeFailureSourceV1::Proof)
+    .map_err(native_pq_masp_error)?;
     Ok(VerifiedPrivacyLedgerEffectsV1::ProofManagedPool(
         VerifiedProofManagedPoolLedgerEffectV1 {
             namespace: prepared.namespace,
@@ -1400,17 +1434,29 @@ fn verify_orchard_actions_v1(
     let successor_state = snapshot
         .derive_successor(&note_commitments)
         .map_err(|_| orchard_state_error(PrivacyOrchardStateFailureCodeV1::SuccessorDerivation))?;
+    let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+        &statement.context,
+        context.genesis_hash,
+        context.consensus_limits,
+    )
+    .map_err(|_| {
+        PrivacyVerificationErrorV1::NativeOrchard(Box::new(PrivacyOrchardVerificationFailureV1 {
+            source: OrchardNativeErrorV1::ConsensusBinding,
+        }))
+    })?;
     let native_public = OrchardBundlePublicV1 {
-        transaction_intent_digest: *statement.context.transaction_intent_digest.as_bytes(),
+        consensus_binding,
         anchor: statement.anchor.into_bytes(),
         value_balance,
         actions: public_actions,
     };
-    verify_orchard_bundle_v1(&native_public, proof.as_bytes()).map_err(|source| {
-        PrivacyVerificationErrorV1::NativeOrchard(Box::new(PrivacyOrchardVerificationFailureV1 {
-            source,
-        }))
-    })?;
+    verify_orchard_bundle_v1(&native_public, proof.as_bytes(), context.consensus_limits).map_err(
+        |source| {
+            PrivacyVerificationErrorV1::NativeOrchard(Box::new(
+                PrivacyOrchardVerificationFailureV1 { source },
+            ))
+        },
+    )?;
 
     Ok(VerifiedPrivacyLedgerEffectsV1::OrchardActions(
         VerifiedOrchardLedgerEffectV1 {
@@ -2085,6 +2131,9 @@ pub(crate) enum PrivacyIvmPrivateNoteNativeFailureSourceV1 {
     /// The fixed authenticated ciphertext shape or public binding is invalid.
     #[error("ciphertext validation failed: {0}")]
     Ciphertext(IvmPrivateNoteWalletErrorV1),
+    /// The trusted chain/genesis/profile binding was invalid.
+    #[error("consensus binding validation failed: {0}")]
+    ConsensusBinding(PrivacyNativeConsensusBindingValidationErrorV1),
     /// The exact STARK proof failed verification.
     #[error("proof verification failed: {0}")]
     Proof(ProofManagedNoteStarkErrorV1),
@@ -2133,6 +2182,12 @@ pub(crate) enum PrivacyPqMaspNativeFailureSourceV1 {
     /// Fixed ML-KEM/XChaCha ciphertext shape or ordered key binding is invalid.
     #[error("ciphertext validation failed: {0}")]
     Ciphertext(PqMaspWireErrorV1),
+    /// The trusted chain/genesis/profile binding was invalid.
+    #[error("consensus binding validation failed: {0}")]
+    ConsensusBinding(PrivacyNativeConsensusBindingValidationErrorV1),
+    /// The validated binding could not be canonically digested.
+    #[error("consensus binding canonical encoding failed")]
+    ConsensusBindingEncoding,
     /// The exact PQA1 ML-DSA-65 authorization wrapper failed verification.
     #[error("authorization verification failed: {0}")]
     Authorization(PqMaspWireErrorV1),
@@ -2241,7 +2296,7 @@ pub(crate) struct PrivacyCanonicalEncodingFailureV1;
 #[cfg(test)]
 pub(crate) use tests::{
     FcmpRuntimeFixtureForTest, ZkAmsRuntimeFixtureForTest, fcmp_runtime_fixture_for_test,
-    zk_ams_runtime_fixture_for_test,
+    zk_ams_runtime_fixture_for_test, zk_x509_dispatch_fixture_for_test,
 };
 #[cfg(all(test, feature = "zk-stark"))]
 pub(crate) use tests::{ZkAceRuntimeFixtureForTest, zk_ace_runtime_fixture_for_test};
@@ -2276,13 +2331,15 @@ mod tests {
             PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
             PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaMdlDateV1,
             PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsAdmissionAnchorV1,
-            PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509CrlDerDigestV1,
+            PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
+            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
             PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
             PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryIdV1, PrivacyZkAmsSeedPublicKeyV1,
-            PrivacyZkAmsSubjectCommitmentV1, VeRangeTransparentRangeStatementV1,
-            ZK_AMS_PHC_VERSION_V1, ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
-            ZkAcePqAuthorizationStatementV1, zk_ams_registry_record_digest_v1,
+            PrivacyZkAmsSubjectCommitmentV1, PrivacyZkX509CrlRecordV1,
+            VeRangeTransparentRangeStatementV1, ZK_AMS_PHC_VERSION_V1,
+            ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1, ZkAcePqAuthorizationStatementV1,
+            zk_ams_registry_record_digest_v1,
         },
         zk::derive_zk_ace_privacy_authorization_digest,
     };
@@ -2329,7 +2386,7 @@ mod tests {
                 JINDO_NATIVE_PROOF_BYTES_V1, commit_polynomial_v1, evaluate_polynomial_v1,
                 prove_batched_evaluation_v1,
             },
-            orchard::tests::fixture as orchard_native_fixture,
+            orchard::tests::build_fixture as orchard_native_fixture,
             p256::SecretScalarV1,
             pq_masp::{
                 relation::{
@@ -2430,7 +2487,9 @@ mod tests {
         (profile, activation)
     }
 
-    fn zk_x509_dispatch_fixture() -> (
+    fn zk_x509_dispatch_fixture_with_crl_v1(
+        current_crl: Option<PrivacyZkX509CrlRecordV1>,
+    ) -> (
         iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
         PrivacyZkX509AuthoritativeStateV1,
     ) {
@@ -2438,7 +2497,7 @@ mod tests {
         let statement = fixture.statement;
         let trust_anchor = fixture.trust_anchor;
         let certificate_policy = fixture.policy;
-        let crl = fixture.crl;
+        let crl = current_crl.unwrap_or(fixture.crl);
 
         let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         commitments.insert(
@@ -2522,6 +2581,41 @@ mod tests {
         (statement, authoritative_state)
     }
 
+    pub(crate) fn zk_x509_dispatch_fixture_for_test() -> (
+        iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
+        PrivacyZkX509AuthoritativeStateV1,
+    ) {
+        zk_x509_dispatch_fixture_with_crl_v1(None)
+    }
+
+    fn zk_x509_dispatch_fixture_with_successor_crl_v1() -> (
+        iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
+        PrivacyZkX509AuthoritativeStateV1,
+    ) {
+        let fixture = crate::privacy_engines::zk_x509::relation::tests::fixture();
+        let current = fixture.crl;
+        let successor = PrivacyZkX509CrlRecordV1::new(
+            current.trust_anchor_id,
+            current.certificate_policy_id,
+            current
+                .record_epoch
+                .checked_add(1)
+                .expect("fixture CRL epoch has a successor"),
+            current
+                .crl_number
+                .checked_add(1)
+                .expect("fixture CRL number has a successor"),
+            PrivacyX509CrlDerDigestV1::new([0xD1; 32]),
+            current.issuer_spki_digest,
+            current.this_update_unix_seconds,
+            current.next_update_unix_seconds,
+            Some(current.record_digest),
+            current.lifecycle,
+        )
+        .expect("canonical successor signed-CRL record");
+        zk_x509_dispatch_fixture_with_crl_v1(Some(successor))
+    }
+
     fn zk_x509_context<'a>(
         statement: &'a iroha_data_model::privacy::IrohaZkX509StarkP256StatementV1,
         activation: &'a PrivacyProtocolActivationRecordV1,
@@ -2556,14 +2650,14 @@ mod tests {
 
     #[test]
     fn zk_x509_dispatch_is_state_first_context_bound_and_fail_closed() {
-        let (statement, authoritative_state) = zk_x509_dispatch_fixture();
+        let (statement, authoritative_state) = zk_x509_dispatch_fixture_for_test();
         let (_, activation) = active_profile();
         let genesis_hash = [0x91; 32];
         let public =
             ZkX509CredentialPublicBindingV1::from_consensus_context_v1(&statement, genesis_hash)
                 .expect("canonical X.509 consensus binding");
         let canonical_proof = PrivacyProofBytesV1::new(
-            encode_zk_x509_credential_envelope_v1(public, b"X5S1main-aggregate", b"X5C1compact-ca")
+            encode_zk_x509_credential_envelope_v1(public, b"X5M1main-aggregate", b"X5C1compact-ca")
                 .expect("canonical X.509 credential envelope"),
         );
         let malformed_proof = PrivacyProofBytesV1::new(Vec::new());
@@ -2611,6 +2705,36 @@ mod tests {
                 "{label} did not fail at the authoritative-state boundary"
             );
         }
+
+        let (_, successor_crl_state) = zk_x509_dispatch_fixture_with_successor_crl_v1();
+        assert_eq!(
+            successor_crl_state.crl_record().record_epoch,
+            authoritative_state
+                .crl_record()
+                .record_epoch
+                .checked_add(1)
+                .expect("fixture epoch has a successor")
+        );
+        assert_ne!(
+            successor_crl_state.crl_record().record_digest,
+            statement.crl_record_digest
+        );
+        assert!(matches!(
+            verify_zk_x509_certificate_v1(
+                &statement,
+                &malformed_proof,
+                &zk_x509_context(
+                    &statement,
+                    &activation,
+                    Some(&successor_crl_state),
+                    false,
+                    genesis_hash,
+                ),
+            ),
+            Err(PrivacyVerificationErrorV1::ZkX509State(detail))
+                if detail.code
+                    == PrivacyZkX509StateFailureCodeV1::AuthoritativeStateMismatch
+        ));
 
         assert!(matches!(
             verify_zk_x509_certificate_v1(
@@ -3220,7 +3344,23 @@ mod tests {
                 asset_definition_id.clone(),
                 AccountId::new(reserve_key.public_key().clone()),
             );
-            let (public, authorization) = orchard_native_fixture();
+            let statement_context = PrivacyStatementContextV1 {
+                chain_id: chain_id.clone(),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x44; 32]),
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+            };
+            let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+                &statement_context,
+                [0xA7; 32],
+                &TEST_CONSENSUS_LIMITS,
+            )
+            .expect("canonical Orchard runtime consensus binding");
+            let (public, authorization) = orchard_native_fixture(1, [0xA7; 32], consensus_binding);
             assert_eq!(
                 public.anchor,
                 snapshot.current_root().into_bytes(),
@@ -3239,18 +3379,7 @@ mod tests {
             };
             let statement =
                 PrivacyStatementV1::OrchardHalo2ActionsV1(OrchardHalo2ActionsStatementV1 {
-                    context: PrivacyStatementContextV1 {
-                        chain_id: chain_id.clone(),
-                        action_index: 0,
-                        transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
-                            public.transaction_intent_digest,
-                        ),
-                        parameter_id: compiled.parameter_id,
-                        parameter_digest: compiled.parameter_digest,
-                        verifier_digest: compiled.verifier_digest,
-                        statement_schema_digest: compiled.statement_schema_digest,
-                        engine_manifest_digest: compiled.engine_manifest_digest,
-                    },
+                    context: statement_context,
                     asset_definition_id,
                     pool_id,
                     anchor: snapshot.current_root(),
@@ -3926,10 +4055,12 @@ mod tests {
                     )
                 },
             );
-            let statement_context = |action_index| PrivacyStatementContextV1 {
+            let statement_context = |transaction_intent_byte: u8| PrivacyStatementContextV1 {
                 chain_id: chain_id.clone(),
-                action_index,
-                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0x21; 32]),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new(
+                    [transaction_intent_byte; 32],
+                ),
                 parameter_id: compiled.parameter_id,
                 parameter_digest: compiled.parameter_digest,
                 verifier_digest: compiled.verifier_digest,
@@ -3937,7 +4068,7 @@ mod tests {
                 engine_manifest_digest: compiled.engine_manifest_digest,
             };
             let batch_statement = IrohaZkAmsStatementV1 {
-                context: statement_context(0),
+                context: statement_context(0x21),
                 issuer_id: bootstrap.issuer_id,
                 issuer_public_key: bootstrap.issuer_public_key,
                 issuer_policy_record_digest: bootstrap.issuer_policy_record_digest(),
@@ -4027,7 +4158,7 @@ mod tests {
             let account_key = KeyPair::try_from_seed(vec![0x40; 32], Algorithm::Ed25519)
                 .expect("ZK-AMS provisioned account");
             let provision_statement = IrohaZkAmsStatementV1 {
-                context: statement_context(1),
+                context: statement_context(0x22),
                 issuer_id: bootstrap.issuer_id,
                 issuer_public_key: bootstrap.issuer_public_key,
                 issuer_policy_record_digest: bootstrap.issuer_policy_record_digest(),
@@ -4062,7 +4193,7 @@ mod tests {
             let provision_binding = TranscriptBindingV1 {
                 chain_id: chain_id.as_str().as_bytes(),
                 genesis_hash,
-                action_index: 1,
+                action_index: 0,
                 statement_digest: *provision_statement_digest.as_bytes(),
                 parameter_id: *compiled.parameter_id.as_bytes(),
                 parameter_digest: *compiled.parameter_digest.as_bytes(),
@@ -4614,7 +4745,7 @@ mod tests {
             batch_statement.registry_record_digest
         );
 
-        let provision_effects = verify_privacy_envelope_v1(&fixture.provision_envelope, context(1))
+        let provision_effects = verify_privacy_envelope_v1(&fixture.provision_envelope, context(0))
             .expect("native ZK-AMS provision dispatch");
         let PrivacyStatementV1::IrohaZkAmsV1(provision_statement) =
             &fixture.provision_envelope.statement
@@ -4666,7 +4797,7 @@ mod tests {
             .digest()
             .expect("mutated ZK-AMS statement remains canonical");
         assert!(matches!(
-            verify_privacy_envelope_v1(&rebound, context(1)),
+            verify_privacy_envelope_v1(&rebound, context(0)),
             Err(PrivacyVerificationErrorV1::NativeZkAms(_))
         ));
 
@@ -5029,6 +5160,34 @@ mod tests {
         );
         assert_eq!(effect.value_balance(), statement.value_balance);
         assert_eq!(effect.expiry_height(), statement.expiry_height);
+    }
+
+    #[test]
+    fn orchard_exact_envelope_rejects_changed_nonzero_authoritative_genesis_natively() {
+        let fixture = orchard_fixture();
+        let original_context = fixture.verification_context();
+        let original_genesis = original_context.genesis_hash;
+        assert_ne!(original_genesis, [0; 32]);
+        verify_privacy_envelope_v1(&fixture.envelope, original_context)
+            .expect("Orchard fixture is valid under its proving genesis");
+
+        let mut changed_context = fixture.verification_context();
+        changed_context.genesis_hash[0] ^= 1;
+        assert_ne!(changed_context.genesis_hash, [0; 32]);
+        assert_ne!(changed_context.genesis_hash, original_genesis);
+        let error = verify_privacy_envelope_v1(&fixture.envelope, changed_context)
+            .expect_err("the exact Orchard envelope must not replay across genesis");
+        assert!(
+            matches!(
+                error,
+                PrivacyVerificationErrorV1::NativeOrchard(detail)
+                    if matches!(
+                        detail.source,
+                        OrchardNativeErrorV1::SpendAuthorizationSignature { index: 0 }
+                    )
+            ),
+            "changed genesis must reach and fail the native Orchard authorization: {error:?}"
+        );
     }
 
     #[test]
@@ -5720,8 +5879,18 @@ mod tests {
         statement.authorization_key_digest = key_digest;
         let unsigned = fixture.envelope(statement.clone(), Vec::new());
         let invalid_inner = vec![0xA5; 64];
+        let consensus_binding = PrivacyNativeConsensusBindingV1::new(
+            &statement.context,
+            [0xA7; 32],
+            &TEST_CONSENSUS_LIMITS,
+        )
+        .expect("canonical runtime PQ-MASP consensus binding");
+        let consensus_binding_digest = consensus_binding
+            .digest()
+            .expect("canonical runtime PQ-MASP binding digest");
         let outer = authorize_pq_masp_stark_proof_v1(
             unsigned.statement_digest,
+            consensus_binding_digest,
             key_digest,
             authorization_keys.secret_key(),
             &invalid_inner,
@@ -5762,6 +5931,34 @@ mod tests {
                     PrivacyPqMaspNativeFailureSourceV1::Proof(_)
                 )
         ));
+
+        let mut changed_genesis_context = context();
+        let proving_genesis = changed_genesis_context.genesis_hash;
+        changed_genesis_context.genesis_hash[0] ^= 1;
+        assert_ne!(proving_genesis, [0; 32]);
+        assert_ne!(changed_genesis_context.genesis_hash, [0; 32]);
+        assert_ne!(changed_genesis_context.genesis_hash, proving_genesis);
+        let changed_genesis_error = verify_pq_masp_action_v1(
+            &statement,
+            envelope.proof.bytes(),
+            &envelope,
+            &changed_genesis_context,
+        )
+        .expect_err("the exact PQ-MASP outer authorization must not replay across genesis");
+        assert!(
+            matches!(
+                changed_genesis_error,
+                PrivacyVerificationErrorV1::NativePqMasp(detail)
+                if matches!(
+                    detail.source,
+                    PrivacyPqMaspNativeFailureSourceV1::Authorization(
+                        PqMaspWireErrorV1::AuthorizationFailed
+                    )
+                )
+            ),
+            "changed genesis must fail the PQ-MASP native authorization layer: \
+             {changed_genesis_error:?}"
+        );
 
         let mut changed_inner = outer.clone();
         *changed_inner.last_mut().expect("inner proof byte") ^= 1;
@@ -5807,6 +6004,7 @@ mod tests {
             .expect("wrong key digest");
         let wrong_key_outer = authorize_pq_masp_stark_proof_v1(
             envelope.statement_digest,
+            consensus_binding_digest,
             wrong_key_digest,
             wrong_keys.secret_key(),
             &invalid_inner,

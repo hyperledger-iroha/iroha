@@ -557,6 +557,9 @@ macro_rules! define_qualified_signer {
             }
 
             fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
+                self.inner
+                    .revalidate()
+                    .map_err(|_| SorafsNativeTransactionSignerProbeErrorV1::Unavailable)?;
                 Ok(self.inner.binding.public_key().clone())
             }
 
@@ -566,6 +569,9 @@ macro_rules! define_qualified_signer {
                 SorafsNativeTransactionSignerQualificationV1,
                 SorafsNativeTransactionSignerProbeErrorV1,
             > {
+                self.inner
+                    .revalidate()
+                    .map_err(|_| SorafsNativeTransactionSignerProbeErrorV1::Unavailable)?;
                 Ok(self.inner.binding.qualification())
             }
         }
@@ -600,8 +606,9 @@ macro_rules! define_qualified_signer {
         #[doc = $constructor_doc]
         ///
         /// The provider is probed twice before this function returns. The
-        /// returned trait object revalidates the same binding immediately
-        /// before and after every signing request.
+        /// returned trait object revalidates the same binding before every
+        /// fallible public-identity probe and immediately before and after
+        /// every signing request.
         ///
         /// # Errors
         ///
@@ -1301,7 +1308,64 @@ mod tests {
     }
 
     #[test]
-    fn qualified_facade_keeps_immutable_binding_when_provider_accessors_substitute() {
+    fn double_qualification_rejects_live_provider_drift() {
+        let provider = Arc::new(TestProvider::new(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            "hsm://sorafs/proof-outcome/double-qualification-drift",
+            0x72,
+        ));
+        let binding = provider.expected_binding();
+        let qualified =
+            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone())
+                .expect("qualify double-qualification drift fixture");
+        provider.set_qualification(Ok(SorafsNativeTransactionSignerQualificationV1::new(
+            binding.qualification().revision() + 1,
+            binding.qualification().policy_digest(),
+        )));
+
+        assert_eq!(
+            qualified.public_key(),
+            Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
+        );
+        assert_eq!(
+            qualified.qualification(),
+            Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
+        );
+        assert!(matches!(
+            qualify_sorafs_proof_outcome_transaction_signer_v1(binding, qualified),
+            Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
+        ));
+    }
+
+    #[test]
+    fn double_qualification_rejects_unavailable_live_provider() {
+        let provider = Arc::new(TestProvider::new(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            "hsm://sorafs/proof-outcome/double-qualification-unavailable",
+            0x73,
+        ));
+        let binding = provider.expected_binding();
+        let qualified =
+            qualify_sorafs_proof_outcome_transaction_signer_v1(binding.clone(), provider.clone())
+                .expect("qualify double-qualification unavailable fixture");
+        provider.set_qualification(Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable));
+
+        assert_eq!(
+            qualified.public_key(),
+            Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
+        );
+        assert_eq!(
+            qualified.qualification(),
+            Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
+        );
+        assert!(matches!(
+            qualify_sorafs_proof_outcome_transaction_signer_v1(binding, qualified),
+            Err(SorafsNativeTransactionSignerQualificationErrorV1::ProviderUnavailable)
+        ));
+    }
+
+    #[test]
+    fn qualified_facade_keeps_immutable_infallible_identity_and_rejects_stale_public_probes() {
         let provider = Arc::new(TestProvider::new(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             "hsm://sorafs/proof-outcome/immutable-facade",
@@ -1325,8 +1389,14 @@ mod tests {
         assert_eq!(qualified.role(), binding.role());
         assert_eq!(qualified.handle(), binding.handle());
         assert_eq!(qualified.authority(), binding.authority().clone());
-        assert_eq!(qualified.public_key(), Ok(binding.public_key().clone()));
-        assert_eq!(qualified.qualification(), Ok(binding.qualification()),);
+        assert_eq!(
+            qualified.public_key(),
+            Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
+        );
+        assert_eq!(
+            qualified.qualification(),
+            Err(SorafsNativeTransactionSignerProbeErrorV1::Unavailable)
+        );
         let worker_payload = payload(qualified.authority());
         assert_eq!(worker_payload.authority(), binding.authority());
         assert_eq!(

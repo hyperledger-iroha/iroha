@@ -42,8 +42,15 @@ This handbook gives infra teams a single playbook for shipping and running Torii
    default_ttl_secs = 900
    default_max_streams = 8
    ```
-2. Ensure TLS automation controller is active (`tls_automation` section) so the `X-Sora-TLS-State` header is populated.
-3. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
+2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
+   `sorafs.storage.native_transaction_signers`, and inject all four matching
+   live providers. The storage-enabled durable-drain requirement does not
+   depend on the new-work generation flags. When storage and a reserve or
+   orderbook generation flag are both disabled, that role starts no worker and
+   leaves its durable state unchanged until a later startup where either
+   control is re-enabled.
+3. Ensure TLS automation controller is active (`tls_automation` section) so the `X-Sora-TLS-State` header is populated.
+4. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
 The TOML `enabled` value is the only production activation control; do not use
 an environment override. The deployment launcher must inject the HSM/KMS signer

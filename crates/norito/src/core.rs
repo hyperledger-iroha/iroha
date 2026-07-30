@@ -1284,13 +1284,19 @@ pub fn payload_slice_from_ptr(ptr: *const u8) -> Result<&'static [u8], Error> {
     Ok(&payload[offset..])
 }
 
+/// Return an exact, bounds-checked range from the active decode payload.
+///
+/// Generated decoders use this instead of constructing slices directly from
+/// pointers supplied by an archived value.
+#[doc(hidden)]
 #[inline]
-fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8], Error> {
+pub fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8], Error> {
     let (payload, offset) = payload_bytes_with_offset(ptr)?;
     let end = offset.checked_add(len).ok_or(Error::LengthMismatch)?;
     if end > payload.len() {
         return Err(Error::LengthMismatch);
     }
+    record_payload_access(ptr, len);
     Ok(&payload[offset..end])
 }
 
@@ -5564,9 +5570,25 @@ pub fn decode_archived_field<T>(bytes: &[u8]) -> Result<T, Error>
 where
     T: for<'de> NoritoDeserialize<'de>,
 {
-    let archived = ArchiveSlice::new_owned(bytes, core::mem::align_of::<Archived<T>>())?;
+    let logical_len = bytes.len();
+    let min_size = core::mem::size_of::<Archived<T>>();
+    let mut padded = Vec::new();
+    let decode_bytes = if logical_len < min_size {
+        padded
+            .try_reserve_exact(min_size)
+            .map_err(|_| Error::AllocationFailed {
+                bytes: u64::try_from(min_size).unwrap_or(u64::MAX),
+            })?;
+        padded.extend_from_slice(bytes);
+        padded.resize(min_size, 0);
+        padded.as_slice()
+    } else {
+        bytes
+    };
+    let archived =
+        ArchiveSlice::new_owned(decode_bytes, core::mem::align_of::<Archived<T>>())?;
     let archived_bytes = archived.as_slice();
-    let _payload_guard = PayloadCtxGuard::enter(archived_bytes);
+    let _payload_guard = PayloadCtxGuard::enter_with_len(archived_bytes, logical_len);
     let archived_ptr = if archived_bytes.is_empty() {
         core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
     } else {
@@ -5574,7 +5596,7 @@ where
     };
     // SAFETY: `ArchiveSlice::new_owned` keeps one allocation with the required
     // `Archived<T>` alignment alive for this entire deserialization call.
-    T::try_deserialize(unsafe { &*archived_ptr })
+    crate::guarded_try_deserialize(|| T::try_deserialize(unsafe { &*archived_ptr }))
 }
 
 /// Interpret `bytes` as an archived value and ensure the slice is large enough.
@@ -8606,6 +8628,10 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
     let payload = payload_without_leading_padding_exact(slice, payload_len, padding)?;
     if crc64(payload) != header.checksum {
         return Err(Error::ChecksumMismatch);
+    }
+    let min_size = core::mem::size_of::<Archived<T>>();
+    if payload.len() < min_size {
+        return Err(Error::LengthMismatch);
     }
     let align = std::mem::align_of::<Archived<T>>();
     if align > 1 && (payload.as_ptr() as usize & (align - 1)) != 0 {

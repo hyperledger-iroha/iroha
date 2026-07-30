@@ -4,6 +4,21 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - ".gitignore"
+      - ".cargo/config"
+      - ".cargo/config.toml"
+      - "**/.cargo/config"
+      - "**/.cargo/config.toml"
+      - "Cargo.toml"
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/Cargo.lock"
+      - "rust-toolchain"
+      - "rust-toolchain.toml"
+      - "**/rust-toolchain"
+      - "**/rust-toolchain.toml"
+      - "crates/**"
+      - "vendor/**"
       - ".github/workflows/pr_privacy_sdk_guard.yml"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_no_tracked_python_bytecode.sh"
@@ -16,6 +31,7 @@ on:
       - "ci/privacy_sdk_cargo_lockfile.sh"
       - "ci/privacy_sdk_cargo_lockfile_test.sh"
       - "ci/privacy_sdk_cargo_wrapper.sh"
+      - "ci/verify_privacy_python_wheel.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/tests/mobile_sdk_python312_contract.sh"
@@ -26,8 +42,42 @@ on:
       - "crates/iroha_js_host/Cargo.toml"
       - "crates/iroha_js_host/src/lib.rs"
       - "crates/iroha_data_model/src/zk.rs"
+      - "crates/iroha_crypto/**"
+      - "crates/iroha_data_model/**"
+      - "crates/iroha_primitives/**"
+      - "crates/iroha_schema/**"
+      - "crates/iroha_version/**"
+      - "crates/iroha_torii_shared/**"
+      - "crates/norito/**"
+      - "crates/ivm/**"
+      - "crates/sorafs_manifest/**"
+      - "crates/iroha_config/**"
+      - "crates/iroha_core/**"
+      - "crates/iroha_zkp_halo2/**"
+      - "crates/zk_ace_prover/**"
+      - "crates/sorafs_car/**"
+      - "crates/sorafs_chunker/**"
+      - "crates/sorafs_orchestrator/**"
+      - "python/iroha_python/pyproject.toml"
+      - "python/iroha_python/pytest.ini"
       - "python/iroha_python/iroha_python_rs/Cargo.toml"
-      - "python/iroha_python/iroha_python_rs/src/lib.rs"
+      - "python/iroha_python/iroha_python_rs/build.rs"
+      - "python/iroha_python/iroha_python_rs/src/**"
+      - "python/iroha_python/requirements-ci.in"
+      - "python/iroha_python/requirements-ci.lock"
+      - "python/iroha_python/src/**"
+      - "python/iroha_python/src/**/*.py"
+      - "python/iroha_python/src/**/*.so"
+      - "python/iroha_python/src/**/*.dylib"
+      - "python/iroha_python/src/**/*.pyd"
+      - "python/iroha_python/tests/conftest.py"
+      - "python/norito_py/**"
+      - "python/norito_py/pyproject.toml"
+      - "python/norito_py/setup.cfg"
+      - "python/norito_py/src/**/*.py"
+      - "python/iroha_torii_client/**"
+      - "python/iroha_torii_client/pyproject.toml"
+      - "python/iroha_torii_client/**/*.py"
       - "javascript/iroha_js/src/crypto.js"
       - "javascript/iroha_js/src/crypto.browser.js"
       - "javascript/iroha_js/src/index.js"
@@ -64,6 +114,7 @@ on:
       - "python/iroha_python/tests/package_import_fallback_test.py"
       - "python/iroha_python/tests/privacy_native_registry_test.py"
       - "python/iroha_python/tests/crypto_algorithms_test.py"
+      - "python/iroha_python/tests/dependency_lock_test.py"
       - "python/iroha_python/tests/anonymous_pgc_test.py"
       - "python/iroha_python/tests/jindo_test.py"
       - "python/iroha_python/tests/silent_threshold_test.py"
@@ -117,19 +168,33 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install host-qualified privacy SDK Rust toolchain
+        shell: bash
+        run: |
+          env -i \
+            HOME="${HOME}" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            "${HOME}/.cargo/bin/rustup" toolchain install \
+              "1.93.1-x86_64-unknown-linux-gnu" \
+              --profile minimal \
+              --no-self-update
       - name: Provision private privacy SDK Cargo lock
         shell: bash
         run: |
-          ci/privacy_sdk_cargo_lockfile.sh provision-ci \
+          env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH \
+            ci/privacy_sdk_cargo_lockfile.sh provision-ci \
             "${GITHUB_WORKSPACE}" \
             "${RUNNER_TEMP}/iroha-privacy-sdk-cargo" \
             "${GITHUB_ENV}" \
-            "${GITHUB_PATH}"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
+            "${GITHUB_PATH}" \
+            "${HOME}/.cargo/bin/rustup" \
+            "1.93.1-x86_64-unknown-linux-gnu"
       - name: Verify privacy SDK Cargo lock isolation
         run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}"
+      - name: Prime privacy native Cargo dependencies
+        env:
+          CARGO_NET_OFFLINE: "false"
+        run: cargo fetch --locked
       - name: Privacy native bridge tests
         run: cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1
       - name: Verify final privacy SDK Cargo lock isolation
@@ -187,28 +252,44 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - name: Install host-qualified privacy SDK Rust toolchain
+        shell: bash
+        run: |
+          env -i \
+            HOME="${HOME}" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            "${HOME}/.cargo/bin/rustup" toolchain install \
+              "1.93.1-x86_64-unknown-linux-gnu" \
+              --profile minimal \
+              --no-self-update
+      - id: privacy-python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
+          update-environment: false
       - name: Provision private privacy SDK Cargo lock
         shell: bash
         run: |
-          ci/privacy_sdk_cargo_lockfile.sh provision-ci \
+          env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH \
+            ci/privacy_sdk_cargo_lockfile.sh provision-ci \
             "${GITHUB_WORKSPACE}" \
             "${RUNNER_TEMP}/iroha-privacy-sdk-cargo" \
             "${GITHUB_ENV}" \
             "${GITHUB_PATH}" \
-            "$(command -v python3)"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
+            "${HOME}/.cargo/bin/rustup" \
+            "1.93.1-x86_64-unknown-linux-gnu" \
+            "${{ steps.privacy-python.outputs.python-path }}"
       - name: Verify privacy SDK Cargo lock isolation
-        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "$(command -v python3)"
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-python.outputs.python-path }}"
+      - name: Prime privacy Python SDK Cargo dependencies
+        env:
+          CARGO_NET_OFFLINE: "false"
+        run: cargo fetch --locked
       - name: Privacy Python SDK tests
-        run: ci/check_privacy_python_sdk.sh
+        run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH ci/check_privacy_python_sdk.sh
       - name: Verify final privacy SDK Cargo lock isolation
         if: always()
-        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "$(command -v python3)"
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-python.outputs.python-path }}"
 
   privacy-sdk-guard:
     needs: [privacy_native_bridge_tests, privacy_swift_sdk_parse, privacy_jvm_sdk_tests, privacy_csharp_sdk_tests, privacy_javascript_sdk_tests, privacy_python_sdk_tests]
@@ -216,33 +297,51 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install host-qualified privacy SDK Rust toolchain
+        shell: bash
+        run: |
+          env -i \
+            HOME="${HOME}" \
+            RUSTUP_DIST_SERVER="https://static.rust-lang.org" \
+            "${HOME}/.cargo/bin/rustup" toolchain install \
+              "1.93.1-x86_64-unknown-linux-gnu" \
+              --profile minimal \
+              --no-self-update
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: javascript/iroha_js/package-lock.json
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      - id: privacy-python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
+          update-environment: false
       - name: Bind the canonical mobile Python
+        env:
+          SETUP_PYTHON_PATH: ${{ steps.privacy-python.outputs.python-path }}
         run: |
-          mobile_python="$(python3 -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
+          mobile_python="$("$SETUP_PYTHON_PATH" -I -S -c 'import pathlib,sys; print(pathlib.Path(sys.executable).resolve(strict=True))')"
           [[ "$("$mobile_python" -I -S -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == "3.12" ]]
           echo "MOBILE_SDK_PYTHON_BINARY=$mobile_python" >> "$GITHUB_ENV"
       - name: Provision private privacy SDK Cargo lock
         shell: bash
         run: |
-          ci/privacy_sdk_cargo_lockfile.sh provision-ci \
+          env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH \
+            ci/privacy_sdk_cargo_lockfile.sh provision-ci \
             "${GITHUB_WORKSPACE}" \
             "${RUNNER_TEMP}/iroha-privacy-sdk-cargo" \
             "${GITHUB_ENV}" \
             "${GITHUB_PATH}" \
-            "$(command -v python3)"
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-        with:
-          cache-on-failure: "true"
+            "${HOME}/.cargo/bin/rustup" \
+            "1.93.1-x86_64-unknown-linux-gnu" \
+            "${{ steps.privacy-python.outputs.python-path }}"
       - name: Verify privacy SDK Cargo lock isolation
-        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "$(command -v python3)"
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-python.outputs.python-path }}"
+      - name: Prime privacy Python SDK Cargo dependencies
+        env:
+          CARGO_NET_OFFLINE: "false"
+        run: cargo fetch --locked
       - name: Install JavaScript SDK dependencies
         run: npm ci --prefix javascript/iroha_js
       - name: NoritoBridge privacy header parity
@@ -258,8 +357,8 @@ jobs:
         # This fixture generator writes only its own temporary Cargo.lock. Keep
         # the job-wide wrapper reserved for commands against the real workspace.
         run: PATH="$(dirname "${IROHA_PRIVACY_REAL_CARGO}"):${PATH}" bash scripts/check_mobile_sdk_artifacts_test.sh
-      - name: Privacy SDK external Cargo lock self-test
-        run: bash ci/privacy_sdk_cargo_lockfile_test.sh
+      - name: Privacy SDK authenticated Cargo lock self-test
+        run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH PRIVACY_SDK_LOCK_TEST_PYTHON_BIN="${{ steps.privacy-python.outputs.python-path }}" bash ci/privacy_sdk_cargo_lockfile_test.sh
       - name: Privacy SDK guard negative controls
         run: |
           ci/check_privacy_sdk_guard.sh --negative-control-js-privacy-abi-drift
@@ -268,6 +367,19 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-python-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-guard-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-helper-generation
+          ci/check_privacy_sdk_guard.sh --negative-control-cargo-config-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-native-crates-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-cargo-manifest-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-bridge-test-fixtures
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-conformance-rand-edge
+          ci/check_privacy_sdk_guard.sh --negative-control-exact12-release-evidence-test-fixtures
+          ci/check_privacy_sdk_guard.sh --negative-control-vendor-workflow-path
+          ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-install-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-cargo-fetch-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-setup-cache-workflow
+          ci/check_privacy_sdk_guard.sh --negative-control-python-path-threading-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-command-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-bridge-header-negative-controls-workflow
@@ -469,7 +581,6 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-setup-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-version-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-setup-order-workflow
-          ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-rust-cache-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-timeout-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-version-script
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-override-script
@@ -481,10 +592,9 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-bytecode-script
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-test-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-python-sdk-needs-workflow
-          ci/check_privacy_sdk_guard.sh --negative-control-main-rust-cache-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-main-timeout-workflow
       - name: Privacy SDK parity and fail-closed guard
-        run: ci/check_privacy_sdk_guard.sh
+        run: env -u PKG_CONFIG_PATH -u LD_LIBRARY_PATH ci/check_privacy_sdk_guard.sh
       - name: Verify final privacy SDK Cargo lock isolation
         if: always()
-        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "$(command -v python3)"
+        run: ci/privacy_sdk_cargo_lockfile.sh verify-ci "${GITHUB_WORKSPACE}" "${{ steps.privacy-python.outputs.python-path }}"

@@ -65,6 +65,8 @@ pub const ZK_AMS_ADMISSION_POSSESSION_SUITE_V1: &[u8] =
 pub const ZK_AMS_HASH_TO_POINT_DOMAIN_V1: &[u8] = b"iroha.zk-ams.v1.lsag.hash-to-ristretto";
 /// Canonical proof wire version.
 pub const ZK_AMS_LSAG_PROOF_VERSION_V1: u8 = 1;
+/// Canonical composed batch-admission proof wire version.
+pub const ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1: u8 = 1;
 /// Canonical holder-possession proof wire version.
 pub const ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1: u8 = 1;
 /// Smallest closed Phase-V ring.
@@ -276,13 +278,32 @@ impl Zeroize for ZkAmsLsagProofWireV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
 )]
 #[norito(decode_from_slice)]
 struct ZkAmsAdmissionPossessionProofWireV1 {
     version: u8,
     commitment: [u8; 32],
     response: [u8; 32],
+}
+
+impl ZkAmsAdmissionPossessionProofWireV1 {
+    /// Exact all-zero sentinel for an unused fixed batch slot.
+    const UNUSED: Self = Self {
+        version: 0,
+        commitment: [0; 32],
+        response: [0; 32],
+    };
+
+    fn is_unused(self) -> bool {
+        self == Self::UNUSED
+    }
 }
 
 impl Zeroize for ZkAmsAdmissionPossessionProofWireV1 {
@@ -300,14 +321,21 @@ impl Zeroize for ZkAmsAdmissionPossessionProofWireV1 {
 struct ZkAmsBatchAdmissionProofWireV1 {
     version: u8,
     relation_proof: Vec<u8>,
-    possession_proofs:
-        [Option<ZkAmsAdmissionPossessionProofWireV1>; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
+    possession_proof_count: u8,
+    possession_proofs: [ZkAmsAdmissionPossessionProofWireV1; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
+}
+
+struct PreflightedZkAmsAdmissionPossessionV1 {
+    public: RistrettoPoint,
+    commitment: RistrettoPoint,
+    response: Scalar,
 }
 
 impl Zeroize for ZkAmsBatchAdmissionProofWireV1 {
     fn zeroize(&mut self) {
         self.version.zeroize();
         self.relation_proof.zeroize();
+        self.possession_proof_count.zeroize();
         self.possession_proofs.zeroize();
     }
 }
@@ -334,8 +362,9 @@ fn zk_ams_possession_decode_limits(payload_len: usize) -> norito::DecodeLimits {
 
 fn zk_ams_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
     // The only variable-length member is the masked-relation byte string.
-    // Possession proofs occupy a fixed eight-slot Option array, so no nested
-    // attacker-selected vector count can amplify allocation.
+    // Possession proofs occupy a fixed eight-slot value array with an explicit
+    // count and canonical unused sentinel, so no nested attacker-selected
+    // vector count can amplify allocation.
     norito::DecodeLimits::new(
         MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1,
         payload_len,
@@ -343,6 +372,97 @@ fn zk_ams_batch_decode_limits(payload_len: usize) -> norito::DecodeLimits {
         MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1.saturating_mul(4),
         16,
     )
+}
+
+fn preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes: &[u8]) -> Result<(), ZkAmsErrorV1> {
+    if proof_bytes.len() > MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1 {
+        return Err(ZkAmsErrorV1::BatchProofTooLarge {
+            actual: proof_bytes.len(),
+            max: MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
+        });
+    }
+    Ok(())
+}
+
+fn decode_zk_ams_batch_admission_wire_v1(
+    proof_bytes: &[u8],
+    expected_possession_proof_count: usize,
+) -> Result<ZkAmsBatchAdmissionProofWireV1, ZkAmsErrorV1> {
+    preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes)?;
+    if expected_possession_proof_count > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    let proof =
+        norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
+            proof_bytes,
+            zk_ams_batch_decode_limits(proof_bytes.len()),
+        )
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    let count = usize::from(proof.possession_proof_count);
+    if proof.version != ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1
+        || count != expected_possession_proof_count
+        || count > ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1
+        || proof.possession_proofs[..count]
+            .iter()
+            .any(|possession| possession.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1)
+        || proof.possession_proofs[count..]
+            .iter()
+            .copied()
+            .any(|possession| !possession.is_unused())
+        || norito::codec::encode_adaptive(&proof) != proof_bytes
+    {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    Ok(proof)
+}
+
+#[cfg(feature = "privacy-release-evidence")]
+pub(crate) fn zk_ams_batch_admission_adversarial_wires_v1(
+    canonical_proof_bytes: &[u8],
+    expected_possession_proof_count: usize,
+) -> Result<Vec<Vec<u8>>, ZkAmsErrorV1> {
+    let canonical = decode_zk_ams_batch_admission_wire_v1(
+        canonical_proof_bytes,
+        expected_possession_proof_count,
+    )?;
+    let mut mutations = Vec::new();
+    mutations
+        .try_reserve_exact(5)
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+
+    let mut wrong_version = canonical.clone();
+    wrong_version.version ^= 1;
+    mutations.push(norito::codec::encode_adaptive(&wrong_version));
+
+    let mut zero_count = canonical.clone();
+    zero_count.possession_proof_count = 0;
+    mutations.push(norito::codec::encode_adaptive(&zero_count));
+
+    let mut excessive_count = canonical.clone();
+    excessive_count.possession_proof_count = u8::try_from(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 + 1)
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    mutations.push(norito::codec::encode_adaptive(&excessive_count));
+
+    if expected_possession_proof_count == 0 {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    let mut used_zero_sentinel = canonical.clone();
+    used_zero_sentinel.possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1::UNUSED;
+    mutations.push(norito::codec::encode_adaptive(&used_zero_sentinel));
+
+    if expected_possession_proof_count < ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 {
+        let mut nonzero_unused_tail = canonical;
+        nonzero_unused_tail.possession_proofs[expected_possession_proof_count].commitment[0] ^= 1;
+        mutations.push(norito::codec::encode_adaptive(&nonzero_unused_tail));
+    }
+
+    if mutations.iter().any(|mutation| {
+        mutation == canonical_proof_bytes
+            || mutation.len() > MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1
+    }) {
+        return Err(ZkAmsErrorV1::InvalidProofEncoding);
+    }
+    Ok(mutations)
 }
 
 fn decode_zk_ams_possession_wire_v1(
@@ -609,13 +729,17 @@ pub fn prove_zk_ams_batch_admission_v1<R: CryptoRng + RngCore>(
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut possession_proofs = core::array::from_fn(|_| None);
+    let possession_proof_count = u8::try_from(encoded_possession_proofs.len())
+        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
+    let mut possession_proofs =
+        [ZkAmsAdmissionPossessionProofWireV1::UNUSED; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
     for (slot, encoded) in possession_proofs.iter_mut().zip(encoded_possession_proofs) {
-        *slot = Some(decode_zk_ams_possession_wire_v1(&encoded)?);
+        *slot = decode_zk_ams_possession_wire_v1(&encoded)?;
     }
     let proof = Zeroizing::new(ZkAmsBatchAdmissionProofWireV1 {
-        version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+        version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
         relation_proof,
+        possession_proof_count,
         possession_proofs,
     });
     let encoded = Zeroizing::new(norito::codec::encode_adaptive(&*proof));
@@ -645,32 +769,22 @@ pub fn verify_zk_ams_batch_admission_v1(
     binding: &TranscriptBindingV1<'_>,
     proof_bytes: &[u8],
 ) -> Result<VerifiedZkAmsBatchAdmissionV1, ZkAmsErrorV1> {
-    if proof_bytes.len() > MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1 {
-        return Err(ZkAmsErrorV1::BatchProofTooLarge {
-            actual: proof_bytes.len(),
-            max: MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,
-        });
-    }
+    preflight_zk_ams_batch_admission_proof_size_v1(proof_bytes)?;
     let (public_inputs, _) = build_admission_public_inputs(statement, binding)?;
     let batch = batch_action(statement)?;
-    let proof =
-        norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
-            proof_bytes,
-            zk_ams_batch_decode_limits(proof_bytes.len()),
-        )
-        .map_err(|_| ZkAmsErrorV1::InvalidProofEncoding)?;
     let anchor_count = batch.anchors.len();
-    if proof.version != ZK_AMS_LSAG_PROOF_VERSION_V1
-        || proof.possession_proofs[..anchor_count]
-            .iter()
-            .any(Option::is_none)
-        || proof.possession_proofs[anchor_count..]
-            .iter()
-            .any(Option::is_some)
-        || norito::codec::encode_adaptive(&proof) != proof_bytes
-    {
-        return Err(ZkAmsErrorV1::InvalidProofEncoding);
-    }
+    let proof = decode_zk_ams_batch_admission_wire_v1(proof_bytes, anchor_count)?;
+    let preflighted_possessions = batch
+        .anchors
+        .iter()
+        .zip(&proof.possession_proofs[..anchor_count])
+        .map(|(anchor, possession)| {
+            preflight_zk_ams_admission_possession_wire_v1(
+                *anchor.seed_public_key.as_bytes(),
+                possession,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let relation_context = relation_context(binding);
     verify_zk_ams_admission_relation_v1(&relation_context, &public_inputs, &proof.relation_proof)
         .map_err(|_| ZkAmsErrorV1::AdmissionRelation)?;
@@ -678,18 +792,16 @@ pub fn verify_zk_ams_batch_admission_v1(
     for (index, (anchor, possession)) in batch
         .anchors
         .iter()
-        .zip(&proof.possession_proofs[..anchor_count])
+        .zip(preflighted_possessions)
         .enumerate()
     {
-        verify_zk_ams_admission_possession_wire_v1(
+        verify_preflighted_zk_ams_admission_possession_v1(
             binding,
             u32::try_from(index).expect("batch is bounded to eight"),
             *anchor.phc_hash.as_bytes(),
             *anchor.seed_public_key.as_bytes(),
             relation_digest,
-            possession
-                .as_ref()
-                .ok_or(ZkAmsErrorV1::InvalidProofEncoding)?,
+            possession,
         )?;
     }
     Ok(VerifiedZkAmsBatchAdmissionV1 {
@@ -984,12 +1096,47 @@ fn verify_zk_ams_admission_possession_wire_v1(
     if phc_hash == [0; 32] || relation_proof_digest == [0; 32] {
         return Err(ZkAmsErrorV1::InvalidBinding);
     }
-    let public = decode_nonidentity_point(seed_public_key)?;
+    let preflight = preflight_zk_ams_admission_possession_wire_v1(seed_public_key, proof)?;
+    verify_preflighted_zk_ams_admission_possession_v1(
+        binding,
+        anchor_index,
+        phc_hash,
+        seed_public_key,
+        relation_proof_digest,
+        preflight,
+    )
+}
+
+fn preflight_zk_ams_admission_possession_wire_v1(
+    seed_public_key: [u8; 32],
+    proof: &ZkAmsAdmissionPossessionProofWireV1,
+) -> Result<PreflightedZkAmsAdmissionPossessionV1, ZkAmsErrorV1> {
     if proof.version != ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1 {
         return Err(ZkAmsErrorV1::InvalidProofEncoding);
     }
+    let public = decode_nonidentity_point(seed_public_key)?;
     let commitment = decode_nonidentity_point(proof.commitment)?;
     let response = scalar_from_canonical(proof.response)?;
+    Ok(PreflightedZkAmsAdmissionPossessionV1 {
+        public,
+        commitment,
+        response,
+    })
+}
+
+fn verify_preflighted_zk_ams_admission_possession_v1(
+    binding: &TranscriptBindingV1<'_>,
+    anchor_index: u32,
+    phc_hash: [u8; 32],
+    seed_public_key: [u8; 32],
+    relation_proof_digest: [u8; 32],
+    preflight: PreflightedZkAmsAdmissionPossessionV1,
+) -> Result<(), ZkAmsErrorV1> {
+    let PreflightedZkAmsAdmissionPossessionV1 {
+        public,
+        commitment,
+        response,
+    } = preflight;
     let challenge = admission_possession_challenge(
         binding,
         anchor_index,
@@ -1601,7 +1748,7 @@ mod tests {
             PrivacyEngineManifestDigestV1, PrivacyP256PointV1, PrivacyParameterDigestV1,
             PrivacyParameterIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
-            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsSubjectCommitmentV1,
+            PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsPhcHashV1, PrivacyZkAmsSubjectCommitmentV1,
         },
     };
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::hazmat::PrehashSigner as _};
@@ -1614,6 +1761,14 @@ mod tests {
         version: u8,
         relation_proof: Vec<u8>,
         possession_proofs: Vec<Vec<u8>>,
+    }
+
+    #[derive(norito::derive::NoritoSerialize)]
+    struct LegacyZkAmsOptionSlotsBatchAdmissionProofWireV1 {
+        version: u8,
+        relation_proof: Vec<u8>,
+        possession_proofs:
+            [Option<ZkAmsAdmissionPossessionProofWireV1>; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
     }
 
     #[derive(Clone, Copy)]
@@ -1909,46 +2064,157 @@ mod tests {
 
     #[test]
     fn batch_decoder_preflights_relation_count_and_rejects_inexact_wires() {
-        let empty = ZkAmsBatchAdmissionProofWireV1 {
-            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
-            relation_proof: Vec::new(),
-            possession_proofs: core::array::from_fn(|_| None),
+        let mut possession_proofs =
+            [ZkAmsAdmissionPossessionProofWireV1::UNUSED; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1 {
+            version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+            commitment: [1; 32],
+            response: [2; 32],
         };
-        let canonical = norito::codec::encode_adaptive(&empty);
-        let decode = |bytes: &[u8]| {
+        let canonical_wire = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+            relation_proof: Vec::new(),
+            possession_proof_count: 1,
+            possession_proofs,
+        };
+        let canonical = norito::codec::encode_adaptive(&canonical_wire);
+        let decode_raw = |bytes: &[u8]| {
             norito::codec::decode_exact_from_slice_with_limits::<ZkAmsBatchAdmissionProofWireV1>(
                 bytes,
                 zk_ams_batch_decode_limits(bytes.len()),
             )
         };
-        assert_eq!(decode(&canonical).expect("canonical empty wire"), empty);
+        assert_eq!(
+            decode_zk_ams_batch_admission_wire_v1(&canonical, 1)
+                .expect("canonical fixed-slot wire"),
+            canonical_wire
+        );
 
         let legacy = LegacyZkAmsBatchAdmissionProofWireV1 {
-            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
             relation_proof: Vec::new(),
             possession_proofs: Vec::new(),
         };
         let legacy_bytes = norito::codec::encode_adaptive(&legacy);
         assert_ne!(legacy_bytes, canonical);
         assert!(
-            decode(&legacy_bytes).is_err(),
+            decode_zk_ams_batch_admission_wire_v1(&legacy_bytes, 1).is_err(),
             "the unreleased nested-Vec wire must not survive the first-release schema"
         );
 
-        assert!(decode(&canonical[..canonical.len() - 1]).is_err());
-        let mut trailing = canonical;
+        let mut legacy_option_slots = [None; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        legacy_option_slots[0] = Some(ZkAmsAdmissionPossessionProofWireV1 {
+            version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+            commitment: [1; 32],
+            response: [2; 32],
+        });
+        let legacy_option_array =
+            norito::codec::encode_adaptive(&LegacyZkAmsOptionSlotsBatchAdmissionProofWireV1 {
+                version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+                relation_proof: Vec::new(),
+                possession_proofs: legacy_option_slots,
+            });
+        assert_ne!(legacy_option_array, canonical);
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(&legacy_option_array, 1).is_err(),
+            "the unreleased Option-array wire must not reach the first-release decoder"
+        );
+
+        let max_wire = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+            relation_proof: Vec::new(),
+            possession_proof_count: ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 as u8,
+            possession_proofs: [ZkAmsAdmissionPossessionProofWireV1 {
+                version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+                commitment: [3; 32],
+                response: [4; 32],
+            }; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
+        };
+        let max_encoded = norito::codec::encode_adaptive(&max_wire);
+        assert_eq!(
+            decode_zk_ams_batch_admission_wire_v1(
+                &max_encoded,
+                ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1,
+            )
+            .expect("all eight canonical slots"),
+            max_wire
+        );
+
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(&canonical[..canonical.len() - 1], 1).is_err()
+        );
+        let mut trailing = canonical.clone();
         trailing.push(0);
-        assert!(decode(&trailing).is_err());
+        assert!(decode_zk_ams_batch_admission_wire_v1(&trailing, 1).is_err());
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(&canonical, 0).is_err(),
+            "wire count must equal the statement anchor count"
+        );
+        assert!(
+            decode_zk_ams_batch_admission_wire_v1(
+                &canonical,
+                ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 + 1,
+            )
+            .is_err(),
+            "an expected count above the fixed profile must fail before decoding"
+        );
+
+        for (label, malformed) in [
+            ("outer version", {
+                let mut proof = canonical_wire.clone();
+                proof.version ^= 1;
+                proof
+            }),
+            ("zero count", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proof_count = 0;
+                proof
+            }),
+            ("count beyond statement", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proof_count = 2;
+                proof
+            }),
+            ("count beyond profile", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proof_count = u8::try_from(ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1 + 1)
+                    .expect("fixed test count fits u8");
+                proof
+            }),
+            ("used zero sentinel", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1::UNUSED;
+                proof
+            }),
+            ("unused nonzero version", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proofs[1].version = ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1;
+                proof
+            }),
+            ("unused nonzero body", {
+                let mut proof = canonical_wire.clone();
+                proof.possession_proofs[1].commitment[0] = 1;
+                proof
+            }),
+        ] {
+            let encoded = norito::codec::encode_adaptive(&malformed);
+            assert!(
+                decode_zk_ams_batch_admission_wire_v1(&encoded, 1).is_err(),
+                "{label} unexpectedly passed the canonical fixed-slot decoder"
+            );
+        }
 
         let oversized_count = MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 + 1;
         let oversized = ZkAmsBatchAdmissionProofWireV1 {
-            version: ZK_AMS_LSAG_PROOF_VERSION_V1,
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
             relation_proof: vec![0; oversized_count],
-            possession_proofs: core::array::from_fn(|_| None),
+            possession_proof_count: 0,
+            possession_proofs: [ZkAmsAdmissionPossessionProofWireV1::UNUSED;
+                ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1],
         };
         let encoded = norito::codec::encode_adaptive(&oversized);
         assert!(matches!(
-            decode(&encoded),
+            decode_raw(&encoded),
             Err(norito::Error::SequenceLengthExceeded { length, limit })
                 if length == oversized_count as u64
                     && limit == MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
@@ -1961,13 +2227,10 @@ mod tests {
             .expect("oversized relation count is present in canonical wire");
         let mut forged = encoded;
         forged[count_offset..count_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
-        assert!(matches!(
-            decode(&forged),
-            Err(norito::Error::SequenceLengthExceeded {
-                length: u64::MAX,
-                limit
-            }) if limit == MAX_ZK_AMS_ADMISSION_RELATION_PROOF_BYTES_V1 as u64
-        ));
+        assert!(
+            decode_raw(&forged).is_err(),
+            "a forged maximum relation length must fail before allocation"
+        );
     }
 
     #[test]
@@ -2292,6 +2555,46 @@ mod tests {
         PrivacyP256PointV1::new(bytes)
     }
 
+    fn typed_batch_statement() -> IrohaZkAmsStatementV1 {
+        let issuer_id = PrivacyIssuerIdV1::new([0x31; 32]);
+        let registry_id = PrivacyZkAmsRegistryIdV1::new([0x33; 32]);
+        let current_root = PrivacyRootV1::new([0x37; 32]);
+        let current_epoch = 9;
+        let next_epoch = current_epoch + 1;
+        let anchor = PrivacyZkAmsAdmissionAnchorV1 {
+            phc_hash: PrivacyZkAmsPhcHashV1::new([0x41; 32]),
+            seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new(zk_ams_seed_public_key_v1(
+                &seed_secret(41),
+            )),
+        };
+        let next_root = zk_ams_registry_transition_root_v1(
+            registry_id,
+            current_root,
+            current_epoch,
+            next_epoch,
+            1,
+            0,
+            anchor,
+        );
+        IrohaZkAmsStatementV1 {
+            context: typed_context(),
+            issuer_id,
+            issuer_public_key: issuer_key(),
+            issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([0x32; 32]),
+            registry_id,
+            registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new([0x34; 32]),
+            policy_id: PrivacyPolicyIdV1::new([0x35; 32]),
+            policy_digest: PrivacyPolicyDigestV1::new([0x36; 32]),
+            action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
+                account_registry_root: current_root,
+                account_registry_root_epoch: current_epoch,
+                next_account_registry_root: next_root,
+                next_account_registry_root_epoch: next_epoch,
+                anchors: vec![anchor],
+            }),
+        }
+    }
+
     fn typed_provision_statement(
         ring: &[([u8; 32], ZkAmsSeedSecretV1)],
         key_image: [u8; 32],
@@ -2534,6 +2837,56 @@ mod tests {
             verify_zk_ams_batch_admission_v1(&statement, &binding, &corrupted).is_err(),
             "one-bit proof corruption must fail closed"
         );
+    }
+
+    #[test]
+    fn batch_preflights_possession_body_before_expensive_relation_verification() {
+        let statement = typed_batch_statement();
+        let binding = binding_for_statement(&statement);
+        let mut possession_proofs =
+            [ZkAmsAdmissionPossessionProofWireV1::UNUSED; ZK_AMS_MAX_ADMISSION_BATCH_SIZE_V1];
+        possession_proofs[0] = ZkAmsAdmissionPossessionProofWireV1 {
+            version: ZK_AMS_ADMISSION_POSSESSION_PROOF_VERSION_V1,
+            commitment: zk_ams_seed_public_key_v1(&seed_secret(42)),
+            response: [0; 32],
+        };
+        let mut wire = ZkAmsBatchAdmissionProofWireV1 {
+            version: ZK_AMS_BATCH_ADMISSION_PROOF_VERSION_V1,
+            relation_proof: vec![0xff],
+            possession_proof_count: 1,
+            possession_proofs,
+        };
+
+        let mut wrong_binding = binding;
+        wrong_binding.action_index ^= 1;
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(
+                &statement,
+                &wrong_binding,
+                &vec![0; MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1 + 1],
+            ),
+            Err(ZkAmsErrorV1::BatchProofTooLarge { .. })
+        ));
+
+        let invalid_relation = norito::codec::encode_adaptive(&wire);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &invalid_relation),
+            Err(ZkAmsErrorV1::AdmissionRelation)
+        ));
+
+        wire.possession_proofs[0].response = [0xff; 32];
+        let invalid_scalar = norito::codec::encode_adaptive(&wire);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &invalid_scalar),
+            Err(ZkAmsErrorV1::InvalidScalar)
+        ));
+
+        wire.possession_proofs[0].commitment = [0; 32];
+        let identity_commitment = norito::codec::encode_adaptive(&wire);
+        assert!(matches!(
+            verify_zk_ams_batch_admission_v1(&statement, &binding, &identity_commitment),
+            Err(ZkAmsErrorV1::InvalidPoint)
+        ));
     }
 
     #[test]

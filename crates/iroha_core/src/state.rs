@@ -11675,6 +11675,9 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_commitments_in_tx: u32,
     /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
     pub(crate) native_anonymous_escrow_transfer_depth: u32,
+    /// Active multisig proposals whose deferred instructions are executing in this transaction.
+    pub(crate) multisig_deferred_execution_stack:
+        Vec<(AccountId, HashOf<Vec<iroha_data_model::isi::InstructionBox>>)>,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -48350,6 +48353,7 @@ impl<'state> StateBlock<'state> {
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
             native_anonymous_escrow_transfer_depth: 0,
+            multisig_deferred_execution_stack: Vec::new(),
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,

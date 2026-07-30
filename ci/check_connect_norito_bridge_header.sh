@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUST_LIB="${ROOT_DIR}/crates/connect_norito_bridge/src/lib.rs"
+DATA_MODEL_PRIVACY="${ROOT_DIR}/crates/iroha_data_model/src/privacy.rs"
 HEADER="${ROOT_DIR}/crates/connect_norito_bridge/include/connect_norito_bridge.h"
 UMBRELLA="${ROOT_DIR}/crates/connect_norito_bridge/include/NoritoBridge.h"
 SWIFT_CONTRACT="${ROOT_DIR}/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
@@ -47,8 +48,9 @@ run_contract_check() {
   local header="$2"
   local umbrella="$3"
   local swift_contract="$4"
+  local data_model_privacy="$5"
 
-  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" <<'PY'
+  python3 - "${rust_lib}" "${header}" "${umbrella}" "${swift_contract}" "${data_model_privacy}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -57,6 +59,7 @@ rust = Path(sys.argv[1]).read_text(encoding="utf-8")
 header = Path(sys.argv[2]).read_text(encoding="utf-8")
 umbrella = Path(sys.argv[3]).read_text(encoding="utf-8")
 swift = Path(sys.argv[4]).read_text(encoding="utf-8")
+privacy_model = Path(sys.argv[5]).read_text(encoding="utf-8")
 
 KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -132,6 +135,8 @@ FORBIDDEN_FIRST_RELEASE_EXPORTS = {
 required_privacy_ffi = (
     "iroha_privacy_capabilities_v1",
     "iroha_privacy_validate_capabilities_v1",
+    "iroha_privacy_exact12_fixture_bundle_v1",
+    "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 )
 PRIVACY_EXPORTS = set(required_privacy_ffi)
@@ -322,6 +327,8 @@ if undeclared_privacy_exports:
 expected_privacy_signatures = {
     "iroha_privacy_capabilities_v1": 2,
     "iroha_privacy_validate_capabilities_v1": 2,
+    "iroha_privacy_exact12_fixture_bundle_v1": 2,
+    "iroha_privacy_validate_exact12_fixture_bundle_v1": 2,
     "iroha_privacy_free_buffer": 1,
 }
 for name, expected_parameter_count in expected_privacy_signatures.items():
@@ -432,9 +439,22 @@ require_signature_parity(
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
 
-abi = re.search(r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*([0-9]+)\s*;", rust)
-if abi is None or abi.group(1) != "21":
-    raise SystemExit("connect_norito bridge ABI must be exactly 21")
+if re.search(
+    r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*"
+    r"PRIVACY_BRIDGE_ABI_VERSION_V1\s*;",
+    rust,
+) is None:
+    raise SystemExit("connect_norito bridge ABI must use the shared privacy ABI constant")
+if re.search(
+    r"pub\s+const\s+PRIVACY_BRIDGE_ABI_VERSION_V1\s*:\s*u32\s*=\s*21\s*;",
+    privacy_model,
+) is None:
+    raise SystemExit("shared privacy bridge ABI must be exactly 21")
+if re.search(
+    r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+21(?:\s|$)",
+    header,
+) is None:
+    raise SystemExit("C bridge ABI macro must be exactly 21")
 if re.search(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(', rust) is None:
     raise SystemExit("Rust bridge ABI export is missing")
 if re.search(r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;", header) is None:
@@ -532,6 +552,7 @@ make_negative_workspace() {
   local tmp
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/iroha-bridge-header.XXXXXX")"
   cp "${RUST_LIB}" "${tmp}/lib.rs"
+  cp "${DATA_MODEL_PRIVACY}" "${tmp}/privacy.rs"
   cp "${HEADER}" "${tmp}/connect_norito_bridge.h"
   cp "${UMBRELLA}" "${tmp}/NoritoBridge.h"
   cp "${SWIFT_CONTRACT}" "${tmp}/KagemushaRecursiveSpendV2.swift"
@@ -545,7 +566,8 @@ expect_contract_rejection() {
       "${tmp}/lib.rs" \
       "${tmp}/connect_norito_bridge.h" \
       "${tmp}/NoritoBridge.h" \
-      "${tmp}/KagemushaRecursiveSpendV2.swift" 2>&1)"; then
+      "${tmp}/KagemushaRecursiveSpendV2.swift" \
+      "${tmp}/privacy.rs" 2>&1)"; then
     echo "[bridge-header] negative control unexpectedly passed: ${MODE}" >&2
     exit 1
   fi
@@ -564,7 +586,12 @@ fi
 if [[ "${MODE}" == --self-test-* ]]; then
   # Prove the authoritative inputs pass before mutating a private copy. This
   # prevents an unrelated source error from masquerading as a negative test.
-  run_contract_check "${RUST_LIB}" "${HEADER}" "${UMBRELLA}" "${SWIFT_CONTRACT}" >/dev/null
+  run_contract_check \
+    "${RUST_LIB}" \
+    "${HEADER}" \
+    "${UMBRELLA}" \
+    "${SWIFT_CONTRACT}" \
+    "${DATA_MODEL_PRIVACY}" >/dev/null
   tmp="$(make_negative_workspace)"
   trap 'rm -rf "${tmp}"' EXIT
   tmp_rust="${tmp}/lib.rs"
@@ -575,7 +602,7 @@ if [[ "${MODE}" == --self-test-* ]]; then
   case "${MODE}" in
     --self-test-bad-abi)
       replace_once "${tmp_rust}" \
-        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;" \
+        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;" \
         "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;"
       ;;
     --self-test-missing-header-symbol)
@@ -726,7 +753,12 @@ elif [[ -n "${MODE}" ]]; then
   exit 2
 fi
 
-run_contract_check "${RUST_LIB}" "${HEADER}" "${UMBRELLA}" "${SWIFT_CONTRACT}"
+run_contract_check \
+  "${RUST_LIB}" \
+  "${HEADER}" \
+  "${UMBRELLA}" \
+  "${SWIFT_CONTRACT}" \
+  "${DATA_MODEL_PRIVACY}"
 
 if command -v "${CC:-cc}" >/dev/null 2>&1; then
   "${CC:-cc}" -fsyntax-only -x c \

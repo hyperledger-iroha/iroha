@@ -23,8 +23,14 @@ pub use iroha_zkp_halo2::vega::{
 
 /// Domain separator used to hash canonical [`PrivacyStatementV1`] values.
 pub const PRIVACY_STATEMENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:statement:v1";
+/// Domain separator used to hash canonical [`PrivacyNativeConsensusBindingV1`] values.
+pub const PRIVACY_NATIVE_CONSENSUS_BINDING_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:native-consensus-binding:v1";
 /// Permanent Norito schema identity for the top-level typed privacy statement.
 pub const PRIVACY_STATEMENT_SCHEMA_NAME_V1: &str = "iroha.privacy.statement.v1";
+/// Permanent Norito schema identity for the shared native consensus binding.
+pub const PRIVACY_NATIVE_CONSENSUS_BINDING_SCHEMA_NAME_V1: &str =
+    "iroha.privacy.native-consensus-binding.v1";
 /// Permanent Norito schema identity for the top-level typed privacy proof.
 pub const PRIVACY_PROOF_SCHEMA_NAME_V1: &str = "iroha.privacy.proof.v1";
 /// Permanent Norito schema identity for the cross-SDK privacy proof envelope.
@@ -360,10 +366,14 @@ impl PrivacyProtocolIdV1 {
     }
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
 pub use exact12_fixture::{
-    PrivacyExact12FixtureErrorV1, PrivacyExact12TypedEnvelopeRowV1,
-    privacy_exact12_typed_envelope_rows_v1,
+    PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1, PrivacyExact12FixtureBundleV1,
+    PrivacyExact12FixtureBundleValidationStatusV1, PrivacyExact12FixtureErrorV1,
+    PrivacyExact12TypedEnvelopeRowV1, PrivacyExact12TypedFixtureRowV1,
+    privacy_exact12_fixture_bundle_bytes_v1, privacy_exact12_fixture_bundle_v1,
+    privacy_exact12_matrix_bytes_v1, privacy_exact12_typed_envelope_rows_v1,
+    validate_privacy_exact12_fixture_bundle_v1,
 };
 
 /// Return whether `label` is reserved by the first-release privacy registry.
@@ -578,6 +588,11 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Digest of the canonical transaction-intent projection bound by a privacy statement.
     PrivacyTransactionIntentDigestV1
+);
+define_privacy_digest!(
+    /// Digest of the canonical chain, genesis, action, and governed-artifact binding
+    /// consumed by a native privacy prover or verifier.
+    PrivacyNativeConsensusBindingDigestV1
 );
 define_privacy_digest!(
     /// Digest of a canonical governance root publication.
@@ -5217,6 +5232,224 @@ impl PrivacyStatementContextV1 {
         }
         Ok(())
     }
+}
+
+/// Exact chain, genesis, action, and governed-artifact binding shared by native engines.
+///
+/// The binding owns every consensus-selected byte that a native proof
+/// transcript must commit. It is constructed from a validated
+/// [`PrivacyStatementContextV1`] plus the trusted chain genesis hash; there is
+/// no optional field, default, alias, or legacy wire shape.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct PrivacyNativeConsensusBindingV1 {
+    /// Exact chain identifier.
+    pub chain_id: ChainId,
+    /// Trusted committed genesis-block hash for this chain.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub genesis_hash: [u8; 32],
+    /// Zero-based privacy action index within the transaction.
+    pub action_index: u32,
+    /// Digest of the canonical transaction projection selected by the action.
+    pub transaction_intent_digest: PrivacyTransactionIntentDigestV1,
+    /// Exact governed parameter-set identifier.
+    pub parameter_id: PrivacyParameterIdV1,
+    /// Digest of the governed parameter set.
+    pub parameter_digest: PrivacyParameterDigestV1,
+    /// Digest of the exact verifier artifact.
+    pub verifier_digest: PrivacyVerifierDigestV1,
+    /// Digest of this protocol's public-statement schema.
+    pub statement_schema_digest: PrivacyStatementSchemaDigestV1,
+    /// Digest of the pinned native engine manifest.
+    pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
+}
+
+impl PrivacyNativeConsensusBindingV1 {
+    /// Construct the sole canonical native consensus binding for a statement context.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid consensus limits, an invalid statement context, or the
+    /// reserved all-zero genesis hash.
+    pub fn new(
+        context: &PrivacyStatementContextV1,
+        genesis_hash: [u8; 32],
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<Self, PrivacyNativeConsensusBindingValidationErrorV1> {
+        let binding = Self {
+            chain_id: context.chain_id.clone(),
+            genesis_hash,
+            action_index: context.action_index,
+            transaction_intent_digest: context.transaction_intent_digest,
+            parameter_id: context.parameter_id,
+            parameter_digest: context.parameter_digest,
+            verifier_digest: context.verifier_digest,
+            statement_schema_digest: context.statement_schema_digest,
+            engine_manifest_digest: context.engine_manifest_digest,
+        };
+        binding.validate(limits)?;
+        Ok(binding)
+    }
+
+    /// Validate every intrinsic field under the supplied consensus limits.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid consensus limits, an invalid context-shaped field, or
+    /// the reserved all-zero genesis hash.
+    pub fn validate(
+        &self,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyNativeConsensusBindingValidationErrorV1> {
+        limits
+            .validate()
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidLimits)?;
+        if self.genesis_hash.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash);
+        }
+        self.as_statement_context()
+            .validate(limits)
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
+    }
+
+    /// Validate this binding and require exact equality with a statement context.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an intrinsically invalid binding or context and reports the
+    /// first consensus-binding axis whose canonical value differs.
+    pub fn validate_against_context(
+        &self,
+        context: &PrivacyStatementContextV1,
+        limits: &PrivacyConsensusLimitsV1,
+    ) -> Result<(), PrivacyNativeConsensusBindingValidationErrorV1> {
+        limits
+            .validate()
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidLimits)?;
+        if self.genesis_hash.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash);
+        }
+        if self.chain_id != context.chain_id {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch);
+        }
+        if self.action_index != context.action_index {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch);
+        }
+        if self.transaction_intent_digest != context.transaction_intent_digest {
+            return Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
+            );
+        }
+        if self.parameter_id != context.parameter_id {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch);
+        }
+        if self.parameter_digest != context.parameter_digest {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch);
+        }
+        if self.verifier_digest != context.verifier_digest {
+            return Err(PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch);
+        }
+        if self.statement_schema_digest != context.statement_schema_digest {
+            return Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
+            );
+        }
+        if self.engine_manifest_digest != context.engine_manifest_digest {
+            return Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
+            );
+        }
+        self.validate(limits)?;
+        context
+            .validate(limits)
+            .map_err(PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext)
+    }
+
+    /// Hash the exact canonical binding in its dedicated transcript domain.
+    ///
+    /// Callers must validate the binding before treating the digest as a
+    /// consensus input. This method remains independently useful for prover
+    /// construction, where the validating constructor already established the
+    /// invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyNativeConsensusBindingDigestV1, norito::Error> {
+        let encoded = norito::encode_canonical(self)?;
+        let encoded_len = u64::try_from(encoded.len()).map_err(|_| {
+            norito::Error::Io(std::io::Error::other(
+                "native privacy consensus-binding length exceeds u64",
+            ))
+        })?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_NATIVE_CONSENSUS_BINDING_DIGEST_DOMAIN_V1);
+        hasher.update(&encoded_len.to_le_bytes());
+        hasher.update(&encoded);
+        Ok(PrivacyNativeConsensusBindingDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+
+    fn as_statement_context(&self) -> PrivacyStatementContextV1 {
+        PrivacyStatementContextV1 {
+            chain_id: self.chain_id.clone(),
+            action_index: self.action_index,
+            transaction_intent_digest: self.transaction_intent_digest,
+            parameter_id: self.parameter_id,
+            parameter_digest: self.parameter_digest,
+            verifier_digest: self.verifier_digest,
+            statement_schema_digest: self.statement_schema_digest,
+            engine_manifest_digest: self.engine_manifest_digest,
+        }
+    }
+}
+
+/// Validation failure for [`PrivacyNativeConsensusBindingV1`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PrivacyNativeConsensusBindingValidationErrorV1 {
+    /// Supplied consensus limits are invalid.
+    #[error("native privacy consensus-binding limits are invalid: {0}")]
+    InvalidLimits(PrivacyConsensusLimitsValidationError),
+    /// A field shared with the statement context is intrinsically invalid.
+    #[error("native privacy consensus-binding context is invalid: {0}")]
+    InvalidContext(PrivacyStatementValidationError),
+    /// The trusted committed genesis hash is the reserved all-zero value.
+    #[error("native privacy consensus-binding genesis hash must be non-zero")]
+    ZeroGenesisHash,
+    /// Chain identifiers differ.
+    #[error("native privacy consensus-binding chain id differs from statement context")]
+    ChainIdMismatch,
+    /// Privacy action indexes differ.
+    #[error("native privacy consensus-binding action index differs from statement context")]
+    ActionIndexMismatch,
+    /// Transaction-intent digests differ.
+    #[error(
+        "native privacy consensus-binding transaction-intent digest differs from statement context"
+    )]
+    TransactionIntentDigestMismatch,
+    /// Governed parameter-set identifiers differ.
+    #[error("native privacy consensus-binding parameter id differs from statement context")]
+    ParameterIdMismatch,
+    /// Governed parameter digests differ.
+    #[error("native privacy consensus-binding parameter digest differs from statement context")]
+    ParameterDigestMismatch,
+    /// Verifier-artifact digests differ.
+    #[error("native privacy consensus-binding verifier digest differs from statement context")]
+    VerifierDigestMismatch,
+    /// Statement-schema digests differ.
+    #[error("native privacy consensus-binding schema digest differs from statement context")]
+    StatementSchemaDigestMismatch,
+    /// Engine-manifest digests differ.
+    #[error(
+        "native privacy consensus-binding engine-manifest digest differs from statement context"
+    )]
+    EngineManifestDigestMismatch,
 }
 
 /// Typed encrypted output emitted by a private transfer.
@@ -11985,9 +12218,9 @@ pub enum PrivacyProofEnvelopeValidationError {
     ActivationStatementLimits(PrivacyActivationStatementLimitsError),
 }
 
-#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
 mod exact12_fixture {
-    use std::str::FromStr as _;
+    use std::{fmt::Write as _, str::FromStr as _};
 
     use iroha_crypto::{Algorithm, KeyPair};
 
@@ -11995,6 +12228,12 @@ mod exact12_fixture {
     use crate::{domain::DomainId, name::Name};
 
     const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
+    const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
+        "# Iroha first-release privacy parity matrix v1.",
+        "# UTF-8, LF only, tab-separated, no aliases and no extension rows.",
+        "# registry-sha256 hashes the concatenation of every protocol label plus LF in index order.",
+        "# typed-envelope hashes bind the canonical sample statement digest and complete Norito envelope.",
+    ];
 
     pub(super) fn raw(seed: u8) -> [u8; 32] {
         [seed; 32]
@@ -12714,9 +12953,9 @@ mod exact12_fixture {
 
     /// One compiled semantic row of the canonical exact-12 cross-SDK fixture.
     ///
-    /// This test-fixture-only type is derived from actual typed statements,
-    /// proof variants, and canonical Norito envelope bytes. It never parses the
-    /// checked-in TSV and carries no embedded digest constants.
+    /// This conformance-only type is derived from actual typed statements,
+    /// proof variants, and canonical Norito envelope bytes. It never parses
+    /// the checked-in TSV and carries no embedded digest constants.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct PrivacyExact12TypedEnvelopeRowV1 {
         /// Closed protocol identity in canonical discriminant order.
@@ -12729,6 +12968,84 @@ mod exact12_fixture {
         pub statement_digest: [u8; 32],
         /// SHA-256 of the actual canonical Norito proof envelope.
         pub envelope_sha256: [u8; 32],
+    }
+
+    /// One complete byte-level KAT row derived from the canonical typed Rust
+    /// fixture.
+    ///
+    /// Both byte strings use canonical uncompressed Norito. Keeping the
+    /// protocol discriminant next to the bytes lets downstream SDKs reject
+    /// cross-protocol substitution before they attempt to decode a statement
+    /// or envelope.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-row.v1")]
+    pub struct PrivacyExact12TypedFixtureRowV1 {
+        /// Closed protocol identity in canonical discriminant order.
+        pub protocol_id: PrivacyProtocolIdV1,
+        /// Complete canonical [`PrivacyStatementV1`] bytes.
+        pub statement_norito: Vec<u8>,
+        /// Complete canonical [`PrivacyProofEnvelopeV1`] bytes.
+        pub envelope_norito: Vec<u8>,
+    }
+
+    /// Signed byte-level KAT material for all first-release privacy protocols.
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[norito(schema_name = "iroha.privacy.exact12-typed-fixture-bundle.v1")]
+    pub struct PrivacyExact12FixtureBundleV1 {
+        /// Exact first-release bundle version.
+        pub version: u32,
+        /// Twelve rows in [`PrivacyProtocolIdV1::ALL`] order.
+        pub rows: Vec<PrivacyExact12TypedFixtureRowV1>,
+    }
+
+    /// Maximum accepted encoded size of the complete exact-12 fixture bundle.
+    pub const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1: usize =
+        PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1;
+    const PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1: usize = 64;
+
+    /// Stable result of validating one untrusted exact-12 fixture bundle.
+    #[repr(i32)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum PrivacyExact12FixtureBundleValidationStatusV1 {
+        /// The archive is byte-identical to the compiled canonical bundle.
+        Valid = 0,
+        /// A native ABI caller supplied a null pointer.
+        NullPointer = 1,
+        /// The archive contains no bytes.
+        Empty = 2,
+        /// The archive exceeds the fixed byte ceiling.
+        ArchiveTooLarge = 3,
+        /// Norito rejected a resource declaration before allocating it.
+        DecodeResourceLimit = 4,
+        /// The archive carries a different typed schema.
+        SchemaMismatch = 5,
+        /// The archive is a non-canonical representation of the typed value.
+        NonCanonical = 6,
+        /// The archive is malformed, truncated, or checksum-invalid.
+        MalformedArchive = 7,
+        /// The typed bundle differs from the one compiled Rust fixture.
+        InvalidBundle = 8,
+    }
+
+    impl PrivacyExact12FixtureBundleValidationStatusV1 {
+        /// Stable native ABI integer representation.
+        #[must_use]
+        pub const fn code(self) -> i32 {
+            self as i32
+        }
+
+        /// Return whether the archive was accepted.
+        #[must_use]
+        pub const fn is_valid(self) -> bool {
+            matches!(self, Self::Valid)
+        }
     }
 
     /// Failure to derive the fixed exact-12 semantic fixture from current
@@ -12750,8 +13067,9 @@ mod exact12_fixture {
     /// types and canonical Norito serialization.
     ///
     /// The helper is available only to tests and builds that explicitly enable
-    /// `iroha_data_model/test-fixtures`; ordinary validator builds do not
-    /// compile this fixture surface.
+    /// `iroha_data_model/privacy-exact12-conformance`; ordinary validator
+    /// builds do not compile this conformance surface. The feature does not
+    /// expose the general data-model test fixtures.
     ///
     /// # Errors
     ///
@@ -12780,6 +13098,164 @@ mod exact12_fixture {
                 PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() }
             })
     }
+
+    /// Build the complete exact-12 byte-level KAT bundle from typed Rust
+    /// values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any statement or envelope cannot be encoded
+    /// canonically, or if the fixture no longer contains exactly twelve rows.
+    pub fn privacy_exact12_fixture_bundle_v1()
+    -> Result<PrivacyExact12FixtureBundleV1, PrivacyExact12FixtureErrorV1> {
+        let rows = sample_statements()
+            .into_iter()
+            .map(|statement| {
+                let protocol_id = statement.protocol_id();
+                let statement_norito = norito::encode_canonical(&statement)?;
+                let envelope = try_envelope(statement)?;
+                let envelope_norito = norito::encode_canonical(&envelope)?;
+                Ok(PrivacyExact12TypedFixtureRowV1 {
+                    protocol_id,
+                    statement_norito,
+                    envelope_norito,
+                })
+            })
+            .collect::<Result<Vec<_>, norito::Error>>()?;
+        if rows.len() != PrivacyProtocolIdV1::COUNT {
+            return Err(PrivacyExact12FixtureErrorV1::RowCount { actual: rows.len() });
+        }
+        Ok(PrivacyExact12FixtureBundleV1 { version: 1, rows })
+    }
+
+    /// Encode the complete exact-12 byte-level KAT bundle as canonical Norito.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fixture construction or canonical encoding fails.
+    pub fn privacy_exact12_fixture_bundle_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1>
+    {
+        let bundle = privacy_exact12_fixture_bundle_v1()?;
+        Ok(norito::encode_canonical(&bundle)?)
+    }
+
+    /// Validate an untrusted byte-level KAT bundle against the exact bundle
+    /// compiled from current typed Rust fixtures.
+    ///
+    /// The decoder is resource-bounded, requires canonical uncompressed
+    /// Norito, and finally requires byte-for-byte semantic equality with the
+    /// compiled bundle. It therefore rejects reordered rows, wrong variants,
+    /// cross-protocol substitution, stale statement/envelope bytes, and
+    /// unknown extensions.
+    #[must_use]
+    pub fn validate_privacy_exact12_fixture_bundle_v1(
+        archive: &[u8],
+    ) -> PrivacyExact12FixtureBundleValidationStatusV1 {
+        use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+
+        if archive.is_empty() {
+            return Status::Empty;
+        }
+        if archive.len() > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 {
+            return Status::ArchiveTooLarge;
+        }
+        let limits = norito::DecodeLimits::new(
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_SEQUENCE_ELEMENTS_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_FIELD_BYTES_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ELEMENTS_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_TOTAL_ALLOCATION_BYTES_V1,
+            PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_NESTING_DEPTH_V1,
+        );
+        let decoded = match norito::decode_canonical_with_limits::<PrivacyExact12FixtureBundleV1>(
+            archive, limits,
+        ) {
+            Ok(decoded) => decoded,
+            Err(error) if error.is_decode_resource_limit() => return Status::DecodeResourceLimit,
+            Err(norito::Error::SchemaMismatch) => return Status::SchemaMismatch,
+            Err(
+                norito::Error::NonCanonicalEncoding
+                | norito::Error::DecodeFlagsMismatch { .. }
+                | norito::Error::UnsupportedCompression { .. },
+            ) => return Status::NonCanonical,
+            Err(_) => return Status::MalformedArchive,
+        };
+        let Ok(expected) = privacy_exact12_fixture_bundle_v1() else {
+            return Status::InvalidBundle;
+        };
+        if decoded != expected {
+            return Status::InvalidBundle;
+        }
+        Status::Valid
+    }
+
+    fn canonical_sha256_hex_v1(digest: &[u8; 32]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut output = String::with_capacity(64);
+        for byte in digest {
+            output.push(char::from(HEX[usize::from(byte >> 4)]));
+            output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        output
+    }
+
+    /// Generate the complete canonical exact-12 cross-SDK matrix from the
+    /// current compiled protocol registry and typed Norito envelope fixtures.
+    ///
+    /// `fixtures/privacy/exact12_v1.tsv` is a derived cross-SDK artifact of
+    /// this function. Keeping construction here prevents a manually copied
+    /// digest row or whole-file hash from becoming a second semantic source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the typed statement/envelope rows cannot be
+    /// generated canonically or no longer have the exact closed registry size.
+    pub fn privacy_exact12_matrix_bytes_v1() -> Result<Vec<u8>, PrivacyExact12FixtureErrorV1> {
+        let semantic_rows = privacy_exact12_typed_envelope_rows_v1()?;
+        let mut registry_preimage = Vec::new();
+        for protocol_id in PrivacyProtocolIdV1::ALL {
+            registry_preimage.extend_from_slice(protocol_id.canonical_label().as_bytes());
+            registry_preimage.push(b'\n');
+        }
+        let registry_sha256: [u8; 32] = Sha256::digest(&registry_preimage).into();
+
+        let mut output = String::new();
+        for header in EXACT12_CANONICAL_HEADER_V1 {
+            writeln!(&mut output, "{header}").expect("writing to String cannot fail");
+        }
+        writeln!(&mut output, "matrix-version\t1").expect("writing to String cannot fail");
+        writeln!(
+            &mut output,
+            "registry-sha256\t{}",
+            canonical_sha256_hex_v1(&registry_sha256)
+        )
+        .expect("writing to String cannot fail");
+        for (index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+            let variant = protocol_id.canonical_typed_variant_label();
+            writeln!(
+                &mut output,
+                "protocol\t{index}\t{}\t{variant}\t{variant}",
+                protocol_id.canonical_label()
+            )
+            .expect("writing to String cannot fail");
+        }
+        for semantic in semantic_rows {
+            writeln!(
+                &mut output,
+                "typed-envelope\t{}\t{}\t{}\t{}\t{}",
+                semantic.protocol_id.canonical_label(),
+                semantic.statement_variant,
+                semantic.proof_variant,
+                canonical_sha256_hex_v1(&semantic.statement_digest),
+                canonical_sha256_hex_v1(&semantic.envelope_sha256)
+            )
+            .expect("writing to String cannot fail");
+        }
+        for retired_label in PRIVACY_RETIRED_PROTOCOL_LABELS_V1 {
+            writeln!(&mut output, "retired\t{retired_label}")
+                .expect("writing to String cannot fail");
+        }
+        Ok(output.into_bytes())
+    }
 }
 
 #[cfg(test)]
@@ -12787,6 +13263,8 @@ mod tests {
     use std::str::FromStr as _;
 
     use hex_literal::hex;
+
+    use crate::{domain::DomainId, name::Name};
 
     use super::{
         exact12_fixture::{
@@ -12801,7 +13279,6 @@ mod tests {
         },
         *,
     };
-    use crate::{domain::DomainId, name::Name};
 
     fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
         (1..=count)
@@ -13827,6 +14304,115 @@ mod tests {
     }
 
     #[test]
+    fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
+        use PrivacyExact12FixtureBundleValidationStatusV1 as Status;
+
+        let bundle = privacy_exact12_fixture_bundle_v1().expect("typed exact12 fixture bundle");
+        let archive =
+            privacy_exact12_fixture_bundle_bytes_v1().expect("canonical exact12 fixture archive");
+        assert_eq!(bundle.version, 1);
+        assert_eq!(bundle.rows.len(), PrivacyProtocolIdV1::COUNT);
+        assert!(archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&archive),
+            Status::Valid
+        );
+
+        for (row, expected_protocol) in bundle.rows.iter().zip(PrivacyProtocolIdV1::ALL) {
+            assert_eq!(row.protocol_id, expected_protocol);
+            let statement: PrivacyStatementV1 =
+                norito::decode_from_bytes(&row.statement_norito).expect("typed statement");
+            assert_eq!(statement.protocol_id(), expected_protocol);
+            assert_eq!(
+                norito::encode_canonical(&statement).expect("canonical statement"),
+                row.statement_norito
+            );
+
+            let envelope: PrivacyProofEnvelopeV1 =
+                norito::decode_from_bytes(&row.envelope_norito).expect("typed envelope");
+            assert_eq!(envelope.protocol_id, expected_protocol);
+            assert_eq!(envelope.statement, statement);
+            envelope
+                .validate_with_limits(&PrivacyConsensusLimitsV1::default())
+                .expect("intrinsically valid sample envelope");
+            assert_eq!(
+                norito::encode_canonical(&envelope).expect("canonical envelope"),
+                row.envelope_norito
+            );
+        }
+
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&[]),
+            Status::Empty
+        );
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&vec![
+                0;
+                PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1
+                    + 1
+            ]),
+            Status::ArchiveTooLarge
+        );
+
+        let truncated = &archive[..archive.len() - 1];
+        assert!(
+            !validate_privacy_exact12_fixture_bundle_v1(truncated).is_valid(),
+            "truncated outer archive must reject"
+        );
+        let mut trailing = archive.clone();
+        trailing.push(0);
+        assert!(
+            !validate_privacy_exact12_fixture_bundle_v1(&trailing).is_valid(),
+            "trailing outer bytes must reject"
+        );
+
+        let mut wrong_version = bundle.clone();
+        wrong_version.version = 2;
+        let wrong_version =
+            norito::encode_canonical(&wrong_version).expect("canonical wrong-version mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&wrong_version),
+            Status::InvalidBundle
+        );
+
+        let mut reordered = bundle.clone();
+        reordered.rows.swap(0, 1);
+        let reordered = norito::encode_canonical(&reordered).expect("canonical reordered mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&reordered),
+            Status::InvalidBundle
+        );
+
+        let mut cross_protocol = bundle.clone();
+        cross_protocol.rows[0].protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let cross_protocol =
+            norito::encode_canonical(&cross_protocol).expect("canonical cross-protocol mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&cross_protocol),
+            Status::InvalidBundle
+        );
+
+        let mut stale_statement = bundle.clone();
+        stale_statement.rows[0].statement_norito[0] ^= 1;
+        let stale_statement =
+            norito::encode_canonical(&stale_statement).expect("canonical stale-statement mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&stale_statement),
+            Status::InvalidBundle
+        );
+
+        let mut stale_envelope = bundle;
+        let final_byte = stale_envelope.rows[11].envelope_norito.len() - 1;
+        stale_envelope.rows[11].envelope_norito[final_byte] ^= 1;
+        let stale_envelope =
+            norito::encode_canonical(&stale_envelope).expect("canonical stale-envelope mutation");
+        assert_eq!(
+            validate_privacy_exact12_fixture_bundle_v1(&stale_envelope),
+            Status::InvalidBundle
+        );
+    }
+
+    #[test]
     #[ignore = "explicit regeneration helper for fixtures/privacy/exact12_v1.tsv"]
     fn emit_exact12_typed_envelope_fixture_rows() {
         for row in privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics") {
@@ -13842,8 +14428,25 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "explicit complete regeneration helper for fixtures/privacy/exact12_v1.tsv"]
+    fn emit_exact12_matrix_fixture() {
+        let bytes = privacy_exact12_matrix_bytes_v1().expect("compiled exact12 matrix");
+        print!(
+            "{}",
+            std::str::from_utf8(&bytes).expect("exact12 generator emits UTF-8")
+        );
+    }
+
+    #[test]
     fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         let matrix = include_str!("../../../fixtures/privacy/exact12_v1.tsv");
+        let generated =
+            privacy_exact12_matrix_bytes_v1().expect("generate compiled exact12 matrix");
+        assert_eq!(
+            matrix.as_bytes(),
+            generated,
+            "checked-in exact12 matrix must be regenerated from compiled typed semantics"
+        );
         assert!(matrix.ends_with('\n'), "matrix must end with one LF");
         assert!(!matrix.contains('\r'), "matrix must use canonical LF lines");
         assert!(
@@ -14264,6 +14867,246 @@ mod tests {
         assert_eq!(
             value.validate(&limits),
             Err(PrivacyStatementValidationError::ZeroTransactionIntentDigest)
+        );
+    }
+
+    #[test]
+    fn native_consensus_binding_roundtrips_only_in_the_canonical_wire_shape() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
+            .expect("construct canonical native consensus binding");
+        binding.validate(&limits).expect("validate binding");
+        binding
+            .validate_against_context(&context(), &limits)
+            .expect("binding matches its statement context");
+
+        let canonical = norito::encode_canonical(&binding).expect("encode canonical binding");
+        assert_eq!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&canonical)
+                .expect("decode canonical binding"),
+            binding
+        );
+
+        let mut truncated = canonical.clone();
+        truncated.pop();
+        assert!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&truncated).is_err(),
+            "truncated binding must fail closed"
+        );
+
+        let mut trailing = canonical;
+        trailing.push(0);
+        assert!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&trailing).is_err(),
+            "trailing binding bytes must fail closed"
+        );
+
+        let alternate_flags =
+            norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+        let alternate = {
+            let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
+            norito::core::to_bytes(&binding).expect("encode alternate-layout binding")
+        };
+        assert_ne!(
+            alternate,
+            norito::encode_canonical(&binding).expect("canonical")
+        );
+        assert!(matches!(
+            norito::decode_canonical::<PrivacyNativeConsensusBindingV1>(&alternate),
+            Err(norito::Error::NonCanonicalEncoding)
+        ));
+
+        let json = norito::json::to_json(&binding).expect("encode binding JSON");
+        assert_eq!(
+            norito::json::from_json::<PrivacyNativeConsensusBindingV1>(&json)
+                .expect("decode canonical binding JSON"),
+            binding
+        );
+        let prefix = json.strip_suffix('}').expect("binding JSON is an object");
+        assert!(
+            norito::json::from_json::<PrivacyNativeConsensusBindingV1>(&format!(
+                "{prefix},\"legacy_genesis\":true}}"
+            ))
+            .is_err(),
+            "unknown legacy JSON fields must fail closed"
+        );
+    }
+
+    #[test]
+    fn native_consensus_binding_digest_changes_on_every_consensus_axis() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let binding = PrivacyNativeConsensusBindingV1::new(&context(), raw(200), &limits)
+            .expect("construct canonical native consensus binding");
+        let expected = binding.digest().expect("digest canonical binding");
+
+        let mut mutations = Vec::new();
+
+        let mut mutated = binding.clone();
+        mutated.chain_id = ChainId::from("another-privacy-chain");
+        mutations.push(("chain_id", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.genesis_hash = raw(201);
+        mutations.push(("genesis_hash", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.action_index = 1;
+        mutations.push(("action_index", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(202));
+        mutations.push(("transaction_intent_digest", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.parameter_id = PrivacyParameterIdV1::new(raw(203));
+        mutations.push(("parameter_id", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.parameter_digest = PrivacyParameterDigestV1::new(raw(204));
+        mutations.push(("parameter_digest", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.verifier_digest = PrivacyVerifierDigestV1::new(raw(205));
+        mutations.push(("verifier_digest", mutated));
+
+        let mut mutated = binding.clone();
+        mutated.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(206));
+        mutations.push(("statement_schema_digest", mutated));
+
+        let mut mutated = binding;
+        mutated.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(207));
+        mutations.push(("engine_manifest_digest", mutated));
+
+        for (axis, mutation) in mutations {
+            assert_ne!(
+                mutation.digest().expect("digest binding mutation"),
+                expected,
+                "changing {axis} must change the native consensus-binding digest"
+            );
+        }
+    }
+
+    #[test]
+    fn native_consensus_binding_rejects_zero_genesis_and_unusable_chain_ids() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        assert_eq!(
+            PrivacyNativeConsensusBindingV1::new(&context(), [0; 32], &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
+        );
+
+        let mut invalid_context = context();
+        invalid_context.chain_id = ChainId::from("");
+        assert!(matches!(
+            PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits),
+            Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext(
+                    PrivacyStatementValidationError::InvalidChainIdLength { bytes: 0, .. }
+                )
+            )
+        ));
+
+        invalid_context = context();
+        invalid_context.chain_id = ChainId::from("x".repeat(256));
+        assert!(matches!(
+            PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits),
+            Err(
+                PrivacyNativeConsensusBindingValidationErrorV1::InvalidContext(
+                    PrivacyStatementValidationError::InvalidChainIdLength { bytes: 256, .. }
+                )
+            )
+        ));
+
+        invalid_context.chain_id = ChainId::from("x".repeat(255));
+        PrivacyNativeConsensusBindingV1::new(&invalid_context, raw(200), &limits)
+            .expect("maximum-length chain id remains canonical");
+    }
+
+    #[test]
+    fn native_consensus_binding_rejects_every_statement_context_substitution() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let base_context = context();
+        let binding = PrivacyNativeConsensusBindingV1::new(&base_context, raw(200), &limits)
+            .expect("construct canonical native consensus binding");
+
+        let mut substitutions = Vec::new();
+
+        let mut substituted = base_context.clone();
+        substituted.chain_id = ChainId::from("substituted-chain");
+        substitutions.push((
+            "chain_id",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ChainIdMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.action_index = 1;
+        substitutions.push((
+            "action_index",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ActionIndexMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(210));
+        substitutions.push((
+            "transaction_intent_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::TransactionIntentDigestMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.parameter_id = PrivacyParameterIdV1::new(raw(211));
+        substitutions.push((
+            "parameter_id",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ParameterIdMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.parameter_digest = PrivacyParameterDigestV1::new(raw(212));
+        substitutions.push((
+            "parameter_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::ParameterDigestMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.verifier_digest = PrivacyVerifierDigestV1::new(raw(213));
+        substitutions.push((
+            "verifier_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::VerifierDigestMismatch,
+        ));
+
+        let mut substituted = base_context.clone();
+        substituted.statement_schema_digest = PrivacyStatementSchemaDigestV1::new(raw(214));
+        substitutions.push((
+            "statement_schema_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::StatementSchemaDigestMismatch,
+        ));
+
+        let mut substituted = base_context;
+        substituted.engine_manifest_digest = PrivacyEngineManifestDigestV1::new(raw(215));
+        substitutions.push((
+            "engine_manifest_digest",
+            substituted,
+            PrivacyNativeConsensusBindingValidationErrorV1::EngineManifestDigestMismatch,
+        ));
+
+        for (axis, substituted, expected) in substitutions {
+            assert_eq!(
+                binding.validate_against_context(&substituted, &limits),
+                Err(expected),
+                "substituted {axis} must fail closed"
+            );
+        }
+
+        let mut zero_genesis = binding;
+        zero_genesis.genesis_hash = [0; 32];
+        assert_eq!(
+            zero_genesis.validate_against_context(&context(), &limits),
+            Err(PrivacyNativeConsensusBindingValidationErrorV1::ZeroGenesisHash)
         );
     }
 

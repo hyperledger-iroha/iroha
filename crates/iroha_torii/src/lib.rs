@@ -53941,7 +53941,7 @@ impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
 #[cfg(feature = "app_api")]
 fn qualify_configured_sorafs_native_transaction_signer_for_startup<S>(
     role: SorafsNativeTransactionSignerRoleV1,
-    enabled: bool,
+    required: bool,
     configured: Option<&iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding>,
     provider: Option<Arc<S>>,
     qualify: impl FnOnce(
@@ -53953,15 +53953,15 @@ where
     S: SorafsNativeTransactionSignerProviderV1 + ?Sized,
 {
     let role_label = role.as_str();
-    match (enabled, configured.is_some()) {
+    match (required, configured.is_some()) {
         (true, false) => {
             return Err(format!(
-                "enabled SoraFS {role_label} signer role is missing its configured binding"
+                "required SoraFS {role_label} signer role is missing its configured binding for storage-enabled durable drain or role generation"
             ));
         }
         (false, true) => {
             return Err(format!(
-                "disabled SoraFS {role_label} signer role rejects a configured binding"
+                "inactive SoraFS {role_label} signer role rejects a configured binding without storage-enabled durable drain or role generation"
             ));
         }
         _ => {}
@@ -54006,6 +54006,14 @@ where
 }
 
 #[cfg(feature = "app_api")]
+const fn sorafs_native_signer_role_required(
+    storage_enabled: bool,
+    role_generation_enabled: bool,
+) -> bool {
+    storage_enabled || role_generation_enabled
+}
+
+#[cfg(feature = "app_api")]
 fn preflight_sorafs_native_transaction_signers(
     config: &Config,
     runtime_deps: &mut ToriiRuntimeDeps,
@@ -54016,7 +54024,7 @@ fn preflight_sorafs_native_transaction_signers(
     runtime_deps.sorafs_proof_outcome_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
-            config.sorafs_storage.enabled,
+            sorafs_native_signer_role_required(config.sorafs_storage.enabled, false),
             configured.proof_outcome.as_ref(),
             proof_provider,
             qualify_sorafs_proof_outcome_transaction_signer_v1,
@@ -54026,7 +54034,10 @@ fn preflight_sorafs_native_transaction_signers(
     runtime_deps.sorafs_repair_transaction_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
             SorafsNativeTransactionSignerRoleV1::Repair,
-            config.sorafs_repair.enabled,
+            sorafs_native_signer_role_required(
+                config.sorafs_storage.enabled,
+                config.sorafs_repair.enabled,
+            ),
             configured.repair.as_ref(),
             repair_provider,
             qualify_sorafs_repair_transaction_signer_v1,
@@ -54036,7 +54047,10 @@ fn preflight_sorafs_native_transaction_signers(
     runtime_deps.sorafs_reserve_transaction_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
             SorafsNativeTransactionSignerRoleV1::Reserve,
-            config.sorafs_storage.reserve_worker.enabled,
+            sorafs_native_signer_role_required(
+                config.sorafs_storage.enabled,
+                config.sorafs_storage.reserve_worker.enabled,
+            ),
             configured.reserve.as_ref(),
             reserve_provider,
             qualify_sorafs_reserve_transaction_signer_v1,
@@ -54046,7 +54060,10 @@ fn preflight_sorafs_native_transaction_signers(
     runtime_deps.sorafs_orderbook_transaction_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
             SorafsNativeTransactionSignerRoleV1::Orderbook,
-            config.sorafs_storage.orderbook_worker.enabled,
+            sorafs_native_signer_role_required(
+                config.sorafs_storage.enabled,
+                config.sorafs_storage.orderbook_worker.enabled,
+            ),
             configured.orderbook.as_ref(),
             orderbook_provider,
             qualify_sorafs_orderbook_transaction_signer_v1,
@@ -54067,6 +54084,14 @@ mod sorafs_native_transaction_signer_startup_tests {
 
     const QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
         SorafsNativeTransactionSignerQualificationV1::new(9, [0x59; 32]);
+
+    #[test]
+    fn storage_enabled_requires_native_signers_independently_of_generation_flags() {
+        assert!(sorafs_native_signer_role_required(true, false));
+        assert!(sorafs_native_signer_role_required(true, true));
+        assert!(sorafs_native_signer_role_required(false, true));
+        assert!(!sorafs_native_signer_role_required(false, false));
+    }
 
     struct ProofSigner {
         handle: String,
@@ -54136,7 +54161,7 @@ mod sorafs_native_transaction_signer_startup_tests {
     }
 
     #[test]
-    fn enabled_native_signer_role_rejects_missing_binding_and_provider() {
+    fn required_native_signer_role_rejects_missing_binding_and_provider() {
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup::<
             dyn SoraFsProofOutcomeTransactionSigner,
         >(
@@ -54147,13 +54172,13 @@ mod sorafs_native_transaction_signer_startup_tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1,
         )
         .err()
-        .expect("enabled role must fail without a configured binding");
+        .expect("required role must fail without a configured binding");
 
         assert!(error.contains("missing its configured binding"));
     }
 
     #[test]
-    fn disabled_native_signer_role_rejects_injected_provider() {
+    fn inactive_native_signer_role_rejects_injected_provider() {
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = Arc::new(ProofSigner::new(
             "hsm://sorafs/proof-outcome/unrequested",
             0x11,
@@ -54166,7 +54191,7 @@ mod sorafs_native_transaction_signer_startup_tests {
             qualify_sorafs_proof_outcome_transaction_signer_v1,
         )
         .err()
-        .expect("disabled role must reject an injected provider");
+        .expect("inactive role must reject an injected provider");
 
         assert!(error.contains("rejects an injected runtime provider"));
     }

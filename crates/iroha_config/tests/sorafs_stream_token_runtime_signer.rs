@@ -32,29 +32,40 @@ fn public_key_hex(seed: u8) -> String {
     hex::encode(key_pair.public_key().to_bytes().1)
 }
 
-fn native_proof_signer_binding() -> String {
-    let key_pair =
-        KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test Ed25519 keypair");
-    let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
-    let authority = AccountId::new(key_pair.public_key().clone())
-        .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
-        .expect("test authority must encode as I105");
-    format!(
-        r#"
-[sorafs.storage.native_transaction_signers.proof_outcome]
-handle = "hsm://sorafs/proof-outcome/primary"
+fn native_signer_bindings() -> String {
+    [
+        ("proof_outcome", "proof-outcome", 0x52),
+        ("repair", "repair", 0x53),
+        ("reserve", "reserve", 0x54),
+        ("orderbook", "orderbook", 0x55),
+    ]
+    .into_iter()
+    .map(|(role, handle_role, seed)| {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("test Ed25519 keypair");
+        let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
+        let authority = AccountId::new(key_pair.public_key().clone())
+            .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
+            .expect("test authority must encode as I105");
+        let policy_digest_hex = hex::encode([seed; 32]);
+        format!(
+            r#"
+[sorafs.storage.native_transaction_signers.{role}]
+handle = "hsm://sorafs/{handle_role}/stream-token-primary"
 authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
 revision = 1
-policy_digest_hex = "{}"
-"#,
-        "52".repeat(32)
-    )
+policy_digest_hex = "{policy_digest_hex}"
+"#
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 fn enabled_overlay(handle: &str, public_key_hex: &str) -> String {
-    let proof_signer = native_proof_signer_binding();
+    let native_signers = native_signer_bindings();
     format!(
         r#"
 [sorafs.storage]
@@ -64,7 +75,7 @@ enabled = true
 enabled = true
 signer_handle = "{handle}"
 signer_public_key_hex = "{public_key_hex}"
-{proof_signer}
+{native_signers}
 "#
     )
 }

@@ -8865,19 +8865,19 @@ fn validate_provider_ingest_archive_presence(
 
 fn validate_sorafs_native_signer_role_presence(
     role: &'static str,
-    enabled: bool,
+    required: bool,
     configured: bool,
     injected: bool,
 ) -> Result<(), String> {
-    match (enabled, configured) {
+    match (required, configured) {
         (true, false) => {
             return Err(format!(
-                "enabled SoraFS {role} signer role is missing its configured binding"
+                "required SoraFS {role} signer role is missing its configured binding for storage-enabled durable drain or role generation"
             ));
         }
         (false, true) => {
             return Err(format!(
-                "disabled SoraFS {role} signer role rejects a configured binding"
+                "inactive SoraFS {role} signer role rejects a configured binding without storage-enabled durable drain or role generation"
             ));
         }
         _ => {}
@@ -8893,6 +8893,13 @@ fn validate_sorafs_native_signer_role_presence(
     }
 }
 
+const fn sorafs_native_signer_role_required(
+    storage_enabled: bool,
+    role_generation_enabled: bool,
+) -> bool {
+    storage_enabled || role_generation_enabled
+}
+
 fn validate_sorafs_native_signer_provider_presence(
     config: &Config,
     runtime_deps: &IrohaRuntimeDeps,
@@ -8900,25 +8907,34 @@ fn validate_sorafs_native_signer_provider_presence(
     let configured = &config.torii.sorafs_storage.native_transaction_signers;
     validate_sorafs_native_signer_role_presence(
         "proof_outcome",
-        config.torii.sorafs_storage.enabled,
+        sorafs_native_signer_role_required(config.torii.sorafs_storage.enabled, false),
         configured.proof_outcome.is_some(),
         runtime_deps.sorafs_proof_outcome_signer.is_some(),
     )?;
     validate_sorafs_native_signer_role_presence(
         "repair",
-        config.torii.sorafs_repair.enabled,
+        sorafs_native_signer_role_required(
+            config.torii.sorafs_storage.enabled,
+            config.torii.sorafs_repair.enabled,
+        ),
         configured.repair.is_some(),
         runtime_deps.sorafs_repair_transaction_signer.is_some(),
     )?;
     validate_sorafs_native_signer_role_presence(
         "reserve",
-        config.torii.sorafs_storage.reserve_worker.enabled,
+        sorafs_native_signer_role_required(
+            config.torii.sorafs_storage.enabled,
+            config.torii.sorafs_storage.reserve_worker.enabled,
+        ),
         configured.reserve.is_some(),
         runtime_deps.sorafs_reserve_transaction_signer.is_some(),
     )?;
     validate_sorafs_native_signer_role_presence(
         "orderbook",
-        config.torii.sorafs_storage.orderbook_worker.enabled,
+        sorafs_native_signer_role_required(
+            config.torii.sorafs_storage.enabled,
+            config.torii.sorafs_storage.orderbook_worker.enabled,
+        ),
         configured.orderbook.is_some(),
         runtime_deps.sorafs_orderbook_transaction_signer.is_some(),
     )
@@ -13384,12 +13400,20 @@ mod build_line_tests {
     }
 
     #[test]
+    fn storage_enabled_requires_native_signers_independently_of_generation_flags() {
+        assert!(sorafs_native_signer_role_required(true, false));
+        assert!(sorafs_native_signer_role_required(true, true));
+        assert!(sorafs_native_signer_role_required(false, true));
+        assert!(!sorafs_native_signer_role_required(false, false));
+    }
+
+    #[test]
     fn native_signer_presence_gate_rejects_enabled_missing_and_disabled_injected_roles() {
         assert_eq!(
             validate_sorafs_native_signer_role_presence("proof_outcome", true, false, false),
             Err(
-                "enabled SoraFS proof_outcome signer role is missing its configured binding"
-                    .to_owned()
+                "required SoraFS proof_outcome signer role is missing its configured binding for storage-enabled durable drain or role generation"
+                    .to_owned(),
             )
         );
         assert_eq!(
@@ -13418,7 +13442,8 @@ mod build_line_tests {
         assert_eq!(
             validate_sorafs_native_signer_role_presence("proof_outcome", false, true, true),
             Err(
-                "disabled SoraFS proof_outcome signer role rejects a configured binding".to_owned()
+                "inactive SoraFS proof_outcome signer role rejects a configured binding without storage-enabled durable drain or role generation"
+                    .to_owned(),
             )
         );
     }
@@ -13537,7 +13562,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "7614e537be8983d69b716d79677f7e2806d03071792da724ac89b8ff412d7c91";
+        "698ec377bba2c2ad875323794b5cbb76879dfcec472a7574e86d8f8b7fb1ee87";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");

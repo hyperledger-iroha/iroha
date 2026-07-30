@@ -5057,7 +5057,12 @@ pub fn verify_signed_query_request(
     query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
-    match query.payload.authority.signatory().try_algorithm() {
+    let signatory = query.payload.authority.try_signatory().ok_or_else(|| {
+        Error::from(ValidationFail::NotPermitted(
+            "signed query authority must use a single-key controller".to_string(),
+        ))
+    })?;
+    match signatory.try_algorithm() {
         Ok(Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
                 Error::from(ValidationFail::NotPermitted(format!(
@@ -5074,12 +5079,11 @@ pub fn verify_signed_query_request(
         }
         _ => {}
     }
-    sig.verify(query.payload.authority.signatory(), &query.payload)
-        .map_err(|_| {
-            Error::from(ValidationFail::NotPermitted(
-                "query signature failed verification".to_string(),
-            ))
-        })?;
+    sig.verify(signatory, &query.payload).map_err(|_| {
+        Error::from(ValidationFail::NotPermitted(
+            "query signature failed verification".to_string(),
+        ))
+    })?;
     Ok(query.payload)
 }
 
@@ -5087,7 +5091,7 @@ pub fn verify_signed_query_request(
 mod signed_query_verification_tests {
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
-        account::AccountId,
+        account::{AccountId, MultisigMember, MultisigPolicy},
         query::{QueryRequest, QuerySignature, SingularQueryBox, runtime::prelude::FindAbiVersion},
     };
 
@@ -5158,6 +5162,28 @@ mod signed_query_verification_tests {
         signed.payload.authority = AccountId::new(other.public_key().clone());
 
         assert!(verify_signed_query_request(signed).is_err());
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_multisig_authority_without_panicking() {
+        let signer = checked_routing_fixture_keypair(
+            0xe8,
+            Algorithm::Ed25519,
+            "derive signed query multisig fixture key",
+        );
+        let member =
+            MultisigMember::new(signer.public_key().clone(), 1).expect("valid multisig member");
+        let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
+        let mut malformed = signed_find_abi_version(&signer);
+        malformed.payload.authority = AccountId::new_multisig(policy);
+
+        let response = verify_signed_query_request(malformed)
+            .expect_err("directly signed multisig query authority must be rejected")
+            .into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        verify_signed_query_request(signed_find_abi_version(&signer))
+            .expect("a valid follow-up query must still verify");
     }
 
     #[test]
@@ -82386,6 +82412,20 @@ mod tests {
         .expect("export handler responds");
         assert_eq!(export.statuses.len(), 1);
         assert_eq!(export.statuses[0].challenge_id, challenge_a.challenge_id);
+
+        let invalid_report_response = super::handle_get_sorafs_por_report(
+            coordinator.clone(),
+            PorReportIsoWeek {
+                year: 9999,
+                week: 52,
+            },
+        )
+        .expect_err("an ISO week whose end is not representable must be rejected")
+        .into_response();
+        assert_eq!(
+            invalid_report_response.status(),
+            axum::http::StatusCode::BAD_REQUEST
+        );
 
         let report = super::handle_get_sorafs_por_report(
             coordinator.clone(),

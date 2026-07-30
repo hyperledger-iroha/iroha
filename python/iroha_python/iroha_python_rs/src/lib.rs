@@ -3,6 +3,8 @@
 #![deny(unsafe_code)]
 #![allow(unsafe_op_in_unsafe_fn)] // PyO3 generates historical wrappers that require this on edition 2024
 
+pub mod privacy_wallet_worker;
+
 use core::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     time::Duration,

@@ -58,8 +58,11 @@ use iroha_data_model::{
 use iroha_futures::supervisor::Child;
 use iroha_primitives::json::Json;
 use iroha_torii::{
-    MaybeTelemetry, OnlinePeersProvider, SoraFsProofOutcomeSigningError,
-    SoraFsProofOutcomeTransactionSigner, SorafsNativeTransactionSignerProbeErrorV1,
+    MaybeTelemetry, OnlinePeersProvider, SoraFsOrderbookTransactionSigner,
+    SoraFsOrderbookTransactionSigningError, SoraFsProofOutcomeSigningError,
+    SoraFsProofOutcomeTransactionSigner, SoraFsRepairTransactionSigner,
+    SoraFsRepairTransactionSigningError, SoraFsReserveTransactionSigner,
+    SoraFsReserveTransactionSigningError, SorafsNativeTransactionSignerProbeErrorV1,
     SorafsNativeTransactionSignerProviderV1, SorafsNativeTransactionSignerQualificationV1,
     SorafsNativeTransactionSignerRoleV1, Torii, ToriiRuntimeDeps,
     sorafs::{
@@ -1605,19 +1608,37 @@ struct ToriiHarness {
     _torii_data_dir: TempDir,
 }
 
-const DISCOVERY_PROOF_SIGNER_HANDLE: &str = "hsm://sorafs/proof-outcome/primary";
-const DISCOVERY_PROOF_SIGNER_QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
-    SorafsNativeTransactionSignerQualificationV1::new(1, [0xD7; 32]);
-
-struct DiscoveryProofSigner {
+/// Deterministic test-only signer used by this discovery integration harness.
+///
+/// Handles intentionally retain production lexical shape so the harness
+/// exercises the same binding validator without weakening production checks.
+struct DiscoveryNativeTransactionSigner {
+    role: SorafsNativeTransactionSignerRoleV1,
+    handle: &'static str,
+    qualification: SorafsNativeTransactionSignerQualificationV1,
     key_pair: KeyPair,
 }
 
-impl DiscoveryProofSigner {
-    fn new() -> Self {
+impl DiscoveryNativeTransactionSigner {
+    fn for_role(role: SorafsNativeTransactionSignerRoleV1) -> Self {
+        let (handle, seed) = match role {
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome => {
+                ("hsm://sorafs/discovery/proof-outcome", 0xD7)
+            }
+            SorafsNativeTransactionSignerRoleV1::Repair => ("hsm://sorafs/discovery/repair", 0xD8),
+            SorafsNativeTransactionSignerRoleV1::Reserve => {
+                ("hsm://sorafs/discovery/reserve", 0xD9)
+            }
+            SorafsNativeTransactionSignerRoleV1::Orderbook => {
+                ("hsm://sorafs/discovery/orderbook", 0xDA)
+            }
+        };
         Self {
-            key_pair: KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::Ed25519)
-                .expect("derive deterministic discovery proof signer"),
+            role,
+            handle,
+            qualification: SorafsNativeTransactionSignerQualificationV1::new(1, [seed; 32]),
+            key_pair: KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive deterministic discovery native signer"),
         }
     }
 
@@ -1626,23 +1647,29 @@ impl DiscoveryProofSigner {
     ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
         let public_key = self.key_pair.public_key().clone();
         iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
-            handle: DISCOVERY_PROOF_SIGNER_HANDLE.to_owned(),
+            handle: self.handle.to_owned(),
             authority: AccountId::new(public_key.clone()),
             algorithm: Algorithm::Ed25519,
             public_key,
-            revision: DISCOVERY_PROOF_SIGNER_QUALIFICATION.revision(),
-            policy_digest: DISCOVERY_PROOF_SIGNER_QUALIFICATION.policy_digest(),
+            revision: self.qualification.revision(),
+            policy_digest: self.qualification.policy_digest(),
         }
+    }
+
+    fn sign_payload(&self, payload: TransactionPayload) -> Result<SignedTransaction, ()> {
+        TransactionBuilder::from_payload(payload)
+            .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
+            .map_err(|_| ())
     }
 }
 
-impl SorafsNativeTransactionSignerProviderV1 for DiscoveryProofSigner {
+impl SorafsNativeTransactionSignerProviderV1 for DiscoveryNativeTransactionSigner {
     fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
-        SorafsNativeTransactionSignerRoleV1::ProofOutcome
+        self.role
     }
 
     fn handle(&self) -> &str {
-        DISCOVERY_PROOF_SIGNER_HANDLE
+        self.handle
     }
 
     fn authority(&self) -> AccountId {
@@ -1659,49 +1686,96 @@ impl SorafsNativeTransactionSignerProviderV1 for DiscoveryProofSigner {
         SorafsNativeTransactionSignerQualificationV1,
         SorafsNativeTransactionSignerProbeErrorV1,
     > {
-        Ok(DISCOVERY_PROOF_SIGNER_QUALIFICATION)
+        Ok(self.qualification)
     }
 }
 
-impl SoraFsProofOutcomeTransactionSigner for DiscoveryProofSigner {
-    fn sign(
-        &self,
-        payload: TransactionPayload,
-    ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError> {
-        TransactionBuilder::from_payload(payload)
-            .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
-            .map_err(|_| SoraFsProofOutcomeSigningError::Refused)
-    }
+macro_rules! impl_discovery_signer_role {
+    ($trait_name:ident, $error:ident) => {
+        impl $trait_name for DiscoveryNativeTransactionSigner {
+            fn sign(&self, payload: TransactionPayload) -> Result<SignedTransaction, $error> {
+                self.sign_payload(payload).map_err(|_| $error::Refused)
+            }
+        }
+    };
+}
+
+impl_discovery_signer_role!(
+    SoraFsProofOutcomeTransactionSigner,
+    SoraFsProofOutcomeSigningError
+);
+impl_discovery_signer_role!(
+    SoraFsRepairTransactionSigner,
+    SoraFsRepairTransactionSigningError
+);
+impl_discovery_signer_role!(
+    SoraFsReserveTransactionSigner,
+    SoraFsReserveTransactionSigningError
+);
+impl_discovery_signer_role!(
+    SoraFsOrderbookTransactionSigner,
+    SoraFsOrderbookTransactionSigningError
+);
+
+fn enable_storage_with_discovery_native_signers(cfg: &mut actual_cfg::Root) {
+    cfg.torii.sorafs_storage.enabled = true;
+    let configured = &mut cfg.torii.sorafs_storage.native_transaction_signers;
+    configured.proof_outcome = Some(
+        DiscoveryNativeTransactionSigner::for_role(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+        )
+        .configured_binding(),
+    );
+    configured.repair = Some(
+        DiscoveryNativeTransactionSigner::for_role(SorafsNativeTransactionSignerRoleV1::Repair)
+            .configured_binding(),
+    );
+    configured.reserve = Some(
+        DiscoveryNativeTransactionSigner::for_role(SorafsNativeTransactionSignerRoleV1::Reserve)
+            .configured_binding(),
+    );
+    configured.orderbook = Some(
+        DiscoveryNativeTransactionSigner::for_role(SorafsNativeTransactionSignerRoleV1::Orderbook)
+            .configured_binding(),
+    );
 }
 
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
     cfg.torii.data_dir = torii_data_dir.path().join("torii");
-    let proof_signer = cfg.torii.sorafs_storage.enabled.then(|| {
-        let signer = Arc::new(DiscoveryProofSigner::new());
-        let binding = signer.configured_binding();
-        match cfg
+    let native_signers = cfg.torii.sorafs_storage.enabled.then(|| {
+        let proof = Arc::new(DiscoveryNativeTransactionSigner::for_role(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+        ));
+        let repair = Arc::new(DiscoveryNativeTransactionSigner::for_role(
+            SorafsNativeTransactionSignerRoleV1::Repair,
+        ));
+        let reserve = Arc::new(DiscoveryNativeTransactionSigner::for_role(
+            SorafsNativeTransactionSignerRoleV1::Reserve,
+        ));
+        let orderbook = Arc::new(DiscoveryNativeTransactionSigner::for_role(
+            SorafsNativeTransactionSignerRoleV1::Orderbook,
+        ));
+        let configured = &cfg
             .torii
             .sorafs_storage
-            .native_transaction_signers
-            .proof_outcome
-            .as_ref()
-        {
-            Some(configured) => {
-                assert_eq!(
-                    configured, &binding,
-                    "discovery harness proof signer must match the configured binding"
-                );
-            }
-            None => {
-                cfg.torii
-                    .sorafs_storage
-                    .native_transaction_signers
-                    .proof_outcome = Some(binding);
-            }
+            .native_transaction_signers;
+        for (binding, signer) in [
+            (configured.proof_outcome.as_ref(), proof.as_ref()),
+            (configured.repair.as_ref(), repair.as_ref()),
+            (configured.reserve.as_ref(), reserve.as_ref()),
+            (configured.orderbook.as_ref(), orderbook.as_ref()),
+        ] {
+            assert_eq!(
+                binding.expect(
+                    "storage-enabled discovery fixture must explicitly configure every native signer binding"
+                ),
+                &signer.configured_binding(),
+                "discovery harness native signer must match its explicit fixture binding"
+            );
         }
-        signer
+        (proof, repair, reserve, orderbook)
     });
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
@@ -1724,9 +1798,16 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let chain_id = cfg.common.chain.clone();
     let chain_id_arc = Arc::new(chain_id.clone());
     let runtime_deps = ToriiRuntimeDeps::new(MaybeTelemetry::disabled());
-    let runtime_deps = if let Some(signer) = proof_signer {
-        let signer: Arc<dyn SoraFsProofOutcomeTransactionSigner> = signer;
-        runtime_deps.with_sorafs_proof_outcome_signer(signer)
+    let runtime_deps = if let Some((proof, repair, reserve, orderbook)) = native_signers {
+        let proof: Arc<dyn SoraFsProofOutcomeTransactionSigner> = proof;
+        let repair: Arc<dyn SoraFsRepairTransactionSigner> = repair;
+        let reserve: Arc<dyn SoraFsReserveTransactionSigner> = reserve;
+        let orderbook: Arc<dyn SoraFsOrderbookTransactionSigner> = orderbook;
+        runtime_deps
+            .with_sorafs_proof_outcome_signer(proof)
+            .with_sorafs_repair_transaction_signer(repair)
+            .with_sorafs_reserve_transaction_signer(reserve)
+            .with_sorafs_orderbook_transaction_signer(orderbook)
     } else {
         runtime_deps
     };
@@ -2466,10 +2547,21 @@ async fn sorafs_pin_register_route_disabled_when_storage_off() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+#[test]
+#[should_panic(
+    expected = "storage-enabled discovery fixture must explicitly configure every native signer binding"
+)]
+fn storage_enabled_discovery_harness_rejects_missing_explicit_native_signers() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.sorafs_storage.enabled = true;
+
+    let _ = build_torii_harness(&cfg);
+}
+
 #[tokio::test]
 async fn sorafs_capacity_route_enabled_when_storage_on() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
 
@@ -2526,7 +2618,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
 #[tokio::test]
 async fn retired_storage_ingest_route_is_not_mounted() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
 
@@ -2591,7 +2683,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
@@ -2658,7 +2750,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
@@ -2690,7 +2782,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
 #[tokio::test]
 async fn sorafs_pin_register_validates_signed_manifest_bytes() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
@@ -2722,7 +2814,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
 #[tokio::test]
 async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
@@ -2753,7 +2845,7 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
 #[tokio::test]
 async fn sorafs_pin_register_rejects_wrong_shape_chain_and_signature() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
@@ -2825,7 +2917,7 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     let temp_dir = tempdir().expect("storage temp dir");
     cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let app = build_torii_harness(&cfg).app;
@@ -2859,7 +2951,7 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
@@ -3031,7 +3123,7 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
@@ -3165,7 +3257,7 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
@@ -3299,7 +3391,7 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
@@ -3408,7 +3500,7 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
@@ -3509,7 +3601,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
@@ -3671,7 +3763,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
         Some(test_admission_config(admission_dir.path().to_path_buf()));
-    cfg.torii.sorafs_storage.enabled = true;
+    enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);

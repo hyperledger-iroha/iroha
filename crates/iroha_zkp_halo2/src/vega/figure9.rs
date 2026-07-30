@@ -2,7 +2,9 @@
 //!
 //! The circuit proves the authenticated bytes themselves.  Native preflight in
 //! `iroha_core` is only an early rejection path and is not part of the
-//! relation's soundness argument.
+//! relation's soundness argument. Both ES256 checks reconstruct the unique
+//! P1363 `s` scalar from the inverse witness and enforce the canonical low-s
+//! representative inside the proof relation.
 
 use core::fmt;
 
@@ -22,7 +24,7 @@ use super::{
         public_date,
     },
     figure9_layout::FIGURE9_LAYOUT,
-    p256::{private_point_from_be_bytes, public_point, verify_es256},
+    p256::{private_point_from_be_bytes, public_point, verify_es256_low_s_from_inverse},
     sha256::{ByteVar, allocate_bytes, enforce_byte_constant, public_word, sha256},
 };
 
@@ -68,6 +70,9 @@ pub enum VegaMdlFigure9ErrorV1 {
 ///
 /// The caller retains ownership so document bytes and signature witnesses do
 /// not acquire another long-lived secret copy in the proof-system crate.
+/// `s^-1` is only an assignment representation: the circuit reconstructs `s`,
+/// proves the ECDSA group equation, and admits only the low-s P1363
+/// representative for both signatures.
 #[derive(Clone, Copy)]
 pub struct VegaMdlFigure9WitnessV1<'a> {
     issuer_authentication_sig_structure: &'a [u8],
@@ -251,7 +256,7 @@ pub(super) fn synthesize_figure9(
 
     let issuer_digest = sha256(&mut builder, &issuer)?;
     let issuer_key = public_point(&mut builder, ISSUER_X_INDEX, ISSUER_Y_INDEX)?;
-    verify_es256(
+    verify_es256_low_s_from_inverse(
         &mut builder,
         issuer_digest,
         &issuer_key,
@@ -264,7 +269,7 @@ pub(super) fn synthesize_figure9(
         .collect::<Result<Vec<_>, _>>()?
         .try_into()
         .map_err(|_| CircuitError::InvalidDimension)?;
-    verify_es256(
+    verify_es256_low_s_from_inverse(
         &mut builder,
         device_digest,
         &device_key,
@@ -428,6 +433,27 @@ pub(super) mod tests {
             .expect("32 bytes")
     }
 
+    pub(crate) fn high_s_counterpart_inverse(low_s_inverse: [u8; 32]) -> [u8; 32] {
+        let mut high_s_inverse = [0_u8; 32];
+        let mut borrow = 0_u16;
+        for index in (0..32).rev() {
+            let minuend = u16::from(super::super::p256::P256_ORDER_BE[index]);
+            let subtrahend = u16::from(low_s_inverse[index]) + borrow;
+            if minuend >= subtrahend {
+                high_s_inverse[index] =
+                    u8::try_from(minuend - subtrahend).expect("single-byte difference");
+                borrow = 0;
+            } else {
+                high_s_inverse[index] =
+                    u8::try_from(minuend + 256 - subtrahend).expect("single-byte difference");
+                borrow = 1;
+            }
+        }
+        assert_eq!(borrow, 0, "fixture inverse is below the P-256 order");
+        assert_ne!(high_s_inverse, [0; 32], "fixture inverse is nonzero");
+        high_s_inverse
+    }
+
     pub(crate) fn baseline_signed_fixture() -> SignedFixture {
         let mut issuer = FIGURE9_LAYOUT.issuer_template.clone();
         let birth = FIGURE9_LAYOUT.birth_template.clone();
@@ -587,6 +613,31 @@ pub(super) mod tests {
         let fixture = baseline_signed_fixture();
         validate_vega_mdl_figure9_relation_v1(&fixture.public, &fixture.witness())
             .expect("complete signed relation");
+    }
+
+    #[test]
+    fn issuer_and_device_high_s_counterparts_are_unsatisfied_in_the_circuit_relation() {
+        let baseline = baseline_signed_fixture();
+        for role in ["issuer", "device"] {
+            let mut changed = baseline.clone();
+            let original_inverse = if role == "issuer" {
+                &mut changed.issuer_s_inverse
+            } else {
+                &mut changed.device_s_inverse
+            };
+            let high_s_inverse = high_s_counterpart_inverse(*original_inverse);
+            assert_eq!(
+                high_s_counterpart_inverse(high_s_inverse),
+                *original_inverse,
+                "P-256 scalar negation is involutive"
+            );
+            *original_inverse = high_s_inverse;
+            assert_eq!(
+                validate_vega_mdl_figure9_relation_v1(&changed.public, &changed.witness()),
+                Err(VegaMdlFigure9ErrorV1::UnsatisfiedRelation),
+                "{role} high-s counterpart bypassed the proof relation"
+            );
+        }
     }
 
     #[test]

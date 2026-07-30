@@ -675,6 +675,9 @@ test("package dist privacy native availability clears probed capability output",
       privacyCapabilitiesV1() {
         return rejectedOutput;
       },
+      privacyValidateCapabilitiesV1() {
+        return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+      },
     }),
     () => assert.equal(isPrivacyNativeAvailable(), false),
   );
@@ -891,6 +894,9 @@ test("package dist privacy capability wrapper rejects malformed Norito output ar
         privacyCapabilitiesV1() {
           return Buffer.from(malformedArchive);
         },
+        privacyValidateCapabilitiesV1() {
+          return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+        },
       }),
       () => {
         assert.throws(
@@ -936,6 +942,9 @@ test("package dist privacy native availability rejects every unsafe capability o
     withNativeBinding(
       completePrivacyCapabilitiesBinding({
         privacyCapabilitiesV1: privacyCapabilitiesOverride,
+        privacyValidateCapabilitiesV1() {
+          return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.MALFORMED_ARCHIVE;
+        },
       }),
       () => assert.equal(isPrivacyNativeAvailable(), false),
     );
@@ -948,6 +957,9 @@ test("package dist privacy capability wrapper rejects wrong result schemas", () 
     completePrivacyCapabilitiesBinding({
       privacyCapabilitiesV1() {
         return Buffer.from(wrongSchemaArchive);
+      },
+      privacyValidateCapabilitiesV1() {
+        return PRIVACY_CAPABILITY_VALIDATION_STATUS_V1.SCHEMA_MISMATCH;
       },
     }),
     () => {

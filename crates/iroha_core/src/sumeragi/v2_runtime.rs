@@ -112,6 +112,10 @@ impl RuntimeLifecycleOrdinalSource {
         Ok(())
     }
 
+    /// Read the next unused ordinal without reserving it.
+    ///
+    /// Runtime ingress uses this to initialize its diagnostic mirror from the
+    /// same actor-global source that owns all lifecycle reservations.
     pub(super) fn next_ordinal(&self) -> Result<Option<u128>, String> {
         self.lock_next().map(|next| *next)
     }

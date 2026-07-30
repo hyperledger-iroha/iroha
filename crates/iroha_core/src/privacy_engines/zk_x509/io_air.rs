@@ -134,7 +134,8 @@ pub(crate) struct ZkX509IoChallengesV1 {
 }
 
 impl ZkX509IoChallengesV1 {
-    fn validate(self) -> Result<(), ZkX509IoAirErrorV1> {
+    /// Reject zero, non-canonical, or duplicate I/O challenge lanes.
+    pub(crate) fn validate(self) -> Result<(), ZkX509IoAirErrorV1> {
         for lane in self.lanes {
             let coefficients = [
                 lane.beta,

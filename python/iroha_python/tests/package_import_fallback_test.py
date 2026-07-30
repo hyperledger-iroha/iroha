@@ -49,23 +49,29 @@ import iroha_python
 try:
     iroha_python.Ed25519KeyPair
 except RuntimeError as exc:
-    assert "requires the compiled iroha_python._crypto extension module" in str(exc)
-    assert isinstance(exc.__cause__, RuntimeError)
-    assert "forced crypto import failure" in str(exc.__cause__)
+    if sys.flags.optimize != 0:
+        raise AssertionError("fallback subprocess unexpectedly enabled optimization")
+    if "requires the compiled iroha_python._crypto extension module" not in str(exc):
+        raise AssertionError("fallback error lost the compiled-extension message")
+    if not isinstance(exc.__cause__, RuntimeError):
+        raise AssertionError("fallback error lost its RuntimeError cause")
+    if "forced crypto import failure" not in str(exc.__cause__):
+        raise AssertionError("fallback error lost the original cause message")
 else:
     raise AssertionError("crypto export unexpectedly resolved")
 """
     env = os.environ.copy()
-    pythonpath = os.pathsep.join(
-        [
-            str(root / "python" / "iroha_python" / "src"),
-            str(root / "python" / "norito_py" / "src"),
-            str(root / "python"),
-            env.get("PYTHONPATH", ""),
-        ]
-    )
+    python_paths = [
+        str(root / "python" / "norito_py" / "src"),
+        str(root / "python"),
+        env.get("PYTHONPATH", ""),
+    ]
+    if env.get("IROHA_PYTHON_TEST_INSTALLED_PACKAGE") != "1":
+        python_paths.insert(0, str(root / "python" / "iroha_python" / "src"))
+    pythonpath = os.pathsep.join(python_paths)
     env["PYTHONPATH"] = pythonpath
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.pop("PYTHONOPTIMIZE", None)
 
     subprocess.run(
         [sys.executable, "-c", script],

@@ -2217,10 +2217,17 @@ impl ReputationJournalFinalizedEventV1 {
         }
     }
 
-    fn validate(
+    /// Validate this event against the exact finalized view that returned it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the event identity, entry, block position,
+    /// source/commit timestamps, or finalized-height/hash binding is invalid.
+    pub fn validate(
         &self,
         finalized_cursor: ReputationJournalFinalizedCursorV1,
     ) -> Result<(), ReputationJournalValidationError> {
+        finalized_cursor.validate()?;
         self.cursor().validate()?;
         self.entry.validate()?;
         if self.block_height > finalized_cursor.height {
@@ -2760,35 +2767,49 @@ fn validate_block_order(
 }
 
 fn validate_source_revision(
-    revisions: &mut BTreeMap<
-        ReputationJournalSourceIdV1,
-        (
-            ReputationJournalSourceKindV1,
-            u32,
-            ReputationJournalEventIdV1,
-        ),
-    >,
+    revisions: &mut BTreeMap<ReputationJournalSourceIdV1, ReputationJournalEntryV1>,
     entry: &ReputationJournalEntryV1,
 ) -> Result<(), ReputationJournalValidationError> {
-    let Some((kind, revision, event_id)) = revisions.get(&entry.source_id).copied() else {
-        revisions.insert(
-            entry.source_id,
-            (entry.source_kind(), entry.source_revision, entry.event_id),
-        );
+    let Some(previous) = revisions.get(&entry.source_id).cloned() else {
+        revisions.insert(entry.source_id, entry.clone());
         return Ok(());
     };
-    if kind != entry.source_kind() || revision == entry.source_revision {
+    if previous.source_kind() != entry.source_kind()
+        || previous.source_revision == entry.source_revision
+    {
         return Err(ReputationJournalValidationError::SourceEquivocation);
     }
-    if revision.checked_add(1) != Some(entry.source_revision)
-        || entry.predecessor_event_id != Some(event_id)
+    if previous.source_revision.checked_add(1) != Some(entry.source_revision)
+        || entry.predecessor_event_id != Some(previous.event_id)
     {
         return Err(ReputationJournalValidationError::SourceRevisionDiscontinuity);
     }
-    revisions.insert(
-        entry.source_id,
-        (entry.source_kind(), entry.source_revision, entry.event_id),
-    );
+    validate_source_revision_material(&previous, entry)?;
+    revisions.insert(entry.source_id, entry.clone());
+    Ok(())
+}
+
+fn validate_source_revision_material(
+    predecessor: &ReputationJournalEntryV1,
+    successor: &ReputationJournalEntryV1,
+) -> Result<(), ReputationJournalValidationError> {
+    let (
+        ReputationJournalPayloadV1::ProviderDispute(opened),
+        ReputationJournalPayloadV1::ProviderDispute(resolved),
+    ) = (&predecessor.payload, &successor.payload)
+    else {
+        return Err(ReputationJournalValidationError::SourceEquivocation);
+    };
+    if predecessor.provider_id != successor.provider_id
+        || opened.dispute_id != resolved.dispute_id
+        || opened.kind != resolved.kind
+        || opened.evidence_digest != resolved.evidence_digest
+        || opened.submitted_at_unix_ms != resolved.submitted_at_unix_ms
+        || !matches!(&opened.status, ProviderDisputeStatusV1::Opened)
+        || !matches!(&resolved.status, ProviderDisputeStatusV1::Resolved(_))
+    {
+        return Err(ReputationJournalValidationError::SourceEquivocation);
+    }
     Ok(())
 }
 
@@ -3272,6 +3293,31 @@ mod tests {
         page.finalized_cursor.finalized_at_unix_ms = u64::MAX;
         assert_eq!(
             page.validate(),
+            Err(ReputationJournalValidationError::InvalidFinalizedCursor)
+        );
+    }
+
+    #[test]
+    fn historical_finalized_event_rejects_an_inert_finalized_view() {
+        let event = finalized_event(1, 0, 3);
+        let mut cursor = finalized_cursor();
+        cursor.block_hash = [0; 32];
+        assert_eq!(
+            event.validate(cursor),
+            Err(ReputationJournalValidationError::InvalidFinalizedCursor)
+        );
+
+        let mut cursor = finalized_cursor();
+        cursor.finalized_at_unix_ms = 0;
+        assert_eq!(
+            event.validate(cursor),
+            Err(ReputationJournalValidationError::InvalidFinalizedCursor)
+        );
+
+        let mut cursor = finalized_cursor();
+        cursor.finalized_at_unix_ms = u64::MAX;
+        assert_eq!(
+            event.validate(cursor),
             Err(ReputationJournalValidationError::InvalidFinalizedCursor)
         );
     }
@@ -4164,7 +4210,7 @@ mod tests {
                 block_hash: [0x40; 32],
                 event_index: 9,
                 recorded_at_unix_ms: SOURCE_TIME - 500,
-                entry: opened,
+                entry: opened.clone(),
             },
             ReputationJournalFinalizedEventV1 {
                 sequence: 2,
@@ -4172,12 +4218,68 @@ mod tests {
                 block_hash: BLOCK_HASH,
                 event_index: 0,
                 recorded_at_unix_ms: RECORDED_AT,
-                entry: resolved,
+                entry: resolved.clone(),
             },
         ];
         page(events)
             .validate()
             .expect("predecessor-contiguous dispute lifecycle");
+
+        let mut substituted_kind = resolved.payload.clone();
+        let ReputationJournalPayloadV1::ProviderDispute(dispute) = &mut substituted_kind else {
+            panic!("resolved fixture must contain a provider dispute");
+        };
+        dispute.kind = ProviderDisputeKindV1::FeeDispute;
+        let mut substituted_evidence = resolved.payload.clone();
+        let ReputationJournalPayloadV1::ProviderDispute(dispute) = &mut substituted_evidence else {
+            panic!("resolved fixture must contain a provider dispute");
+        };
+        dispute.evidence_digest[0] ^= 0xFF;
+        let mut substituted_submission = resolved.payload.clone();
+        let ReputationJournalPayloadV1::ProviderDispute(dispute) = &mut substituted_submission
+        else {
+            panic!("resolved fixture must contain a provider dispute");
+        };
+        dispute.submitted_at_unix_ms += 1;
+
+        for (provider_id, payload) in [
+            (ProviderId::new([0x44; 32]), resolved.payload.clone()),
+            (resolved.provider_id, substituted_kind),
+            (resolved.provider_id, substituted_evidence),
+            (resolved.provider_id, substituted_submission),
+        ] {
+            let substituted = ReputationJournalEntryV1::try_new(
+                provider_id,
+                resolved.authority_policy_digest,
+                resolved.recorded_by.clone(),
+                resolved.source_time_unix_ms,
+                Some(opened.event_id),
+                payload,
+            )
+            .expect("substituted immutable dispute material remains structurally valid");
+            let events = vec![
+                ReputationJournalFinalizedEventV1 {
+                    sequence: 1,
+                    block_height: 4,
+                    block_hash: [0x40; 32],
+                    event_index: 9,
+                    recorded_at_unix_ms: SOURCE_TIME - 500,
+                    entry: opened.clone(),
+                },
+                ReputationJournalFinalizedEventV1 {
+                    sequence: 2,
+                    block_height: 5,
+                    block_hash: BLOCK_HASH,
+                    event_index: 0,
+                    recorded_at_unix_ms: RECORDED_AT,
+                    entry: substituted,
+                },
+            ];
+            assert_eq!(
+                page(events).validate(),
+                Err(ReputationJournalValidationError::SourceEquivocation)
+            );
+        }
     }
 
     #[test]

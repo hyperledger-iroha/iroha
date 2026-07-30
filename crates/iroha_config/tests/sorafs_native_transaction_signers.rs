@@ -486,7 +486,7 @@ fn all_role_handles_authorities_and_public_keys_must_be_distinct() {
 }
 
 #[test]
-fn every_role_binding_is_required_iff_its_worker_is_enabled() {
+fn every_role_binding_is_required_iff_drain_or_generation_is_active() {
     let fixtures = complete_role_fixtures();
     for (role, enablement, binding) in [
         (
@@ -507,21 +507,59 @@ fn every_role_binding_is_required_iff_its_worker_is_enabled() {
         ),
     ] {
         let error =
-            parse_overlay(enablement).expect_err("enabled worker without binding must fail closed");
+            parse_overlay(enablement).expect_err("active signer role without binding must fail");
         assert!(
             error.contains(&format!(
-                "native_transaction_signers.{role} is required when its worker is enabled"
+                "native_transaction_signers.{role} is required for storage-enabled durable drain or role generation"
             )),
             "{role} missing-binding diagnostic was unexpected: {error}"
         );
 
         let error = parse_overlay(&render_binding(role, binding))
-            .expect_err("disabled worker with dormant binding must fail closed");
+            .expect_err("inactive signer role with dormant binding must fail");
         assert!(
             error.contains(&format!(
-                "native_transaction_signers.{role} is forbidden when its worker is disabled"
+                "native_transaction_signers.{role} is forbidden without storage-enabled durable drain or role generation"
             )),
             "{role} dormant-binding diagnostic was unexpected: {error}"
+        );
+    }
+}
+
+#[test]
+fn storage_enabled_requires_all_four_signers_with_generation_workers_disabled() {
+    let fixtures = complete_role_fixtures();
+    let mut complete = "[sorafs.storage]\nenabled = true\n".to_owned();
+    for (role, binding) in ["proof_outcome", "repair", "reserve", "orderbook"]
+        .into_iter()
+        .zip(&fixtures)
+    {
+        complete.push_str(&render_binding(role, binding));
+    }
+    parse_overlay(&complete)
+        .expect("storage-enabled durable drain must accept all four explicit bindings");
+
+    for (missing_index, missing_role) in ["proof_outcome", "repair", "reserve", "orderbook"]
+        .into_iter()
+        .enumerate()
+    {
+        let mut incomplete = "[sorafs.storage]\nenabled = true\n".to_owned();
+        for (index, (role, binding)) in ["proof_outcome", "repair", "reserve", "orderbook"]
+            .into_iter()
+            .zip(&fixtures)
+            .enumerate()
+        {
+            if index != missing_index {
+                incomplete.push_str(&render_binding(role, binding));
+            }
+        }
+        let error =
+            parse_overlay(&incomplete).expect_err("one missing durable-drain signer must fail");
+        assert!(
+            error.contains(&format!(
+                "native_transaction_signers.{missing_role} is required for storage-enabled durable drain or role generation"
+            )),
+            "{missing_role} durable-drain diagnostic was unexpected: {error}"
         );
     }
 }

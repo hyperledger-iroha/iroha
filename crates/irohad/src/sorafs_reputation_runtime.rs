@@ -17,7 +17,9 @@ use eyre::{Result, WrapErr, bail};
 use iroha_config::parameters::{actual::SorafsReputationRuntime, is_production_runtime_handle};
 use iroha_data_model::{
     ChainId,
-    query::sorafs::prelude::FindSorafsReputationJournalAuthorityPolicy,
+    query::sorafs::prelude::{
+        FindSorafsReputationJournalAuthorityPolicy, FindSorafsReputationJournalEventBySourceId,
+    },
     sorafs::{capacity::ProviderId, reputation::PorTerminalOutcomeV1},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
@@ -35,8 +37,9 @@ use sorafs_node::reputation::{
         ReputationJournalDeliveryFinalizedViewV1, ReputationJournalDeliveryMetricsV1,
         ReputationJournalDeliveryPolicyV1, ReputationJournalDeliveryWorkerV1,
         ReputationJournalProducerOutboxV1, ReputationJournalProducerPolicyV1,
-        ReputationJournalTransactionSubmitterV1, ReputationNativeOutcomeAdmissionApiV1,
-        ReputationPublicationPolicyV1, ReputationPublicationReconcilerV1, ReputationRuntimeError,
+        ReputationJournalSourceFinalizedViewV1, ReputationJournalTransactionSubmitterV1,
+        ReputationNativeOutcomeAdmissionApiV1, ReputationPublicationPolicyV1,
+        ReputationPublicationReconcilerV1, ReputationRuntimeError,
         ReputationRuntimeProviderQualificationV1, ReputationRuntimeStatusV1,
         ReputationRuntimeSupervisorV1, ReputationThresholdSignerClientV1,
         reputation_journal_submitter_policy_digest_v1,
@@ -1503,6 +1506,32 @@ mod tests {
             if self.malformed_bootstrap_continuation {
                 view.journal_page.has_more = true;
             }
+            Ok(view)
+        }
+
+        fn reputation_journal_event_by_source_id(
+            &self,
+            chain_id: &ChainId,
+            maximum_height: u64,
+            query: FindSorafsReputationJournalEventBySourceId,
+        ) -> Result<ReputationJournalSourceFinalizedViewV1, ReputationExternalFailureV1> {
+            ExternalProviderCallCounters::record_operation(&self.external_calls);
+            let view = ReputationJournalSourceFinalizedViewV1 {
+                anchor: ReputationFinalizedAnchorV1 {
+                    chain_id: chain_id.clone(),
+                    identity: sorafs_node::reputation::ReputationFinalizedIdentityV1 {
+                        height: 1,
+                        block_hash: [0x81; 32],
+                    },
+                    finalized_at_unix_ms: 1_800_000_000_000,
+                },
+                event: None,
+            };
+            view.validate_for_request(chain_id, maximum_height, query)
+                .map_err(|_| {
+                    ReputationExternalFailureV1::try_new([0x93; 32])
+                        .expect("non-zero source-query failure receipt")
+                })?;
             Ok(view)
         }
 

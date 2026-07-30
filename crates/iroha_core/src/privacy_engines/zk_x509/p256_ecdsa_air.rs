@@ -143,19 +143,66 @@ pub(crate) trait P256EcdsaCircuitV1: P256WindowCircuitV1 {
     fn constrain_low_s_v1(&mut self, scalar: Self::Scalar) -> Result<(), Self::Error>;
 }
 
-/// Constrain one complete P-256 ECDSA verification equation.
-pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
+/// Typed source for the five external values consumed by one ECDSA equation.
+///
+/// The relation schedule asks for each value only at its canonical allocation
+/// point. Native proving sources bind concrete witness bytes through
+/// [`P256EcdsaCircuitV1`], while verifier-topology compilers can allocate typed
+/// handles without constructing witness-shaped placeholder values.
+pub(crate) trait P256EcdsaInputSourceV1<C: P256EcdsaCircuitV1> {
+    /// Allocate the affine public-key coordinates.
+    fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error>;
+
+    /// Allocate the canonical signature scalars `(r, s)`.
+    fn signature_v1(&mut self, circuit: &mut C) -> Result<(C::Scalar, C::Scalar), C::Error>;
+
+    /// Allocate and constrain the reduced SHA-256 digest.
+    fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error>;
+}
+
+#[derive(Clone, Copy)]
+struct P256EcdsaWitnessInputSourceV1 {
+    witness: P256EcdsaWitnessV1,
+}
+
+impl<C: P256EcdsaCircuitV1> P256EcdsaInputSourceV1<C> for P256EcdsaWitnessInputSourceV1 {
+    fn public_key_v1(&mut self, circuit: &mut C) -> Result<(C::Value, C::Value), C::Error> {
+        Ok((
+            circuit.base_input_v1(self.witness.public_key_x_be)?,
+            circuit.base_input_v1(self.witness.public_key_y_be)?,
+        ))
+    }
+
+    fn signature_v1(&mut self, circuit: &mut C) -> Result<(C::Scalar, C::Scalar), C::Error> {
+        Ok((
+            circuit.scalar_input_v1(self.witness.r_be)?,
+            circuit.scalar_input_v1(self.witness.s_be)?,
+        ))
+    }
+
+    fn reduced_digest_v1(&mut self, circuit: &mut C) -> Result<C::Scalar, C::Error> {
+        circuit.reduce_digest_v1(self.witness.digest_be)
+    }
+}
+
+/// Constrain one complete P-256 ECDSA verification equation from a typed
+/// external-value source.
+///
+/// This is the single canonical relation schedule shared by native witness
+/// compilation and independent verifier-topology compilation.
+pub(crate) fn constrain_p256_ecdsa_from_source_v1<
+    C: P256EcdsaCircuitV1,
+    I: P256EcdsaInputSourceV1<C>,
+>(
     circuit: &mut C,
     generator_table: &[P256ProjectiveValueV1<C::Value>; 16],
     role: P256EcdsaRoleV1,
-    witness: P256EcdsaWitnessV1,
+    mut inputs: I,
 ) -> Result<P256EcdsaAssignedV1<C::Scalar, C::Value>, C::Error> {
-    let public_key_x = circuit.base_input_v1(witness.public_key_x_be)?;
-    let public_key_y = circuit.base_input_v1(witness.public_key_y_be)?;
+    let (public_key_x, public_key_y) = inputs.public_key_v1(circuit)?;
     let public_key = constrain_p256_affine_on_curve_v1(circuit, public_key_x, public_key_y)?;
 
-    let r = circuit.scalar_input_v1(witness.r_be)?;
-    let s = circuit.scalar_input_v1(witness.s_be)?;
+    let (r, s) = inputs.signature_v1(circuit)?;
     // ECDSA requires both scalars to be strictly positive.
     let _r_inverse = circuit.scalar_inverse_nonzero_v1(r)?;
     let s_inverse = circuit.scalar_inverse_nonzero_v1(s)?;
@@ -163,7 +210,7 @@ pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
         circuit.constrain_low_s_v1(s)?;
     }
 
-    let z = circuit.reduce_digest_v1(witness.digest_be)?;
+    let z = inputs.reduced_digest_v1(circuit)?;
     let u1 = circuit.scalar_multiply_v1(z, s_inverse)?;
     let u2 = circuit.scalar_multiply_v1(r, s_inverse)?;
     let u1_bits = circuit.scalar_bits_be_v1(u1, P256WindowScalarV1::U1)?;
@@ -190,6 +237,22 @@ pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
         result_x,
         reduced_x,
     })
+}
+
+/// Constrain one complete P-256 ECDSA verification equation from native
+/// witness bytes.
+pub(crate) fn constrain_p256_ecdsa_v1<C: P256EcdsaCircuitV1>(
+    circuit: &mut C,
+    generator_table: &[P256ProjectiveValueV1<C::Value>; 16],
+    role: P256EcdsaRoleV1,
+    witness: P256EcdsaWitnessV1,
+) -> Result<P256EcdsaAssignedV1<C::Scalar, C::Value>, C::Error> {
+    constrain_p256_ecdsa_from_source_v1(
+        circuit,
+        generator_table,
+        role,
+        P256EcdsaWitnessInputSourceV1 { witness },
+    )
 }
 
 #[cfg(test)]
@@ -233,13 +296,47 @@ mod tests {
         HighS,
     }
 
-    #[derive(Default)]
+    #[derive(Debug, Default, PartialEq, Eq)]
     struct TestCircuit {
         base_values: Vec<[u8; 32]>,
         scalar_values: Vec<[u8; 32]>,
         operations: Vec<ZkX509P256ArithmeticOperationV1>,
         reductions: Vec<P256ReductionTraceV1>,
         low_s: Vec<P256LowSTraceV1>,
+    }
+
+    #[derive(Clone, Copy)]
+    struct ExplicitTestInputSourceV1 {
+        witness: P256EcdsaWitnessV1,
+    }
+
+    impl P256EcdsaInputSourceV1<TestCircuit> for ExplicitTestInputSourceV1 {
+        fn public_key_v1(
+            &mut self,
+            circuit: &mut TestCircuit,
+        ) -> Result<(BaseValue, BaseValue), TestError> {
+            Ok((
+                circuit.base_input_v1(self.witness.public_key_x_be)?,
+                circuit.base_input_v1(self.witness.public_key_y_be)?,
+            ))
+        }
+
+        fn signature_v1(
+            &mut self,
+            circuit: &mut TestCircuit,
+        ) -> Result<(ScalarValue, ScalarValue), TestError> {
+            Ok((
+                circuit.scalar_input_v1(self.witness.r_be)?,
+                circuit.scalar_input_v1(self.witness.s_be)?,
+            ))
+        }
+
+        fn reduced_digest_v1(
+            &mut self,
+            circuit: &mut TestCircuit,
+        ) -> Result<ScalarValue, TestError> {
+            circuit.reduce_digest_v1(self.witness.digest_be)
+        }
     }
 
     impl TestCircuit {
@@ -541,6 +638,38 @@ mod tests {
         let generator_table = assigned_generator_table(&mut circuit);
         constrain_p256_ecdsa_v1(&mut circuit, &generator_table, role, witness)?;
         Ok(circuit)
+    }
+
+    fn execute_from_explicit_source(
+        witness: P256EcdsaWitnessV1,
+        role: P256EcdsaRoleV1,
+    ) -> Result<TestCircuit, TestError> {
+        let mut circuit = TestCircuit::default();
+        let generator_table = assigned_generator_table(&mut circuit);
+        constrain_p256_ecdsa_from_source_v1(
+            &mut circuit,
+            &generator_table,
+            role,
+            ExplicitTestInputSourceV1 { witness },
+        )?;
+        Ok(circuit)
+    }
+
+    #[test]
+    fn typed_input_source_preserves_the_exact_native_witness_schedule() {
+        let key = signing_key(7);
+        let digest = core::array::from_fn(|index| (index as u8).wrapping_mul(29).wrapping_add(3));
+        let signature: Signature = key.sign_prehash(&digest).expect("signature");
+        let signature = signature.normalize_s().unwrap_or(signature);
+        let witness = witness_for(&key, digest, signature);
+        assert_eq!(
+            execute(witness, P256EcdsaRoleV1::WalletOwnership),
+            execute_from_explicit_source(witness, P256EcdsaRoleV1::WalletOwnership),
+        );
+        assert_eq!(
+            execute(witness, P256EcdsaRoleV1::CertificateOrCrl),
+            execute_from_explicit_source(witness, P256EcdsaRoleV1::CertificateOrCrl),
+        );
     }
 
     #[test]

@@ -1084,7 +1084,12 @@ pub struct OrderbookWorkerPolicy {
 }
 
 impl OrderbookWorkerPolicy {
-    /// Whether the supervised finalized-state worker should run.
+    /// Whether the supervised runtime may generate new orderbook work.
+    ///
+    /// The worker remains active for durable drain/reconciliation while
+    /// provider storage is enabled. If storage and generation are both
+    /// disabled, retained outbox state stays durable until a later startup where
+    /// either is re-enabled.
     #[must_use]
     pub const fn enabled(self) -> bool {
         self.enabled
@@ -1202,7 +1207,10 @@ pub struct ReserveWorkerPolicy {
 impl ReserveWorkerPolicy {
     /// Whether the supervised runtime may generate new reserve/rent work.
     ///
-    /// The durable outbox is always drained and reconciled on restart.
+    /// The worker remains active for durable drain/reconciliation while
+    /// provider storage is enabled. If storage and generation are both
+    /// disabled, retained outbox state stays durable until a later startup where
+    /// either is re-enabled.
     #[must_use]
     pub const fn enabled(self) -> bool {
         self.enabled
