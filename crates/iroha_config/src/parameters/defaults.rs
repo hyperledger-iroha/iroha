@@ -1353,8 +1353,9 @@ pub mod sorafs {
             use iroha_config_base::util::Bytes;
 
             /// The committed projector is opt-in until every runtime-only
-            /// finalized-query, threshold-signer, Governance DAG, and native
-            /// journal-transaction dependency is supplied.
+            /// finalized-query, sealed journal-checkpoint, threshold-signer,
+            /// Governance DAG, and native journal-transaction dependency is
+            /// supplied.
             pub const ENABLED: bool = false;
             /// Exact-anchor reconciliation cadence.
             pub const POLL_INTERVAL_MS: u64 = 1_000;

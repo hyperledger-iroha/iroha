@@ -32,22 +32,6 @@ object GovernanceInstructionUtils {
         }
     }
 
-    /** Derivation kind recorded for persisted councils. */
-    enum class CouncilDerivationKind(@JvmField val wireValue: String) {
-        VRF("Vrf");
-
-        companion object {
-            @JvmStatic
-            fun parse(raw: String): CouncilDerivationKind {
-                require(raw.isNotBlank()) { "derived_by must not be blank" }
-                return when (raw.trim().lowercase()) {
-                    "vrf" -> VRF
-                    else -> throw IllegalArgumentException("Unknown council derivation: $raw")
-                }
-            }
-        }
-    }
-
     @JvmStatic
     fun appendAtWindow(arguments: MutableMap<String, String>, window: AtWindow, prefix: String) {
         arguments["$prefix.lower"] = window.lower.toString()

@@ -4002,53 +4002,6 @@ fn governance_paths() -> Map {
             vec![path_param("account_id", "Account id.")],
         )),
     );
-    #[cfg(feature = "gov_vrf")]
-    {
-        paths.insert(
-            "/v1/gov/council/persist".to_owned(),
-            Value::Object(json_post_operation(
-                "Governance",
-                "Persist a council roster.",
-                "Persist a governance council roster for an epoch.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-        paths.insert(
-            "/v1/gov/council/replace".to_owned(),
-            Value::Object(json_post_operation(
-                "Governance",
-                "Replace a council member.",
-                "Replace a council member using the next alternate.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            )),
-        );
-    }
-    paths.insert(
-        "/v1/gov/council/audit".to_owned(),
-        Value::Object(json_get_operation(
-            "Governance",
-            "Audit council derivation.",
-            "Return governance council derivation audit data.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    #[cfg(feature = "gov_vrf")]
-    paths.insert(
-        "/v1/gov/council/derive-vrf".to_owned(),
-        Value::Object(json_post_operation(
-            "Governance",
-            "Derive council VRF inputs.",
-            "Derive VRF inputs for council selection.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
     paths
 }
 
@@ -11523,7 +11476,6 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/da/pin-intents/prove"
                     | "/v1/da/pin-intents/verify"
                     | "/v1/domains/query"
-                    | "/v1/gov/council/derive-vrf"
                     | "/v1/multisig/proposals/query"
                     | "/v1/multisig/proposals/resolve"
                     | "/v1/multisig/spec"
@@ -31796,14 +31748,13 @@ mod tests {
             feature = "schema",
             feature = "p2p_ws",
             feature = "connect",
-            feature = "gov_vrf",
             feature = "zk-verify-batch",
             feature = "push"
         ))]
         assert_eq!(
             expected.len(),
-            444,
-            "the supported full Torii documentation profile must remain exactly 444 cataloged operations"
+            440,
+            "the supported full Torii documentation profile must remain exactly 440 cataloged operations"
         );
 
         let spec = generate_spec();
@@ -32095,9 +32046,6 @@ mod tests {
         );
         #[cfg(feature = "connect")]
         descriptors.extend_from_slice(route_catalog::connect::ROUTES);
-        #[cfg(feature = "gov_vrf")]
-        descriptors.extend_from_slice(route_catalog::governance_vrf::ROUTES);
-
         for descriptor in descriptors {
             assert!(descriptor.projections().openapi());
             let method = match descriptor.method() {
@@ -34124,18 +34072,10 @@ mod tests {
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
-        #[cfg(feature = "gov_vrf")]
-        {
-            assert!(paths.contains_key("/v1/gov/council/persist"));
-            assert!(paths.contains_key("/v1/gov/council/replace"));
-            assert!(paths.contains_key("/v1/gov/council/derive-vrf"));
-        }
-        #[cfg(not(feature = "gov_vrf"))]
-        {
-            assert!(!paths.contains_key("/v1/gov/council/persist"));
-            assert!(!paths.contains_key("/v1/gov/council/replace"));
-            assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
-        }
+        assert!(!paths.contains_key("/v1/gov/council/audit"));
+        assert!(!paths.contains_key("/v1/gov/council/persist"));
+        assert!(!paths.contains_key("/v1/gov/council/replace"));
+        assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));

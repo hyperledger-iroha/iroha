@@ -749,10 +749,10 @@ mod tests {
     }
 
     #[test]
-    fn direct_keypair_rejects_all_zero_coin_material() {
+    fn direct_fips_keypair_rejects_all_zero_seed_material() {
         let suite = MlDsaSuite::MlDsa44;
-        let err = generate_mldsa_keypair_from_coins(suite, &[0_u8; 32])
-            .expect_err("all-zero ML-DSA keypair coins must be rejected");
+        let err = generate_mldsa_keypair_from_fips_seed(suite, &[0_u8; 32])
+            .expect_err("all-zero ML-DSA FIPS keypair seed must be rejected");
 
         match err {
             MlDsaError::InertKeyMaterial {
@@ -760,9 +760,9 @@ mod tests {
                 kind,
             } => {
                 assert_eq!(actual.suite_id(), suite.suite_id());
-                assert_eq!(kind, "ML-DSA keypair coins");
+                assert_eq!(kind, "ML-DSA keypair seed");
             }
-            other => panic!("expected ML-DSA inert keypair coin error, got {other:?}"),
+            other => panic!("expected ML-DSA inert FIPS keypair seed error, got {other:?}"),
         }
     }
 

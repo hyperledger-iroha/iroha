@@ -23,7 +23,7 @@ use iroha_config::parameters::actual::{
     Network as Config, SoranetHandshake as ActualSoranetHandshake, SoranetPow as ActualSoranetPow,
 };
 use iroha_crypto::{
-    Hash, KeyPair,
+    Algorithm, Hash, KeyPair, Signature,
     soranet::{
         pow::{Parameters as PowParameters, TicketRevocationStore, TicketRevocationStoreLimits},
         puzzle,
@@ -724,6 +724,13 @@ const NETWORK_ACTOR_DEFERRED_MAX: usize = 64;
 const NETWORK_HIGH_ACTOR_DRAIN_BASE: usize = 64;
 const NETWORK_HIGH_ACTOR_DRAIN_PRESSURED: usize = 512;
 const NETWORK_HIGH_ACTOR_DRAIN_SATURATED: usize = 2_048;
+/// Domain separating end-to-end relay-origin signatures from every other use
+/// of a node's application key.
+const RELAY_ORIGIN_SIGNATURE_DOMAIN: &[u8] = b"iroha:p2p:relay-origin:v1\n";
+/// Largest canonical signature carried by a supported peer identity.
+///
+/// ML-DSA-65 is wider than every classical, BLS, GOST, and SM2 signature.
+pub const MAX_RELAY_ORIGIN_SIGNATURE_BYTES: usize = 3_309;
 /// Default hop limit for relay forwarding (origin hub hop + spoke hop).
 #[cfg(test)]
 const DEFAULT_RELAY_TTL: u8 = 8;
@@ -761,6 +768,7 @@ struct RelayMessage<T> {
     target: RelayTarget,
     ttl: u8,
     priority: Priority,
+    origin_signature: Vec<u8>,
     payload: T,
 }
 
@@ -787,21 +795,126 @@ where
     }
 }
 
-impl<T> RelayMessage<T> {
+impl<T: Encode> RelayMessage<T> {
+    fn try_new(
+        key_pair: &KeyPair,
+        target: RelayTarget,
+        ttl: u8,
+        priority: Priority,
+        payload: T,
+    ) -> Result<Self, iroha_crypto::error::Error> {
+        let origin = PeerId::from(key_pair.public_key().clone());
+        let digest = relay_origin_signature_digest(&origin, &target, priority, &payload);
+        let origin_signature = Signature::try_new(key_pair.private_key(), digest.as_ref())?
+            .payload()
+            .to_vec();
+        Ok(Self {
+            origin,
+            target,
+            ttl,
+            priority,
+            origin_signature,
+            payload,
+        })
+    }
+
+    fn new_signed(
+        key_pair: &KeyPair,
+        target: RelayTarget,
+        ttl: u8,
+        priority: Priority,
+        payload: T,
+    ) -> Self {
+        Self::try_new(key_pair, target, ttl, priority, payload)
+            .expect("a validated local P2P key pair must sign relay-origin material")
+    }
+
+    #[cfg(test)]
     fn new(origin: PeerId, target: RelayTarget, ttl: u8, priority: Priority, payload: T) -> Self {
+        let origin_signature = vec![
+            0xA5;
+            relay_origin_signature_len(&origin)
+                .expect("test relay origin must use a supported key")
+        ];
         Self {
             origin,
             target,
             ttl,
             priority,
+            origin_signature,
             payload,
         }
+    }
+
+    fn verify_origin_signature(&self) -> Result<(), iroha_crypto::error::Error> {
+        let digest =
+            relay_origin_signature_digest(&self.origin, &self.target, self.priority, &self.payload);
+        Signature::try_from_bytes(&self.origin_signature)?
+            .verify(self.origin.public_key(), digest.as_ref())
+    }
+
+    fn forwarded_with_ttl(&self, ttl: u8) -> Self
+    where
+        T: Clone,
+    {
+        let mut forwarded = self.clone();
+        forwarded.ttl = ttl;
+        forwarded
     }
 
     #[allow(dead_code)]
     fn decremented_ttl(&self) -> Option<u8> {
         self.ttl.checked_sub(1)
     }
+}
+
+fn relay_origin_signature_digest<T: Encode>(
+    origin: &PeerId,
+    target: &RelayTarget,
+    priority: Priority,
+    payload: &T,
+) -> Hash {
+    let origin = origin.encode();
+    let target = target.encode();
+    let priority = priority.encode();
+    let payload = payload.encode();
+    let origin_len = u64::try_from(origin.len())
+        .expect("an in-memory relay origin length must fit u64")
+        .to_le_bytes();
+    let target_len = u64::try_from(target.len())
+        .expect("an in-memory relay target length must fit u64")
+        .to_le_bytes();
+    let priority_len = u64::try_from(priority.len())
+        .expect("an in-memory relay priority length must fit u64")
+        .to_le_bytes();
+    let payload_len = u64::try_from(payload.len())
+        .expect("an in-memory relay payload length must fit u64")
+        .to_le_bytes();
+    Hash::new_from_chunks(&[
+        RELAY_ORIGIN_SIGNATURE_DOMAIN,
+        &origin_len,
+        &origin,
+        &target_len,
+        &target,
+        &priority_len,
+        &priority,
+        &payload_len,
+        &payload,
+    ])
+}
+
+fn relay_origin_signature_len(origin: &PeerId) -> Option<usize> {
+    Some(match origin.public_key().try_algorithm().ok()? {
+        Algorithm::Ed25519 | Algorithm::Secp256k1 => 64,
+        Algorithm::BlsNormal => 96,
+        Algorithm::BlsSmall => 48,
+        Algorithm::MlDsa => MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
+        Algorithm::Gost3410_2012_256ParamSetA
+        | Algorithm::Gost3410_2012_256ParamSetB
+        | Algorithm::Gost3410_2012_256ParamSetC => 64,
+        Algorithm::Gost3410_2012_512ParamSetA | Algorithm::Gost3410_2012_512ParamSetB => 128,
+        Algorithm::Sm2 => 64,
+    })
 }
 
 /// Return the plaintext wire length of a P2P data frame containing `payload`.
@@ -815,11 +928,8 @@ pub fn data_frame_wire_len<T: Encode + Clone>(
     priority: message::Priority,
     payload: &T,
 ) -> usize {
-    let target = target.map_or(RelayTarget::Broadcast, |peer_id| {
-        RelayTarget::Direct(peer_id.clone())
-    });
-    let frame = RelayMessage::new(origin.clone(), target, ttl, priority, payload.clone());
-    crate::peer::data_message_wire_len(&frame)
+    let _ = (ttl, priority);
+    data_frame_wire_len_from_payload_len::<T>(origin, target, payload.encoded_len())
 }
 
 fn checked_len_prefixed(payload_len: usize, flags: u8) -> Option<usize> {
@@ -856,6 +966,21 @@ fn peer_id_wire_len_from_raw_key_bytes(raw_key_bytes: usize, flags: u8) -> Optio
         .checked_add(public_key_len)
 }
 
+fn byte_sequence_wire_len(bytes: usize, flags: u8) -> Option<usize> {
+    if ncore::packed_seq_enabled_for_flags(flags) {
+        ncore::seq_len_prefix_len(bytes)
+            .checked_add(
+                bytes
+                    .checked_add(1)?
+                    .checked_mul(core::mem::size_of::<u64>())?,
+            )?
+            .checked_add(bytes)
+    } else {
+        let encoded_byte_len = checked_len_prefixed(core::mem::size_of::<u8>(), flags)?;
+        ncore::seq_len_prefix_len(bytes).checked_add(bytes.checked_mul(encoded_byte_len)?)
+    }
+}
+
 fn peer_id_raw_key_bytes(peer_id: &PeerId) -> Option<usize> {
     peer_id
         .public_key()
@@ -878,6 +1003,7 @@ fn relay_target_wire_len(target_raw_key_bytes: Option<usize>, flags: u8) -> Opti
 fn relay_message_wire_payload_len(
     origin_raw_key_bytes: usize,
     target_raw_key_bytes: Option<usize>,
+    origin_signature_bytes: usize,
     payload_len: usize,
     flags: u8,
 ) -> Option<usize> {
@@ -885,7 +1011,15 @@ fn relay_message_wire_payload_len(
     let target_len = relay_target_wire_len(target_raw_key_bytes, flags)?;
     let ttl_len = core::mem::size_of::<u8>();
     let priority_len = core::mem::size_of::<u32>();
-    let field_lens = [origin_len, target_len, ttl_len, priority_len, payload_len];
+    let origin_signature_len = byte_sequence_wire_len(origin_signature_bytes, flags)?;
+    let field_lens = [
+        origin_len,
+        target_len,
+        ttl_len,
+        priority_len,
+        origin_signature_len,
+        payload_len,
+    ];
 
     if flags & ncore::header_flags::PACKED_STRUCT == 0 {
         return field_lens.into_iter().try_fold(0usize, |total, field_len| {
@@ -903,11 +1037,17 @@ fn relay_message_wire_payload_len(
     }
 
     // The hybrid packed relay bitset marks every field except the fixed-width TTL.
-    let size_header_len = [origin_len, target_len, priority_len, payload_len]
-        .into_iter()
-        .try_fold(0usize, |total, field_len| {
-            total.checked_add(ncore::len_prefix_len_with_flags(field_len, flags))
-        })?;
+    let size_header_len = [
+        origin_len,
+        target_len,
+        priority_len,
+        origin_signature_len,
+        payload_len,
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, field_len| {
+        total.checked_add(ncore::len_prefix_len_with_flags(field_len, flags))
+    })?;
     field_lens
         .into_iter()
         .try_fold(1usize.checked_add(size_header_len)?, usize::checked_add)
@@ -920,19 +1060,23 @@ fn relay_message_wire_payload_len(
 /// `payload_len`; it is used only to preserve the outer Norito frame alignment.
 /// Each key length excludes the compact one-byte algorithm tag and counts only
 /// the algorithm-specific bytes returned by `PublicKey::try_to_bytes`. A
-/// `None` target represents broadcast. The result is exact for the current
-/// canonical layout; use [`iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES`] for a
-/// feature-independent protocol ceiling. Arithmetic overflow fails closed as
-/// `usize::MAX`.
+/// `None` target represents broadcast. `origin_signature_bytes` is the raw
+/// signature width selected by the origin key algorithm. The result is exact
+/// for the current canonical layout; use
+/// [`iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES`] and
+/// [`MAX_RELAY_ORIGIN_SIGNATURE_BYTES`] for feature-independent protocol
+/// ceilings. Arithmetic overflow fails closed as `usize::MAX`.
 pub fn data_frame_wire_len_from_payload_len_with_peer_key_bytes<T>(
     origin_raw_key_bytes: usize,
     target_raw_key_bytes: Option<usize>,
+    origin_signature_bytes: usize,
     payload_len: usize,
 ) -> usize {
     let flags = ncore::default_encode_flags();
     let Some(relay_len) = relay_message_wire_payload_len(
         origin_raw_key_bytes,
         target_raw_key_bytes,
+        origin_signature_bytes,
         payload_len,
         flags,
     ) else {
@@ -959,6 +1103,9 @@ pub fn data_frame_wire_len_from_payload_len<T>(
     let Some(origin_raw_key_bytes) = peer_id_raw_key_bytes(origin) else {
         return usize::MAX;
     };
+    let Some(origin_signature_bytes) = relay_origin_signature_len(origin) else {
+        return usize::MAX;
+    };
     let target_raw_key_bytes = match target {
         Some(target) => {
             let Some(raw_key_bytes) = peer_id_raw_key_bytes(target) else {
@@ -971,6 +1118,7 @@ pub fn data_frame_wire_len_from_payload_len<T>(
     data_frame_wire_len_from_payload_len_with_peer_key_bytes::<T>(
         origin_raw_key_bytes,
         target_raw_key_bytes,
+        origin_signature_bytes,
         payload_len,
     )
 }
@@ -978,11 +1126,12 @@ pub fn data_frame_wire_len_from_payload_len<T>(
 type WireMessage<T> = RelayMessage<T>;
 
 fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore::Error> {
-    const FIELD_COUNT: usize = 5;
+    const FIELD_COUNT: usize = 6;
     const PAYLOAD_FIELD_INDEX: usize = FIELD_COUNT - 1;
     // Hybrid packed RelayMessage fields needing explicit sizes are origin,
-    // target, priority, and payload. TTL is the sole one-byte fixed field.
-    const EXPECTED_FIELD_BITSET: u8 = 0b0001_1011;
+    // target, priority, origin signature, and payload. TTL is the sole
+    // one-byte fixed field.
+    const EXPECTED_FIELD_BITSET: u8 = 0b0011_1011;
 
     if flags & ncore::header_flags::PACKED_STRUCT == 0 {
         let mut remaining = payload;
@@ -1053,7 +1202,7 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
     if bitset != EXPECTED_FIELD_BITSET {
         return Err(ncore::Error::LengthMismatch);
     }
-    let mut field_sizes = [0_usize; 4];
+    let mut field_sizes = [0_usize; 5];
     for field_size in &mut field_sizes {
         let (size, used) = ncore::read_len_from_slice_with_flags(size_headers, flags)?;
         *field_size = size;
@@ -1065,9 +1214,10 @@ fn relay_message_payload_field(payload: &[u8], flags: u8) -> Result<&[u8], ncore
         .checked_add(field_sizes[1])
         .and_then(|offset| offset.checked_add(core::mem::size_of::<u8>()))
         .and_then(|offset| offset.checked_add(field_sizes[2]))
+        .and_then(|offset| offset.checked_add(field_sizes[3]))
         .ok_or(ncore::Error::LengthMismatch)?;
     let payload_end = payload_start
-        .checked_add(field_sizes[3])
+        .checked_add(field_sizes[4])
         .ok_or(ncore::Error::LengthMismatch)?;
     if payload_end != size_headers.len() {
         return Err(ncore::Error::LengthMismatch);
@@ -1951,6 +2101,7 @@ mod data_frame_wire_len_tests {
                 data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                     raw_key_bytes,
                     Some(raw_key_bytes),
+                    MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                     payload_len,
                 ),
                 direct,
@@ -1965,6 +2116,7 @@ mod data_frame_wire_len_tests {
                 data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                     raw_key_bytes,
                     None,
+                    MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                     payload_len,
                 ),
                 broadcast,
@@ -1986,6 +2138,7 @@ mod data_frame_wire_len_tests {
             data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                 usize::MAX,
                 None,
+                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 0,
             ),
             usize::MAX,
@@ -1995,6 +2148,7 @@ mod data_frame_wire_len_tests {
             data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                 raw_key_bytes,
                 None,
+                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 usize::MAX,
             ),
             usize::MAX,
@@ -2004,6 +2158,7 @@ mod data_frame_wire_len_tests {
             data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                 raw_key_bytes,
                 Some(usize::MAX),
+                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 0,
             ),
             usize::MAX,
@@ -2013,6 +2168,7 @@ mod data_frame_wire_len_tests {
             data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 0,
             ),
             usize::MAX,
@@ -2080,6 +2236,7 @@ mod data_frame_wire_len_tests {
             data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                64,
                 payload_len,
             ),
             direct_materialized
@@ -2107,6 +2264,7 @@ mod data_frame_wire_len_tests {
             data_frame_wire_len_from_payload_len_with_peer_key_bytes::<DynamicDummy>(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 None,
+                64,
                 payload_len,
             ),
             broadcast_materialized
@@ -16457,8 +16615,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                             .relay_route_for_unconnected_post_target(&post.peer_id)
                             .unwrap_or_else(|| post.peer_id.clone()),
                     };
-                    let frame = RelayMessage::new(
-                        self.self_id.clone(),
+                    let frame = RelayMessage::new_signed(
+                        &self.key_pair,
                         RelayTarget::Direct(post.peer_id.clone()),
                         self.relay_ttl,
                         post.priority,
@@ -16505,8 +16663,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
                         if pending_flush_acks.contains_key(&target) {
                             continue;
                         }
-                        let frame = RelayMessage::new(
-                            self.self_id.clone(),
+                        let frame = RelayMessage::new_signed(
+                            &self.key_pair,
                             RelayTarget::Broadcast,
                             self.relay_ttl,
                             broadcast.priority,
@@ -19118,10 +19276,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             inc_trust_gossip_skipped("send", "local_capability_off");
             return false;
         }
-        let origin = self.self_id.clone();
         let relay_ttl = self.relay_ttl;
+        let key_pair = self.key_pair.clone();
         let frame_for = |target: RelayTarget| {
-            RelayMessage::new(origin.clone(), target, relay_ttl, *priority, data.clone())
+            RelayMessage::new_signed(&key_pair, target, relay_ttl, *priority, data.clone())
         };
         if let Some(hub_id) = self.relay_route_for_unconnected_post_target(&peer_id) {
             let frame = frame_for(RelayTarget::Direct(peer_id.clone()));
@@ -19298,8 +19456,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             let pid = remaining
                 .pop_front()
                 .expect("broadcast retry attempts are bounded by the target queue");
-            let frame = RelayMessage::new(
-                self.self_id.clone(),
+            let frame = RelayMessage::new_signed(
+                &self.key_pair,
                 RelayTarget::Broadcast,
                 self.relay_ttl,
                 *priority,
@@ -19499,6 +19657,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             );
             return;
         }
+        if let Err(error) = msg.payload.verify_origin_signature() {
+            iroha_logger::warn!(
+                peer = %incoming_peer,
+                origin = %origin,
+                %error,
+                "dropping relay frame with invalid end-to-end origin signature"
+            );
+            return;
+        }
         if matches!(
             topic,
             message::Topic::ConsensusSafety
@@ -19544,24 +19711,15 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             if let Some(next_ttl) = ttl.checked_sub(1) {
                 match &target {
                     RelayTarget::Broadcast => {
-                        self.forward_broadcast(
-                            &incoming_peer,
-                            &origin,
-                            &msg.payload.payload,
-                            next_ttl,
-                            priority,
-                            topic,
-                        );
+                        self.forward_broadcast(&incoming_peer, &msg.payload, next_ttl, topic);
                     }
                     RelayTarget::Direct(target_id) => {
                         if target_id != &self.self_id {
                             self.forward_direct(
                                 &incoming_peer,
-                                &origin,
+                                &msg.payload,
                                 target_id,
-                                &msg.payload.payload,
                                 next_ttl,
-                                priority,
                                 topic,
                             );
                         }
@@ -19882,10 +20040,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn forward_broadcast(
         &mut self,
         incoming_peer: &Peer,
-        origin: &PeerId,
-        payload: &T,
+        relay: &RelayMessage<T>,
         ttl: u8,
-        priority: Priority,
         topic: message::Topic,
     ) {
         let targets: Vec<PeerId> = self.peers.keys().cloned().collect();
@@ -19893,13 +20049,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             if pid == *incoming_peer.id() {
                 continue;
             }
-            let frame = RelayMessage::new(
-                origin.clone(),
-                RelayTarget::Broadcast,
-                ttl,
-                priority,
-                payload.clone(),
-            );
+            let frame = relay.forwarded_with_ttl(ttl);
             self.send_frame_to_peer(&pid, frame, topic);
         }
     }
@@ -19907,24 +20057,16 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     fn forward_direct(
         &mut self,
         incoming_peer: &Peer,
-        origin: &PeerId,
+        relay: &RelayMessage<T>,
         target: &PeerId,
-        payload: &T,
         ttl: u8,
-        priority: Priority,
         topic: message::Topic,
     ) {
         if target == incoming_peer.id() {
             iroha_logger::debug!(%target, "Dropping relay frame targeted at sender");
             return;
         }
-        let frame = RelayMessage::new(
-            origin.clone(),
-            RelayTarget::Direct(target.clone()),
-            ttl,
-            priority,
-            payload.clone(),
-        );
+        let frame = relay.forwarded_with_ttl(ttl);
         let _ = self.send_frame_to_peer(target, frame, topic);
     }
 
@@ -20600,9 +20742,10 @@ mod tests {
             2,
         ));
 
+        let source_key_pair = KeyPair::random();
         let source = Peer::new(
             socket_addr!(127.0.0.1:12003),
-            KeyPair::random().public_key().clone(),
+            source_key_pair.public_key().clone(),
         );
         let retired_connection = 501;
         let current_connection = 502;
@@ -20646,9 +20789,10 @@ mod tests {
         network
             .peer_message(PeerMessage::new_for_connection(
                 source.clone(),
-                relay_frame(
-                    source.id().clone(),
-                    &local_target,
+                RelayMessage::new_signed(
+                    &source_key_pair,
+                    RelayTarget::Direct(local_target.clone()),
+                    DEFAULT_RELAY_TTL,
                     Priority::High,
                     SafetyMsg(1),
                 ),
@@ -20667,9 +20811,10 @@ mod tests {
         network
             .peer_message(PeerMessage::new_for_connection(
                 source.clone(),
-                relay_frame(
-                    source.id().clone(),
-                    &local_target,
+                RelayMessage::new_signed(
+                    &source_key_pair,
+                    RelayTarget::Direct(local_target),
+                    DEFAULT_RELAY_TTL,
                     Priority::High,
                     SafetyMsg(2),
                 ),
@@ -23674,9 +23819,10 @@ mod tests {
             return;
         };
         let conn_id = 78;
+        let peer_key_pair = KeyPair::random();
         let peer = Peer::new(
             socket_addr!(127.0.0.1:12078),
-            KeyPair::random().public_key().clone(),
+            peer_key_pair.public_key().clone(),
         );
         network.max_total_connections = Some(1);
         network.incoming_pending.insert(conn_id);
@@ -24034,8 +24180,8 @@ mod tests {
         );
 
         let relay = || {
-            RelayMessage::new(
-                peer.id().clone(),
+            RelayMessage::new_signed(
+                &peer_key_pair,
                 RelayTarget::Broadcast,
                 DEFAULT_RELAY_TTL,
                 Priority::Low,
@@ -24074,9 +24220,10 @@ mod tests {
         let Some(mut network) = bare_network_with::<DeferredProgressMsg>() else {
             return;
         };
+        let peer_key_pair = KeyPair::random();
         let peer = Peer::new(
             socket_addr!(127.0.0.1:12079),
-            KeyPair::random().public_key().clone(),
+            peer_key_pair.public_key().clone(),
         );
         let current_conn_id = 80;
         let draining_conn_id = 79;
@@ -24090,8 +24237,8 @@ mod tests {
             handle,
             true,
         );
-        let relay = RelayMessage::new(
-            peer.id().clone(),
+        let relay = RelayMessage::new_signed(
+            &peer_key_pair,
             RelayTarget::Broadcast,
             DEFAULT_RELAY_TTL,
             Priority::High,
@@ -29665,14 +29812,20 @@ mod tests {
             104,
             other_handle,
         );
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_key_pair = KeyPair::random();
+        let origin = PeerId::from(origin_key_pair.public_key().clone());
+        let relay = RelayMessage::new_signed(
+            &origin_key_pair,
+            RelayTarget::Broadcast,
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
 
         network.forward_broadcast(
             &incoming_peer,
-            &origin,
-            &DummyMsg,
+            &relay,
             DEFAULT_RELAY_TTL - 1,
-            Priority::Low,
             message::Topic::Other,
         );
 
@@ -29685,6 +29838,10 @@ mod tests {
             .expect("broadcast should be forwarded to peers other than the sender");
         assert_eq!(received.origin, origin);
         assert!(matches!(received.target, RelayTarget::Broadcast));
+        assert_eq!(received.ttl, DEFAULT_RELAY_TTL - 1);
+        received
+            .verify_origin_signature()
+            .expect("TTL-only forwarding must preserve the origin signature");
     }
 
     #[test]
@@ -29707,15 +29864,20 @@ mod tests {
             105,
             handle,
         );
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
+        let origin_key_pair = KeyPair::random();
+        let relay = RelayMessage::new_signed(
+            &origin_key_pair,
+            RelayTarget::Direct(incoming_peer.id().clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            DummyMsg,
+        );
 
         network.forward_direct(
             &incoming_peer,
-            &origin,
+            &relay,
             incoming_peer.id(),
-            &DummyMsg,
             DEFAULT_RELAY_TTL - 1,
-            Priority::High,
             message::Topic::Other,
         );
 
@@ -29939,9 +30101,10 @@ mod tests {
         };
         network.relay_role = RelayRole::Hub;
 
+        let incoming_key_pair = KeyPair::random();
         let incoming_peer = Peer::new(
             socket_addr!(127.0.0.1:45707),
-            KeyPair::random().public_key().clone(),
+            incoming_key_pair.public_key().clone(),
         );
         let target_id = PeerId::from(KeyPair::random().public_key().clone());
         let (target_handle, mut target_receivers) =
@@ -29957,8 +30120,8 @@ mod tests {
         network
             .peer_message(PeerMessage::new(
                 incoming_peer.clone(),
-                RelayMessage::new(
-                    incoming_peer.id().clone(),
+                RelayMessage::new_signed(
+                    &incoming_key_pair,
                     RelayTarget::Direct(target_id.clone()),
                     3,
                     Priority::High,
@@ -29987,9 +30150,10 @@ mod tests {
         };
         network.relay_role = RelayRole::Hub;
 
+        let incoming_key_pair = KeyPair::random();
         let incoming_peer = Peer::new(
             socket_addr!(127.0.0.1:45709),
-            KeyPair::random().public_key().clone(),
+            incoming_key_pair.public_key().clone(),
         );
         let target_id = PeerId::from(KeyPair::random().public_key().clone());
         let (target_handle, mut target_receivers) =
@@ -30005,8 +30169,8 @@ mod tests {
         network
             .peer_message(PeerMessage::new(
                 incoming_peer.clone(),
-                RelayMessage::new(
-                    incoming_peer.id().clone(),
+                RelayMessage::new_signed(
+                    &incoming_key_pair,
                     RelayTarget::Direct(target_id),
                     0,
                     Priority::Low,
@@ -30029,9 +30193,10 @@ mod tests {
         };
         network.relay_role = RelayRole::Hub;
 
+        let incoming_key_pair = KeyPair::random();
         let incoming_peer = Peer::new(
             socket_addr!(127.0.0.1:45711),
-            KeyPair::random().public_key().clone(),
+            incoming_key_pair.public_key().clone(),
         );
         let other_id = PeerId::from(KeyPair::random().public_key().clone());
         let (other_handle, mut other_receivers) =
@@ -30053,8 +30218,8 @@ mod tests {
         network
             .peer_message(PeerMessage::new(
                 incoming_peer.clone(),
-                RelayMessage::new(
-                    incoming_peer.id().clone(),
+                RelayMessage::new_signed(
+                    &incoming_key_pair,
                     RelayTarget::Broadcast,
                     2,
                     Priority::Low,
@@ -30563,26 +30728,29 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn peer_message_allows_mismatched_origin_from_hub_in_spoke_mode() {
+    async fn peer_message_accepts_origin_signed_multi_hop_frame_from_selected_hub() {
         let Some(mut network) = bare_network_with::<DummyMsg>() else {
             return;
         };
         network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        let hub_key_pair = KeyPair::random();
         let hub_peer = Peer::new(
             socket_addr!(127.0.0.1:203),
-            KeyPair::random().public_key().clone(),
+            hub_key_pair.public_key().clone(),
         );
         network.relay_hub_peer = Some(hub_peer.id().clone());
         let (tx, mut rx) = mpsc::channel(1);
         network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 1));
-        let origin = PeerId::from(KeyPair::random().public_key().clone());
-        let payload = RelayMessage::new(
-            origin.clone(),
+        let origin_key_pair = KeyPair::random();
+        let origin = PeerId::from(origin_key_pair.public_key().clone());
+        let payload = RelayMessage::new_signed(
+            &origin_key_pair,
             RelayTarget::Direct(network.self_id.clone()),
             DEFAULT_RELAY_TTL,
             Priority::Low,
             DummyMsg,
-        );
+        )
+        .forwarded_with_ttl(DEFAULT_RELAY_TTL - 1);
         let msg = PeerMessage::new(hub_peer, payload, 1);
 
         network.peer_message(msg).await;
@@ -30593,6 +30761,72 @@ mod tests {
             &origin,
             "origin should be preserved when relaying through the hub"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_message_rejects_hub_rewritten_semantic_origin() {
+        let Some(mut network) = bare_network_with::<DummyMsg>() else {
+            return;
+        };
+        network.relay_mode = iroha_config::parameters::actual::RelayMode::Spoke;
+        let hub_key_pair = KeyPair::random();
+        let hub_peer = Peer::new(
+            socket_addr!(127.0.0.1:203),
+            hub_key_pair.public_key().clone(),
+        );
+        network.relay_hub_peer = Some(hub_peer.id().clone());
+        let (tx, mut rx) = mpsc::channel(1);
+        network.subscribe_to_peers_messages(Subscriber::new(tx, SubscriberFilter::All, 1));
+        let mut forged = RelayMessage::new_signed(
+            &hub_key_pair,
+            RelayTarget::Direct(network.self_id.clone()),
+            DEFAULT_RELAY_TTL,
+            Priority::Low,
+            DummyMsg,
+        );
+        forged.origin = PeerId::from(KeyPair::random().public_key().clone());
+
+        network
+            .peer_message(PeerMessage::new(hub_peer, forged, 1))
+            .await;
+
+        assert!(
+            matches!(rx.try_recv(), Err(TryRecvError::Empty)),
+            "a selected hub must not acquire semantic-origin signing authority"
+        );
+    }
+
+    #[test]
+    fn relay_origin_signature_binds_payload_target_and_priority_but_not_ttl() {
+        let origin_key_pair = KeyPair::random();
+        let target = PeerId::from(KeyPair::random().public_key().clone());
+        let frame = RelayMessage::new_signed(
+            &origin_key_pair,
+            RelayTarget::Direct(target),
+            DEFAULT_RELAY_TTL,
+            Priority::High,
+            Dummy { tag: 7 },
+        );
+        frame
+            .verify_origin_signature()
+            .expect("fresh origin signature must verify");
+
+        let forwarded = frame.forwarded_with_ttl(DEFAULT_RELAY_TTL - 1);
+        forwarded
+            .verify_origin_signature()
+            .expect("TTL is mutable hop metadata outside the origin signature");
+
+        let mut payload_tampered = frame.clone();
+        payload_tampered.payload.tag = 8;
+        assert!(payload_tampered.verify_origin_signature().is_err());
+
+        let mut target_tampered = frame.clone();
+        target_tampered.target = RelayTarget::Broadcast;
+        assert!(target_tampered.verify_origin_signature().is_err());
+
+        let mut priority_tampered = frame;
+        priority_tampered.priority = Priority::Low;
+        assert!(priority_tampered.verify_origin_signature().is_err());
     }
 
     #[test]
@@ -31676,10 +31910,10 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     ) {
         iroha_logger::trace!(peer=%peer_id, "Post message (low)");
         let topic = data.topic();
-        let origin = self.self_id.clone();
         let relay_ttl = self.relay_ttl;
+        let key_pair = self.key_pair.clone();
         let frame_for = |target: RelayTarget| {
-            RelayMessage::new(origin.clone(), target, relay_ttl, priority, data.clone())
+            RelayMessage::new_signed(&key_pair, target, relay_ttl, priority, data.clone())
         };
         let send_with_throttle = |this: &mut Self, target_id: &PeerId, frame: RelayMessage<T>| {
             if !this.low_allow(target_id) {
@@ -31728,8 +31962,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
         let topic = data.topic();
         let peers: Vec<PeerId> = self.peers.keys().cloned().collect();
         for pid in peers {
-            let frame = RelayMessage::new(
-                self.self_id.clone(),
+            let frame = RelayMessage::new_signed(
+                &self.key_pair,
                 RelayTarget::Broadcast,
                 self.relay_ttl,
                 priority,

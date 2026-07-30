@@ -1589,8 +1589,6 @@ struct SwiftTransactionEncoder {
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
                 epoch: request.epoch,
-                candidatesCount: request.candidatesCount,
-                derivedBy: request.derivedBy.rawValue,
                 membersJson: membersJson,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,

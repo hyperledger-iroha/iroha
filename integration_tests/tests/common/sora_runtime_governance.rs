@@ -15,8 +15,8 @@ use iroha::data_model::{
     governance::types::ParliamentBody,
     isi::governance::{
         AtWindow, CastParliamentBallot, CastPlainBallot, EnactReferendum, FinalizeReferendum,
-        ParliamentDecision, PersistCouncilForEpoch,
-        ProposeRuntimeUpgradeProposal, RegisterCitizen, VotingMode,
+        ParliamentDecision, PersistCouncilForEpoch, ProposeRuntimeUpgradeProposal, RegisterCitizen,
+        VotingMode,
     },
     permission::Permission,
     prelude::{

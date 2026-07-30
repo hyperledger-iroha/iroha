@@ -112,9 +112,9 @@ use iroha_data_model::{
         asset_transfer_control::SetAssetTransferAvailability,
         escrow::CancelAssetLock,
         governance::{
-            CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-            ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
+            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+            PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
+            RegisterCitizen, VotingMode,
         },
         ministry::SubmitAgendaProposal,
         rwa::{
@@ -7863,29 +7863,6 @@ fn parse_optional_voting_mode(
     }
 }
 
-fn parse_council_derivation_kind(
-    value: json::Value,
-    context: &str,
-) -> napi::Result<CouncilDerivationKind> {
-    let label = parse_string_value(value, context)?;
-    match label.as_str() {
-        "Vrf" | "vrf" | "VRF" => Ok(CouncilDerivationKind::Sortition),
-        "Fallback" | "fallback" | "FALLBACK" => Ok(CouncilDerivationKind::Manual),
-        other => Err(napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("{context} must be either \"Vrf\" or \"Fallback\" (found {other})"),
-        )),
-    }
-}
-
-fn council_derivation_to_json(kind: CouncilDerivationKind) -> json::Value {
-    let label = match kind {
-        CouncilDerivationKind::Sortition => "Vrf",
-        CouncilDerivationKind::Manual => "Fallback",
-    };
-    json::Value::String(label.to_owned())
-}
-
 fn voting_mode_to_json(mode: VotingMode) -> &'static str {
     match mode {
         VotingMode::Zk => "Zk",
@@ -9977,29 +9954,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .unwrap_or_else(|| json::Value::Array(Vec::new()));
                 let alternates: Vec<AccountId> =
                     json::from_value(alternates_value).map_err(norito_to_napi)?;
-                let verified = parse_u32_value(
-                    fields
-                        .remove("verified")
-                        .unwrap_or_else(|| json::Value::Number(json::Number::from(0u64))),
-                    "PersistCouncilForEpoch.verified",
-                )?;
-                let candidates_count = parse_u32_value(
-                    required_value(&mut fields, "candidates_count", "PersistCouncilForEpoch")?,
-                    "PersistCouncilForEpoch.candidates_count",
-                )?;
-                let derived_by_value =
-                    required_value(&mut fields, "derived_by", "PersistCouncilForEpoch")?;
-                let derived_by = parse_council_derivation_kind(
-                    derived_by_value,
-                    "PersistCouncilForEpoch.derived_by",
-                )?;
                 let persist = PersistCouncilForEpoch {
                     epoch,
                     members,
                     alternates,
-                    verified,
-                    candidates_count,
-                    derived_by,
                 };
                 return Ok(Box::new(persist).into_instruction_box());
             }
@@ -11400,18 +11358,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         inner.insert(
             "alternates".to_owned(),
             json::to_value(&persist.alternates).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "verified".to_owned(),
-            json::to_value(&persist.verified).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "candidates_count".to_owned(),
-            json::to_value(&persist.candidates_count).map_err(norito_to_napi)?,
-        );
-        inner.insert(
-            "derived_by".to_owned(),
-            council_derivation_to_json(persist.derived_by),
         );
         let mut outer = json::Map::new();
         outer.insert(
@@ -14474,9 +14420,9 @@ mod tests {
             Mint, MintBox, RecordKaigiUsage, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
             SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
             governance::{
-                AtWindow, CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-                FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract,
-                ProposeValidationFeePolicy, RegisterCitizen, VotingMode,
+                AtWindow, CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+                PersistCouncilForEpoch, ProposeDeployContract, ProposeValidationFeePolicy,
+                RegisterCitizen, VotingMode,
             },
             smart_contract_code::{
                 ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -18636,9 +18582,6 @@ seiyaku Privacy {
             epoch: 10,
             members: vec![member.clone()],
             alternates: vec![member.clone()],
-            verified: 2,
-            candidates_count: 5,
-            derived_by: CouncilDerivationKind::Manual,
         })
         .into_instruction_box();
 
@@ -18654,15 +18597,6 @@ seiyaku Privacy {
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize PersistCouncilForEpoch");
         assert_eq!(reconstructed, instruction);
-
-        let derived = json_value
-            .as_object()
-            .unwrap()
-            .get("PersistCouncilForEpoch")
-            .and_then(|value| value.get("derived_by"))
-            .and_then(|value| value.as_str())
-            .expect("derived_by string present");
-        assert_eq!(derived, "Fallback");
 
         let member_json = json_value
             .as_object()

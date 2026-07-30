@@ -241,6 +241,14 @@ p2p_scion_outbound_total 0
 
 Iroha can optionally use a relay hub to improve reachability when some peers are behind NAT/firewalls or in censored networks. This is an application-level relay (forwarding encrypted frames), not a special Internet routing mechanism.
 
+Every relay envelope carries an end-to-end origin signature over a
+domain-separated commitment to the origin, final target, priority, and
+canonical application payload. Hubs preserve that signature and may only
+decrement the unsigned hop-limit (`relay_ttl`). Receivers verify the signature
+against the origin peer key before forwarding or local delivery, so selecting a
+hub grants routing authority but never grants authority to impersonate another
+peer's semantic origin. Unsigned relay envelopes are not accepted.
+
 - Knobs (`[network]`):
   - `relay_mode` (string; `disabled` | `hub` | `spoke` | `assist`)
     - `disabled`: default; direct peer-to-peer mesh.

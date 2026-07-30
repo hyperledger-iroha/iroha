@@ -707,11 +707,6 @@ public enum BallotDirection: UInt8, Sendable {
     case abstain = 2
 }
 
-public enum CouncilDerivation: UInt8, Sendable {
-    case vrf = 0
-    case backup = 1
-}
-
 public struct ProposeDeployContractRequest {
     public let chainId: String
     public let authority: String
@@ -876,8 +871,6 @@ public struct PersistCouncilRequest {
     public let authority: String
     public let epoch: UInt64
     public let members: [String]
-    public let candidatesCount: UInt32
-    public let derivedBy: CouncilDerivation
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
@@ -885,16 +878,12 @@ public struct PersistCouncilRequest {
                 authority: String,
                 epoch: UInt64,
                 members: [String],
-                candidatesCount: UInt32,
-                derivedBy: CouncilDerivation,
                 feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = 100_000) {
         self.chainId = chainId
         self.authority = authority
         self.epoch = epoch
         self.members = members
-        self.candidatesCount = candidatesCount
-        self.derivedBy = derivedBy
         self.feePayment = feePayment
         self.ttlMs = ttlMs
     }

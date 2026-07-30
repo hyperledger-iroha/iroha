@@ -21,8 +21,7 @@ use iroha::data_model::{
     isi::governance::{
         ApproveGovernanceProposal, AtWindow, CastParliamentBallot, CastPlainBallot,
         EnactReferendum, FinalizeReferendum, ParliamentDecision, PersistCouncilForEpoch,
-        ProposeDeployContract, ProposeRuntimeUpgradeProposal,
-        RegisterCitizen, VotingMode,
+        ProposeDeployContract, ProposeRuntimeUpgradeProposal, RegisterCitizen, VotingMode,
     },
     permission::Permission,
     prelude::{

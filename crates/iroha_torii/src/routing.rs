@@ -5177,9 +5177,11 @@ mod signed_query_verification_tests {
         let mut malformed = signed_find_abi_version(&signer);
         malformed.payload.authority = AccountId::new_multisig(policy);
 
-        let response = verify_signed_query_request(malformed)
-            .expect_err("directly signed multisig query authority must be rejected")
-            .into_response();
+        let error = match verify_signed_query_request(malformed) {
+            Ok(_) => panic!("directly signed multisig query authority must be rejected"),
+            Err(error) => error,
+        };
+        let response = error.into_response();
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
         verify_signed_query_request(signed_find_abi_version(&signer))

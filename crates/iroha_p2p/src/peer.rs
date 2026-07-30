@@ -17256,11 +17256,9 @@ mod handshake_flow {
     impl_handshake!(Connecting);
 }
 
+pub(crate) use run::{checked_data_message_wire_len, data_message_wire_len_from_payload_len};
 #[cfg(test)]
-pub(crate) use run::materialized_data_message_wire_len;
-pub(crate) use run::{
-    checked_data_message_wire_len, data_message_wire_len, data_message_wire_len_from_payload_len,
-};
+pub(crate) use run::{data_message_wire_len, materialized_data_message_wire_len};
 
 pub mod message {
     //! Module for peer messages

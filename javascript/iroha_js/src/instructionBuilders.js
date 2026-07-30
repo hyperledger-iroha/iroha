@@ -5193,11 +5193,6 @@ export function buildCancelTwitterEscrowInstruction(options) {
  */
 export function buildPersistCouncilForEpochInstruction(options) {
   const source = assertPlainObject(options, "persistCouncilForEpoch");
-  const derivedBy = source.derivedBy ?? source.derived_by ?? "Vrf";
-  const normalizedDerived = String(derivedBy).trim();
-  if (normalizedDerived.toLowerCase() !== "vrf") {
-    throw new TypeError("persistCouncilForEpoch.derivedBy must be Vrf");
-  }
   return {
     PersistCouncilForEpoch: {
       epoch: asNonNegativeInteger(source.epoch, "epoch"),
@@ -5210,15 +5205,6 @@ export function buildPersistCouncilForEpochInstruction(options) {
         "alternates",
         { allowEmpty: true },
       ),
-      verified: asNonNegativeInteger(
-        source.verified ?? 0,
-        "verified",
-      ),
-      candidates_count: asNonNegativeInteger(
-        source.candidatesCount ?? source.candidates_count,
-        "candidatesCount",
-      ),
-      derived_by: "Vrf",
     },
   };
 }

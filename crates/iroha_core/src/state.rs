@@ -172,9 +172,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::{
-    nft::{CanModifyNftMetadata, CanTransferNft},
-    sorafs::CanOperateSorafsRepair,
-    trigger::CanExecuteTrigger,
+    nft::CanModifyNftMetadata, sorafs::CanOperateSorafsRepair, trigger::CanExecuteTrigger,
 };
 use iroha_logger::prelude::*;
 use iroha_primitives::{
@@ -16227,28 +16225,6 @@ pub(crate) struct DetachedStateTransactionDelta {
     nft_kv_set_vals: Vec<iroha_primitives::json::Json>,
     nft_kv_del_ids: Vec<iroha_data_model::nft::NftId>,
     nft_kv_del_key_ids: Vec<NameId>,
-    nft_transfer: std::collections::BTreeMap<
-        iroha_data_model::nft::NftId,
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::account::AccountId,
-        ),
-    >,
-    // Owner transfers (domain, asset definition)
-    domain_owner_transfer: std::collections::BTreeMap<
-        iroha_data_model::domain::DomainId,
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::account::AccountId,
-        ),
-    >,
-    asset_def_owner_transfer: std::collections::BTreeMap<
-        iroha_data_model::asset::AssetDefinitionId,
-        (
-            iroha_data_model::account::AccountId,
-            iroha_data_model::account::AccountId,
-        ),
-    >,
     // AssetDefinition metadata
     asset_def_kv_set_ids: Vec<iroha_data_model::asset::AssetDefinitionId>,
     asset_def_kv_set_key_ids: Vec<NameId>,
@@ -16376,9 +16352,6 @@ impl DetachedStateTransactionDelta {
             && self.nft_kv_set_vals.is_empty()
             && self.nft_kv_del_ids.is_empty()
             && self.nft_kv_del_key_ids.is_empty()
-            && self.nft_transfer.is_empty()
-            && self.domain_owner_transfer.is_empty()
-            && self.asset_def_owner_transfer.is_empty()
             && self.asset_def_kv_set_ids.is_empty()
             && self.asset_def_kv_set_key_ids.is_empty()
             && self.asset_def_kv_set_vals.is_empty()
@@ -16537,33 +16510,6 @@ impl DetachedStateTransactionDelta {
         self.nft_kv_del_ids.push(id);
         self.nft_kv_del_key_ids.push(key_id);
     }
-    /// Record an NFT ownership transfer.
-    pub(crate) fn transfer_nft(
-        &mut self,
-        id: iroha_data_model::nft::NftId,
-        from: iroha_data_model::account::AccountId,
-        to: iroha_data_model::account::AccountId,
-    ) {
-        self.nft_transfer.insert(id, (from, to));
-    }
-    /// Record a domain ownership transfer.
-    pub(crate) fn transfer_domain(
-        &mut self,
-        id: iroha_data_model::domain::DomainId,
-        from: iroha_data_model::account::AccountId,
-        to: iroha_data_model::account::AccountId,
-    ) {
-        self.domain_owner_transfer.insert(id, (from, to));
-    }
-    /// Record an asset definition ownership transfer.
-    pub(crate) fn transfer_asset_def(
-        &mut self,
-        id: iroha_data_model::asset::AssetDefinitionId,
-        from: iroha_data_model::account::AccountId,
-        to: iroha_data_model::account::AccountId,
-    ) {
-        self.asset_def_owner_transfer.insert(id, (from, to));
-    }
     /// Record a key-value insertion/update on an asset definition.
     pub(crate) fn set_asset_def_kv(
         &mut self,
@@ -16687,13 +16633,10 @@ impl DetachedStateTransactionDelta {
         authority: &AccountId,
         nft_id: &NftId,
     ) -> Result<bool, ValidationFail> {
-        let domain_owner = match self.domain_owner_transfer.get(nft_id.domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(nft_id.domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
+        let domain_owner = world
+            .domain(nft_id.domain())
+            .map(|domain| domain.owned_by().clone())
+            .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
 
         if &domain_owner == authority {
             return Ok(true);
@@ -16786,13 +16729,10 @@ impl DetachedStateTransactionDelta {
             else {
                 continue;
             };
-            let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
-                Some((_, to)) => to.clone(),
-                None => world
-                    .domain(&domain_id)
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-            };
+            let domain_owner = world
+                .domain(&domain_id)
+                .map(|domain| domain.owned_by().clone())
+                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
 
             if &domain_owner == authority {
                 return Ok(true);
@@ -16851,171 +16791,6 @@ impl DetachedStateTransactionDelta {
                 if role_def.permissions.iter().any(|perm| perm == &target_perm) {
                     return Ok(true);
                 }
-            }
-        }
-
-        Ok(false)
-    }
-
-    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
-    pub(crate) fn can_transfer_domain(
-        &self,
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transfer: &iroha_data_model::isi::Transfer<
-            iroha_data_model::account::Account,
-            iroha_data_model::domain::DomainId,
-            iroha_data_model::account::Account,
-        >,
-        now_ms: u64,
-    ) -> Result<bool, ValidationFail> {
-        if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        for alias in world.bound_account_aliases(transfer.source()) {
-            if crate::sns::resolve_active_account_alias(
-                world,
-                world.dataspace_catalog(),
-                &alias,
-                now_ms,
-            )
-            .as_ref()
-                != Some(transfer.source())
-            {
-                continue;
-            }
-            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
-                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
-            })?
-            else {
-                continue;
-            };
-            let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
-                Some((_, to)) => to.clone(),
-                None => world
-                    .domain(&domain_id)
-                    .map(|domain| domain.owned_by().clone())
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-            };
-
-            if &source_domain_owner == authority {
-                return Ok(true);
-            }
-        }
-
-        let transferred_domain_owner = match self.domain_owner_transfer.get(transfer.object()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(transfer.object())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-
-        Ok(&transferred_domain_owner == authority)
-    }
-
-    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
-    pub(crate) fn can_transfer_asset_definition(
-        &self,
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transfer: &iroha_data_model::isi::Transfer<
-            iroha_data_model::account::Account,
-            iroha_data_model::asset::AssetDefinitionId,
-            iroha_data_model::account::Account,
-        >,
-    ) -> Result<bool, ValidationFail> {
-        if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        let transferred_owner = match self.asset_def_owner_transfer.get(transfer.object()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .asset_definition(transfer.object())
-                .map(|definition| definition.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-        Ok(&transferred_owner == authority)
-    }
-
-    /// Check whether `authority` may transfer `transfer.object()` under the current delta.
-    pub(crate) fn can_transfer_nft(
-        &self,
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        transfer: &iroha_data_model::isi::Transfer<
-            iroha_data_model::account::Account,
-            iroha_data_model::nft::NftId,
-            iroha_data_model::account::Account,
-        >,
-    ) -> Result<bool, ValidationFail> {
-        if transfer.source() == authority {
-            return Ok(true);
-        }
-
-        let nft_domain_owner = match self.domain_owner_transfer.get(transfer.object().domain()) {
-            Some((_, to)) => to.clone(),
-            None => world
-                .domain(transfer.object().domain())
-                .map(|domain| domain.owned_by().clone())
-                .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?,
-        };
-        if &nft_domain_owner == authority {
-            return Ok(true);
-        }
-
-        let target_perm: Permission = CanTransferNft {
-            nft: transfer.object().clone(),
-        }
-        .into();
-        let direct_op = self
-            .perm_ops
-            .get(&(authority.clone(), target_perm.clone()))
-            .copied();
-        match direct_op {
-            Some(PermissionDeltaOp::Grant) => return Ok(true),
-            Some(PermissionDeltaOp::Revoke) => {}
-            None => {
-                let permissions = world
-                    .account_permissions_iter(authority)
-                    .map_err(|err| ValidationFail::InstructionFailed(Error::Find(err)))?;
-                if permissions.into_iter().any(|perm| perm == &target_perm) {
-                    return Ok(true);
-                }
-            }
-        }
-
-        let mut roles: BTreeSet<RoleId> = world.account_roles_iter(authority).cloned().collect();
-        for ((acc, role), op) in &self.role_ops {
-            if acc != authority {
-                continue;
-            }
-            match op {
-                RoleDeltaOp::Grant => {
-                    roles.insert(role.clone());
-                }
-                RoleDeltaOp::Revoke => {
-                    roles.remove(role);
-                }
-            }
-        }
-
-        for role in roles {
-            match self
-                .role_perm_ops
-                .get(&(role.clone(), target_perm.clone()))
-                .copied()
-            {
-                Some(PermissionDeltaOp::Grant) => return Ok(true),
-                Some(PermissionDeltaOp::Revoke) => continue,
-                None => {}
-            }
-            if let Some(role_def) = world.roles().get(&role)
-                && role_def.permissions.iter().any(|perm| perm == &target_perm)
-            {
-                return Ok(true);
             }
         }
 
@@ -17147,9 +16922,8 @@ impl DetachedStateTransactionDelta {
         use iroha_data_model::isi::{Grant, Revoke, SetParameter};
         use iroha_data_model::{
             events::data::prelude::{
-                AccountEvent, AssetDefinitionEvent, AssetDefinitionOwnerChanged,
-                ConfigurationEvent, DomainEvent, DomainOwnerChanged, MetadataChanged, NftEvent,
-                NftOwnerChanged, ParameterChanged, PeerEvent,
+                AccountEvent, AssetDefinitionEvent, ConfigurationEvent, DomainEvent,
+                MetadataChanged, NftEvent, ParameterChanged, PeerEvent,
             },
             transaction::error::TransactionRejectionReason,
         };
@@ -17402,64 +17176,6 @@ impl DetachedStateTransactionDelta {
                         value: val,
                     })));
             }
-            for (id, (from, to)) in self.nft_transfer {
-                {
-                    let nft = stx.world.nft_mut(&id)?;
-                    if nft.owned_by != from {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "source does not own NFT {id}"
-                        )));
-                    }
-                    nft.owned_by = to.clone();
-                }
-                stx.world.replace_nft_owner_index(&id, &from, &to);
-                stx.world
-                    .emit_events(Some(NftEvent::OwnerChanged(NftOwnerChanged {
-                        nft: id,
-                        new_owner: to,
-                    })));
-            }
-
-            // Apply domain owner transfers
-            for (dom, (from, to)) in self.domain_owner_transfer {
-                {
-                    let d = stx.world.domain_mut(&dom)?;
-                    if d.owned_by() != &from {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "source does not own domain {dom}"
-                        )));
-                    }
-                    d.set_owned_by(to.clone());
-                }
-                stx.world.replace_domain_owner_index(&dom, &from, &to);
-                stx.world
-                    .emit_events(Some(DomainEvent::OwnerChanged(DomainOwnerChanged {
-                        domain: dom,
-                        new_owner: to,
-                    })));
-            }
-
-            // Apply asset definition owner transfers
-            for (ad, (from, to)) in self.asset_def_owner_transfer {
-                {
-                    let def = stx.world.asset_definition_mut(&ad)?;
-                    if def.owned_by() != &from {
-                        return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                            "source does not own asset definition {ad}"
-                        )));
-                    }
-                    def.set_owned_by(to.clone());
-                }
-                stx.world
-                    .replace_asset_definition_owner_index(&ad, &from, &to);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
-                        asset_definition: ad,
-                        new_owner: to,
-                    }),
-                )));
-            }
-
             // Apply peer registrations/removals
             for pid in self.peer_adds {
                 use iroha_primitives::unique_vec::PushResult;
@@ -66335,8 +66051,8 @@ mod tests {
             time::{ExecutionTime, Schedule, TimeEventFilter},
         },
         isi::{
-            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetHoldingLimit, SetAssetKeyValue,
-            SetKeyValue, Transfer, Unregister, error::InstructionExecutionError,
+            Burn, Mint, Register, RemoveAssetKeyValue, SetAssetKeyValue, SetKeyValue, Transfer,
+            Unregister, error::InstructionExecutionError,
         },
         merge::MergeQuorumCertificate,
         name::Name,
@@ -115784,277 +115500,6 @@ seiyaku SequentialNfts {
                 .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "domain owner must be allowed to modify account metadata"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_domain_denies_non_owner() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let transferred_domain_id: DomainId =
-            DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-
-        let mut world = World::with(
-            [alice_domain, users_domain, transferred_domain],
-            [alice_account, user1_account, user2_account],
-            [],
-        );
-        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
-        let view = world.view();
-        let transfer =
-            iroha_data_model::isi::Transfer::domain(user1, transferred_domain_id, user2.clone());
-        let delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "authority that owns neither source account/domain nor transferred domain must be denied"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_domain_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let transferred_domain_id: DomainId =
-            DomainId::try_new("foo", "universal").expect("foo domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-
-        let mut world = World::with(
-            [
-                alice_domain,
-                users_domain.clone(),
-                transferred_domain.clone(),
-            ],
-            [alice_account, user1_account, user2_account],
-            [],
-        );
-        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::domain(
-            user1.clone(),
-            transferred_domain_id.clone(),
-            user2,
-        );
-        let mut delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "baseline should deny authority before pending owner updates"
-        );
-
-        delta.transfer_domain(users_domain_id.clone(), user1.clone(), ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "pending source-domain transfer should authorize subsequent transfer"
-        );
-
-        let mut delta = DetachedStateTransactionDelta::default();
-        delta.transfer_domain(transferred_domain_id.clone(), user1, ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
-                .expect("permission check"),
-            "pending transferred-domain ownership should authorize subsequent transfer"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_asset_definition_denies_non_owner() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let definition_domain_id: DomainId =
-            DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let asset_definition_id =
-            AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
-        let asset_definition = {
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }
-        .build(&user1);
-
-        let world = World::with(
-            [alice_domain, users_domain, definition_domain],
-            [alice_account, user1_account, user2_account],
-            [asset_definition],
-        );
-        let view = world.view();
-        let transfer =
-            iroha_data_model::isi::Transfer::asset_definition(user1, asset_definition_id, user2);
-        let delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "authority that owns neither source account nor asset definition must be denied"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_asset_definition_considers_pending_owner_transfer() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let definition_domain_id: DomainId =
-            DomainId::try_new("defs", "universal").expect("defs domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let definition_domain = Domain::new(definition_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let asset_definition_id =
-            AssetDefinitionId::new(definition_domain_id.clone(), "bond".parse().unwrap());
-        let asset_definition = {
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }
-        .build(&user1);
-
-        let world = World::with(
-            [
-                alice_domain,
-                users_domain.clone(),
-                definition_domain.clone(),
-            ],
-            [alice_account, user1_account, user2_account],
-            [asset_definition],
-        );
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::asset_definition(
-            user1.clone(),
-            asset_definition_id,
-            user2,
-        );
-        let mut delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "baseline should deny authority before pending owner updates"
-        );
-
-        delta.transfer_asset_def(transfer.object().clone(), user1.clone(), ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_asset_definition(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "pending asset-definition owner transfer should authorize subsequent transfer"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_nft_denies_non_owner() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
-        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
-
-        let world = World::with_assets(
-            [alice_domain, users_domain],
-            [alice_account, user1_account, user2_account],
-            [],
-            [],
-            [nft],
-        );
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::nft(user1, nft_id, user2);
-        let delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_nft(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "authority that owns neither source account/domain nor nft domain must be denied"
-        );
-    }
-
-    #[test]
-    fn detached_can_transfer_nft_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId =
-            DomainId::try_new("users", "universal").expect("users domain id");
-        let user1 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-        let user2 = AccountId::new(crate::state::checked_keypair().into_parts().0);
-
-        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
-        let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
-        let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
-        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
-
-        let world = World::with_assets(
-            [alice_domain, users_domain.clone()],
-            [alice_account, user1_account, user2_account],
-            [],
-            [],
-            [nft],
-        );
-        let view = world.view();
-        let transfer = iroha_data_model::isi::Transfer::nft(user1.clone(), nft_id, user2);
-        let mut delta = DetachedStateTransactionDelta::default();
-
-        assert!(
-            !delta
-                .can_transfer_nft(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "baseline should deny authority before pending owner updates"
-        );
-
-        delta.transfer_domain(users_domain_id, user1, ALICE_ID.clone());
-        assert!(
-            delta
-                .can_transfer_nft(&view, &ALICE_ID, &transfer)
-                .expect("permission check"),
-            "pending source-domain transfer should authorize subsequent transfer"
         );
     }
 

@@ -238,6 +238,7 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
                     | IrohaRuntimeProviderSlotV1::GatewayAcmeClient
                     | IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport
                     | IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter
+                    | IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint
                     | IrohaRuntimeProviderSlotV1::ReputationThresholdSigner
                     | IrohaRuntimeProviderSlotV1::ReputationGovernanceDag
                     | IrohaRuntimeProviderSlotV1::BillingFinalizedQuery
@@ -356,6 +357,9 @@ pub struct RuntimeProviderBrokerBackendsV1 {
     >,
     reputation_journal_transaction_submitter: Option<
         Arc<dyn sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1>,
+    >,
+    reputation_journal_checkpoint: Option<
+        Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
     >,
     reputation_threshold_signer: Option<
         Arc<dyn sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1>,
@@ -524,6 +528,10 @@ impl fmt::Debug for RuntimeProviderBrokerBackendsV1 {
                 &self.reputation_journal_transaction_submitter.is_some(),
             )
             .field(
+                "reputation_journal_checkpoint",
+                &self.reputation_journal_checkpoint.is_some(),
+            )
+            .field(
                 "reputation_threshold_signer",
                 &self.reputation_threshold_signer.is_some(),
             )
@@ -637,6 +645,7 @@ impl RuntimeProviderBrokerBackendsV1 {
             provider_ingest_retention_authority: None,
             reputation_finalized_archive_retention_authority: None,
             reputation_journal_transaction_submitter: None,
+            reputation_journal_checkpoint: None,
             reputation_threshold_signer: None,
             reputation_governance_dag: None,
             billing_finalized_query: None,
@@ -965,6 +974,16 @@ impl RuntimeProviderBrokerBackendsV1 {
         >,
     ) -> Self {
         self.reputation_journal_transaction_submitter = Some(submitter);
+        self
+    }
+
+    /// Attach the externally sealed monotonic reputation-journal checkpoint provider.
+    #[must_use]
+    pub fn with_reputation_journal_checkpoint(
+        mut self,
+        checkpoint: Arc<dyn sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1>,
+    ) -> Self {
+        self.reputation_journal_checkpoint = Some(checkpoint);
         self
     }
 
@@ -1445,6 +1464,15 @@ mod protocol {
     const MAX_REPUTATION_RETENTION_FRAME_BYTES_V1: usize = 128 * 1024;
     const MAX_REPUTATION_JOURNAL_INSTRUCTION_BYTES_V1: usize = 16 * 1024 * 1024;
     const MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1: usize = 128 * 1024 * 1024;
+    const MAX_REPUTATION_JOURNAL_CHECKPOINT_BYTES_V1: usize =
+        sorafs_node::reputation::runtime::REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1
+            as usize;
+    const MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1: usize =
+        MAX_REPUTATION_JOURNAL_CHECKPOINT_BYTES_V1
+            + sorafs_node::reputation::runtime::
+                REPUTATION_JOURNAL_SEALED_CHECKPOINT_MAX_OVERHEAD_BYTES_V1 as usize;
+    const MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1: usize =
+        MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1 + MAX_BROKER_FRAME_ENVELOPE_BYTES_V1;
     // The largest billing payload is a canonical 128 MiB checkpoint in its
     // bounded epoch-witness wrapper. Keep independent framing overhead without
     // inheriting appeal finance's 512 MiB operation ceiling.
@@ -2113,6 +2141,8 @@ mod protocol {
     const OPERATION_BILLING_LOAD_EPOCH_V1: u16 = 98;
     const OPERATION_BILLING_COMPARE_AND_SWAP_EPOCH_V1: u16 = 99;
     const OPERATION_SORACLOUD_PROVENANCE_SIGN_V1: u16 = 100;
+    const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1: u16 = 101;
+    const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 102;
 
     const STATUS_OK_V1: u8 = 0;
     const STATUS_REJECTED_V1: u8 = 1;
@@ -3091,8 +3121,11 @@ mod protocol {
             binding.slot == IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher.wire_id();
         let fenced_privacy_head_reader =
             binding.slot == IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader.wire_id();
+        let reputation_checkpoint =
+            binding.slot == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id();
         let reputation_runtime = binding.slot
             == IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter.wire_id()
+            || reputation_checkpoint
             || binding.slot == IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id()
             || binding.slot == IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id();
         let reputation_retention = binding.slot
@@ -3155,6 +3188,15 @@ mod protocol {
             || binding
                 .provider_ingest_max_signed_transaction_bytes
                 .is_some();
+        if reputation_checkpoint
+            && binding.revision
+                != Some(
+                    sorafs_node::reputation::runtime::
+                        REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                )
+        {
+            return Err(BrokerError::BindingMismatch);
+        }
         if stream_token
             || appeal_signer
             || appeal_checkpoint
@@ -5830,11 +5872,14 @@ mod protocol {
         signed_transaction: Vec<u8>,
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-    struct ProviderIngestCheckpointLoadRequestWireV1;
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestCheckpointCompareAndSwapRequestWireV1 {
+        expected_revision: Option<[u8; 32]>,
+        next_record: Vec<u8>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+    struct ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
@@ -7679,6 +7724,7 @@ mod protocol {
                         .wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id()
+                || slot == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::BillingJournalVerifier.wire_id()
                 || slot == IrohaRuntimeProviderSlotV1::BillingStatementSigner.wire_id()
@@ -8004,6 +8050,7 @@ mod protocol {
         })
     }
 
+    #[cfg(test)]
     fn validate_operation_request(request: &OperationRequestV1) -> Result<(), BrokerError> {
         validate_operation_request_with_session_chain(request, None)
     }
@@ -9690,7 +9737,11 @@ mod protocol {
             OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1
             | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
             | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
-            | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1 => REPUTATION_DECODE_POLICY_V1,
+            | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1
+            | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
+            | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                REPUTATION_DECODE_POLICY_V1
+            }
             OPERATION_SIGN_V1 | OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1 => {
                 GOVERNANCE_BULK_DECODE_POLICY_V1
             }
@@ -9752,6 +9803,10 @@ mod protocol {
             | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
             | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
             | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1 => MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+            OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
+            | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1
+            }
             OPERATION_BILLING_IDENTITY_V1
             | OPERATION_BILLING_READINESS_V1
             | OPERATION_BILLING_QUERY_CAPABILITIES_V1
@@ -9871,6 +9926,10 @@ mod protocol {
             | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
             | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
             | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1 => MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
+            OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
+            | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1
+            }
             OPERATION_BILLING_QUERY_PAGE_V1
             | OPERATION_BILLING_QUERY_PERIOD_CLOSE_V1
             | OPERATION_BILLING_VERIFY_PAGE_V1
@@ -9918,6 +9977,8 @@ mod protocol {
                 | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
                 | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
                 | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1
+                | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
+                | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1
                 | OPERATION_BILLING_IDENTITY_V1
                 | OPERATION_BILLING_READINESS_V1
                 | OPERATION_BILLING_QUERY_CAPABILITIES_V1
@@ -10537,6 +10598,8 @@ mod protocol {
             IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id();
         let reputation_governance_slot =
             IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id();
+        let reputation_checkpoint_slot =
+            IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id();
         let billing_finalized_query_slot =
             IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id();
         let billing_journal_verifier_slot =
@@ -10588,6 +10651,7 @@ mod protocol {
                     || slot == reputation_journal_slot
                     || slot == reputation_threshold_slot
                     || slot == reputation_governance_slot
+                    || slot == reputation_checkpoint_slot
                     || slot == billing_finalized_query_slot
                     || slot == billing_journal_verifier_slot
                     || slot == billing_statement_signer_slot
@@ -10729,6 +10793,37 @@ mod protocol {
                     MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1,
                 )?;
                 reputation_governance_request_from_wire(wire)?;
+            }
+            (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1)
+                if slot == reputation_checkpoint_slot =>
+            {
+                decode_canonical::<()>(
+                    &request.payload,
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                )?;
+            }
+            (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1)
+                if slot == reputation_checkpoint_slot =>
+            {
+                let compare =
+                    decode_canonical::<ReputationJournalCheckpointCompareAndSwapRequestWireV1>(
+                        &request.payload,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )?;
+                if compare.expected_revision == Some([0; 32]) {
+                    return Err(BrokerError::Rejected);
+                }
+                reserve_external_canonical_decode(
+                    compare.next_record.len(),
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1,
+                )?;
+                sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1::
+                    from_canonical_bytes(
+                        &compare.next_record,
+                        sorafs_node::reputation::runtime::
+                            REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+                    )
+                    .map_err(|_| BrokerError::Rejected)?;
             }
             (slot, OPERATION_BILLING_IDENTITY_V1)
                 if slot == billing_finalized_query_slot
@@ -11323,9 +11418,9 @@ mod protocol {
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1)
                 if slot == provider_ingest_checkpoint_slot =>
             {
-                decode_canonical::<ProviderIngestCheckpointLoadRequestWireV1>(
+                decode_canonical::<()>(
                     &request.payload,
-                    MAX_OPERATION_FRAME_BYTES_V1,
+                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
                 )?;
             }
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1)
@@ -11618,12 +11713,16 @@ mod protocol {
     ) -> Result<(), BrokerError> {
         validate_operation_response_envelope(request, response)?;
         if response.status == STATUS_OK_V1
-            && request.operation == OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
+            && matches!(
+                request.operation,
+                OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1
+                    | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1
+            )
         {
             // The caller decodes and validates the full sealed record exactly
             // once while the response-owned admission remains live. Repeating
-            // the 192 MiB typed decode here would require a multi-gigabyte
-            // composed reservation.
+            // a large typed decode here would multiply the composed
+            // reservation without adding an independent validation boundary.
             return Ok(());
         }
         validate_operation_result(request, response.status, &response.result)
@@ -11707,6 +11806,7 @@ mod protocol {
                     | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
                     | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
                     | OPERATION_REPUTATION_GOVERNANCE_RECONCILE_V1
+                    | OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1
                     | OPERATION_APPEAL_FINANCE_CHECKPOINT_COMPARE_AND_SWAP_V1
                     | OPERATION_SEALED_COMPARE_AND_SWAP_V1
                     | OPERATION_SEALED_DELETE_V1
@@ -11931,6 +12031,31 @@ mod protocol {
                         _ => return Err(BrokerError::Protocol),
                     }
                 }
+                OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1 => {
+                    let record = decode_canonical::<Option<Vec<u8>>>(
+                        result,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )?;
+                    if let Some(record) = record {
+                        reserve_external_canonical_decode(
+                            record.len(),
+                            MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1,
+                        )?;
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalSealedCheckpointRecordV1::from_canonical_bytes(
+                                &record,
+                                sorafs_node::reputation::runtime::
+                                    REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+                            )
+                            .map_err(|_| BrokerError::Protocol)?;
+                    }
+                }
+                OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1 => {
+                    decode_canonical::<()>(
+                        result,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )?;
+                }
                 OPERATION_QUALIFY_V1
                     if matches!(
                         request.binding.slot,
@@ -11941,6 +12066,8 @@ mod protocol {
                                 == IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id()
                             || slot
                                 == IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id()
+                            || slot
+                                == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id()
                     ) =>
                 {
                     let qualification = decode_canonical::<QualificationResultWireV1>(
@@ -13486,6 +13613,15 @@ mod protocol {
                         .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
                     qualify_reputation_runtime_backend(binding, governance_dag.as_ref())?;
                 }
+                slot if slot
+                    == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id() =>
+                {
+                    let checkpoint = backends
+                        .reputation_journal_checkpoint
+                        .as_ref()
+                        .ok_or(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)?;
+                    qualify_reputation_runtime_backend(binding, checkpoint.as_ref())?;
+                }
                 slot if slot == IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id() => {
                     let query = backends
                         .billing_finalized_query
@@ -14404,6 +14540,8 @@ mod protocol {
                         == backends.reputation_threshold_signer.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::ReputationGovernanceDag)
                         == backends.reputation_governance_dag.is_some()
+                    && requested(IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint)
+                        == backends.reputation_journal_checkpoint.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::BillingFinalizedQuery)
                         == backends.billing_finalized_query.is_some()
                     && requested(IrohaRuntimeProviderSlotV1::BillingJournalVerifier)
@@ -14446,6 +14584,7 @@ mod protocol {
             Ok(())
         }
 
+        #[cfg(test)]
         fn prepare_server_state(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -15040,6 +15179,8 @@ mod protocol {
                 IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id();
             let reputation_governance_slot =
                 IrohaRuntimeProviderSlotV1::ReputationGovernanceDag.wire_id();
+            let reputation_checkpoint_slot =
+                IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id();
             let billing_finalized_query_slot =
                 IrohaRuntimeProviderSlotV1::BillingFinalizedQuery.wire_id();
             let billing_journal_verifier_slot =
@@ -15260,6 +15401,7 @@ mod protocol {
                         || slot == reputation_journal_slot
                         || slot == reputation_threshold_slot
                         || slot == reputation_governance_slot
+                        || slot == reputation_checkpoint_slot
                         || slot == billing_finalized_query_slot
                         || slot == billing_journal_verifier_slot
                         || slot == billing_statement_signer_slot
@@ -15417,6 +15559,132 @@ mod protocol {
                     )
                     .map_err(|_| BrokerError::Ambiguous)?;
                     encode_canonical(&result, MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1)
+                    if slot == reputation_checkpoint_slot =>
+                {
+                    let checkpoint = state
+                        .backends
+                        .reputation_journal_checkpoint
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let record = checkpoint.load_latest().map_err(|error| {
+                        match error {
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Unavailable => {
+                            BrokerError::Unavailable
+                        }
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Rejected => {
+                            BrokerError::Rejected
+                        }
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Ambiguous => {
+                            BrokerError::Protocol
+                        }
+                    }
+                    })?;
+                    let record = record
+                        .map(|record| {
+                            record
+                                .to_canonical_bytes(
+                                    sorafs_node::reputation::runtime::
+                                        REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+                                )
+                                .map_err(|_| BrokerError::Protocol)
+                        })
+                        .transpose()?;
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )?;
+                    encode_canonical(&record, MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
+                }
+                (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1)
+                    if slot == reputation_checkpoint_slot =>
+                {
+                    let compare =
+                        decode_canonical::<ReputationJournalCheckpointCompareAndSwapRequestWireV1>(
+                            &request.payload,
+                            MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                        )?;
+                    let next = sorafs_node::reputation::runtime::
+                        ReputationJournalSealedCheckpointRecordV1::from_canonical_bytes(
+                            &compare.next_record,
+                            sorafs_node::reputation::runtime::
+                                REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+                        )
+                        .map_err(|_| BrokerError::Rejected)?;
+                    let checkpoint = state
+                        .backends
+                        .reputation_journal_checkpoint
+                        .as_ref()
+                        .ok_or(BrokerError::BindingMismatch)?;
+                    let current = checkpoint.load_latest().map_err(|error| {
+                        match error {
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Unavailable => {
+                            BrokerError::Unavailable
+                        }
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Rejected => {
+                            BrokerError::Rejected
+                        }
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Ambiguous => {
+                            BrokerError::Protocol
+                        }
+                    }
+                    })?;
+                    let monotonic = match &current {
+                        None => {
+                            compare.expected_revision.is_none()
+                                && next.checkpoint_sequence() == 1
+                                && next.predecessor_checkpoint_digest().is_none()
+                        }
+                        Some(previous) => {
+                            compare.expected_revision == Some(previous.revision())
+                                && previous
+                                    .checkpoint_sequence()
+                                    .checked_add(1)
+                                    .is_some_and(|sequence| sequence == next.checkpoint_sequence())
+                                && next.predecessor_checkpoint_digest()
+                                    == Some(previous.checkpoint_digest())
+                        }
+                    };
+                    if !monotonic {
+                        return Err(BrokerError::Rejected);
+                    }
+                    checkpoint
+                        .compare_and_swap_latest(compare.expected_revision, &next)
+                        .map_err(|error| {
+                            match error {
+                            sorafs_node::reputation::runtime::
+                                ReputationJournalCheckpointExternalErrorV1::Unavailable
+                            | sorafs_node::reputation::runtime::
+                                ReputationJournalCheckpointExternalErrorV1::Ambiguous => {
+                                BrokerError::Ambiguous
+                            }
+                            sorafs_node::reputation::runtime::
+                                ReputationJournalCheckpointExternalErrorV1::Rejected => {
+                                BrokerError::Rejected
+                            }
+                        }
+                        })?;
+                    let readback = checkpoint
+                        .load_latest()
+                        .map_err(|_| BrokerError::Ambiguous)?;
+                    if readback.as_ref() != Some(&next) {
+                        return Err(BrokerError::Ambiguous);
+                    }
+                    qualify_server_binding(
+                        state,
+                        &request.binding,
+                        request.provider_metadata_digest,
+                    )
+                    .map_err(|_| BrokerError::Ambiguous)?;
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
                 }
                 (slot, OPERATION_BILLING_IDENTITY_V1) if slot == billing_finalized_query_slot => {
                     let identity = state
@@ -25754,10 +26022,7 @@ mod protocol {
                 &self,
             ) -> Result<Option<sorafs_node::ProviderIngestSealedCheckpointRecordV1>, BrokerError>
             {
-                let payload = encode_canonical(
-                    &ProviderIngestCheckpointLoadRequestWireV1,
-                    MAX_OPERATION_FRAME_BYTES_V1,
-                )?;
+                let payload = encode_canonical(&(), MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1)?;
                 let result = self.session.call(
                     &self.binding,
                     self.metadata_digest,
@@ -26548,6 +26813,188 @@ mod protocol {
             > {
                 self.live_qualification()
                     .map_err(|error| self.external_failure(error))
+            }
+        }
+
+        #[derive(Clone, Debug)]
+        struct ReputationJournalBrokerCheckpoint {
+            provider: ReputationBrokerProvider,
+        }
+
+        impl ReputationJournalBrokerCheckpoint {
+            fn load_latest_raw(
+                &self,
+            ) -> Result<
+                Option<sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1>,
+                BrokerError,
+            > {
+                let payload =
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)?;
+                let result = self.provider.session.call(
+                    &self.provider.binding,
+                    self.provider.metadata_digest,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
+                    payload,
+                    false,
+                )?;
+                let _scope = result.enter_decode_admission();
+                let record_bytes = self
+                    .provider
+                    .session
+                    .decode_result::<Option<Vec<u8>>>(&result)?;
+                record_bytes
+                    .map(|bytes| {
+                        reserve_external_canonical_decode(
+                            bytes.len(),
+                            MAX_REPUTATION_JOURNAL_CHECKPOINT_RECORD_BYTES_V1,
+                        )?;
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalSealedCheckpointRecordV1::from_canonical_bytes(
+                                &bytes,
+                                sorafs_node::reputation::runtime::
+                                    REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+                            )
+                            .map_err(|_| BrokerError::Protocol)
+                    })
+                    .transpose()
+                    .inspect_err(|_| self.provider.session.poison())
+            }
+        }
+
+        impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
+            for ReputationJournalBrokerCheckpoint
+        {
+            fn handle(&self) -> &str {
+                &self.provider.binding.handle
+            }
+
+            fn qualification(
+                &self,
+            ) -> Result<
+                sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1,
+                sorafs_node::reputation::runtime::ReputationExternalFailureV1,
+            > {
+                sorafs_node::reputation::runtime::ReputationRuntimeProviderV1::qualification(
+                    &self.provider,
+                )
+            }
+        }
+
+        impl sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1
+            for ReputationJournalBrokerCheckpoint
+        {
+            fn load_latest(
+                &self,
+            ) -> Result<
+                Option<sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1>,
+                sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1,
+            > {
+                self.provider
+                    .live_qualification()
+                    .map_err(reputation_journal_checkpoint_error)?;
+                let record = self
+                    .load_latest_raw()
+                    .map_err(reputation_journal_checkpoint_error)?;
+                self.provider
+                    .live_qualification()
+                    .map_err(reputation_journal_checkpoint_error)?;
+                Ok(record)
+            }
+
+            fn compare_and_swap_latest(
+                &self,
+                expected_revision: Option<[u8; 32]>,
+                next: &sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1,
+            ) -> Result<
+                (),
+                sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1,
+            > {
+                use sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1 as Error;
+
+                if expected_revision == Some([0; 32]) {
+                    return Err(Error::Rejected);
+                }
+                let next_record = next
+                    .to_canonical_bytes(
+                        sorafs_node::reputation::runtime::
+                            REPUTATION_JOURNAL_PRODUCER_MAX_CHECKPOINT_BYTES_V1,
+                    )
+                    .map_err(|_| Error::Rejected)?;
+                self.provider
+                    .live_qualification()
+                    .map_err(reputation_journal_checkpoint_error)?;
+                let current = self
+                    .load_latest_raw()
+                    .map_err(reputation_journal_checkpoint_error)?;
+                let monotonic = match &current {
+                    None => {
+                        expected_revision.is_none()
+                            && next.checkpoint_sequence() == 1
+                            && next.predecessor_checkpoint_digest().is_none()
+                    }
+                    Some(previous) => {
+                        expected_revision == Some(previous.revision())
+                            && previous
+                                .checkpoint_sequence()
+                                .checked_add(1)
+                                .is_some_and(|sequence| sequence == next.checkpoint_sequence())
+                            && next.predecessor_checkpoint_digest()
+                                == Some(previous.checkpoint_digest())
+                    }
+                };
+                if !monotonic {
+                    return Err(Error::Rejected);
+                }
+                let payload = encode_canonical(
+                    &ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
+                        expected_revision,
+                        next_record,
+                    },
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                )
+                .map_err(reputation_journal_checkpoint_error)?;
+                self.provider
+                    .session
+                    .call(
+                        &self.provider.binding,
+                        self.provider.metadata_digest,
+                        OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                        payload,
+                        true,
+                    )
+                    .map_err(reputation_journal_checkpoint_error)
+                    .and_then(|result| {
+                        self.provider
+                            .session
+                            .decode_result::<()>(&result)
+                            .map_err(|_| {
+                                self.provider.session.poison();
+                                Error::Ambiguous
+                            })
+                    })?;
+                let readback = self.load_latest_raw().map_err(|error| {
+                    self.provider.session.poison();
+                    match error {
+                        BrokerError::BindingMismatch
+                        | BrokerError::StaleOrRevoked
+                        | BrokerError::Rejected => Error::Rejected,
+                        _ => Error::Ambiguous,
+                    }
+                })?;
+                self.provider.live_qualification().map_err(|error| {
+                    self.provider.session.poison();
+                    match error {
+                        BrokerError::BindingMismatch
+                        | BrokerError::StaleOrRevoked
+                        | BrokerError::Rejected => Error::Rejected,
+                        _ => Error::Ambiguous,
+                    }
+                })?;
+                if readback.as_ref() != Some(next) {
+                    self.provider.session.poison();
+                    return Err(Error::Ambiguous);
+                }
+                Ok(())
             }
         }
 
@@ -28138,6 +28585,22 @@ mod protocol {
             }
         }
 
+        fn reputation_journal_checkpoint_error(
+            error: BrokerError,
+        ) -> sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1 {
+            use sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1 as Error;
+
+            match error {
+                BrokerError::Unavailable => Error::Unavailable,
+                BrokerError::Ambiguous => Error::Ambiguous,
+                BrokerError::Protocol
+                | BrokerError::BindingMismatch
+                | BrokerError::StaleOrRevoked
+                | BrokerError::Rejected
+                | BrokerError::Conflict => Error::Rejected,
+            }
+        }
+
         fn provider_ingest_retention_error(
             error: BrokerError,
         ) -> iroha_core::query::provider_ingest_finalized::
@@ -28472,6 +28935,40 @@ mod protocol {
                             .map_err(registry_error)?;
                         dependencies = dependencies
                             .with_sorafs_reputation_journal_transaction_submitter(submitter);
+                    }
+                    slot
+                        if slot
+                            == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint.wire_id() =>
+                    {
+                        let checkpoint = Arc::new(ReputationJournalBrokerCheckpoint {
+                            provider: ReputationBrokerProvider {
+                                session: Arc::clone(&session),
+                                binding: binding.clone(),
+                                metadata_digest: observation.metadata_digest,
+                            },
+                        });
+                        checkpoint
+                            .provider
+                            .live_qualification()
+                            .map_err(registry_error)?;
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointRuntimeV1::load_latest(
+                                checkpoint.as_ref(),
+                            )
+                            .map_err(|error| match error {
+                                sorafs_node::reputation::runtime::
+                                    ReputationJournalCheckpointExternalErrorV1::Unavailable => {
+                                    IrohaRuntimeProviderRegistryErrorV1::Unavailable
+                                }
+                                sorafs_node::reputation::runtime::
+                                    ReputationJournalCheckpointExternalErrorV1::Rejected
+                                | sorafs_node::reputation::runtime::
+                                    ReputationJournalCheckpointExternalErrorV1::Ambiguous => {
+                                    IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
+                                }
+                            })?;
+                        dependencies = dependencies
+                            .with_sorafs_reputation_journal_checkpoint_provider(checkpoint);
                     }
                     slot if slot
                         == IrohaRuntimeProviderSlotV1::ReputationThresholdSigner.wire_id() =>
@@ -29253,6 +29750,8 @@ mod protocol {
                 "hsm://sorafs/reputation/threshold-primary";
             const SERVER_TEST_REPUTATION_GOVERNANCE_HANDLE: &str =
                 "dag://sorafs/reputation/publication-primary";
+            const SERVER_TEST_REPUTATION_CHECKPOINT_HANDLE: &str =
+                "sealed://sorafs/reputation/journal-checkpoint-primary";
             const SERVER_TEST_BILLING_QUERY_HANDLE: &str =
                 "ledger://sorafs/billing/finalized-query-primary";
             const SERVER_TEST_BILLING_VERIFIER_HANDLE: &str =
@@ -32492,6 +32991,9 @@ mod protocol {
                     IrohaRuntimeProviderSlotV1::ReputationGovernanceDag => {
                         SERVER_TEST_REPUTATION_GOVERNANCE_HANDLE
                     }
+                    IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint => {
+                        SERVER_TEST_REPUTATION_CHECKPOINT_HANDLE
+                    }
                     _ => panic!("slot is not a reputation runtime provider"),
                 }
             }
@@ -32503,7 +33005,12 @@ mod protocol {
                     "server-test-chain",
                     slot,
                     reputation_runtime_test_handle(slot),
-                    7,
+                    if slot == IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint {
+                        sorafs_node::reputation::runtime::
+                            REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1
+                    } else {
+                        7
+                    },
                     TEST_POLICY_DIGEST,
                 )
             }
@@ -32995,6 +33502,11 @@ mod protocol {
                             Arc::new(ServerTestReputationGovernanceDag::exact()),
                         )
                     }
+                    IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint => {
+                        RuntimeProviderBrokerBackendsV1::new().with_reputation_journal_checkpoint(
+                            Arc::new(ServerTestReputationJournalCheckpoint::exact()),
+                        )
+                    }
                     _ => panic!("slot is not a reputation runtime provider"),
                 }
             }
@@ -33017,6 +33529,11 @@ mod protocol {
                     IrohaRuntimeProviderSlotV1::ReputationGovernanceDag => {
                         RuntimeProviderBrokerBackendsV1::new().with_reputation_governance_dag(
                             Arc::new(ServerTestReputationGovernanceDag::substituted()),
+                        )
+                    }
+                    IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint => {
+                        RuntimeProviderBrokerBackendsV1::new().with_reputation_journal_checkpoint(
+                            Arc::new(ServerTestReputationJournalCheckpoint::substituted()),
                         )
                     }
                     _ => panic!("slot is not a reputation runtime provider"),
@@ -33263,6 +33780,79 @@ mod protocol {
                         self.revision.store(8, Ordering::SeqCst);
                     }
                     Ok(None)
+                }
+            }
+
+            #[derive(Debug)]
+            struct ServerTestReputationJournalCheckpoint {
+                handle: &'static str,
+            }
+
+            impl ServerTestReputationJournalCheckpoint {
+                const fn exact() -> Self {
+                    Self {
+                        handle: SERVER_TEST_REPUTATION_CHECKPOINT_HANDLE,
+                    }
+                }
+
+                const fn substituted() -> Self {
+                    Self {
+                        handle: "sealed://sorafs/reputation/checkpoint-substitute",
+                    }
+                }
+            }
+
+            impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
+                for ServerTestReputationJournalCheckpoint
+            {
+                fn handle(&self) -> &str {
+                    self.handle
+                }
+
+                fn qualification(
+                    &self,
+                ) -> Result<
+                    sorafs_node::reputation::runtime::ReputationRuntimeProviderQualificationV1,
+                    sorafs_node::reputation::runtime::ReputationExternalFailureV1,
+                > {
+                    Ok(
+                        sorafs_node::reputation::runtime::
+                            ReputationRuntimeProviderQualificationV1::new(
+                                sorafs_node::reputation::runtime::
+                                    REPUTATION_RUNTIME_PROVIDER_QUALIFICATION_REVISION_V1,
+                                TEST_POLICY_DIGEST,
+                            ),
+                    )
+                }
+            }
+
+            impl sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1
+                for ServerTestReputationJournalCheckpoint
+            {
+                fn load_latest(
+                    &self,
+                ) -> Result<
+                    Option<
+                        sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1,
+                    >,
+                    sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1,
+                > {
+                    Ok(None)
+                }
+
+                fn compare_and_swap_latest(
+                    &self,
+                    _expected_revision: Option<[u8; 32]>,
+                    _next: &sorafs_node::reputation::runtime::
+                        ReputationJournalSealedCheckpointRecordV1,
+                ) -> Result<
+                    (),
+                    sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1,
+                > {
+                    Err(
+                        sorafs_node::reputation::runtime::
+                            ReputationJournalCheckpointExternalErrorV1::Rejected,
+                    )
                 }
             }
 
@@ -40665,6 +41255,7 @@ mod protocol {
                     ),
                     (IrohaRuntimeProviderSlotV1::ReputationThresholdSigner, 33),
                     (IrohaRuntimeProviderSlotV1::ReputationGovernanceDag, 34),
+                    (IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint, 50),
                 ];
                 for (slot, wire_id) in slots {
                     assert_eq!(slot.wire_id(), wire_id);
@@ -40713,6 +41304,150 @@ mod protocol {
                         "{slot:?}"
                     );
                 }
+            }
+
+            #[test]
+            fn reputation_checkpoint_load_is_bounded_and_slot_exact() {
+                assert_eq!(OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1, 101);
+                assert_eq!(
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                    102
+                );
+                for operation in [
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                ] {
+                    assert!(operation_is_known(operation));
+                    assert_eq!(
+                        operation_frame_limit(operation),
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1
+                    );
+                    assert_eq!(
+                        operation_decode_policy(operation),
+                        REPUTATION_DECODE_POLICY_V1
+                    );
+                }
+
+                let slot = IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint;
+                let catalog = reputation_runtime_test_catalog(slot);
+                let state = prepare_server_state(&catalog, reputation_runtime_exact_backends(slot))
+                    .expect("prepare exact reputation checkpoint backend");
+                let binding = state.catalog[0].clone();
+                let mut wrong_profile = binding.clone();
+                wrong_profile.revision = Some(2);
+                assert_eq!(
+                    validate_wire_binding(&wrong_profile),
+                    Err(BrokerError::BindingMismatch)
+                );
+                let payload =
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
+                        .expect("encode checkpoint load request");
+                let request = make_operation_request(
+                    TEST_SESSION_ID,
+                    1,
+                    binding.clone(),
+                    state.observations[0].metadata_digest,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
+                    payload,
+                )
+                .expect("seal checkpoint load request");
+                assert_ne!(request.session_id, [0; 32]);
+                assert_ne!(request.request_id, 0);
+                assert_ne!(request.provider_metadata_digest, [0; 32]);
+                assert_eq!(
+                    operation_payload_digest(&request.payload),
+                    request.payload_digest,
+                    "checkpoint load payload digest"
+                );
+                validate_wire_binding(&request.binding)
+                    .expect("validate checkpoint load request binding");
+                let request_fields = OperationRequestFieldsV1 {
+                    session_id: request.session_id,
+                    request_id: request.request_id,
+                    binding: request.binding.clone(),
+                    provider_metadata_digest: request.provider_metadata_digest,
+                    operation: request.operation,
+                    payload_digest: request.payload_digest,
+                    payload_len: u64::try_from(request.payload.len())
+                        .expect("checkpoint load payload length fits u64"),
+                };
+                assert_eq!(
+                    operation_request_digest(&request_fields)
+                        .expect("digest checkpoint load request fields"),
+                    request.request_digest,
+                    "checkpoint load request digest"
+                );
+                decode_canonical::<()>(
+                    &request.payload,
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                )
+                .expect("decode checkpoint load payload");
+                validate_operation_payload(&request, None)
+                    .expect("validate checkpoint load operation payload");
+                validate_operation_request(&request).expect("validate checkpoint load request");
+                let result =
+                    dispatch_server_operation(&state, &request).expect("dispatch checkpoint load");
+                assert_eq!(
+                    decode_canonical::<Option<Vec<u8>>>(
+                        &result,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )
+                    .expect("decode empty checkpoint head"),
+                    None
+                );
+                validate_operation_result(&request, STATUS_OK_V1, &result)
+                    .expect("validate checkpoint load result");
+
+                let malformed_compare = encode_canonical(
+                    &ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
+                        expected_revision: Some([0; 32]),
+                        next_record: vec![0],
+                    },
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                )
+                .expect("encode malformed checkpoint CAS");
+                let malformed_compare = make_operation_request(
+                    TEST_SESSION_ID,
+                    2,
+                    binding,
+                    state.observations[0].metadata_digest,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1,
+                    malformed_compare,
+                )
+                .expect("seal malformed checkpoint CAS");
+                assert_eq!(
+                    validate_operation_request(&malformed_compare),
+                    Err(BrokerError::Rejected)
+                );
+                let ambiguous_compare = make_operation_response(
+                    &malformed_compare,
+                    STATUS_AMBIGUOUS_V1,
+                    encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
+                        .expect("encode empty ambiguous checkpoint result"),
+                )
+                .expect("construct checkpoint CAS ambiguity");
+                assert_eq!(
+                    validate_operation_response(&malformed_compare, &ambiguous_compare),
+                    Ok(())
+                );
+
+                let journal_binding = reputation_runtime_test_binding(
+                    IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter,
+                );
+                let cross_slot = make_operation_request(
+                    TEST_SESSION_ID,
+                    3,
+                    journal_binding.clone(),
+                    observation(&journal_binding).metadata_digest,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
+                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
+                        .expect("encode cross-slot checkpoint load"),
+                )
+                .expect("seal cross-slot checkpoint load");
+                assert_eq!(
+                    validate_operation_request(&cross_slot),
+                    Err(BrokerError::BindingMismatch)
+                );
             }
 
             #[test]
@@ -41086,6 +41821,7 @@ mod protocol {
                     ),
                     (IrohaRuntimeProviderSlotV1::ReputationThresholdSigner, 2),
                     (IrohaRuntimeProviderSlotV1::ReputationGovernanceDag, 3),
+                    (IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint, 4),
                 ] {
                     let binding = reputation_runtime_test_binding(slot);
                     let operation = make_operation_request(
@@ -41731,6 +42467,37 @@ mod protocol {
                     evidence_viewer_archive_max_bytes: None,
                 };
                 assert_eq!(validate_wire_binding(&checkpoint), Ok(()));
+                let checkpoint_load_payload =
+                    encode_canonical(&(), MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1)
+                        .expect("encode provider-ingest checkpoint load");
+                decode_canonical::<()>(
+                    &checkpoint_load_payload,
+                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                )
+                .expect("decode provider-ingest checkpoint load");
+                let checkpoint_load = make_operation_request(
+                    TEST_SESSION_ID,
+                    3,
+                    checkpoint.clone(),
+                    [0xC7; 32],
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    checkpoint_load_payload.clone(),
+                )
+                .expect("seal provider-ingest checkpoint load");
+                assert_eq!(validate_operation_request(&checkpoint_load), Ok(()));
+                let cross_slot_checkpoint_load = make_operation_request(
+                    TEST_SESSION_ID,
+                    4,
+                    source.clone(),
+                    [0xC8; 32],
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    checkpoint_load_payload,
+                )
+                .expect("seal cross-slot provider-ingest checkpoint load");
+                assert_eq!(
+                    validate_operation_request(&cross_slot_checkpoint_load),
+                    Err(BrokerError::BindingMismatch)
+                );
 
                 let retention = ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::ProviderIngestRetentionAuthority.wire_id(),

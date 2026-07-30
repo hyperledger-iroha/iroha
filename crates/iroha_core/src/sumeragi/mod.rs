@@ -2442,6 +2442,7 @@ fn fair_v2_ingress_required_p2p_frame_bytes(consensus_envelope_bytes: usize) -> 
             >(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 network_message_bytes,
             ),
         )
@@ -2460,6 +2461,7 @@ fn fair_v2_ingress_required_lane_p2p_frame_bytes(block_message_bytes: usize) -> 
             >(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 network_message_bytes,
             ),
         )
@@ -2547,6 +2549,7 @@ fn fair_v2_ingress_required_merge_sidecar_chunk_p2p_frame_bytes() -> usize {
             >(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 network_message_bytes,
             ),
         )
@@ -7762,6 +7765,7 @@ mod authoritative_runtime_gate_tests {
             >(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 network_message_bytes,
             ),
             "protocol-maximum identities must use the exact complete direct P2P wire"
@@ -7905,6 +7909,7 @@ mod authoritative_runtime_gate_tests {
             >(
                 iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES,
                 Some(iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES),
+                iroha_p2p::network::MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
                 network_response.encoded_len(),
             ),
             "maximum completion must retain exact protocol-maximum direct-relay geometry"

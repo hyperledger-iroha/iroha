@@ -196,8 +196,6 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                             authority: authority,
                                             epoch: 1,
                                             members: ["bob"],
-                                            candidatesCount: 1,
-                                            derivedBy: .vrf,
                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                             ttlMs: nil)
 

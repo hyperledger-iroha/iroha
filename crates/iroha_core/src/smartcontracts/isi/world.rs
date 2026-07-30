@@ -9773,10 +9773,9 @@ pub mod isi {
             for (account, record) in updated_citizens {
                 state_transaction.world.citizens.insert(account, record);
             }
-            let candidate_count = u32::try_from(
-                self.members.len().saturating_add(self.alternates.len()),
-            )
-            .unwrap_or(u32::MAX);
+            let candidate_count =
+                u32::try_from(self.members.len().saturating_add(self.alternates.len()))
+                    .unwrap_or(u32::MAX);
             // This instruction is the privileged manual-roster path. Derivation metadata is
             // ledger-owned so callers cannot assert that unverified cryptographic work occurred.
             let mut rec = crate::state::CouncilState {
@@ -9784,8 +9783,7 @@ pub mod isi {
                 members: self.members.clone(),
                 alternates: self.alternates.clone(),
                 candidate_count,
-                derived_by:
-                    iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
+                derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Manual,
             };
             if let Some(existing) = state_transaction.world.council.get(&self.epoch) {
                 let same_members = existing.members == self.members;
@@ -29140,7 +29138,6 @@ seiyaku GovernanceLifecycle {
                                     epoch: 1,
                                     members: vec![account_id.clone()],
                                     alternates: Vec::new(),
-                                    verified: 0,
                                     candidate_count: 0,
                                     derived_by: Default::default(),
                                 },

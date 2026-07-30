@@ -141,39 +141,7 @@
         }
       ],
       "candidate_count": 3,
-      "verified": 2,
-      "derived_by": "Vrf"
-    },
-    "councilDerive": {
-      "epoch": 9,
-      "members": [
-        {
-          "account_id": "34mSYmhpgCPNxWQs5cVbkLKGozfqYki1YUf9FpBYFrfTVR5tkj1NBgaQmvpV1bgPyxUWuyiar"
-        }
-      ],
-      "alternates": [],
-      "total_candidates": 1,
-      "verified": 1,
-      "derived_by": "Vrf"
-    },
-    "councilPersist": {
-      "epoch": 1,
-      "members": [],
-      "alternates": [],
-      "total_candidates": 1,
-      "verified": 1,
-      "derived_by": "Vrf"
-    },
-    "councilAudit": {
-      "epoch": 10,
-      "seed_hex": "abababababababababababababababab",
-      "beacon_hex": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
-      "members_count": 5,
-      "candidate_count": 8,
-      "alternates_count": 2,
-      "verified": 7,
-      "derived_by": "Vrf",
-      "chain_id": "chain"
+      "derived_by": "Manual"
     }
   },
   "repo": {

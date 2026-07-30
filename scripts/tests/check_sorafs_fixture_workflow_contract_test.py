@@ -392,6 +392,9 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     assert "npm run build:native" in parity_runner
     assert "test/cancelAssetLockV1.test.js" in parity_runner
     assert "test/sorafsAppealFinanceValidation.test.js" in parity_runner
+    assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
+    assert "swift test --filter CancelAssetLockV1Tests" in parity_runner
+    assert "swift test --filter SorafsReferenceValidatorsTests" in parity_runner
     assert "name: Build exact ABI-21 NoritoBridge XCFramework" in parity
     assert "check_mobile_sdk_artifacts.sh --apple-only" in parity
     assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in parity

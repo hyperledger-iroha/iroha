@@ -87,7 +87,6 @@ use iroha_data_model::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    domain::DomainId,
     events::prelude::*,
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS},
@@ -13586,63 +13585,6 @@ pub(crate) mod valid {
                                     .map(|rm| rm.object.clone())
                             })
                     };
-                    let domain_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::Domain(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        DomainId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
-                    let asset_definition_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::AssetDefinition(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        AssetDefinitionId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
-                    let nft_transfer_target = |instruction: &InstructionBox| {
-                        instruction
-                            .as_any()
-                            .downcast_ref::<TransferBox>()
-                            .and_then(|transfer| match transfer {
-                                TransferBox::Nft(transfer) => Some(transfer.clone()),
-                                _ => None,
-                            })
-                            .or_else(|| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<iroha_data_model::isi::Transfer<
-                                        iroha_data_model::account::Account,
-                                        iroha_data_model::nft::NftId,
-                                        iroha_data_model::account::Account,
-                                    >>()
-                                    .cloned()
-                            })
-                    };
                     let asset_transfer_target = |instruction: &InstructionBox| {
                         instruction
                             .as_any()
@@ -13689,11 +13631,8 @@ pub(crate) mod valid {
                             let mut unsupported = false;
                             let mut reject: Option<TransactionRejectionReason> = None;
                             for instr in ovl.instructions() {
-                                if let Some(transfer) = asset_transfer_target(instr) {
-                                    if detached_is_genesis
-                                        || ovl.instruction_count() != 1
-                                        || transfer.source().account() != &p.authority
-                                    {
+                                if asset_transfer_target(instr).is_some() {
+                                    if detached_is_genesis || ovl.instruction_count() != 1 {
                                         unsupported = true;
                                         break;
                                     }
@@ -13738,86 +13677,6 @@ pub(crate) mod valid {
                                                     TransactionRejectionReason::Validation(
                                                         iroha_data_model::ValidationFail::NotPermitted(
                                                             "Can't set value to the metadata of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = domain_transfer_target(instr) {
-                                        match delta.can_transfer_domain(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                            alias_resolution_time_ms,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer domain of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = asset_definition_transfer_target(instr)
-                                    {
-                                        match delta.can_transfer_asset_definition(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer asset definition of another account"
-                                                                .to_owned(),
-                                                        ),
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            Err(err) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(err),
-                                                );
-                                                break;
-                                            }
-                                        }
-                                    }
-                                    if let Some(transfer) = nft_transfer_target(instr) {
-                                        match delta.can_transfer_nft(
-                                            &state_block.world,
-                                            &p.authority,
-                                            &transfer,
-                                        ) {
-                                            Ok(true) => {}
-                                            Ok(false) => {
-                                                reject = Some(
-                                                    TransactionRejectionReason::Validation(
-                                                        iroha_data_model::ValidationFail::NotPermitted(
-                                                            "Can't transfer NFT of another account"
                                                                 .to_owned(),
                                                         ),
                                                     ),

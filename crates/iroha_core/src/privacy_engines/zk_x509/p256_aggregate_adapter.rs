@@ -22,9 +22,8 @@ use super::{
         P256_ARITHMETIC_STARK_AUX_WIDTH_V1, P256_ARITHMETIC_STARK_CONSTRAINT_COUNT_V1,
         P256_ARITHMETIC_STARK_FIXED_WIDTH_V1, P256ArithmeticStarkFixedProviderV1,
         ZkX509P256AirErrorV1, ZkX509P256ArithmeticTopologyV1, ZkX509P256ArithmeticTraceV1,
-        ZkX509P256ModulusV1, evaluate_p256_arithmetic_stark_residues_v1,
-        p256_arithmetic_opened_c_limb_bits_v1, p256_arithmetic_opened_operand_limbs_v1,
-        p256_arithmetic_opened_scalar_source_bits_v1,
+        evaluate_p256_arithmetic_stark_residues_v1, p256_arithmetic_opened_c_limb_bits_v1,
+        p256_arithmetic_opened_operand_limbs_v1, p256_arithmetic_opened_scalar_source_bits_v1,
     },
     p256_cross_trace_bus::{
         P256_CROSS_TRACE_CHALLENGE_TERMS_V1, P256_CROSS_TRACE_LANES_V1,
@@ -6544,7 +6543,7 @@ mod tests {
             derive_zk_x509_credential_pre_aux_binding_v1,
         },
         p256_air::{
-            ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1,
+            ZkX509P256ArithmeticKindV1, ZkX509P256ArithmeticOperationV1, ZkX509P256ModulusV1,
             build_zk_x509_p256_arithmetic_trace_v1, p256_arithmetic_operand_limbs_v1,
         },
         p256_cross_trace_bus::P256CrossTraceLaneChallengesV1,

@@ -17,6 +17,8 @@ use std::{
 use base64::Engine as _;
 use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
+#[cfg(any(test, feature = "iroha-core-tests"))]
+use iroha_data_model::parameter::CustomParameter;
 use iroha_data_model::{
     Identifiable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
@@ -46,7 +48,7 @@ use iroha_data_model::{
         FeeSponsorRuleEffect, FeeSponsorRuleSelector, FeeSponsorVaultKey,
         VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
     },
-    parameter::{CustomParameter, CustomParameterId},
+    parameter::CustomParameterId,
     permission::Permission,
     prelude::{Account, Burn, Domain, DomainId, Mint, Register, Transfer, Trigger, Unregister},
     query::{AnyQueryBox, QueryRequest, SingularQueryBox},
@@ -463,7 +465,7 @@ impl FixtureExecutorKind {
 /// to sequential execution.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn execute_instruction_detached(
-    _authority: &AccountId,
+    authority: &AccountId,
     instruction: &iroha_data_model::isi::InstructionBox,
     delta: &mut crate::state::DetachedStateTransactionDelta,
 ) -> Result<(), ValidationFail> {
@@ -505,18 +507,20 @@ pub(crate) fn execute_instruction_detached(
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
         match tb {
             TransferBox::Asset(t) => {
+                if t.source.account() != authority {
+                    return Err(ValidationFail::InternalError(
+                        "detached: delegated asset transfer requires sequential authorization"
+                            .to_owned(),
+                    ));
+                }
                 let src = t.source.clone();
                 let qty = t.object.clone();
                 delta.transfer_asset(src, t.destination.clone(), qty);
             }
-            TransferBox::Domain(t) => {
-                delta.transfer_domain(t.object.clone(), t.source.clone(), t.destination.clone());
-            }
-            TransferBox::AssetDefinition(t) => {
-                delta.transfer_asset_def(t.object.clone(), t.source.clone(), t.destination.clone());
-            }
-            TransferBox::Nft(t) => {
-                delta.transfer_nft(t.object.clone(), t.source.clone(), t.destination.clone());
+            TransferBox::Domain(_) | TransferBox::AssetDefinition(_) | TransferBox::Nft(_) => {
+                return Err(ValidationFail::InternalError(
+                    "detached: ownership transfer requires sequential authorization".to_owned(),
+                ));
             }
         }
         return Ok(());
@@ -16443,6 +16447,64 @@ mod tests {
     }
 
     #[test]
+    fn detached_transfers_keep_authorization_in_the_canonical_executor() {
+        let authority = alice();
+        let other = checked_account_id();
+        let destination = checked_account_id();
+        let domain_id =
+            DomainId::try_new("wonderland", "universal").expect("valid domain identifier");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("valid asset name"));
+
+        let delegated_asset = InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(definition_id.clone(), other.clone()),
+            1_u32,
+            destination.clone(),
+        ));
+        let domain = InstructionBox::from(Transfer::domain(
+            authority.clone(),
+            domain_id.clone(),
+            destination.clone(),
+        ));
+        let asset_definition = InstructionBox::from(Transfer::asset_definition(
+            authority.clone(),
+            definition_id,
+            destination.clone(),
+        ));
+        let nft = InstructionBox::from(Transfer::nft(
+            authority.clone(),
+            NftId::new(domain_id, "ticket".parse().expect("valid NFT name")),
+            destination,
+        ));
+
+        for instruction in [delegated_asset, domain, asset_definition, nft] {
+            let mut delta = crate::state::DetachedStateTransactionDelta::default();
+            let error = execute_instruction_detached(&authority, &instruction, &mut delta)
+                .expect_err("authorization-sensitive transfers must execute sequentially");
+            assert!(matches!(error, ValidationFail::InternalError(message) if
+                message.contains("sequential authorization")));
+        }
+
+        let owned_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
+            "owned".parse().expect("valid asset name"),
+        );
+        let owned_source = AssetId::new(owned_definition, authority.clone());
+        let owned_transfer = InstructionBox::from(Transfer::asset_quantity(
+            owned_source.clone(),
+            1_u32,
+            other.clone(),
+        ));
+        let mut delta = crate::state::DetachedStateTransactionDelta::default();
+        execute_instruction_detached(&authority, &owned_transfer, &mut delta)
+            .expect("source-owned transparent transfer may use canonical detached replay");
+        assert_eq!(
+            delta.single_transfer_delta(),
+            Some((owned_source, other, Quantity::from(1_u32)))
+        );
+    }
+
+    #[test]
     fn detached_contract_deployment_permission_mutation_forces_sequential_path() {
         let authority = alice();
         let instruction: InstructionBox =
@@ -20831,7 +20893,7 @@ seiyaku IdentityRequired {
         .sign(ALICE_KEYPAIR.private_key());
         let mut ivm_cache = IvmCache::new();
 
-        let error = Executor::Initial
+        let error = super::Executor::Initial
             .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
             .expect_err("the call-site authority must match the signed transaction");
         assert!(matches!(error, ValidationFail::InternalError(message) if

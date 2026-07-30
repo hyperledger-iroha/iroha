@@ -45,8 +45,8 @@ use iroha_data_model::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         decode_instruction_from_pair, framed_instruction_payload,
         governance::{
-            CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
-            FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
+            CastPlainBallot, CastZkBallot, EnactReferendum, FinalizeReferendum,
+            PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
         },
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
@@ -27344,8 +27344,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
     ttl_ms: u64,
     ttl_present: c_uchar,
     epoch: u64,
-    candidates_count: u32,
-    derived_by: u8,
     members_json_ptr: *const c_uchar,
     members_json_len: c_ulong,
     fee_payment_json_ptr: *const c_uchar,
@@ -27374,11 +27372,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
-        let derived_by = match derived_by {
-            0 => CouncilDerivationKind::Sortition,
-            1 => CouncilDerivationKind::Manual,
-            _ => return Err(BridgeError::Governance),
-        };
 
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -27387,9 +27380,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             epoch,
             members,
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count,
-            derived_by,
         };
 
         let fee_payment =
@@ -27422,8 +27412,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
     ttl_ms: u64,
     ttl_present: c_uchar,
     epoch: u64,
-    candidates_count: u32,
-    derived_by: u8,
     members_json_ptr: *const c_uchar,
     members_json_len: c_ulong,
     fee_payment_json_ptr: *const c_uchar,
@@ -27454,11 +27442,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
         let authority = parse_account_id(authority_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let members = parse_account_list(members_slice)?;
-        let derived_by = match derived_by {
-            0 => CouncilDerivationKind::Sortition,
-            1 => CouncilDerivationKind::Manual,
-            _ => return Err(BridgeError::Governance),
-        };
 
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -27467,9 +27450,6 @@ pub unsafe extern "C" fn connect_norito_encode_governance_persist_council_signed
             epoch,
             members,
             alternates: Vec::new(),
-            verified: 0,
-            candidates_count,
-            derived_by,
         };
 
         let fee_payment =

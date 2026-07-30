@@ -4192,7 +4192,6 @@ mod tests {
                         epoch: 1,
                         members: vec![(*ALICE_ID).clone()],
                         alternates: Vec::new(),
-                        verified: 1,
                         candidate_count: 1,
                         derived_by: CouncilDerivationKind::Manual,
                     },
@@ -9974,7 +9973,6 @@ mod tests {
             epoch: 1,
             members: vec![account_id.clone()],
             alternates: Vec::new(),
-            verified: 0,
             candidate_count: 0,
             derived_by: Default::default(),
         };

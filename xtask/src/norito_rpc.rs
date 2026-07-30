@@ -30,6 +30,7 @@ use iroha_primitives::json::Json;
 use norito::{
     NoritoSerialize,
     codec::{Decode, Encode},
+    core::DecodeFromSlice,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
 use sha2::{Digest as ShaDigest, Sha256};

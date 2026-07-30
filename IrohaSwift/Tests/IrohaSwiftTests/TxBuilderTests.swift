@@ -1711,8 +1711,6 @@ final class TxBuilderTests: XCTestCase {
                                             authority: authority,
                                             epoch: 7,
                                             members: [authority],
-                                            candidatesCount: 1,
-                                            derivedBy: .vrf,
                                             feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                             ttlMs: 15)
 
@@ -1727,8 +1725,6 @@ final class TxBuilderTests: XCTestCase {
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
             epoch: request.epoch,
-            candidatesCount: request.candidatesCount,
-            derivedBy: request.derivedBy.rawValue,
             membersJson: membersJson,
             feePaymentJSON: try request.feePayment.canonicalJSONData(),
             privateKey: keypair.privateKeyBytes

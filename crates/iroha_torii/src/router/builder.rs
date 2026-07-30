@@ -39,8 +39,6 @@ const COMPILED_ROUTE_FEATURES: &[&str] = &[
     "p2p_ws",
     #[cfg(feature = "connect")]
     "connect",
-    #[cfg(feature = "gov_vrf")]
-    "gov_vrf",
     #[cfg(feature = "zk-verify-batch")]
     "zk-verify-batch",
     #[cfg(feature = "push")]

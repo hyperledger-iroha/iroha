@@ -26,6 +26,8 @@ javascript/iroha_js
 kotlin
 mochi
 python/iroha_python
+python/iroha_torii_client
+release/openapi-cargo-lock-v1.txt
 release/openapi-generator-inputs-v1.txt
 release/version-map.toml
 rust-toolchain.toml
