@@ -19,7 +19,7 @@ readonly APALACHE_LAUNCHER_SHA256="bda52d2dbdbc7f6e95289a69dfe7ddeb162493ddd3501
 readonly APALACHE_JAR_SHA256="1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly CONTRACT_CHECKER="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_models.py"
 readonly RUNNER_CONTRACT_TEST="${REPO_ROOT}/scripts/formal/check_sumeragi_v2_multilane_apalache_runner_contract.py"
 readonly INSTALL_ROOT="${APALACHE_INSTALL_ROOT:-${REPO_ROOT}/target/apalache/toolchains}"

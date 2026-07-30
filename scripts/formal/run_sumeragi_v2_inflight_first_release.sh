@@ -11,7 +11,7 @@ if (($#)); then
 fi
 
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/1.7.4/tla2tools.jar}"
 readonly MODULE="SumeragiV2InFlightFirstRelease.tla"
 [[ -f "$TLA2TOOLS_JAR" ]] || { echo "missing TLA2Tools jar: $TLA2TOOLS_JAR" >&2; exit 1; }

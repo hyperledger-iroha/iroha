@@ -19,11 +19,11 @@ from typing import Any
 
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[2]
-FORMAL_RELATIVE = Path("docs/formal/sumeragi_v2")
+FORMAL_RELATIVE = Path("formal/sumeragi_v2")
 BINDINGS_FILENAME = "multilane_source_bindings.json"
 PROOF_COVERAGE_RELATIVE = FORMAL_RELATIVE / "proof_coverage.json"
 CLOSURE_LEDGER_RELATIVE = Path(
-    "docs/source/sumeragi_v2_multilane_closure_ledger.md"
+    "specs/sumeragi_v2_multilane_closure_ledger.md"
 )
 APALACHE_RUNNER_RELATIVE = Path(
     "scripts/formal/run_sumeragi_v2_multilane_apalache.sh"
@@ -117,7 +117,7 @@ INFLIGHT_LAYOUT_TEST = Path(
     "pytests/scripts/sumeragi_v2_multilane_models_test.py"
 )
 INFLIGHT_LAYOUT_EVIDENCE = Path(
-    "docs/formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md"
+    "formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md"
 )
 INFLIGHT_LAYOUT_REQUIRED_INVARIANTS = (
     "FirstReleaseTypeInvariant",

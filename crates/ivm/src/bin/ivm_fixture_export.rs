@@ -294,9 +294,7 @@ fn main() -> Result<(), String> {
     )?;
     publish(&root.join("defaults/executor.to"), &default_executor, mode)?;
     publish(
-        &root.join(
-            "docs/source/sdk/android/generated/fixtures/smart_contract_code_executor_hashes.json",
-        ),
+        &root.join("specs/sdk/android/generated/fixtures/smart_contract_code_executor_hashes.json"),
         smart_contract_code_hashes_fixture.as_bytes(),
         mode,
     )?;

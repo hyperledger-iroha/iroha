@@ -222,11 +222,16 @@ explicit, frozen identifiers: instruction IDs are inventoried in
 `crates/iroha_data_model/src/isi/registry/wire_ids.rs`, and query IDs are pinned
 by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
 those identifiers rather than deriving new values from the current Rust module
-layout. Registries retain the concrete Rust type name as a decode lookup alias,
-so internal refactors can move an implementation without changing canonical
-bytes or breaking already encoded values. New built-ins must add a unique
-identifier and update the corresponding golden inventory; an existing V1
-identifier must not be renamed or reused for a different layout.
+layout. The golden checks bind each built-in type label to its identifier, so
+swapping two otherwise valid identifiers is also a compatibility failure.
+Registries retain the concrete Rust type name as a decode lookup alias, while
+the frozen built-in mapping takes precedence over an installed application
+registry for canonical encoding and decoding. Application registries are then
+used as a fallback for custom query types. Internal refactors can therefore
+move an implementation without changing canonical bytes or breaking already
+encoded values. New built-ins must add a unique identifier and update the
+corresponding golden inventory; an existing V1 identifier must not be renamed
+or reused for a different layout.
 
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 4 changes the canonical validation-fee governance layout:

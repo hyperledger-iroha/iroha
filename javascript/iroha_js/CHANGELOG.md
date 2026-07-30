@@ -274,7 +274,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   against the standard `ACTC`/`ACSP`/`ACSC`/`ACWC`/`PDNG`/`RJCT` set so JS-06
   callers get deterministic errors when the bridge returns an unexpected
   state. Typings, README/docs snippets, and Jest coverage exercise the new
-  validation paths.【javascript/iroha_js/src/toriiClient.js:7168】【javascript/iroha_js/index.d.ts:3600】【javascript/iroha_js/test/toriiClient.test.js:940】【javascript/iroha_js/README.md:1232】【docs/source/sdk/js/governance_iso_examples.md:79】
+  validation paths.【javascript/iroha_js/src/toriiClient.js:7168】【javascript/iroha_js/index.d.ts:3600】【javascript/iroha_js/test/toriiClient.test.js:940】【javascript/iroha_js/README.md:1232】【specs/sdk/js/governance_iso_examples.md:79】
 - `decodeI105AccountAddress` now enforces string inputs and surfaces a
   clear `TypeError` for non-string values, keeping JS-04 validation parity for
   I105 helpers and preventing accidental coercion when decoding selectors.
@@ -289,7 +289,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   a single `AbortSignal` across submission and polling, and optionally waits
   for a terminal bridge status. Typings, README/docs snippets, and Jest
   coverage keep the JS-06 advanced ISO bridge flow deterministic for CI and
-  operators.【javascript/iroha_js/src/toriiClient.js:493】【javascript/iroha_js/index.d.ts:5420】【javascript/iroha_js/test/toriiClient.test.js:2876】【javascript/iroha_js/README.md:1243】【docs/source/sdk/js/governance_iso_examples.md:92】
+  operators.【javascript/iroha_js/src/toriiClient.js:493】【javascript/iroha_js/index.d.ts:5420】【javascript/iroha_js/test/toriiClient.test.js:2876】【javascript/iroha_js/README.md:1243】【specs/sdk/js/governance_iso_examples.md:92】
 - Hardened `ToriiClient.waitForTransactionStatus{,Typed}` by validating the
   polling options up front: the helper now requires the options payload to be a
   plain object, enforces non-negative `intervalMs`/`timeoutMs`, positive
@@ -325,7 +325,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   mirrors the Nexus NX-16 UAID portfolio and Space Directory manifest APIs
   without bespoke JSON parsing. The helpers validate UAID literals, lifecycle
   metadata, and dataspace filters, keeping the new universal-account surfaces in
-  lockstep with the Torii reference docs.【javascript/iroha_js/src/toriiClient.js:1234】【javascript/iroha_js/index.d.ts:3255】【javascript/iroha_js/README.md:818】【javascript/iroha_js/test/toriiClient.test.js:964】【docs/source/torii/portfolio_api.md:1】
+  lockstep with the Torii reference docs.【javascript/iroha_js/src/toriiClient.js:1234】【javascript/iroha_js/index.d.ts:3255】【javascript/iroha_js/README.md:818】【javascript/iroha_js/test/toriiClient.test.js:964】【specs/torii/portfolio_api.md:1】
 - Added `ToriiClient.callContract` with typed request/response normalisation so
   Node.js clients can invoke `/v1/contracts/call` without hand-crafting JSON,
   keeping contract execution coverage aligned with the roadmap’s JS-04/JS-06
@@ -416,7 +416,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   `governanceSubmitZkBallotV1`, `governanceSubmitZkBallotProofV1`) with input
   validation, README snippets, and TypeScript definitions so the JS SDK covers
   the `/v1/gov/proposals/deploy-contract` and ballot DTOs described in
-  `docs/source/governance_api.md`.
+  `specs/governance_api.md`.
 - Removed legacy `addressFormat` support from `ToriiClient.listAccounts`/`queryAccounts`;
   SDK account-list/query helpers are now canonical I105-only.
 - Added runtime capability helpers to `ToriiClient`

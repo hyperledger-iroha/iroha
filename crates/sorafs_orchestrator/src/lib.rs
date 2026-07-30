@@ -7240,7 +7240,8 @@ mod tests {
     #[test]
     fn compliance_example_config_parses() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let example_path = manifest_dir.join("../../docs/examples/sorafs_compliance_policy.json");
+        let example_path =
+            manifest_dir.join("../../fixtures/documentation/sorafs_compliance_policy.json");
         let file = File::open(&example_path).expect("open compliance example");
         let value: Value =
             norito::json::from_reader(file).expect("decode compliance example config");
@@ -9237,7 +9238,8 @@ mod tests {
     #[test]
     fn direct_mode_policy_example_is_valid() {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let example_path = manifest_dir.join("../../docs/examples/sorafs_direct_mode_policy.json");
+        let example_path =
+            manifest_dir.join("../../fixtures/documentation/sorafs_direct_mode_policy.json");
         let file = File::open(&example_path).expect("open direct mode policy example");
         let value: Value = norito::json::from_reader(file).expect("decode config json");
         let config =

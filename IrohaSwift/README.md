@@ -448,7 +448,7 @@ swift test --filter IrohaPeer
 swift test --filter KagemushaPeerTransportTests
 ```
 
-See the [peer transport V1 guide](../docs/source/peer_transport_v1.md) for byte
+See the [peer transport V1 guide](../specs/peer_transport_v1.md) for byte
 layouts, fixture hashes, Android permissions, and durability boundaries.
 
 ### Kagemusha offline cash lifecycle
@@ -1905,7 +1905,7 @@ For contributor setup and Torii mock ledger instructions, refer to
 
 ## Documentation & Integration Guides
 
-- SDK overview and APIs: [`docs/source/sdk/swift/index.md`](../docs/source/sdk/swift/index.md)
+- SDK overview and APIs: [`specs/sdk/swift/index.md`](../specs/sdk/swift/index.md)
 - Connect quickstart (high-level SDK flow + CryptoKit reference): [`docs/connect_swift_ios.md`](../docs/connect_swift_ios.md)
 - Xcode integration guide (NoritoBridgeKit, ChaChaPoly framing, ConnectSession wiring): [`docs/connect_swift_integration.md`](../docs/connect_swift_integration.md)
 - SwiftUI demo contributor guide (local Torii setup, acceleration toggles): [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md)

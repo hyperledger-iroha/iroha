@@ -28,7 +28,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn source_dir() -> PathBuf {
-    workspace_root().join("docs/source")
+    workspace_root().join("specs")
 }
 
 fn abi_hash_golden_path() -> PathBuf {

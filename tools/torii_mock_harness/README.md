@@ -61,7 +61,7 @@ metrics described below.
 ## Telemetry
 
 Every run must emit the following metrics (also documented in
-`docs/source/torii/norito_rpc_brief.md`):
+`specs/torii/norito_rpc_brief.md`):
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|

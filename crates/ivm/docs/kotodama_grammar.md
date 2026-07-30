@@ -1,7 +1,7 @@
 # Kotodama V1 grammar
 
 The single normative Kotodama V1 language specification is
-[`docs/source/kotodama_grammar.md`](../../../docs/source/kotodama_grammar.md).
+[`specs/kotodama_grammar.md`](../../../specs/kotodama_grammar.md).
 
 This file is retained only as a stable link for readers of the `ivm` crate.
 The compiler has no compatibility grammar or edition selector. V1 declaration

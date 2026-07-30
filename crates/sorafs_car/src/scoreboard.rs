@@ -4,7 +4,7 @@
 //! snapshots into weighted [`FetchProvider`](crate::multi_fetch::FetchProvider)
 //! instances that the orchestrator can schedule deterministically. Each run
 //! evaluates capability constraints, honouring range and stream budgets, and
-//! applies the weighting formula described in `docs/source/sorafs_orchestrator_plan.md`.
+//! applies the weighting formula described in `specs/sorafs_orchestrator_plan.md`.
 
 use std::{
     collections::HashMap,

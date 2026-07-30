@@ -16,7 +16,7 @@ else
 fi
 export JAVA_BIN
 
-readonly proof_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
+readonly proof_ledger="formal/sumeragi_v2/proof_coverage.json"
 readonly proof_evidence="target/formal/sumeragi_v2/proof_evidence.json"
 readonly verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
 readonly cross_tool_evidence="target/formal/sumeragi_v2/cross_tool_evidence.json"

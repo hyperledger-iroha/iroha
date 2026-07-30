@@ -235,6 +235,15 @@ def foundational_summary(
                     f"{prerequisite_id}:production-evidence".encode("ascii")
                 ).hexdigest(),
                 "evidence_generated_at_unix": generated_at_unix - 1,
+                "readiness_summary_sha256": [
+                    {
+                        "gate": gate_name,
+                        "sha256": lane_summary_sha256[gate_name],
+                    }
+                    for gate_name in MODULE.FOUNDATIONAL_PREREQUISITE_LANES[
+                        prerequisite_id
+                    ]
+                ],
             }
             for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS
         ],
@@ -308,12 +317,28 @@ def foundational_cli_args() -> list[str]:
     ]
 
 
-def topology_cli_args(
+def topology_only_cli_args(
     root: Path,
     deployment_id: str = DEPLOYMENT_ID,
     environment: str = ENVIRONMENT,
 ) -> list[str]:
-    """Return the mandatory exact qualification input for CLI cases."""
+    """Return the topology qualification accepted by individual lane checkers."""
+
+    topology_path = write_topology_qualification(root, deployment_id, environment)
+    return [
+        "--topology-qualification-summary",
+        str(topology_path),
+    ]
+
+
+def resilience_cli_args(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    *,
+    generated_at_unix: int = GENERATED_AT,
+) -> list[str]:
+    """Return the aggregate-only resilience qualification arguments."""
 
     topology_path = write_topology_qualification(root, deployment_id, environment)
     topology_qualification, topology_errors = (
@@ -330,18 +355,36 @@ def topology_cli_args(
         deployment_id=deployment_id,
         environment=environment,
         topology_qualification=topology_qualification,
-        generated_at_unix=GENERATED_AT,
-        captured_at_unix=GENERATED_AT - 1,
+        generated_at_unix=generated_at_unix,
+        captured_at_unix=generated_at_unix - 1,
     )
     resilience_path = root / "l1-resilience-qualification.summary"
     resilience_path.write_bytes(render_resilience_summary(resilience_payload))
     return [
-        "--topology-qualification-summary",
-        str(topology_path),
         "--resilience-qualification-summary",
         str(resilience_path),
         "--resilience-qualification-signer-public-key-hex",
         RESILIENCE_SIGNER_PUBLIC_KEY.hex(),
+    ]
+
+
+def topology_cli_args(
+    root: Path,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    *,
+    generated_at_unix: int = GENERATED_AT,
+) -> list[str]:
+    """Return the complete topology and resilience input for aggregate cases."""
+
+    return [
+        *topology_only_cli_args(root, deployment_id, environment),
+        *resilience_cli_args(
+            root,
+            deployment_id,
+            environment,
+            generated_at_unix=generated_at_unix,
+        ),
     ]
 
 
@@ -1313,7 +1356,7 @@ def write_complete_lane_fixture_summary(
         written_evidence if isinstance(written_evidence, Path) else evidence_root
     )
     normalize_fixture_evidence_context(gate_evidence_root)
-    topology_args = topology_cli_args(root)
+    topology_args = topology_only_cli_args(root)
 
     if gate_name == "pop_credentials":
         exit_code = fixture_module.MODULE.main(
@@ -1631,12 +1674,72 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     assert payload["foundational_prerequisites"]["prerequisite_count"] == len(
         MODULE.FOUNDATIONAL_PREREQUISITE_IDS
     )
+    grouped = payload["foundational_prerequisites"][
+        "prerequisite_readiness_summary_sha256"
+    ]
+    assert [row["id"] for row in grouped] == list(
+        MODULE.FOUNDATIONAL_PREREQUISITE_IDS
+    )
+    global_digests = {
+        row["gate"]: row["sha256"]
+        for row in payload["foundational_prerequisites"]["lane_summary_sha256"]
+    }
+    for row in grouped:
+        expected_gates = MODULE.FOUNDATIONAL_PREREQUISITE_LANES[row["id"]]
+        assert [item["gate"] for item in row["readiness_summary_sha256"]] == list(
+            expected_gates
+        )
+        assert row["readiness_summary_sha256"] == [
+            {"gate": gate_name, "sha256": global_digests[gate_name]}
+            for gate_name in expected_gates
+        ]
     assert "signature" not in payload["foundational_prerequisites"]
     assert payload["required"]["gateway_load"]["valid"] is True
     assert payload["required"]["gateway_load"]["path"] == "gateway_load.json"
     assert payload["required"]["gateway_load"]["thresholds"] == {
         "max_evidence_bytes": 2_097_152,
     }
+
+
+def test_aggregate_replay_cross_binds_foundational_and_required_lane_digests(
+    tmp_path: Path,
+) -> None:
+    """A self-consistent foundational substitution cannot diverge from lane rows."""
+
+    write_all_gates(tmp_path)
+    summary_path = tmp_path / "aggregate.json"
+    assert run_gate(tmp_path, "--summary-out", str(summary_path)) == 0
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    gate_name = "reputation"
+    substituted_digest = hashlib.sha256(
+        b"substituted-foundational-reputation-summary"
+    ).hexdigest()
+    lane_row = next(
+        row
+        for row in summary["foundational_prerequisites"]["lane_summary_sha256"]
+        if row["gate"] == gate_name
+    )
+    lane_row["sha256"] = substituted_digest
+    group = next(
+        row
+        for row in summary["foundational_prerequisites"][
+            "prerequisite_readiness_summary_sha256"
+        ]
+        if row["id"] == "SFM-1"
+    )
+    group["readiness_summary_sha256"][0]["sha256"] = substituted_digest
+
+    errors: list[str] = []
+    MODULE.validate_aggregate_summary_output(
+        summary,
+        MODULE.DEFAULT_REQUIRED_GATES,
+        errors,
+    )
+    assert (
+        "reputation aggregate foundational lane digest must match required row sha256"
+        in errors
+    )
 
 
 def test_aggregate_ready_requires_exact_canonical_ordered_17_gate_tuple() -> None:
@@ -1683,6 +1786,7 @@ def test_complete_aggregate_without_topology_qualification_stays_blocked(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *resilience_cli_args(tmp_path),
                 *foundational_cli_args(),
                 "--summary-out",
                 str(summary),
@@ -1780,10 +1884,149 @@ def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
         "public_key_fingerprint_sha256",
         "signature_hex",
     }
+    assert MODULE.FOUNDATIONAL_PREREQUISITE_ROW_FIELDS == {
+        "id",
+        "status",
+        "evidence_anchor_sha256",
+        "evidence_generated_at_unix",
+        "readiness_summary_sha256",
+    }
     assert MODULE.FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS == {
         "gate",
         "sha256",
     }
+    assert MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS == {
+        "id",
+        "readiness_summary_sha256",
+    }
+    assert MODULE.FOUNDATIONAL_PREREQUISITE_LANES == {
+        "SFM-1": ("reputation",),
+        "SF-1": ("reference_sdk_release",),
+        "SF-2": ("pdp",),
+        "SF-2c": ("por", "potr"),
+        "SF-3": ("gateway_compliance",),
+        "SF-4": ("repair",),
+        "SF-5b": ("gateway_load",),
+        "SF-6": (
+            "appeal_finance",
+            "governance_dag",
+            "hedging_billing",
+            "orderbook",
+            "reserve_rent",
+        ),
+        "SF-8a": (
+            "ai_prescreen",
+            "moderation_panel",
+            "pop_credentials",
+            "transparency",
+        ),
+    }
+    assert tuple(MODULE.FOUNDATIONAL_PREREQUISITE_LANES) == (
+        MODULE.FOUNDATIONAL_PREREQUISITE_IDS
+    )
+    mapped_lanes = [
+        gate_name
+        for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS
+        for gate_name in MODULE.FOUNDATIONAL_PREREQUISITE_LANES[prerequisite_id]
+    ]
+    assert len(mapped_lanes) == len(set(mapped_lanes))
+    assert set(mapped_lanes) == set(MODULE.DEFAULT_REQUIRED_GATES)
+
+
+def test_foundational_prerequisite_readiness_groups_reject_resigned_attacks(
+    tmp_path: Path,
+) -> None:
+    """Signed prerequisite rows must preserve their exact mapped lane digests."""
+
+    def signed_mutation(mutator) -> dict:
+        payload = foundational_summary()
+        mutator(payload)
+        resign_foundational_summary(payload)
+        return payload
+
+    def prerequisite_row(payload: dict, prerequisite_id: str) -> dict:
+        return next(
+            row for row in payload["prerequisites"] if row["id"] == prerequisite_id
+        )
+
+    def remove_legacy_field(payload: dict) -> None:
+        prerequisite_row(payload, "SFM-1").pop("readiness_summary_sha256")
+
+    def remove_mapped_lane(payload: dict) -> None:
+        prerequisite_row(payload, "SF-6")["readiness_summary_sha256"].pop()
+
+    def add_foreign_lane(payload: dict) -> None:
+        global_by_gate = {
+            row["gate"]: row for row in payload["lane_summaries"]
+        }
+        prerequisite_row(payload, "SF-6")["readiness_summary_sha256"].append(
+            copy.deepcopy(global_by_gate["gateway_load"])
+        )
+
+    def reorder_mapped_lanes(payload: dict) -> None:
+        prerequisite_row(payload, "SF-6")["readiness_summary_sha256"].reverse()
+
+    def duplicate_mapped_lane(payload: dict) -> None:
+        rows = prerequisite_row(payload, "SF-6")["readiness_summary_sha256"]
+        rows.append(copy.deepcopy(rows[0]))
+
+    def duplicate_mapped_digest(payload: dict) -> None:
+        rows = prerequisite_row(payload, "SF-6")["readiness_summary_sha256"]
+        rows[1]["sha256"] = rows[0]["sha256"]
+
+    def mismatch_grouped_digest(payload: dict) -> None:
+        prerequisite_row(payload, "SF-5b")["readiness_summary_sha256"][0][
+            "sha256"
+        ] = "55" * 32
+
+    cases = (
+        (
+            "legacy-missing-field",
+            remove_legacy_field,
+            ".readiness_summary_sha256 must be an array",
+        ),
+        (
+            "missing-lane",
+            remove_mapped_lane,
+            ".readiness_summary_sha256 is missing required gates",
+        ),
+        (
+            "extra-lane",
+            add_foreign_lane,
+            ".readiness_summary_sha256 contains unknown gates",
+        ),
+        (
+            "reordered-lanes",
+            reorder_mapped_lanes,
+            "must match the exact canonical readiness lanes for its prerequisite id",
+        ),
+        (
+            "duplicate-lane",
+            duplicate_mapped_lane,
+            ".readiness_summary_sha256 must not contain duplicate gates",
+        ),
+        (
+            "duplicate-digest",
+            duplicate_mapped_digest,
+            ".readiness_summary_sha256 must use unique summary digests",
+        ),
+        (
+            "digest-mismatch",
+            mismatch_grouped_digest,
+            "grouped digest must match foundational lane_summaries",
+        ),
+    )
+
+    for index, (name, mutator, expected_error) in enumerate(cases):
+        exit_code, result = run_foundational_case(
+            tmp_path / f"foundation-readiness-group-{index:02d}-{name}",
+            signed_mutation(mutator),
+        )
+        assert exit_code == 1, name
+        diagnostics = "\n".join(result["errors"])
+        assert expected_error in diagnostics, name
+        assert result["status"] == "blocked", name
+        assert result["foundational_prerequisites"]["valid"] is False, name
 
 
 def test_foundational_prerequisites_reject_schema_set_freshness_and_context_attacks(
@@ -2480,11 +2723,23 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
     fixture_root.mkdir()
     summary_root.mkdir()
     now_unix = write_normalized_complete_lane_summaries(fixture_root, summary_root)
+    qualification_args = topology_cli_args(
+        summary_root,
+        generated_at_unix=now_unix - 1,
+    )
+    resilience_path = summary_root / "l1-resilience-qualification.summary"
+    resilience_bytes = resilience_path.read_bytes()
+    resilience_qualification = build_resilience_binding(
+        MODULE,
+        json.loads(resilience_bytes),
+        resilience_bytes,
+    )
     write_foundational_summary(
         summary_root,
         foundational_summary(
             generated_at_unix=now_unix - 1,
             lane_summary_sha256=lane_summary_digests(summary_root),
+            resilience_qualification=resilience_qualification,
         ),
     )
     summary = tmp_path / "aggregate.json"
@@ -2500,7 +2755,7 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
-                *topology_cli_args(summary_root),
+                *qualification_args,
                 *foundational_cli_args(),
                 "--summary-out",
                 str(summary),
@@ -2605,15 +2860,21 @@ def test_aggregate_summary_path_label_falls_back_when_identity_resolution_fails(
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_foundational_summary(tmp_path)
+    qualification_args = topology_cli_args(tmp_path)
+    qualification_lines = [
+        f"{flag} {value}"
+        for flag, value in zip(
+            qualification_args[::2],
+            qualification_args[1::2],
+            strict=True,
+        )
+    ]
     args = tmp_path / "aggregate.args"
     args.write_text(
         "\n".join(
-                [
-                    (
-                        "--topology-qualification-summary "
-                        f"{write_topology_qualification(tmp_path)}"
-                    ),
-                    f"--evidence-dir {tmp_path}",
+            [
+                *qualification_lines,
+                f"--evidence-dir {tmp_path}",
                 "--require-gate gateway_load",
                 f"--now-unix {NOW_UNIX}",
                 f"--deployment-id {DEPLOYMENT_ID}",
@@ -3013,6 +3274,7 @@ def test_explicit_evidence_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3048,6 +3310,7 @@ def test_explicit_evidence_broken_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3088,6 +3351,7 @@ def test_evidence_dir_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3123,6 +3387,7 @@ def test_evidence_dir_broken_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3163,6 +3428,7 @@ def test_explicit_evidence_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3200,6 +3466,7 @@ def test_explicit_evidence_broken_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3241,6 +3508,7 @@ def test_evidence_dir_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3278,6 +3546,7 @@ def test_evidence_dir_broken_parent_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3317,6 +3586,7 @@ def test_discovered_evidence_file_symlink_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -16654,6 +16924,9 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
         "AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS": (
             MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
         ),
+        "AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS": (
+            MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS
+        ),
         "AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS": (
             MODULE.AGGREGATE_MISSING_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS
         ),
@@ -16751,6 +17024,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "previous_envelope_sha256",
             "signer_public_key_fingerprint_sha256",
             "evidence_anchor_sha256",
+            "prerequisite_readiness_summary_sha256",
             "lane_summary_sha256",
             "topology_qualification",
             "resilience_qualification",
@@ -16758,6 +17032,10 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "sha256",
             "errors",
         }
+    )
+    assert (
+        MODULE.AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS
+        == frozenset({"id", "readiness_summary_sha256"})
     )
     assert MODULE.RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS == frozenset(
         {"requirement", "artifact_path", "artifact_sha256", "captured_at_unix"}

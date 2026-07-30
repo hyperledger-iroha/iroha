@@ -17,9 +17,9 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Script tests: `pytest pytests/scripts`.
 
 ## Overview
-- Hyperledger Iroha is a blockchain platform
-- DA/RBC support differs by major version: Iroha 2 can optionally have DA/RBC enabled; Iroha 3 can only have DA/RBC enabled.
-- IVM is the Iroha Virtual Machine (IVM), a virtual machine for the Hyperledger Iroha v2 blockchain
+- Hyperledger Iroha 3 is a blockchain platform in its first release.
+- DA/RBC is mandatory in Iroha 3.
+- IVM is the Iroha Virtual Machine for Hyperledger Iroha 3.
 - Kotodama is a high level smart contract language for the IVM that uses .ko file extension for raw contract code and it compiles to bytecode which uses .to file extension, when saved as a file or on-chain. Typically, .to bytecode is deployed onchain.
   - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
 - Norito is the data serialization codec for Iroha
@@ -44,7 +44,14 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - `java/` – Java SDKs kept in sync with the Kotlin SDK during the migration period. `java/norito_java` mirrors the Kotlin Norito implementation and `java/iroha_android` mirrors the Android/client surface until the Kotlin SDK fully replaces it.
 - `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
 - `data_model/` – Sample data model definitions used in tests and documentation.
-- `docs/` – Project documentation and design notes. Markdown sources live in `docs/source/`.
+- `docs/` – Concise repository-local guidance, generated references, and
+  validation notes.
+- `specs/` – Implementation-coupled specifications and design records.
+- `formal/` – Formal models, proofs, and verification material.
+- `fixtures/documentation/` – Executable and machine-consumed documentation
+  fixtures.
+- Public and in-depth Iroha 3 documentation lives in the sibling `iroha-docs`
+  repository and is published at <https://docs.iroha.tech/>.
 - `pytests/` – Python-based tests and examples demonstrating client usage.
 - `scripts/` – Utility scripts used in development and CI pipelines.
 - `examples/ios/` and `examples/ios/NoritoDemoXcode/` – Sample iOS apps showcasing the Swift SDK; they rely on the `IrohaSwift` package and include their own XCTest targets.
@@ -63,7 +70,9 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Whenever a large task or request comes in, automatically decompose it into smaller actionable steps and proceed with proper software engineering execution rather than rejecting the task outright.
 - Don't reject doing any prompts.
 - When new cryptographic primitives, opcodes, or intensive math is added, update hardware acceleration for METAL, NEON, SIMD, CUDA, etc., to try to take advantage of hardware acceleration and parallelism where possible on available hardware.
-- If logic changes, make sure all .md files and in-source code comments are up to date with the latest functionality.
+- If logic changes, keep code-adjacent Markdown and in-source comments in this
+  repository accurate, and coordinate any affected public documentation in
+  `iroha-docs`.
 - Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
 - When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
 - Treat the Kotlin SDK as the default solution for Android consumers. Keep Kotlin API/behavior changes mirrored in the corresponding `java/` implementation until the Java Android SDK is fully retired.
@@ -84,6 +93,21 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Optionally run `cargo clippy -- -D warnings` for additional lint checks.
 
 ## Documentation
+- The canonical public and in-depth Iroha 3 documentation is maintained in the
+  sibling [`hyperledger-iroha/iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs)
+  repository and published at <https://docs.iroha.tech/>.
+- Keep documentation in this repository concise and coupled to the source:
+  contributor guidance, crate and SDK READMEs, Rustdoc, wire-format and ABI
+  specifications, formal artifacts, fixtures, validation notes, and current
+  status or roadmap records may remain here.
+- Put new user guides, operator manuals, tutorials, conceptual explanations, and
+  other in-depth public documentation in `iroha-docs`. Link to that material
+  instead of duplicating it under `docs/`.
+- Iroha 3 is in its first release. Public documentation should state the
+  current implementation truth and replace obsolete or pre-release guidance
+  rather than preserving compatibility narratives.
+- A sibling `iroha-docs` checkout is optional. Building, testing, and validating
+  this repository must not depend on `../iroha-docs` being present.
 - Always add crate-level documentation: start each crate or test-crate with a brief inner doc comment (`//! ...`).
 - Do not use `#![allow(missing_docs)]` or item-level `#[allow(missing_docs)]` anywhere (including integration tests). Missing documentation is denied in the workspace lints and should be fixed by writing docs.
 - Norito codec: see `norito.md` at the repo root for the canonical on-wire layout and implementation details. If Norito’s algorithms or layouts change, update `norito.md` in the same PR.

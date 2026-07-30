@@ -24,8 +24,8 @@ resolve_base() {
 	echo "HEAD^"
 }
 
-JSON_PATH="docs/source/agents/env_var_inventory.json"
-MD_PATH="docs/source/agents/env_var_inventory.md"
+JSON_PATH="specs/agents/env_var_inventory.json"
+MD_PATH="specs/agents/env_var_inventory.md"
 
 tmp_json="$(mktemp)"
 tmp_md="$(mktemp)"

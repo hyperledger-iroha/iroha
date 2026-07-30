@@ -1,5 +1,6 @@
 iroha.openapi.generator-inputs.v1
 .github/workflows/openapi.yml
+artifacts/openapi/allowed_signers.json
 Cargo.lock
 Cargo.toml
 IrohaSwift
@@ -10,14 +11,9 @@ ci/check_openapi_spec.sh
 crates
 csharp
 data_model
-docs/i18n
-docs/portal/package-lock.json
-docs/portal/package.json
-docs/portal/scripts
-docs/portal/static/openapi/allowed_signers.json
-docs/source/sdk/android/generated
-docs/source/sdk/android/generated/codegen_hash_tree.json
-docs/source/sdk/android/generated/codegen_manifest_metadata.json
+specs/sdk/android/generated
+specs/sdk/android/generated/codegen_hash_tree.json
+specs/sdk/android/generated/codegen_manifest_metadata.json
 fixtures
 integration_tests
 java/iroha_android

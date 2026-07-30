@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tuple
 
-DEFAULT_JOBS = "docs/source/sns/regulatory/annex_jobs.json"
-DEFAULT_REGULATORY_ROOT = "docs/source/sns/regulatory"
-DEFAULT_REPORT_ROOT = "docs/source/sns/reports"
+DEFAULT_JOBS = "specs/sns/regulatory/annex_jobs.json"
+DEFAULT_REGULATORY_ROOT = "specs/sns/regulatory"
+DEFAULT_REPORT_ROOT = "specs/sns/reports"
 
 MARKER_RE = re.compile(
     r"<!--\s*sns-annex:([a-z0-9\.\-]+?)-(\d{4}-\d{2}):start\s*-->",

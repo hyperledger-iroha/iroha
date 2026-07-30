@@ -10264,7 +10264,7 @@ mod view_lock_contention_log_tests {
 
 /// Current state of the blockchain.
 ///
-/// Merge-ledger finality plumbing is specified in `docs/source/merge_ledger.md`.
+/// Merge-ledger finality plumbing is specified in `specs/merge_ledger.md`.
 /// The lane/global reduction metadata exposed by the merge ledger is stored in
 /// [`World::merge_hint_roots`] and [`World::merge_global_state_root`] so queries can
 /// surface the latest committee commitments.

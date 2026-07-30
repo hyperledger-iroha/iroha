@@ -1,11 +1,11 @@
 # IVM Reference
 
 This file is the workspace-root entry point for IVM architecture and ABI notes.
-Detailed docs live under `docs/source/` and `crates/ivm/docs/`.
+Detailed docs live under `specs/` and `crates/ivm/docs/`.
 
 Related docs:
-- `docs/source/ivm_architecture_plan.md`
-- `docs/source/ivm_syscalls.md`
+- `specs/ivm_architecture_plan.md`
+- `specs/ivm_syscalls.md`
 - `crates/ivm/docs/pointer_abi.md`
 
 <!-- BEGIN GENERATED POINTER TYPES -->

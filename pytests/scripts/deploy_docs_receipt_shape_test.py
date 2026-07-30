@@ -16,8 +16,8 @@ STALE_CONTRACT_DEPLOYMENT_RESPONSE = (
 
 def _target_docs() -> list[Path]:
     patterns = (
-        "docs/source/governance_api*.md",
-        "docs/source/contract_deployment*.md",
+        "specs/governance_api*.md",
+        "specs/contract_deployment*.md",
         "docs/portal/docs/governance/api*.md",
         "docs/portal/i18n/*/docusaurus-plugin-content-docs/current/governance/api*.md",
     )
@@ -41,9 +41,9 @@ def test_targeted_deploy_docs_do_not_describe_flattened_single_contract_response
 
 
 def test_canonical_english_docs_reference_bundle_receipt_shape() -> None:
-    governance = (REPO_ROOT / "docs/source/governance_api.md").read_text(encoding="utf-8")
+    governance = (REPO_ROOT / "specs/governance_api.md").read_text(encoding="utf-8")
     contract_deployment = (
-        REPO_ROOT / "docs/source/contract_deployment.md"
+        REPO_ROOT / "specs/contract_deployment.md"
     ).read_text(encoding="utf-8")
     assert "DeployContractBundleReceiptDto" in governance
     assert "contracts[]" in governance

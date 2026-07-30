@@ -441,21 +441,6 @@ jobs:
           path: target/formal/sumeragi_v2
           if-no-files-found: ignore
 
-  docs_i18n_metadata:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Audit translated documentation metadata
-        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
-      - name: Upload formal docs metadata report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: formal-docs-i18n-metadata
-          path: target/docs-i18n/formal-metadata.json
-          if-no-files-found: ignore
-
   nexus_cross_dataspace_localnet:
     runs-on: [self-hosted, Linux, iroha2]
     container:

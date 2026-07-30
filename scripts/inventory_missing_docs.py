@@ -209,13 +209,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--json",
-        default="docs/source/agents/missing_docs_inventory.json",
+        default="specs/agents/missing_docs_inventory.json",
         type=pathlib.Path,
         help="Path to write the JSON inventory (default: %(default)s)",
     )
     parser.add_argument(
         "--md",
-        default="docs/source/agents/missing_docs_inventory.md",
+        default="specs/agents/missing_docs_inventory.md",
         type=pathlib.Path,
         help="Path to write the Markdown summary (default: %(default)s)",
     )

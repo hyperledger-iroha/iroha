@@ -169,7 +169,7 @@ def test_explicit_non_rust_path_can_skip_rust_lanes(tmp_path: Path) -> None:
     """A documented non-Rust path produces an empty, valid matrix."""
 
     result = rust_ci.classify_paths(
-        ["docs/source/index.md"],
+        ["specs/index.md"],
         metadata=_metadata(tmp_path),
         manifest=_manifest(),
         root=tmp_path,

@@ -1,7 +1,7 @@
 //! Reserve-plus-rent policy quoting (SFM-6 / DA-7).
 //!
 //! These types translate the economics specification captured in
-//! `docs/source/sorafs_reserve_rent_plan.md` into deterministic payloads so
+//! `specs/sorafs_reserve_rent_plan.md` into deterministic payloads so
 //! governance, CLI tooling, and ledger ISIs can derive the same rent and
 //! reserve requirements. The quoting logic intentionally mirrors the formulas
 //! documented in the roadmap: monthly rent is computed per storage class and

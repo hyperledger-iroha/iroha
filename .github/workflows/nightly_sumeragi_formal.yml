@@ -35,17 +35,12 @@ jobs:
         env:
           SUMERAGI_V2_TLC_PROFILE: nightly
         run: bash ci/check_sumeragi_formal.sh
-      - name: Formal docs metadata report
-        if: always()
-        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
       - name: Upload Sumeragi v2 formal evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: sumeragi-v2-formal-nightly
-          path: |
-            target/formal/sumeragi_v2
-            target/docs-i18n/formal-metadata.json
+          path: target/formal/sumeragi_v2
           if-no-files-found: ignore
 
   # Deliberately independent of the strict formal job: incomplete proof debt

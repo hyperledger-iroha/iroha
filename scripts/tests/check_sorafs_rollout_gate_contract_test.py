@@ -15219,9 +15219,9 @@ def sorafs_rollout_gate_plan_scan_paths() -> list[Path]:
 def test_sorafs_rollout_gate_plan_scan_covers_localized_mirrors() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in sorafs_rollout_gate_plan_scan_paths()}
 
-    assert Path("docs/source/sorafs_pdp_plan.md") in scanned
-    assert Path("docs/source/sorafs_pdp_plan.ja.md") in scanned
-    assert Path("docs/source/sorafs_transparency_plan.zh-hans.md") in scanned
+    assert Path("specs/sorafs_pdp_plan.md") in scanned
+    assert Path("specs/sorafs_pdp_plan.ja.md") in scanned
+    assert Path("specs/sorafs_transparency_plan.zh-hans.md") in scanned
 
 
 def test_sorafs_plan_docs_do_not_reopen_shipped_rollout_gates() -> None:
@@ -15513,7 +15513,7 @@ def sorafs_doc_command_scan_paths() -> list[Path]:
 def test_unshipped_doc_command_scan_covers_nested_and_portal_sorafs_docs() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in sorafs_doc_command_scan_paths()}
 
-    assert Path("docs/source/sorafs/pin_registry_plan.md") in scanned
+    assert Path("specs/sorafs/pin_registry_plan.md") in scanned
     assert Path("docs/portal/docs/sorafs/node-plan.md") in scanned
     assert any(
         path.parts[:3] == ("docs", "portal", "i18n") and "sorafs" in path.parts
@@ -16580,7 +16580,7 @@ def test_unshipped_public_route_matcher_has_negative_controls() -> None:
 def test_unshipped_public_route_doc_scan_covers_nested_and_portal_sorafs_docs() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in sorafs_doc_command_scan_paths()}
 
-    assert Path("docs/source/sorafs/pin_registry_plan.md") in scanned
+    assert Path("specs/sorafs/pin_registry_plan.md") in scanned
     assert Path("docs/portal/docs/sorafs/node-plan.md") in scanned
     assert any(
         path.parts[:3] == ("docs", "portal", "i18n") and "sorafs" in path.parts

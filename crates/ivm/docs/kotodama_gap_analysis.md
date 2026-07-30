@@ -2,7 +2,7 @@
 
 This is a non-normative guide for contributors aligning the implementation
 with the first release. The sole source-language specification is
-[`docs/source/kotodama_grammar.md`](../../../docs/source/kotodama_grammar.md).
+[`specs/kotodama_grammar.md`](../../../specs/kotodama_grammar.md).
 `status.md` records verified work and `roadmap.md` records only outstanding
 work.
 

@@ -20,6 +20,7 @@ readonly source_paths=(
   python/iroha_torii_client/native_amx.py
   javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js
   javascript/iroha_js/src/toriiClient.js
+  javascript/iroha_js/scripts/build-dist.mjs
   javascript/iroha_js/index.d.ts
   javascript/iroha_js/package.json
   javascript/iroha_js/package-lock.json
@@ -125,11 +126,12 @@ case "$surface" in
     ;;
 esac
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 is required for grouped Native AMX V2 parity" >&2
+readonly python_bin="${PYTHON_BIN:-python3}"
+if [[ -z "$python_bin" ]] || ! command -v "$python_bin" >/dev/null 2>&1; then
+  echo "A valid Python 3 interpreter is required for grouped Native AMX V2 parity (PYTHON_BIN=${python_bin})" >&2
   exit 1
 fi
-python3 - "$fixture_path" "$expected_negative_control_count" <<'PY'
+"$python_bin" - "$fixture_path" "$expected_negative_control_count" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -188,7 +190,7 @@ resolve_java_home() {
     java_bin="$("${repo_root}/scripts/formal/resolve_java.sh")"
   fi
   java_bin="$(
-    python3 - "$java_bin" <<'PY'
+    "$python_bin" - "$java_bin" <<'PY'
 from pathlib import Path
 import sys
 print(Path(sys.argv[1]).resolve(strict=True))
@@ -208,7 +210,7 @@ PY
 
 assert_pytest_count() {
   local expected="$1"
-  python3 - "$transcript" "$expected" <<'PY'
+  "$python_bin" - "$transcript" "$expected" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -235,7 +237,7 @@ assert_gradle_report() {
   local report_root="$1"
   local class_name="$2"
   local expected="$3"
-  python3 - "$report_root" "$class_name" "$expected" <<'PY'
+  "$python_bin" - "$report_root" "$class_name" "$expected" <<'PY'
 from pathlib import Path
 import sys
 import xml.etree.ElementTree as ET
@@ -267,18 +269,18 @@ case "$surface" in
     observed_test_count=7
     run_and_capture \
       env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
-      python3 -m pytest -q -p no:cacheprovider \
+      "$python_bin" -m pytest -q -p no:cacheprovider \
       "${repo_root}/pytests/scripts/native_amx_v2_grouped_fixture_test.py"
     assert_pytest_count "$observed_test_count"
     ;;
   python)
     observed_test_count=56
-    python3 -c \
+    "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     run_and_capture \
       env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
-      PYTHONPATH="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python" \
-      python3 -m pytest -q -p no:cacheprovider \
+      PYTHONPATH="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}" \
+      "$python_bin" -m pytest -q -p no:cacheprovider \
       "${repo_root}/python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py"
     assert_pytest_count "$observed_test_count"
     ;;
@@ -288,7 +290,36 @@ case "$surface" in
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
     fi
+    readonly javascript_sdk_root="${repo_root}/javascript/iroha_js"
+    readonly javascript_source_root="${javascript_sdk_root}/src"
+    readonly javascript_package_root="${temporary_root}/javascript-package"
+    readonly javascript_dist_root="${javascript_package_root}/dist"
+    readonly javascript_dist_diff="${temporary_root}/javascript-dist.diff"
+    if [[ -n "$(find "$javascript_source_root" -type l -print -quit)" ]]; then
+      echo "grouped Native AMX V2 JavaScript source tree must not contain symlinks" >&2
+      exit 1
+    fi
+    if [[ ! -d "${javascript_sdk_root}/node_modules" \
+      || -L "${javascript_sdk_root}/node_modules" ]]; then
+      echo "grouped Native AMX V2 JavaScript parity requires a regular installed node_modules directory" >&2
+      exit 1
+    fi
+    mkdir -p -- "$javascript_dist_root"
+    cp "${javascript_sdk_root}/package.json" "${javascript_package_root}/package.json"
+    ln -s "${javascript_sdk_root}/node_modules" "${javascript_package_root}/node_modules"
+    cp -R "${javascript_source_root}/." "$javascript_dist_root/"
+    if [[ -n "$(find "$javascript_dist_root" -type l -print -quit)" ]]; then
+      echo "grouped Native AMX V2 staged JavaScript distribution must not contain symlinks" >&2
+      exit 1
+    fi
+    if ! diff -qr "$javascript_source_root" "$javascript_dist_root" >"$javascript_dist_diff"; then
+      echo "grouped Native AMX V2 staged JavaScript distribution differs from source" >&2
+      sed -n '1,40p' "$javascript_dist_diff" >&2
+      exit 1
+    fi
     run_and_capture \
+      env \
+      IROHA_JS_NATIVE_AMX_V2_PARITY_DIST_TORII_CLIENT="${javascript_dist_root}/toriiClient.js" \
       node --test --test-reporter=tap \
       "${repo_root}/javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js"
     if [[ "$(grep -Fxc -- "# pass ${observed_test_count}" "$transcript" || true)" != 1 \
@@ -312,7 +343,7 @@ case "$surface" in
       --only-use-versions-from-resolved-file \
       --disable-swift-testing \
       --filter NativeAmxV2GroupedFixtureTests
-    python3 - "$transcript" "$observed_test_count" <<'PY'
+    "$python_bin" - "$transcript" "$observed_test_count" <<'PY'
 from pathlib import Path
 import re
 import sys

@@ -10,7 +10,7 @@ readonly TLAPM_FOLDS_SHA256="aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b
 readonly SEED="19349663"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly FIXTURE_DIR="${REPO_ROOT}/crates/iroha_sumeragi_core/tests/fixtures"
 readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"
 readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"

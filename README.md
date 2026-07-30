@@ -23,7 +23,9 @@ Both tracks share the same core components, including Norito serialization, Sume
 - [`integration_tests/`](./integration_tests): cross-component network/integration tests.
 - [`IrohaSwift/`](./IrohaSwift): Swift SDK package.
 - [`java/iroha_android/`](./java/iroha_android): Android SDK package.
-- [`docs/`](./docs): user/operator/developer documentation.
+- [`docs/`](./docs): concise repository-local and code-adjacent documentation;
+  public Iroha 3 documentation is maintained in
+  [`iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs).
 
 ## Quickstart
 
@@ -130,10 +132,8 @@ For liveness checks, prefer the queue-aware fields in `/status`: use
 `/v1/pipeline/preflight.sumeragi.stall_threshold_ms` value. An old block
 timestamp alone is not a stall when the queue is empty.
 
-See the full endpoint reference in:
-
-- [`docs/source/telemetry.md`](./docs/source/telemetry.md)
-- [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
+See the full endpoint reference in the
+[public Iroha documentation](https://docs.iroha.tech/reference/torii-endpoints.html).
 
 Contract deployment is a locally signed consensus transaction flow. Clients
 upload and finalize bytecode, register the locally signed manifest, then submit
@@ -205,20 +205,19 @@ than a secret-bearing runtime profile.
 - [`crates/ivm`](./crates/ivm): Iroha Virtual Machine.
 - [`crates/iroha_kagami`](./crates/iroha_kagami): key/genesis/config tooling.
 
-## Documentation Map
+## Documentation
 
-- Main docs index: [`docs/README.md`](./docs/README.md)
-- Genesis: [`docs/genesis.md`](./docs/genesis.md)
-- Consensus (Sumeragi): [`docs/source/sumeragi.md`](./docs/source/sumeragi.md)
-- Sumeragi v2 formal argument: [`docs/formal/sumeragi_v2/PROOF.md`](./docs/formal/sumeragi_v2/PROOF.md)
-- Sumeragi v2 liveness gate: [`docs/source/sumeragi_v2_liveness.md`](./docs/source/sumeragi_v2_liveness.md)
-- Transaction pipeline: [`docs/source/pipeline.md`](./docs/source/pipeline.md)
-- P2P internals: [`docs/source/p2p.md`](./docs/source/p2p.md)
-- IVM syscalls: [`docs/source/ivm_syscalls.md`](./docs/source/ivm_syscalls.md)
-- Kotodama grammar: [`docs/source/kotodama_grammar.md`](./docs/source/kotodama_grammar.md)
-- Norito wire format: [`norito.md`](./norito.md)
-- Community: [`docs/source/community.md`](./docs/source/community.md)
-- Current work tracking: [`status.md`](./status.md), [`roadmap.md`](./roadmap.md)
+Public and in-depth Iroha 3 documentation is published at
+[docs.iroha.tech](https://docs.iroha.tech/) from the
+[`hyperledger-iroha/iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs)
+repository.
+
+This repository keeps concise contributor guidance and documentation coupled to
+the implementation, including the [`docs/` index](./docs/README.md), the
+[Norito wire-format specification](./norito.md), crate and SDK READMEs, formal
+artifacts, and the current [`status.md`](./status.md) and
+[`roadmap.md`](./roadmap.md). Building or testing Iroha does not require a
+sibling `iroha-docs` checkout.
 
 The protected Stage-6 scratch source gives proof bodies through non-Completion
 node/candidate capacity descent, fair causal admission, no-debt acquisition,
@@ -259,20 +258,14 @@ promoted without a fresh strict receipt. The current 60-obligation ledger record
 
 ## Translations
 
-Root document translations are kept out of the repository root under
-[`docs/i18n/root/`](./docs/i18n/root).
-
-Japanese overview: [`docs/i18n/root/ja/README.md`](./docs/i18n/root/ja/README.md)
-
-Other overviews:
-[`Hebrew`](./docs/i18n/root/he/README.md), [`Spanish`](./docs/i18n/root/es/README.md), [`Portuguese`](./docs/i18n/root/pt/README.md), [`French`](./docs/i18n/root/fr/README.md), [`Russian`](./docs/i18n/root/ru/README.md), [`Arabic`](./docs/i18n/root/ar/README.md), [`Urdu`](./docs/i18n/root/ur/README.md)
-
-Translation workflow: [`docs/i18n/README.md`](./docs/i18n/README.md)
+Localized public documentation is published at
+[docs.iroha.tech](https://docs.iroha.tech/) and maintained in
+[`iroha-docs`](https://github.com/hyperledger-iroha/iroha-docs).
 
 ## Contributing and Help
 
 - Contribution guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- Community/support channels: [`docs/source/community.md`](./docs/source/community.md)
+- Community/support information: [public Iroha documentation](https://docs.iroha.tech/)
 - Security policy: [`SECURITY.md`](./SECURITY.md)
 
 ## License

@@ -996,7 +996,7 @@ def main() -> int:
         default=[],
         help=(
             "Restrict candidate files by repo-relative glob (repeatable), e.g. "
-            "'docs/source/data_model.*.md'."
+            "'specs/data_model.*.md'."
         ),
     )
     parser.add_argument(

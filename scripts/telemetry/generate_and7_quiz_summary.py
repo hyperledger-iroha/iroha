@@ -4,7 +4,7 @@ Generate attendance and score summaries for the AND7 telemetry readiness quiz.
 
 Roadmap item AND7 requires the Android telemetry enablement program to capture
 knowledge‑check evidence before governance sign‑off. This helper scans the
-CSV exports stored under ``docs/source/sdk/android/readiness/forms/responses/``
+CSV exports stored under ``specs/sdk/android/readiness/forms/responses/``
 and emits structured JSON plus an optional Markdown report so the evidence can
 be attached to the enablement bundle.
 """

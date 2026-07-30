@@ -21,7 +21,7 @@ cargo xtask soranet-pop-template \
   --output deploy/soranet/frr/generated/sjc01.frr.conf
 ```
 
-See `docs/source/soranet/bgp_policy.md` for the descriptor schema, BFD/RPKI
+See `specs/soranet/bgp_policy.md` for the descriptor schema, BFD/RPKI
 guidance, and dashboard references. Generated configs intentionally avoid
 mutable placeholders so that CI can diff artefacts and operators can attach them
 directly to rollout evidence bundles.

@@ -1,7 +1,7 @@
 //! Capability negotiation helpers for the SoraNet relay handshake.
 //!
 //! This module implements the TLV parsing and negotiation rules documented in
-//! `docs/source/soranet_handshake.md`. It is intentionally deterministic so
+//! `specs/soranet_handshake.md`. It is intentionally deterministic so
 //! transcript hashes computed by clients and relays match byte-for-byte.
 
 use std::fmt;

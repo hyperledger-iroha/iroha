@@ -204,7 +204,7 @@ canonical payloads:
 
 Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
 hosts and SDKs can verify the controller deterministically. See
-`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+`specs/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
 validation rules, hashing procedure, and golden fixtures.
 
 All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
@@ -235,7 +235,7 @@ decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
 fail-closed behaviour.
 
 The canonical registry (including a machine-readable JSON export) lives under
-[`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
+[`specs/references/address_curve_registry.md`](source/references/address_curve_registry.md).
 Tooling SHOULD consume that dataset directly so curve identifiers remain
 consistent across SDKs and operator workflows.
 
@@ -257,7 +257,7 @@ consistent across SDKs and operator workflows.
 
 `AccountController::Multisig` serialises policies via
 `crates/iroha_data_model/src/account/controller.rs` and enforces the schema
-documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+documented in [`specs/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
 Key implementation details:
 
 - Policies are normalised and validated by `MultisigPolicy::validate()` before
@@ -407,7 +407,7 @@ consume the same fixture to guarantee codec parity across SDKs and Torii admissi
 
 ### 3. Globally unique domains & normalization
 
-See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+See also: [`specs/references/address_norm_v1.md`](source/references/address_norm_v1.md)
 for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
 
 Redefine `DomainId` as a tagged tuple:
@@ -433,7 +433,7 @@ expanded structure allows routing decisions.
 
 Norm v1 defines the canonical pipeline every component must use before a domain
 name is persisted or embedded into an `AccountAddress`. The full walkthrough
-lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+lives in [`specs/references/address_norm_v1.md`](source/references/address_norm_v1.md);
 the summary below captures the steps that wallets, Torii, SDKs, and governance
 tools must implement.
 
@@ -465,7 +465,7 @@ case, upper-case, raw Unicode input) are rejected with structured
 
 Canonical fixtures demonstrating these rules — including punycode round-trips
 and invalid STD3 sequences — are listed in
-`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+`specs/references/address_norm_v1.md` and are mirrored in the SDK CI
 vector suites tracked under ADDR‑2.
 
 ### 4. Nexus domain registry & routing
@@ -742,7 +742,7 @@ messages, plus recommended remediation guidance.
 3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
 4. Collect feedback from wallet providers and custodians on human-factor aspects
    (HRP naming, display formatting).
-5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
+5. Update documentation (`specs/data_model.md`, Torii API docs) once the
    implementation path is committed.
 6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
    vectors covering success and failure cases.

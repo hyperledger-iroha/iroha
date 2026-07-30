@@ -1,7 +1,7 @@
 //! `Transaction`-related functionality of Iroha.
 //!
 //! Admission derives the Nexus lane/dataspace assignment for every transaction
-//! using the configured routing policy (see `docs/source/nexus_transition_notes.md`)
+//! using the configured routing policy (see `specs/nexus_transition_notes.md`)
 //! so telemetry, fraud monitoring, and queue accounting observe the real topology.
 //!
 //! Types represent various stages of a `Transaction`'s lifecycle. For

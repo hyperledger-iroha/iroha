@@ -47,10 +47,10 @@ fn generated_header_policy_sections_are_up_to_date() {
         .parent()
         .and_then(|path| path.parent())
         .expect("workspace root")
-        .join("docs/source");
+        .join("specs");
     let mut paths = std::fs::read_dir(&source_dir)
-        .expect("read docs/source")
-        .map(|entry| entry.expect("read docs/source entry").path())
+        .expect("read specs")
+        .map(|entry| entry.expect("read specs entry").path())
         .filter(|path| {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return false;

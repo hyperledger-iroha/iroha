@@ -17,7 +17,7 @@
 //! It begins with [`Root`], containing sub-modules.
 
 // This module's usage is documented in high detail in the Configuration Reference
-// (`docs/source/references/configuration.md`).
+// (`specs/references/configuration.md`).
 #![allow(clippy::doc_markdown, clippy::doc_link_with_quotes)]
 use std::{
     borrow::Cow,

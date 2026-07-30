@@ -4,7 +4,7 @@
 //
 // Generates a concise summary of the Swift Norito parity dashboard data. The
 // script expects a JSON payload that matches the schema documented in
-// docs/source/references/ios_metrics.md (see the sample data under
+// specs/references/ios_metrics.md (see the sample data under
 // dashboards/data/mobile_parity.sample.json).
 
 import Foundation

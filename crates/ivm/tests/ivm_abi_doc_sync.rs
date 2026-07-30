@@ -5,7 +5,7 @@ fn docs_source_dir() -> std::path::PathBuf {
         .parent() // crates/
         .and_then(|path| path.parent()) // workspace root
         .expect("workspace root")
-        .join("docs/source")
+        .join("specs")
 }
 
 #[test]
@@ -14,8 +14,8 @@ fn generated_abi_hashes_sections_in_all_ivm_headers_are_up_to_date() {
     const END: &str = "<!-- END GENERATED ABI HASHES -->";
     let source_dir = docs_source_dir();
     let mut paths = std::fs::read_dir(&source_dir)
-        .expect("read docs/source")
-        .map(|entry| entry.expect("read docs/source entry").path())
+        .expect("read specs")
+        .map(|entry| entry.expect("read specs entry").path())
         .filter(|path| {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return false;
@@ -49,8 +49,8 @@ fn generated_abi_hashes_sections_in_all_ivm_headers_are_up_to_date() {
 fn runtime_abi_hash_samples_match_the_descriptor() {
     let sample_dir = docs_source_dir().join("samples");
     let mut paths = std::fs::read_dir(&sample_dir)
-        .expect("read docs/source/samples")
-        .map(|entry| entry.expect("read docs/source/samples entry").path())
+        .expect("read specs/samples")
+        .map(|entry| entry.expect("read specs/samples entry").path())
         .filter(|path| {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 return false;

@@ -247,7 +247,7 @@ def test_first_release_sdk_versions_are_final_and_swift_is_tag_pinned() -> None:
     assert ":branch" not in podspec
     assert "File.symlink?(version_file)" in podspec
 
-    for relative in ("IrohaSwift/README.md", "docs/source/sdk/swift/index.md"):
+    for relative in ("IrohaSwift/README.md", "specs/sdk/swift/index.md"):
         install_doc = (Path(__file__).resolve().parents[2] / relative).read_text(
             encoding="utf-8"
         )

@@ -3928,7 +3928,7 @@ mod new {
         ) -> WithEvents<ValidBlock> {
             // Future pipeline overlap: the scheduler can pre-validate on a snapshot pinned at
             // height N-1 while proposing block N. For now we keep the simple path to preserve
-            // deterministic behaviour; see docs/source/new_pipeline.md for the staged rollout.
+            // deterministic behaviour; see specs/new_pipeline.md for the staged rollout.
             ValidBlock::validate_unchecked(self.into(), state_block)
         }
 

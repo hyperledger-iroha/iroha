@@ -20,7 +20,7 @@ CONTRACT_FIXTURE_PATHS = (
     "crates/iroha_torii/src/lib.rs",
     "crates/irohad/src/main.rs",
     "xtask/src/sorafs.rs",
-    "docs/source/sorafs_gateway_tls_automation.md",
+    "specs/sorafs_gateway_tls_automation.md",
 )
 
 
@@ -38,7 +38,7 @@ def test_repository_runtime_acme_contract_is_fail_closed() -> None:
 
 def test_gateway_handbook_withdraws_instead_of_using_certificate_fallback() -> None:
     handbook = (
-        REPO_ROOT / "docs/source/sorafs_gateway_deployment_handbook.md"
+        REPO_ROOT / "specs/sorafs_gateway_deployment_handbook.md"
     ).read_text(encoding="utf-8")
 
     assert "sorafs-gateway tls renew" not in handbook
@@ -82,7 +82,7 @@ def test_guard_rejects_fake_renewal_and_stale_docs(tmp_path: Path) -> None:
     text = text.replace(marker, "fn fake() { AcmeAutomation::new(); }\n\n" + marker)
     xtask.write_text(text, encoding="utf-8")
 
-    doc = root / "docs/source/sorafs_gateway_tls_automation.md"
+    doc = root / "specs/sorafs_gateway_tls_automation.md"
     doc.write_text(
         doc.read_text(encoding="utf-8")
         + "\nProduction ACME clients remain available for validated accounts.\n",
@@ -97,7 +97,7 @@ def test_guard_accepts_traceable_generated_translation_stub(tmp_path: Path) -> N
     root = tmp_path / "repo"
     copy_contract_fixture(root)
 
-    canonical = root / "docs/source/sorafs_gateway_tls_automation.md"
+    canonical = root / "specs/sorafs_gateway_tls_automation.md"
     source_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
     localized = canonical.with_name("sorafs_gateway_tls_automation.ja.md")
     localized.write_text(
@@ -106,7 +106,7 @@ def test_guard_accepts_traceable_generated_translation_stub(tmp_path: Path) -> N
         "---\n"
         "lang: ja\n"
         "direction: ltr\n"
-        "source: docs/source/sorafs_gateway_tls_automation.md\n"
+        "source: specs/sorafs_gateway_tls_automation.md\n"
         "status: needs-translation\n"
         "generator: scripts/sync_docs_i18n.py\n"
         f"source_hash: {source_hash}\n"
@@ -124,7 +124,7 @@ def test_guard_rejects_malformed_generated_translation_stub(tmp_path: Path) -> N
     root = tmp_path / "repo"
     copy_contract_fixture(root)
 
-    canonical = root / "docs/source/sorafs_gateway_tls_automation.md"
+    canonical = root / "specs/sorafs_gateway_tls_automation.md"
     source_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
     localized = canonical.with_name("sorafs_gateway_tls_automation.ja.md")
     localized.write_text(
@@ -133,7 +133,7 @@ def test_guard_rejects_malformed_generated_translation_stub(tmp_path: Path) -> N
         "---\n"
         "lang: ja\n"
         "direction: ltr\n"
-        "source: docs/source/wrong.md\n"
+        "source: specs/wrong.md\n"
         "status: needs-translation\n"
         "generator: scripts/sync_docs_i18n.py\n"
         f"source_hash: {source_hash}\n"

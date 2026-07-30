@@ -10814,7 +10814,7 @@ def test_dormant_reply_clock_mutation_contract_is_bound() -> None:
     ("relative_path", "old", "new", "error_fragment"),
     (
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             "AsyncServeTransportAdmissionGateAllows ==\n"
             "  requestServiceable \\/ lifecycleOwned",
@@ -10824,14 +10824,14 @@ def test_dormant_reply_clock_mutation_contract_is_bound() -> None:
             "AsyncServeTransportAdmissionGateAllows must equal only",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             "        ELSE ~AsyncDormantExactReplyRequestPacket",
             "        ELSE AsyncPhysicalAdmissionGateAllows",
             "AsyncPacketOwnsClockDeadline must equal only",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             "UNCHANGED <<asyncNow, requestRetained, requestServiceable,\n"
             "                  lifecycleOwned, capacityOpen, selectorOpen, "
@@ -10842,35 +10842,35 @@ def test_dormant_reply_clock_mutation_contract_is_bound() -> None:
             "InstallTimeoutCertificate must retain dormant reply clock fragment",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             '  /\\ lastTransition = "Init"',
             "  \\/ TRUE",
             "Init must equal only",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             "  \\/ ServeRetainedRequest\n\nSpec ==",
             "\nSpec ==",
             "Next must equal only",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             "  /\\ WF_dormantReplyClockVars(AsyncTick)",
             "  /\\ TRUE",
             "Spec must equal only",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2DormantReplyClockMutation.tla",
             "  /\\ requestRetained \\in BOOLEAN",
             "  /\\ requestRetained = TRUE",
             "TypeInvariant must equal only",
         ),
         (
-            "docs/formal/sumeragi_v2/dormant_reply_clock_fixed.cfg",
+            "formal/sumeragi_v2/dormant_reply_clock_fixed.cfg",
             "PROPERTY NextViewClockProgress",
             "",
             "dormant reply clock config must equal only",
@@ -10916,7 +10916,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
     ("relative_path", "old", "new", "error_fragment"),
     (
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "  /\\ deadlineSet' = TRUE\n"
             "  /\\ deadlineBudget' = ScaledDeadline(timeoutAttempt)\n"
             "  /\\ deadlineOrigin' = 0",
@@ -10926,7 +10926,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "FirstExactActorDispatch must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "                 timedOutCount, dispatchStarted, deadlineSet,\n"
             "                 deadlineBudget, deadlineOrigin, deadlineDue, ackReady,\n"
             "                 ackTimeoutAttempt, writerFlushObserved, ackPublished, routeWritable,\n"
@@ -10940,7 +10940,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "RetryFullPeerWriterQueue must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "  /\\ kind = \"ExactReply\" =>\n"
             "       (writerFlushObserved <=> (ackReady \\/ ackPublished))",
             "  /\\ kind = \"ExactReply\" =>\n"
@@ -10948,7 +10948,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "FlushOutcomeInvariant must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "WriterFlushObservationOriginAction ==\n"
             "  Next =>\n"
             "    (/\\ ~writerFlushObserved\n"
@@ -10959,7 +10959,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "WriterFlushObservationOriginAction must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "WriterFlushObservationMonotonicAction ==\n"
             "  /\\ ReplyWriterDeadlineInvariant\n"
             "  /\\ Next\n"
@@ -10970,7 +10970,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "WriterFlushObservationMonotonicAction must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "ExactDeadlineDue ==\n"
             "  /\\ ExactActive\n"
             "  /\\ deadlineDue\n"
@@ -10983,7 +10983,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "ExactDeadlineDue must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "  /\\ WF_replyWriterDeadlineVars(PollPeerWriterFlush)\n\n"
             "ResponsiveReplyWriterSpec ==",
             "  /\\ WF_replyWriterDeadlineVars(PollPeerWriterFlush)\n"
@@ -10992,14 +10992,14 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "ReplyWriterDeadlineSpec may not contain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "  /\\ SF_replyWriterDeadlineVars(AdmitPeerWriter)\n"
             "  /\\ SF_replyWriterDeadlineVars(PublishPeerWriterFlush)",
             "  /\\ SF_replyWriterDeadlineVars(AdmitPeerWriter)",
             "ResponsiveReplyWriterSpec must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "  /\\ dispatchStarted\n"
             "  /\\ ~ackReady\n"
             "  /\\ occurrenceConnection = \"OldConnection\"\n"
@@ -11010,7 +11010,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "RetireOldExactRoute must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "TerminalFenceReadyWinsEveryDestructiveExitAction ==\n"
             "  ExactFlushReady =>\n"
             "    /\\ ~ExpireExactDeadline\n"
@@ -11024,7 +11024,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "TerminalFenceReadyWinsEveryDestructiveExitAction must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "  /\\ ackReady\n"
             "  /\\ ackTimeoutAttempt = timeoutAttempt\n"
             "  /\\ writerFlushObserved",
@@ -11033,7 +11033,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "ExactFlushReady must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "FlushAttemptIdentityInvariant ==\n"
             "  /\\ ackReady => ackTimeoutAttempt = timeoutAttempt\n"
             "  /\\ ~ackReady => ackTimeoutAttempt = 0",
@@ -11042,7 +11042,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "FlushAttemptIdentityInvariant must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadline.tla",
             "WriterFlushAttemptIdentityAction ==\n"
             "  PublishPeerWriterFlush =>\n"
             "    ackTimeoutAttempt' = timeoutAttempt",
@@ -11051,7 +11051,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "WriterFlushAttemptIdentityAction must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
             "THEOREM WriterFlushObservationComesOnlyFromPublish ==\n"
             "  WriterFlushObservationOriginAction",
             "THEOREM WriterFlushObservationMayBeForged ==\n"
@@ -11060,7 +11060,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "WriterFlushObservationComesOnlyFromPublish",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
             "THEOREM WriterFlushObservationIsNeverErased ==\n"
             "  WriterFlushObservationMonotonicAction",
             "THEOREM WriterFlushObservationMayBeErased ==\n"
@@ -11069,7 +11069,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "WriterFlushObservationIsNeverErased",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
             "THEOREM TerminalFenceReadyReceiptWinsEveryDestructiveExit ==\n"
             "  TerminalFenceReadyWinsEveryDestructiveExitAction",
             "THEOREM TerminalFenceMayLoseReadyReceipt ==\n"
@@ -11078,7 +11078,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "TerminalFenceReadyReceiptWinsEveryDestructiveExit",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
             "THEOREM ResponsiveStrongFairnessToReceiptResidual ==\n"
             "  ResponsiveReplyWriterSpec => ResponsiveWriterReceiptAssumption",
             "THEOREM ResponsiveStrongFairnessToReceiptDebt ==\n"
@@ -11087,7 +11087,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "ResponsiveStrongFairnessToReceiptResidual",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
             "BY ResponsiveStrongFairnessToReceiptObservation,\n"
             "   ReplyWriterDeadlineSpecAlwaysInvariant,\n"
             "   OutstandingReceiptObservationIsReady, PTL",
@@ -11095,7 +11095,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "ResponsiveStrongFairnessToReceiptResidual must retain deductive",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineProofs.tla",
             "THEOREM ResponsiveReplyWriterCursorLivenessFromStrongFairness ==\n"
             "  ResponsiveReplyWriterSpec => ResponsiveReplyWriterCursorLiveness",
             "THEOREM ResponsiveReplyWriterCursorLivenessWithoutFairness ==\n"
@@ -11104,7 +11104,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "ResponsiveReplyWriterCursorLivenessFromStrongFairness",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "  /\\ ackPublished' = TRUE\n"
             "  /\\ UNCHANGED <<kind, timeoutAttempt, timedOutCount, dispatchStarted,\n"
             "                 dispatchRetries, ackReady, writerFlushObserved,",
@@ -11115,7 +11115,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "TimeoutAsFlushed must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "  /\\ routeWritable' = FALSE\n"
             "  /\\ ackReady' = FALSE\n"
             "  /\\ ackTimeoutAttempt' = 0\n"
@@ -11130,25 +11130,25 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "TimeoutBeatsReadyFlush must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             '   "RetireReadyFlush",',
             '   "RetireReadyReceipt",',
             "MutationModes must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             '   "CloseReadyFlushWithoutTerminalFence",',
             '   "CloseReadyFlushWithTerminalFence",',
             "MutationModes must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             '   "PublishWrongTimeoutAttempt",',
             '   "PublishCurrentTimeoutAttempt",',
             "MutationModes must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "PublishWrongTimeoutAttempt ==\n"
             "  /\\ ExactActive\n"
             "  /\\ phase = \"WriterPending\"\n"
@@ -11160,7 +11160,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "PublishWrongTimeoutAttempt must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "CloseReadyFlushWithoutTerminalFence ==\n"
             "  /\\ ExactFlushReady\n"
             "  /\\ phase' = \"Parked\"",
@@ -11170,7 +11170,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "CloseReadyFlushWithoutTerminalFence must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "  /\\ ackReady' = FALSE\n"
             "  /\\ ackTimeoutAttempt' = 0\n"
             "  /\\ writerFlushObserved' = FALSE\n"
@@ -11181,7 +11181,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "EraseReadyFlushWitness must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "MutationWriterFlushObservationMonotonicity ==\n"
             "  [][MutationWriterFlushObservationMonotonicAction]"
             "_replyWriterDeadlineVars",
@@ -11190,7 +11190,7 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "MutationWriterFlushObservationMonotonicity must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2ReplyWriterDeadlineMutation.tla",
             "RetireReadyFlush ==\n"
             "  /\\ ExactFlushReady\n"
             "  /\\ occurrenceConnection = \"OldConnection\"",
@@ -11200,19 +11200,19 @@ def test_typed_rollover_handoff_formal_source_is_bound() -> None:
             "RetireReadyFlush must retain",
         ),
         (
-            "docs/formal/sumeragi_v2/reply_writer_deadline_timeout_beats_flush_bug.cfg",
+            "formal/sumeragi_v2/reply_writer_deadline_timeout_beats_flush_bug.cfg",
             '  MutationMode = "TimeoutBeatsReadyFlush"',
             '  MutationMode = "Fixed"',
             "must match exact reviewed SHA-256",
         ),
         (
-            "docs/formal/sumeragi_v2/reply_writer_deadline_close_ready_flush_bug.cfg",
+            "formal/sumeragi_v2/reply_writer_deadline_close_ready_flush_bug.cfg",
             '  MutationMode = "CloseReadyFlushWithoutTerminalFence"',
             '  MutationMode = "Fixed"',
             "must match exact reviewed SHA-256",
         ),
         (
-            "docs/formal/sumeragi_v2/reply_writer_deadline_wrong_attempt_flush_bug.cfg",
+            "formal/sumeragi_v2/reply_writer_deadline_wrong_attempt_flush_bug.cfg",
             '  MutationMode = "PublishWrongTimeoutAttempt"',
             '  MutationMode = "Fixed"',
             "must match exact reviewed SHA-256",
@@ -11344,13 +11344,13 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
     ("relative_path", "old", "new", "error_fragment"),
     (
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "StateSlots == {0, 1}",
             "StateSlots == {0}",
             "StateSlots must equal exact reviewed root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "LifecycleSnapshotV3(\n"
             "    rootGeneration,\n"
             "    roster,\n"
@@ -11371,25 +11371,25 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "LifecycleSnapshotV3 parameters must equal exact root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "   serverClosePrefix |-> serverClosePrefix]",
             "   serverClosePrefix |-> 0]",
             "LifecycleSnapshotV3 must equal exact reviewed root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "LifecycleRootV3(snapshot) ==",
             "LifecycleRootV3(snapshot, stateSlot) ==",
             "LifecycleRootV3 parameters must equal exact root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "   snapshotDigest |-> LifecycleSnapshotDigest(snapshot)]",
             "   snapshotDigest |-> NoLifecycleSnapshot]",
             "LifecycleRootV3 must equal exact reviewed root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "RootSelectedLifecyclePairIsPresent(s) ==\n"
             '  /\\ s.durableLifecycleRootV3.shape = "Committed"\n'
             "  /\\ SelectedLifecycleSnapshotV3(s) # NoLifecycleSnapshot",
@@ -11398,7 +11398,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "RootSelectedLifecyclePairIsPresent must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ SelectedLifecycleSnapshotV3(s).rootGeneration =\n"
             "       s.durableLifecycleRootV3.rootGeneration",
             "  /\\ SelectedLifecycleSnapshotV3(s).rootGeneration #\n"
@@ -11406,7 +11406,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "RootSelectedLifecyclePairMatches must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "PredecessorTransportOwnershipOpen ==\n"
             "  /\\ state.currentRoster = state.baselineRoster\n"
             '  /\\ state.transitionAuthority = "None"',
@@ -11416,7 +11416,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "PredecessorTransportOwnershipOpen must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "CreateServiceTransportOwnerPair ==\n"
             "  /\\ PredecessorTransportOwnershipOpen",
             "CreateServiceTransportOwnerPair ==\n"
@@ -11424,7 +11424,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "CreateServiceTransportOwnerPair must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "SealAppliedHeightOutputHandoff ==\n"
             "  /\\ PredecessorTransportOwnershipOpen",
             "SealAppliedHeightOutputHandoff ==\n"
@@ -11432,7 +11432,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "SealAppliedHeightOutputHandoff must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "ActivateSameRosterSuccessor ==\n"
             "  /\\ PredecessorTransportOwnershipOpen",
             "ActivateSameRosterSuccessor ==\n"
@@ -11440,7 +11440,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "ActivateSameRosterSuccessor must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "UnconsumedPredecessorTransportOwnershipInvariant ==\n"
             '  state.receiptStage \\in {"Minted", "Retained"} =>\n'
             "    PredecessorTransportOwnershipOpen",
@@ -11451,48 +11451,48 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             '          !.lifecycleCommitPhase = "BootstrapStateReplaced",',
             '          !.lifecycleCommitPhase = "Current",',
             "PublishInitialLifecycleStateSlotV3 must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "ValidateBootstrapLifecycleCandidateV3 ==",
             "ValidateBootstrapLifecycleCandidateWithoutSemanticsV3 ==",
             "missing reviewed root-anchored V3 typed rollover operator "
             "ValidateBootstrapLifecycleCandidateV3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "CommitInitialLifecycleRootV3 ==",
             "CommitInitialLifecycleStateV3 ==",
             "missing reviewed root-anchored V3 typed rollover operator "
             "CommitInitialLifecycleRootV3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "PublishSuccessorLifecycleStateSlotV3 ==",
             "PublishSuccessorLifecycleRootFirstV3 ==",
             "missing reviewed root-anchored V3 typed rollover operator "
             "PublishSuccessorLifecycleStateSlotV3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "CommitSuccessorLifecycleRootV3 ==",
             "CommitSuccessorLifecycleMemoryV3 ==",
             "missing reviewed root-anchored V3 typed rollover operator "
             "CommitSuccessorLifecycleRootV3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "RootGenerationMonotonicStepSafety ==",
             "RootGenerationMayRegressStepSafety ==",
             "missing reviewed root-anchored V3 typed rollover operator "
             "RootGenerationMonotonicStepSafety",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
             "THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==\n"
             "  ResponsiveDurableExactOutputRolloverLiveness\n",
             "THEOREM ResponsiveDurableExactOutputRolloverLivenessObligation ==\n"
@@ -11502,7 +11502,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "proofless",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
             "PROOF\n"
             "  BY Isa DEF Init, BootstrapLifecycleRootV3\n\n"
             "THEOREM FreshBootstrapUsesTargetGeometryEpochZeroObligation ==",
@@ -11512,7 +11512,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "a proof directive",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
             "PROOF\n"
             "  BY Isa DEF CommitInitialLifecycleRootV3,\n"
             "                 TypedRolloverSafetyInvariant,\n"
@@ -11532,13 +11532,13 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "retain a proof directive",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ snapshot.requesterStreamEpoch <= snapshot.nextStreamEpoch",
             "  /\\ snapshot.requesterStreamEpoch > snapshot.nextStreamEpoch",
             "LifecycleSnapshotSemanticallyValid must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             '   shape |-> "Bootstrap",\n'
             "   rootGeneration |-> 0,\n"
             "   snapshotDigest |-> NoLifecycleSnapshot]",
@@ -11548,20 +11548,20 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "BootstrapLifecycleRootV3 must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  IF rootGeneration % 2 = 0 THEN 0 ELSE 1",
             "  IF rootGeneration % 3 = 0 THEN 0 ELSE 1",
             "LifecycleStateSlot must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ s.durableLifecycleRootV3.snapshotDigest =\n"
             "       LifecycleSnapshotDigest(SelectedLifecycleSnapshotV3(s))",
             "  /\\ TRUE",
             "RootSelectedLifecyclePairMatches must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "LifecycleJournalReady(s) ==\n"
             "  /\\ s.durableJournalValidated\n"
             "  /\\ RootSelectedLifecyclePairMatches(s)\n"
@@ -11572,7 +11572,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "LifecycleJournalReady must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ state.candidateStateSlot #\n"
             "       SelectedLifecycleStateSlot(state)\n"
             "  /\\ state.durableLifecycleStateSlotsV3[",
@@ -11580,7 +11580,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "DurableCandidateStateSlotAheadOfRoot must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "CleanupValidatedLifecycleArtifactsV3 ==\n"
             "  /\\ state.restartRequired\n"
             "  /\\ state.durableJournalValidated\n"
@@ -11593,7 +11593,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "CleanupValidatedLifecycleArtifactsV3 must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "PersistFreshRequesterEpoch ==\n"
             '  /\\ state.requesterEpochPhase = "Idle"\n'
             "  /\\ state.nextStreamEpoch < StreamEpochLimit\n"
@@ -11610,7 +11610,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "PersistFreshRequesterEpoch must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "CrashAfterLifecycleStateSlotV3Publication ==\n"
             "  /\\ ValidatedCandidateSuccessorStateSlotAheadOfRoot",
             "CrashAfterLifecycleStateSlotV3Publication ==\n"
@@ -11619,7 +11619,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ RootSelectedLifecyclePairMatches(state)\n"
             "  /\\ LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))\n"
             "  /\\ LifecycleMemoryMatchesDurableSnapshotV3\n"
@@ -11630,7 +11630,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "RecoverPredecessorLifecycleV3 must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "  /\\ RootAnchoredLifecycleV3Invariant\n"
             "  /\\ SemanticValidationBeforeCleanupInvariant\n"
             "  /\\ ValidatedCleanupRemovesInactiveSlotInvariant",
@@ -11639,7 +11639,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "TypedRolloverSafetyInvariant must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "         /\\ state.syncedLifecycleRootV3 =\n"
             "              BootstrapLifecycleRootV3\n"
             "         /\\ DurableSnapshot(state) =\n"
@@ -11651,7 +11651,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "LifecycleCommitPhaseInvariant must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoff.tla",
             "      /\\ state'.durableLifecycleRootV3 =\n"
             "           state.durableLifecycleRootV3\n"
             "      /\\ state'.syncedLifecycleRootV3 =\n"
@@ -11663,13 +11663,13 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "StateSlotBeforeRootCommitStepSafety must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
             "THEOREM MissingRootSelectedStateCannotValidateOrCleanupObligation ==",
             "THEOREM MissingRootSelectedStateMayValidateOrCleanupObligation ==",
             "reviewed root-anchored V3 theorem inventory must equal",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffProofs.tla",
             "THEOREM TypedRolloverSpecAlwaysSafeObligation ==\n"
             "  TypedRolloverSpec => []TypedRolloverSafetyInvariant\n",
             "THEOREM TypedRolloverSpecAlwaysSafeObligation ==\n"
@@ -11679,14 +11679,14 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "proofless",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
             '   "CleanupBeforeRootParentResync",\n'
             '   "AcceptSemanticInvalidLifecycleState"}',
             '   "CleanupBeforeRootParentResync"}',
             "MutationModes must equal exact reviewed 42-mode",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
             '    [] MutationMode = "ChangedRosterWithoutGenerationAdvance" ->\n'
             "         ChangeRosterWithoutServiceGenerationAdvance",
             '    [] MutationMode = "ChangedRosterWithoutGenerationAdvance" ->\n'
@@ -11694,7 +11694,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "SelectedMutationAction must retain exact root-anchored V3 dispatch",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
             "RemoveRootSelectedLifecycleState ==\n"
             '  AcceptInvalidLifecycleStartup("LifecycleSelectedStateMissing")',
             "RemoveRootSelectedLifecycleState ==\n"
@@ -11703,7 +11703,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "RemoveRootSelectedLifecycleState must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
             "CleanupLifecycleArtifactsBeforeValidation ==\n"
             "  /\\ ~state.durableJournalValidated\n"
             "  /\\ state.crashArtifactsPresent",
@@ -11714,7 +11714,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
+            "formal/sumeragi_v2/SumeragiV2TypedRolloverHandoffMutation.tla",
             "          !.targetRoster = wrongTarget,\n"
             '          !.compactionCause = "RosterGeometryReplacement",\n'
             "          !.durableLifecycleRootV3 =\n"
@@ -11728,7 +11728,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "WrongBootstrapLifecycleProjection must retain root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "typed_rollover_handoff_changed_roster_without_generation_advance_bug.cfg",
             'CONSTANT MutationMode = "ChangedRosterWithoutGenerationAdvance"',
             'CONSTANT MutationMode = "SameRosterGenerationRoll"',
@@ -11736,7 +11736,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "ChangedRosterWithoutGenerationAdvance",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla",
             "ReopenPredecessorTransportAfterRestartRestore ==\n"
             '  /\\ state.lifecycleCommitPhase = "Restored"\n'
@@ -11749,7 +11749,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "forbidden reviewed mutation fragment",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla",
             "ResealPredecessorTransportAfterRestartRestore ==\n"
             '  /\\ state.lifecycleCommitPhase = "Restored"\n'
@@ -11762,7 +11762,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "forbidden reviewed mutation fragment",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla",
             "  /\\ state.lifecycleCommitPhase = \"Restored\"\n"
             "  /\\ state.transitionAuthority = \"RestartRestore\"\n"
@@ -11774,7 +11774,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "root-anchored V3",
         ),
         (
-            "docs/formal/sumeragi_v2/"
+            "formal/sumeragi_v2/"
             "typed_rollover_handoff_repeated_handoff_after_restart_restore_bug.cfg",
             "SPECIFICATION RepeatedHandoffMutationSpec\n\n"
             "CHECK_DEADLOCK FALSE\n\n"
@@ -11785,7 +11785,7 @@ def test_typed_rollover_handoff_hashes_every_reviewed_artifact(
             "dedicated repeated-handoff mutation config must select exactly",
         ),
         (
-            "docs/formal/sumeragi_v2/typed_rollover_handoff_fixed.cfg",
+            "formal/sumeragi_v2/typed_rollover_handoff_fixed.cfg",
             "INVARIANT ExactServiceTransportOwnerPairInvariant\n"
             "INVARIANT UnconsumedPredecessorTransportOwnershipInvariant\n"
             "INVARIANT ReceiptLifecycleInvariant",
@@ -33608,9 +33608,9 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
@@ -33640,9 +33640,9 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
@@ -33692,9 +33692,9 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
@@ -33740,9 +33740,9 @@ def test_production_release_inventory_seals_successor_parent_binding(
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
@@ -33803,9 +33803,9 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -33852,7 +33852,7 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
     ("relative", "old", "new"),
     (
         (
-            Path("docs/formal/sumeragi_v2/README.md"),
+            Path("formal/sumeragi_v2/README.md"),
             "current inventory therefore contains 738 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             "corridor contains 81 legs.",
@@ -33861,7 +33861,7 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
             "corridor contains 80 legs.",
         ),
         (
-            Path("docs/formal/sumeragi_v2/PROOF.md"),
+            Path("formal/sumeragi_v2/PROOF.md"),
             "738-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\n"
             "contains 81 legs",
@@ -33870,7 +33870,7 @@ def test_production_release_inventory_seals_closed_prefix_suffix_retry(
             "contains 80 legs",
         ),
         (
-            Path("docs/source/sumeragi_v2_liveness.md"),
+            Path("specs/sumeragi_v2_liveness.md"),
             "current source-bound inventory therefore contains 738 exact tests "
             "across\n38 modules and 81 pre-network legs.",
             "current source-bound inventory therefore contains 738 exact tests "
@@ -33888,9 +33888,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     for fixture_relative in (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
@@ -34002,9 +34002,9 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
     required_paths = (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
         Path("scripts/write_sumeragi_v2_release_receipt.py"),
-        Path("docs/formal/sumeragi_v2/README.md"),
-        Path("docs/formal/sumeragi_v2/PROOF.md"),
-        Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("formal/sumeragi_v2/README.md"),
+        Path("formal/sumeragi_v2/PROOF.md"),
+        Path("specs/sumeragi_v2_liveness.md"),
         Path("scripts/bootstrap_sumeragi_v2_release.py"),
         Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),

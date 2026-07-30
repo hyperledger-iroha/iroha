@@ -323,6 +323,42 @@ FOUNDATIONAL_PREREQUISITE_IDS = (
     "SF-6",
     "SF-8a",
 )
+FOUNDATIONAL_PREREQUISITE_LANES: dict[str, tuple[str, ...]] = {
+    "SFM-1": ("reputation",),
+    "SF-1": ("reference_sdk_release",),
+    "SF-2": ("pdp",),
+    "SF-2c": ("por", "potr"),
+    "SF-3": ("gateway_compliance",),
+    "SF-4": ("repair",),
+    "SF-5b": ("gateway_load",),
+    "SF-6": (
+        "appeal_finance",
+        "governance_dag",
+        "hedging_billing",
+        "orderbook",
+        "reserve_rent",
+    ),
+    "SF-8a": (
+        "ai_prescreen",
+        "moderation_panel",
+        "pop_credentials",
+        "transparency",
+    ),
+}
+if tuple(FOUNDATIONAL_PREREQUISITE_LANES) != FOUNDATIONAL_PREREQUISITE_IDS:
+    raise RuntimeError("foundational prerequisite lane map must follow the canonical IDs")
+_FOUNDATIONAL_MAPPED_LANES = tuple(
+    gate
+    for prerequisite_id in FOUNDATIONAL_PREREQUISITE_IDS
+    for gate in FOUNDATIONAL_PREREQUISITE_LANES[prerequisite_id]
+)
+if (
+    any(not lanes for lanes in FOUNDATIONAL_PREREQUISITE_LANES.values())
+    or len(set(_FOUNDATIONAL_MAPPED_LANES)) != len(_FOUNDATIONAL_MAPPED_LANES)
+):
+    raise RuntimeError(
+        "foundational prerequisite lane map must use non-empty disjoint lane groups"
+    )
 MAX_FOUNDATIONAL_RELEASE_SEQUENCE = (1 << 63) - 1
 FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
     {
@@ -348,9 +384,13 @@ FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "status",
         "evidence_anchor_sha256",
         "evidence_generated_at_unix",
+        "readiness_summary_sha256",
     }
 )
 FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS = frozenset({"gate", "sha256"})
+AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS = frozenset(
+    {"id", "readiness_summary_sha256"}
+)
 FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
     {"algorithm", "public_key_fingerprint_sha256", "signature_hex"}
 )
@@ -372,6 +412,7 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "topology_qualification",
         "resilience_qualification",
         "evidence_anchor_sha256",
+        "prerequisite_readiness_summary_sha256",
         "lane_summary_sha256",
         "path",
         "sha256",
@@ -1320,6 +1361,10 @@ GATE_SUMMARY_KINDS: tuple[GateSummaryKind, ...] = (
 SCHEMA_TO_GATE = {kind.schema: kind for kind in GATE_SUMMARY_KINDS}
 GATE_BY_NAME = {kind.name: kind for kind in GATE_SUMMARY_KINDS}
 DEFAULT_REQUIRED_GATES = tuple(kind.name for kind in GATE_SUMMARY_KINDS)
+if set(_FOUNDATIONAL_MAPPED_LANES) != set(DEFAULT_REQUIRED_GATES):
+    raise RuntimeError(
+        "foundational prerequisite lane map must cover the canonical readiness lanes"
+    )
 NON_PROMOTABLE_STATUS = "partial"
 
 
@@ -2602,6 +2647,91 @@ def validate_foundational_lane_summary_rows(
     return rows
 
 
+def validate_foundational_prerequisite_readiness_summary_rows(
+    value: Any,
+    prerequisite_id: str | None,
+    errors: list[str],
+    *,
+    path: str,
+) -> list[dict[str, str]]:
+    """Validate one prerequisite's exact ordered readiness-summary digest group."""
+
+    rows: list[dict[str, str]] = []
+    if not isinstance(value, list):
+        errors.append(f"{path} must be an array")
+        return rows
+    for index, item in enumerate(value):
+        row_path = f"{path}[{index}]"
+        row = validate_foundational_exact_fields(
+            item,
+            FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS,
+            row_path,
+            errors,
+        )
+        if row is None:
+            continue
+        gate = canonical_string(row.get("gate"))
+        if gate is None:
+            errors.append(f"{row_path}.gate must be a canonical string")
+        digest = canonical_lower_hex(row.get("sha256"), 64)
+        if digest is None:
+            errors.append(f"{row_path}.sha256 must be canonical lowercase SHA-256")
+        elif not any(bytes.fromhex(digest)):
+            errors.append(f"{row_path}.sha256 must not be zero")
+        if gate is not None and digest is not None and any(bytes.fromhex(digest)):
+            rows.append({"gate": gate, "sha256": digest})
+
+    expected_gates = FOUNDATIONAL_PREREQUISITE_LANES.get(prerequisite_id)
+    observed_gates = [row["gate"] for row in rows]
+    if expected_gates is None:
+        errors.append(f"{path} requires a known prerequisite id")
+    elif observed_gates != list(expected_gates):
+        errors.append(
+            f"{path} must match the exact canonical readiness lanes for its prerequisite id"
+        )
+        if len(set(observed_gates)) != len(observed_gates):
+            errors.append(f"{path} must not contain duplicate gates")
+        if set(expected_gates) - set(observed_gates):
+            errors.append(f"{path} is missing required gates")
+        if set(observed_gates) - set(expected_gates):
+            errors.append(f"{path} contains unknown gates")
+    digests = [row["sha256"] for row in rows]
+    if len(set(digests)) != len(digests):
+        errors.append(f"{path} must use unique summary digests")
+    return rows
+
+
+def validate_foundational_grouped_lane_summary_digest_bindings(
+    grouped_rows: list[dict[str, Any]],
+    lane_summary_rows: list[dict[str, str]],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Require every grouped prerequisite digest to equal the signed global row."""
+
+    global_by_gate = {
+        row["gate"]: row["sha256"]
+        for row in lane_summary_rows
+        if set(row) == FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS
+    }
+    for group in grouped_rows:
+        rows = group.get("readiness_summary_sha256")
+        if canonical_string(group.get("id")) is None or not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            gate = canonical_string(row.get("gate"))
+            digest = canonical_lower_hex(row.get("sha256"), 64)
+            if gate is None or digest is None:
+                continue
+            if global_by_gate.get(gate) != digest:
+                errors.append(
+                    f"{path} grouped digest must match foundational lane_summaries"
+                )
+
+
 def validate_foundational_prerequisite_summary(
     payload: dict[str, Any],
     options: ValidationOptions,
@@ -2733,6 +2863,7 @@ def validate_foundational_prerequisite_summary(
     prerequisite_ids: list[str] = []
     anchors: list[str] = []
     evidence_generated_times: list[int] = []
+    prerequisite_readiness_summary_rows: list[dict[str, Any]] = []
     if not isinstance(prerequisites, list):
         errors.append("foundational prerequisites must be an array")
     else:
@@ -2751,6 +2882,21 @@ def validate_foundational_prerequisite_summary(
                 errors.append(f"{path}.id must be a canonical string")
             else:
                 prerequisite_ids.append(prerequisite_id)
+            readiness_summary_rows = (
+                validate_foundational_prerequisite_readiness_summary_rows(
+                    row.get("readiness_summary_sha256"),
+                    prerequisite_id,
+                    errors,
+                    path=f"{path}.readiness_summary_sha256",
+                )
+            )
+            if prerequisite_id in FOUNDATIONAL_PREREQUISITE_LANES:
+                prerequisite_readiness_summary_rows.append(
+                    {
+                        "id": prerequisite_id,
+                        "readiness_summary_sha256": readiness_summary_rows,
+                    }
+                )
             if row.get("status") != "verified":
                 errors.append(f"{path}.status must be `verified`")
             anchor = canonical_lower_hex(row.get("evidence_anchor_sha256"), 64)
@@ -2795,6 +2941,12 @@ def validate_foundational_prerequisite_summary(
     lane_summary_rows = validate_foundational_lane_summary_rows(
         payload.get("lane_summaries"),
         errors,
+    )
+    validate_foundational_grouped_lane_summary_digest_bindings(
+        prerequisite_readiness_summary_rows,
+        lane_summary_rows,
+        errors,
+        path="foundational prerequisites readiness_summary_sha256",
     )
     topology_qualification = payload.get("topology_qualification")
     errors.extend(
@@ -2904,6 +3056,9 @@ def validate_foundational_prerequisite_summary(
         "topology_qualification": topology_qualification,
         "resilience_qualification": resilience_qualification,
         "evidence_anchor_sha256": anchors,
+        "prerequisite_readiness_summary_sha256": (
+            prerequisite_readiness_summary_rows
+        ),
         "lane_summary_sha256": lane_summary_rows,
         "errors": errors,
     }
@@ -6036,6 +6191,69 @@ def validate_aggregate_required_row_output(
     )
 
 
+def validate_aggregate_foundational_prerequisite_readiness_summary_output(
+    value: Any,
+    lane_summary_rows: list[dict[str, str]],
+    errors: list[str],
+) -> list[dict[str, Any]]:
+    """Validate the aggregate's preserved prerequisite-to-lane digest groups."""
+
+    path = "aggregate foundational prerequisites prerequisite_readiness_summary_sha256"
+    groups: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        errors.append(f"{path} must be an array")
+        return groups
+    observed_ids: list[str] = []
+    for index, item in enumerate(value):
+        row_path = f"{path}[{index}]"
+        row = validate_foundational_exact_fields(
+            item,
+            AGGREGATE_FOUNDATIONAL_PREREQUISITE_READINESS_SUMMARY_ROW_FIELDS,
+            row_path,
+            errors,
+        )
+        if row is None:
+            continue
+        prerequisite_id = canonical_string(row.get("id"))
+        if prerequisite_id is None:
+            errors.append(f"{row_path}.id must be a canonical string")
+        else:
+            observed_ids.append(prerequisite_id)
+        readiness_summary_rows = (
+            validate_foundational_prerequisite_readiness_summary_rows(
+                row.get("readiness_summary_sha256"),
+                prerequisite_id,
+                errors,
+                path=f"{row_path}.readiness_summary_sha256",
+            )
+        )
+        if prerequisite_id in FOUNDATIONAL_PREREQUISITE_LANES:
+            groups.append(
+                {
+                    "id": prerequisite_id,
+                    "readiness_summary_sha256": readiness_summary_rows,
+                }
+            )
+
+    if observed_ids != list(FOUNDATIONAL_PREREQUISITE_IDS):
+        errors.append(
+            f"{path} must match the exact prerequisite set and canonical order"
+        )
+        if len(set(observed_ids)) != len(observed_ids):
+            errors.append(f"{path} must not contain duplicate ids")
+        if set(FOUNDATIONAL_PREREQUISITE_IDS) - set(observed_ids):
+            errors.append(f"{path} is missing required ids")
+        if set(observed_ids) - set(FOUNDATIONAL_PREREQUISITE_IDS):
+            errors.append(f"{path} contains unknown ids")
+    validate_foundational_grouped_lane_summary_digest_bindings(
+        groups,
+        lane_summary_rows,
+        errors,
+        path=path,
+    )
+    return groups
+
+
 def validate_aggregate_foundational_prerequisite_output(
     row: Any,
     errors: list[str],
@@ -6197,6 +6415,15 @@ def validate_aggregate_foundational_prerequisite_output(
     )
     if valid is True and len(lane_summary_rows) != len(DEFAULT_REQUIRED_GATES):
         errors.append(f"{path} lane summary digests must cover every readiness lane")
+    grouped_rows = validate_aggregate_foundational_prerequisite_readiness_summary_output(
+        row.get("prerequisite_readiness_summary_sha256"),
+        lane_summary_rows,
+        errors,
+    )
+    if valid is True and len(grouped_rows) != len(FOUNDATIONAL_PREREQUISITE_IDS):
+        errors.append(
+            f"{path} prerequisite readiness summary digests must cover every prerequisite"
+        )
 
     artifact_path = row.get("path")
     if canonical_string(artifact_path) is None:
@@ -6476,6 +6703,39 @@ def validate_aggregate_summary_output(
         foundational_prerequisites,
         errors,
     )
+    if (
+        isinstance(required, dict)
+        and isinstance(foundational_prerequisites, dict)
+        and foundational_prerequisites.get("present") is True
+    ):
+        foundational_lane_rows = foundational_prerequisites.get(
+            "lane_summary_sha256"
+        )
+        if isinstance(foundational_lane_rows, list):
+            for lane_row in foundational_lane_rows:
+                if not isinstance(lane_row, dict):
+                    continue
+                gate_name = canonical_string(lane_row.get("gate"))
+                foundational_digest = canonical_lower_hex(
+                    lane_row.get("sha256"),
+                    64,
+                )
+                required_row = required.get(gate_name) if gate_name is not None else None
+                required_digest = (
+                    canonical_lower_hex(required_row.get("sha256"), 64)
+                    if isinstance(required_row, dict)
+                    else None
+                )
+                if (
+                    gate_name is not None
+                    and foundational_digest is not None
+                    and required_digest is not None
+                    and foundational_digest != required_digest
+                ):
+                    errors.append(
+                        f"{gate_name} aggregate foundational lane digest must "
+                        "match required row sha256"
+                    )
     if (
         isinstance(foundational_prerequisites, dict)
         and foundational_prerequisites.get("present") is True

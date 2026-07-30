@@ -3,7 +3,7 @@
 Verify or refresh iroha_monitor demo screenshot checksums.
 
 The monitor docs ship four deterministic artefacts under
-docs/source/images/iroha_monitor_demo/:
+specs/images/iroha_monitor_demo/:
 
 - iroha_monitor_demo_overview.ans
 - iroha_monitor_demo_overview.svg
@@ -82,7 +82,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument(
         "--dir",
         type=Path,
-        default=Path("docs/source/images/iroha_monitor_demo"),
+        default=Path("specs/images/iroha_monitor_demo"),
         help="Directory containing the screenshot artefacts",
     )
     parser.add_argument(

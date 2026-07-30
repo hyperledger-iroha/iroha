@@ -4,7 +4,7 @@
 set -euo pipefail
 
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
+readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"
 readonly NETWORK="${FORMAL_DIR}/SumeragiV2AsyncNetwork.tla"
 readonly PROOF="${FORMAL_DIR}/SumeragiV2CommandExecutionReadyProofs.tla"
 readonly REGULAR_FRAMED_HELPER="${FORMAL_DIR}/SumeragiV2RegularCommandFramedReadyProofs.tla"

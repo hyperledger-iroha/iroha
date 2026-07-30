@@ -3,7 +3,7 @@
 
 Prerequisites: Python 3.9+ and a freshly built canonical Rust ``koto``
 driver. The normative grammar and documentation roots are read from
-``docs/source/kotodama_v1_docs.json``. Every tracked or newly added Markdown
+``specs/kotodama_v1_docs.json``. Every tracked or newly added Markdown
 file below those roots is scanned. Explicit ``kotodama``/``ko`` fences and
 ``cat > *.ko <<'TAG'`` shell snippets are checked. The checker only creates
 temporary ``.ko`` files and never writes generated artifacts into the
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Sequence
 
 
-DEFAULT_MANIFEST = Path("docs/source/kotodama_v1_docs.json")
+DEFAULT_MANIFEST = Path("specs/kotodama_v1_docs.json")
 MANIFEST_SCHEMA = 2
 SOURCE_LANGUAGES = frozenset({"ko", "kotodama"})
 SOURCE_DIRECTIVES = frozenset({"zk"})

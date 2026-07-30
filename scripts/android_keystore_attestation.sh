@@ -28,7 +28,7 @@ Optional:
   --help                   Show this message.
 
 The script compiles the attestation harness and its direct verifier dependencies.
-See docs/source/sdk/android/readiness/android_strongbox_device_matrix.md for collection
+See specs/sdk/android/readiness/android_strongbox_device_matrix.md for collection
 guidance and required firmware levels.
 EOF
 }

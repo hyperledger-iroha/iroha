@@ -6,7 +6,7 @@
 
 Roadmap item DA-1 and `status.md` call for a deterministic automation loop that
 produces the Norito PDP/PoTR threat-model summaries surfaced in
-`docs/source/da/threat_model.md` and the Docusaurus mirror. This directory
+`specs/da/threat_model.md` and the Docusaurus mirror. This directory
 captures the artefacts referenced by:
 
 - `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`
@@ -31,7 +31,7 @@ captures the artefacts referenced by:
    make docs-da-threat-model
    ```
    This runs `scripts/docs/render_da_threat_model_tables.py` to rewrite
-   `docs/source/da/threat_model.md` and `docs/portal/docs/da/threat-model.md`.
+   `specs/da/threat_model.md` and `docs/portal/docs/da/threat-model.md`.
 3. **Archive the artefact** by copying the JSON report (and optional CLI log) to
    `docs/automation/da/reports/<timestamp>-threat_model_report.json`. When
    governance decisions rely on a specific run, include the git commit hash and

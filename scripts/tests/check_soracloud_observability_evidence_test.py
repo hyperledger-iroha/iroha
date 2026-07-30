@@ -39,7 +39,7 @@ def evidence_payload() -> dict:
             name: {
                 "enabled": True,
                 "severity": "critical",
-                "runbook": "docs/source/soracloud/vue3_spa_api_runbook.md",
+                "runbook": "specs/soracloud/vue3_spa_api_runbook.md",
             }
             for name in MODULE.REQUIRED_ALERTS
         },

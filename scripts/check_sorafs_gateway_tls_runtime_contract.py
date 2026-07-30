@@ -258,7 +258,7 @@ def check_contract(root: Path) -> list[str]:
         if marker not in irohad:
             failures.append(failure)
 
-    canonical_relative = "docs/source/sorafs_gateway_tls_automation.md"
+    canonical_relative = "specs/sorafs_gateway_tls_automation.md"
     canonical_path = root_identity / canonical_relative
     canonical = _read(root_identity, canonical_relative, failures)
     if canonical is None:
@@ -269,7 +269,7 @@ def check_contract(root: Path) -> list[str]:
             canonical_path.parent.glob("sorafs_gateway_tls_automation.*.md")
         )
     except (OSError, RuntimeError):
-        failures.append("docs/source:gateway-tls-mirror-scan-failed")
+        failures.append("specs:gateway-tls-mirror-scan-failed")
         return failures
     docs = [canonical_path, *localized_docs]
     for path in docs:

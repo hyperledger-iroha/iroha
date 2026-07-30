@@ -139,15 +139,15 @@ examples-inspect: examples-run
 
 docs-syscalls:
 	@python3 scripts/gen_syscall_doc.py --write
-	@echo "Generated docs/source/ivm_syscalls_generated.md"
+	@echo "Generated specs/ivm_syscalls_generated.md"
 
 docs-da-threat-model:
 	@echo "Generating DA threat-model report JSON..."
-	@scripts/telemetry/run_da_threat_model_report.sh docs/source/da/_generated
-	@echo "Updating docs/source/da/threat_model.md and docs/portal/docs/da/threat-model.md..."
+	@scripts/telemetry/run_da_threat_model_report.sh specs/da/_generated
+	@echo "Updating specs/da/threat_model.md and docs/portal/docs/da/threat-model.md..."
 	@python3 scripts/docs/render_da_threat_model_tables.py \
-		--input docs/source/da/_generated/threat_model_report.json \
-		--docs docs/source/da/threat_model.md docs/portal/docs/da/threat-model.md
+		--input specs/da/_generated/threat_model_report.json \
+		--docs specs/da/threat_model.md docs/portal/docs/da/threat-model.md
 	@echo "DA threat-model docs refreshed."
 
 check-docs:
@@ -246,8 +246,8 @@ swift-dashboards:
 		$(if $(SWIFT_CI_NEON_MIN_THROUGHPUT), --ci-neon-min-throughput $(SWIFT_CI_NEON_MIN_THROUGHPUT),) \
 		"$(SWIFT_PARITY_FEED)" "$(SWIFT_CI_FEED)"
 	@python3 scripts/check_swift_pipeline_metadata.py "$(SWIFT_PIPELINE_METADATA_FEED)"
-	@python3 -m jsonschema --output pretty docs/source/references/ios_metrics.schema.json --instance "$(SWIFT_PARITY_FEED)"
-	@python3 -m jsonschema --output pretty docs/source/references/ios_metrics.schema.json --instance "$(SWIFT_CI_FEED)"
+	@python3 -m jsonschema --output pretty specs/references/ios_metrics.schema.json --instance "$(SWIFT_PARITY_FEED)"
+	@python3 -m jsonschema --output pretty specs/references/ios_metrics.schema.json --instance "$(SWIFT_CI_FEED)"
 	@./scripts/render_swift_dashboards.sh "$(SWIFT_PARITY_FEED)" "$(SWIFT_CI_FEED)" "$(SWIFT_PIPELINE_METADATA_FEED)"
 
 swift-fixtures:
@@ -302,18 +302,17 @@ android-codegen-docs:
 	@python3 scripts/android_codegen_docs.py \
 		--manifest target-codex/android_codegen/instruction_manifest.json \
 		--builders target-codex/android_codegen/builder_index.json \
-		--out docs/source/sdk/android/generated \
-		--all-locales
+		--out specs/sdk/android/generated
 	@python3 scripts/android_codegen_replay_sorafs_fixture.py
 	@bash scripts/docs/hash_tree.sh \
-		docs/source/sdk/android/generated \
-		docs/source/sdk/android/generated/codegen_hash_tree.json
+		specs/sdk/android/generated \
+		specs/sdk/android/generated/codegen_hash_tree.json
 
 android-codegen-verify: android-codegen-docs
 	@python3 scripts/check_android_codegen_parity.py \
 		--manifest target-codex/android_codegen/instruction_manifest.json \
 		--builder-index target-codex/android_codegen/builder_index.json \
-		--metadata docs/source/sdk/android/generated/codegen_manifest_metadata.json \
+		--metadata specs/sdk/android/generated/codegen_manifest_metadata.json \
 		--json-out artifacts/android/codegen_parity_summary.json
 
 android-publish-snapshot:

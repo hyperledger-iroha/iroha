@@ -1,4 +1,4 @@
-//! Generate or check header policy sections in `docs/source/ivm_header*.md`.
+//! Generate or check header policy sections in `specs/ivm_header*.md`.
 //! Usage:
 //!   cargo run -p ivm --bin gen_header_doc -- --write
 //!   cargo run -p ivm --bin gen_header_doc -- --check
@@ -146,7 +146,7 @@ fn main() {
         .parent()
         .and_then(|p| p.parent())
         .expect("workspace root")
-        .join("docs/source");
+        .join("specs");
     let layout = render_header_layout_markdown();
     let expected_layout = format!("{LAYOUT_BEGIN}\n{layout}{LAYOUT_END}");
     let table = render_header_policy_markdown();

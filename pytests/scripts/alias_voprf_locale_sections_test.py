@@ -70,7 +70,7 @@ def source_path(locale: str) -> Path:
     """Return the corresponding source-document mirror for ``locale``."""
 
     suffix = "" if locale == "en" else f".{locale}"
-    return REPO_ROOT / f"docs/source/sdk/js/governance_iso_examples{suffix}.md"
+    return REPO_ROOT / f"specs/sdk/js/governance_iso_examples{suffix}.md"
 
 
 def alias_section(path: Path) -> str:

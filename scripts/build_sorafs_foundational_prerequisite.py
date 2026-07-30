@@ -32,6 +32,7 @@ from check_sorafs_production_readiness import (  # noqa: E402
     DEFAULT_REQUIRED_GATES,
     FOUNDATIONAL_PREREQUISITE_FIELDS,
     FOUNDATIONAL_PREREQUISITE_IDS,
+    FOUNDATIONAL_PREREQUISITE_LANES,
     FOUNDATIONAL_PREREQUISITE_ROW_FIELDS,
     FOUNDATIONAL_PREREQUISITE_SCHEMA,
     FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN,
@@ -97,7 +98,7 @@ FOUNDATIONAL_PREREQUISITE_EVIDENCE_PACKAGE_FIELDS = frozenset(
         "deployment",
         "evidence_generated_at_unix",
         "topology_qualification",
-        "readiness_summary",
+        "readiness_summaries",
         "errors",
     }
 )
@@ -114,6 +115,41 @@ ZERO_SIGNATURE_DIAGNOSTIC = (
     "foundational prerequisite signature must be a non-zero canonical "
     "Ed25519 signature"
 )
+
+
+def _validate_prerequisite_lane_contract() -> None:
+    """Require the nine prerequisite groups to partition all readiness lanes."""
+
+    if tuple(FOUNDATIONAL_PREREQUISITE_LANES) != FOUNDATIONAL_PREREQUISITE_IDS:
+        raise RuntimeError(
+            "foundational prerequisite lane mapping must match the canonical IDs"
+        )
+    flattened = [
+        gate_name
+        for prerequisite_id in FOUNDATIONAL_PREREQUISITE_IDS
+        for gate_name in FOUNDATIONAL_PREREQUISITE_LANES[prerequisite_id]
+    ]
+    if (
+        not all(FOUNDATIONAL_PREREQUISITE_LANES.values())
+        or len(flattened) != len(set(flattened))
+        or set(flattened) != set(DEFAULT_REQUIRED_GATES)
+    ):
+        raise RuntimeError(
+            "foundational prerequisite lane mapping must partition all 17 lanes"
+        )
+    gate_order = {
+        gate_name: index for index, gate_name in enumerate(DEFAULT_REQUIRED_GATES)
+    }
+    if any(
+        tuple(sorted(gates, key=gate_order.__getitem__)) != tuple(gates)
+        for gates in FOUNDATIONAL_PREREQUISITE_LANES.values()
+    ):
+        raise RuntimeError(
+            "foundational prerequisite lane groups must use canonical lane order"
+        )
+
+
+_validate_prerequisite_lane_contract()
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -346,20 +382,50 @@ def parse_prerequisite_specs(
                     "be later than the signed envelope"
                 )
 
-        summary_reference = validate_foundational_exact_fields(
-            package.get("readiness_summary"),
-            FOUNDATIONAL_PREREQUISITE_EVIDENCE_SUMMARY_FIELDS,
-            f"--prerequisite[{index}] evidence package readiness_summary",
-            package_errors,
+        expected_lane_id = expected_id if expected_id is not None else prerequisite_id
+        expected_gate_names = tuple(
+            FOUNDATIONAL_PREREQUISITE_LANES.get(expected_lane_id, ())
         )
-        summary_row: dict[str, Any] | None = None
-        if summary_reference is not None:
+        summary_references = package.get("readiness_summaries")
+        observed_gate_names: list[str] = []
+        signed_summary_digests: list[dict[str, str]] = []
+        validated_summary_times: list[int] = []
+        if not isinstance(summary_references, list):
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package readiness_summaries "
+                "must be an array"
+            )
+            summary_references = []
+        elif len(summary_references) != len(expected_gate_names):
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package readiness_summaries "
+                f"must contain exactly {len(expected_gate_names)} entries for "
+                f"{expected_lane_id}"
+            )
+            # Reject before inspecting or opening any reference. This prevents
+            # an oversized, schema-closed array from amplifying bounded reads.
+            summary_references = []
+        for summary_index, summary_value in enumerate(summary_references):
+            summary_label = (
+                f"--prerequisite[{index}] evidence package "
+                f"readiness_summaries[{summary_index}]"
+            )
+            summary_reference = validate_foundational_exact_fields(
+                summary_value,
+                FOUNDATIONAL_PREREQUISITE_EVIDENCE_SUMMARY_FIELDS,
+                summary_label,
+                package_errors,
+            )
+            if summary_reference is None:
+                continue
             gate_name = canonical_string(summary_reference.get("gate"))
+            if gate_name is not None:
+                observed_gate_names.append(gate_name)
             gate = GATE_BY_NAME.get(gate_name) if gate_name is not None else None
             if gate is None:
                 package_errors.append(
-                    f"--prerequisite[{index}] evidence package readiness_summary.gate "
-                    "must name an authoritative bundled readiness checker"
+                    f"{summary_label}.gate must name an authoritative bundled "
+                    "readiness checker"
                 )
             relative_path = canonical_string(summary_reference.get("path"))
             if (
@@ -367,8 +433,7 @@ def parse_prerequisite_specs(
                 or not is_archive_portable_artifact_path(relative_path)
             ):
                 package_errors.append(
-                    f"--prerequisite[{index}] evidence package "
-                    "readiness_summary.path must be archive-relative and portable"
+                    f"{summary_label}.path must be archive-relative and portable"
                 )
                 summary_path = None
             else:
@@ -379,28 +444,25 @@ def parse_prerequisite_specs(
             )
             if expected_digest is None or not any(bytes.fromhex(expected_digest)):
                 package_errors.append(
-                    f"--prerequisite[{index}] evidence package "
-                    "readiness_summary.sha256 must be a non-zero canonical "
+                    f"{summary_label}.sha256 must be a non-zero canonical "
                     "lowercase SHA-256"
                 )
             if summary_path is not None:
                 summary_raw, summary_read_errors = read_bounded_regular_file(
                     summary_path,
-                    label=(
-                        f"--prerequisite[{index}] evidence package "
-                        "readiness_summary"
-                    ),
+                    label=summary_label,
                     maximum_bytes=MAX_SUMMARY_BYTES,
                 )
                 package_errors.extend(summary_read_errors)
             else:
                 summary_raw = None
+            summary_row: dict[str, Any] | None = None
+            observed_digest: str | None = None
             if summary_raw is not None:
                 observed_digest = hashlib.sha256(summary_raw).hexdigest()
                 if expected_digest != observed_digest:
                     package_errors.append(
-                        f"--prerequisite[{index}] evidence package readiness_summary "
-                        "digest does not match the exact file"
+                        f"{summary_label} digest does not match the exact file"
                     )
                 cache_key = (
                     (gate.name, observed_digest) if gate is not None else None
@@ -410,17 +472,13 @@ def parse_prerequisite_specs(
                 if summary_row is None:
                     summary_payload = _strict_lane_summary_object(
                         summary_raw,
-                        label=(
-                            f"--prerequisite[{index}] evidence package "
-                            "readiness_summary"
-                        ),
+                        label=summary_label,
                         errors=package_errors,
                     )
                     if gate is not None and summary_payload is not None:
                         if summary_payload.get("schema") != gate.schema:
                             package_errors.append(
-                                f"--prerequisite[{index}] evidence package "
-                                "readiness_summary schema must match its gate"
+                                f"{summary_label} schema must match its gate"
                             )
                         summary_row, summary_errors = validate_gate_summary(
                             gate,
@@ -434,9 +492,7 @@ def parse_prerequisite_specs(
                             ),
                         )
                         package_errors.extend(
-                            f"--prerequisite[{index}] evidence package "
-                            f"readiness_summary: {error}"
-                            for error in summary_errors
+                            f"{summary_label}: {error}" for error in summary_errors
                         )
                         if (
                             cache_key is not None
@@ -445,15 +501,52 @@ def parse_prerequisite_specs(
                             and summary_payload.get("schema") == gate.schema
                         ):
                             validated_summary_cache[cache_key] = summary_row
+            if summary_row is not None:
+                newest_generated_at = summary_row.get("newest_generated_at_unix")
+                if (
+                    isinstance(newest_generated_at, int)
+                    and not isinstance(newest_generated_at, bool)
+                ):
+                    validated_summary_times.append(newest_generated_at)
+            if (
+                gate is not None
+                and expected_digest is not None
+                and observed_digest == expected_digest
+                and summary_row is not None
+            ):
+                signed_summary_digests.append(
+                    {"gate": gate.name, "sha256": expected_digest}
+                )
+
+        if observed_gate_names != list(expected_gate_names):
+            package_errors.append(
+                f"--prerequisite[{index}] evidence package readiness_summaries "
+                f"must match the exact lanes for {expected_lane_id}: "
+                f"{', '.join(expected_gate_names)}"
+            )
+            if len(observed_gate_names) != len(set(observed_gate_names)):
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package readiness_summaries "
+                    "must not contain duplicate gates"
+                )
+            if set(expected_gate_names) - set(observed_gate_names):
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package readiness_summaries "
+                    "are missing required gates"
+                )
+            if set(observed_gate_names) - set(expected_gate_names):
+                package_errors.append(
+                    f"--prerequisite[{index}] evidence package readiness_summaries "
+                    "contain gates outside the prerequisite mapping"
+                )
         if (
-            summary_row is not None
+            validated_summary_times
             and evidence_generated_at_unix is not None
-            and summary_row.get("newest_generated_at_unix")
-            != evidence_generated_at_unix
+            and max(validated_summary_times) != evidence_generated_at_unix
         ):
             package_errors.append(
                 f"--prerequisite[{index}] evidence_generated_at_unix must match "
-                "the authoritative readiness summary"
+                "the newest authoritative readiness summary"
             )
         errors.extend(package_errors)
         if (
@@ -468,6 +561,7 @@ def parse_prerequisite_specs(
                 "status": "verified",
                 "evidence_anchor_sha256": hashlib.sha256(package_raw).hexdigest(),
                 "evidence_generated_at_unix": evidence_generated_at_unix,
+                "readiness_summary_sha256": signed_summary_digests,
             }
         )
 
@@ -1745,7 +1839,7 @@ def build_parser() -> EvidenceArgumentParser:
             "One exact prerequisite evidence-package manifest. Repeat exactly "
             "nine times in canonical SFM-1, SF-1, SF-2, SF-2c, SF-3, SF-4, "
             "SF-5b, SF-6, SF-8a order. Each manifest and its digest-bound "
-            "readiness summary are opened and validated before signing."
+            "readiness summaries are opened and validated before signing."
         ),
     )
     prepare_parser.add_argument(

@@ -54,7 +54,7 @@ Override the recorded metadata via Gradle properties, for example:
   -PoperatorConsoleFeatures=pipeline,attestation
 ```
 
-The CI helper (`scripts/check_android_samples.sh`) runs these tasks and fails if the manifest files are missing so release artifacts always include the provenance snippet referenced by `docs/source/sdk/android/developer_experience_plan.md`.
+The CI helper (`scripts/check_android_samples.sh`) runs these tasks and fails if the manifest files are missing so release artifacts always include the provenance snippet referenced by `specs/sdk/android/developer_experience_plan.md`.
 
 Manifests now capture the sandbox inputs exported by `android_sample_env.sh`
 (`sorafs_scoreboard`/`sorafs_summary` paths + SHA-256 digests, telemetry logs,
@@ -95,5 +95,5 @@ demo pointing at the freshly provisioned sandbox.
 - Sample manifests now embed the telemetry redaction parameters to keep
   provenance bundles self-contained.
 
-Track implementation progress in `docs/source/sdk/android/developer_experience_plan.md`
+Track implementation progress in `specs/sdk/android/developer_experience_plan.md`
 and update the corresponding roadmap entries when milestones advance.

@@ -3,7 +3,7 @@
 //! The merge ledger records a compact ordered log of lane tips along with the
 //! deterministic global reduction state used to finalize world state updates.
 //! These DTOs provide the on-wire and persistence representations of merge
-//! entries. See `docs/source/merge_ledger.md` for the normative behaviour the
+//! entries. See `specs/merge_ledger.md` for the normative behaviour the
 //! runtime must enforce when producing and validating these records.
 
 use iroha_crypto::{Hash, HashOf, MerkleTree, PublicKey};

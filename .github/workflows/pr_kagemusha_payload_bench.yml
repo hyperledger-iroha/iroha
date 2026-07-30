@@ -736,7 +736,7 @@ on:
       - "java/iroha_android/**"
       - "kotlin/core-jvm/**"
       - "python/iroha_torii_client/**"
-      - "docs/source/offline_kagemusha*.md"
+      - "specs/offline_kagemusha*.md"
       - "docs/portal/static/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
       - "scripts/check_mobile_sdk_artifacts.sh"

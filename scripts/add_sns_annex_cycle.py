@@ -8,24 +8,13 @@ import datetime as dt
 import hashlib
 import json
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
-from typing import Iterable, Sequence
+from typing import Sequence
 
-# Reuse the translation helpers so localization stubs stay consistent.
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.append(str(REPO_ROOT))
-
-from scripts import sync_docs_i18n as i18n  # noqa: E402
-
-
-ANNEX_LANGS = ("ar", "es", "fr", "pt", "ru", "ur")
-PORTAL_LANGS = ANNEX_LANGS
-MEMO_LANGS = ("ar", "es", "fr", "he", "ja", "pt", "ru", "ur")
-ANNEX_JOBS_PATH = REPO_ROOT / "docs" / "source" / "sns" / "regulatory" / "annex_jobs.json"
+ANNEX_JOBS_PATH = REPO_ROOT / "specs" / "sns" / "regulatory" / "annex_jobs.json"
 PORTAL_REGULATORY_DIR = REPO_ROOT / "docs" / "portal" / "docs" / "sns" / "regulatory"
 SUFFIX_LITERAL_RE = re.compile(r"\.[a-z0-9]{1,64}")
 
@@ -75,19 +64,10 @@ def parse_args(argv: Sequence[str] | None = None) -> CycleContext:
     return CycleContext(cycle=args.cycle, suffixes=suffixes, dry_run=args.dry_run)
 
 
-def load_languages(codes: Iterable[str]) -> dict[str, i18n.Language]:
-    manifest = i18n.Manifest.load(i18n.MANIFEST_PATH)
-    lookup = {lang.code: lang for lang in manifest.targets}
-    missing = sorted(set(codes).difference(lookup))
-    if missing:
-        raise SystemExit(f"Missing localization entries for: {', '.join(missing)}")
-    return {code: lookup[code] for code in codes}
-
-
 def resolve_annex_metadata(
     suffix: str, cycle: str, default_dashboard_path: str
 ) -> AnnexMetadata:
-    annex_path = REPO_ROOT / "docs" / "source" / "sns" / "reports" / suffix / f"{cycle}.md"
+    annex_path = REPO_ROOT / "specs" / "sns" / "reports" / suffix / f"{cycle}.md"
     dashboard_path = default_dashboard_path
     dashboard_sha256: str | None = None
     generated_at: str | None = None
@@ -214,16 +194,15 @@ def ensure_annex_jobs(cycle: str, suffixes: Sequence[str], *, dry_run: bool) -> 
 def ensure_annex_stub(
     cycle: str,
     suffix: str,
-    annex_langs: dict[str, i18n.Language],
     *,
     dry_run: bool,
 ) -> bool:
-    reports_dir = REPO_ROOT / "docs" / "source" / "sns" / "reports" / f"{suffix}"
+    reports_dir = REPO_ROOT / "specs" / "sns" / "reports" / f"{suffix}"
     reports_dir.mkdir(parents=True, exist_ok=True)
     english_path = reports_dir / f"{cycle}.md"
     rel_english = english_path.relative_to(REPO_ROOT)
     dashboard_path = f"artifacts/sns/regulatory/{suffix}/{cycle}/sns_suffix_analytics.json"
-    regulatory_target = f"docs/source/sns/regulatory/eu-dsa/{cycle}.md"
+    regulatory_target = f"specs/sns/regulatory/eu-dsa/{cycle}.md"
 
     if english_path.exists():
         created = False
@@ -259,8 +238,8 @@ def ensure_annex_stub(
             - Re-run the annex helper to rewrite this file with the signed metadata.
             - Ensure the EU DSA memo at `{regulatory_target}` references the refreshed hash via
               the `sns-annex:{suffix.lstrip('.')}-{cycle}` marker.
-            - Update translation stubs via `scripts/sync_docs_i18n.py` once localization teams
-              confirm the final English content.
+            - Coordinate any public or translated presentation in `iroha-docs` once reviewers
+              confirm the final English evidence.
             """
         ).strip() + "\n"
         print(f"[annex-report] create {rel_english.as_posix()}")
@@ -268,20 +247,6 @@ def ensure_annex_stub(
             english_path.write_text(content, encoding="utf-8")
         created = True
 
-    if dry_run:
-        return created
-
-    # Provision translation stubs so localization diffs stay deterministic.
-    for lang in annex_langs.values():
-        translation_rel = i18n.compute_translation_path(rel_english, lang.code)
-        translation_abs = REPO_ROOT / translation_rel
-        if translation_abs.exists():
-            continue
-        stub = i18n.build_stub_content(rel_english, translation_abs, lang, english_path)
-        translation_abs.parent.mkdir(parents=True, exist_ok=True)
-        translation_abs.write_text(stub, encoding="utf-8")
-        print(f"[annex-report] create {translation_rel.as_posix()}")
-        created = True
     return created
 
 
@@ -301,7 +266,7 @@ def build_annex_section(cycle: str, suffixes: Sequence[str]) -> str:
                 f"""
                 <!-- sns-annex:{suffix.lstrip('.')}-{cycle}:start -->
                 ### KPI Dashboard Annex ({suffix} — {cycle})
-                - Annex report: docs/source/sns/reports/{suffix}/{cycle}.md
+                - Annex report: specs/sns/reports/{suffix}/{cycle}.md
                 - Dashboard export: {metadata.dashboard_path}
                 - Dashboard SHA-256: {sha256}
                 - Generated: {generated_at}
@@ -314,12 +279,11 @@ def build_annex_section(cycle: str, suffixes: Sequence[str]) -> str:
 
 def ensure_memo_stub(
     cycle: str,
-    memo_langs: dict[str, i18n.Language],
     suffixes: Sequence[str],
     *,
     dry_run: bool,
 ) -> bool:
-    memo_dir = REPO_ROOT / "docs" / "source" / "sns" / "regulatory" / "eu-dsa"
+    memo_dir = REPO_ROOT / "specs" / "sns" / "regulatory" / "eu-dsa"
     memo_dir.mkdir(parents=True, exist_ok=True)
     english_path = memo_dir / f"{cycle}.md"
     rel_english = english_path.relative_to(REPO_ROOT)
@@ -347,7 +311,7 @@ def ensure_memo_stub(
 
             - **Bulletin:** Pending governance bulletin for cycle {cycle}.
             - **Key requirements:** Reserve the annex artefacts for this cycle, update the KPI hashes,
-              and keep localization stubs in sync so regulators can diff against earlier submissions.
+              and coordinate any public-facing summary in `iroha-docs`.
             - **Submission window:** Pending governance bulletin; update once the review window is announced.
 
             Ticket placeholder `SNS-REG-{cycle.replace('-', '')}` tracks the deliverables once the
@@ -357,8 +321,8 @@ def ensure_memo_stub(
 
             | Obligation | Mapping | Notes |
             |------------|---------|-------|
-            | Annex job scheduling | Append `{cycle}` to `docs/source/sns/regulatory/annex_jobs.json` and run the annex helper. | `scripts/run_sns_annex_jobs.py --jobs docs/source/sns/regulatory/annex_jobs.json` |
-            | Localization parity | Regenerate annex/memo translation stubs for `{cycle}`. | `python3 scripts/sync_docs_i18n.py` (targeted run once English text is final). |
+            | Annex job scheduling | Append `{cycle}` to `specs/sns/regulatory/annex_jobs.json` and run the annex helper. | `scripts/run_sns_annex_jobs.py --jobs specs/sns/regulatory/annex_jobs.json` |
+            | Public documentation | Coordinate any user-facing summary for `{cycle}` in `iroha-docs`. | Update it once the English evidence is final. |
             | Fee/dispute attachments | Capture surcharge + dispute artefacts alongside the dashboard export. | Store under `artifacts/sns/regulatory/<suffix>/{cycle}/`. |
 
             Memo hash (Blake3): pending signature.
@@ -377,7 +341,7 @@ def ensure_memo_stub(
             | Artifact | Path / Reference |
             |----------|------------------|
             | Bulletin digest | artifacts/sns/regulatory/eu-dsa/{cycle}/bulletin.sha256 |
-            | Council addendum draft | docs/source/sns/governance_addenda/SN-CH-{cycle}-A1.md |
+            | Council addendum draft | specs/sns/governance_addenda/SN-CH-{cycle}-A1.md |
             | Fee disclosure samples | artifacts/sns/regulatory/<suffix>/{cycle}/fee_disclosure.json |
             | Dispute queue hashes | artifacts/sns/regulatory/<suffix>/{cycle}/dispute_queue_otlp.sha256 |
 
@@ -389,25 +353,11 @@ def ensure_memo_stub(
             english_path.write_text(body, encoding="utf-8")
         created = True
 
-    if dry_run:
-        return created
-
-    for lang in memo_langs.values():
-        translation_rel = i18n.compute_translation_path(rel_english, lang.code)
-        translation_abs = REPO_ROOT / translation_rel
-        if translation_abs.exists():
-            continue
-        stub = i18n.build_stub_content(rel_english, translation_abs, lang, english_path)
-        translation_abs.parent.mkdir(parents=True, exist_ok=True)
-        translation_abs.write_text(stub, encoding="utf-8")
-        print(f"[regulatory-memo] create {translation_rel.as_posix()}")
-        created = True
     return created
 
 
 def ensure_portal_stub(
     cycle: str,
-    portal_langs: dict[str, i18n.Language],
     suffixes: Sequence[str],
     *,
     dry_run: bool,
@@ -415,7 +365,7 @@ def ensure_portal_stub(
     PORTAL_REGULATORY_DIR.mkdir(parents=True, exist_ok=True)
     english_path = PORTAL_REGULATORY_DIR / f"eu-dsa-{cycle}.md"
     rel_english = english_path.relative_to(REPO_ROOT)
-    canonical = f"docs/source/sns/regulatory/eu-dsa/{cycle}.md"
+    canonical = f"specs/sns/regulatory/eu-dsa/{cycle}.md"
     annex_section = build_annex_section(cycle, suffixes)
     if english_path.exists():
         created = False
@@ -464,34 +414,18 @@ def ensure_portal_stub(
             english_path.write_text(content, encoding="utf-8")
         created = True
 
-    if dry_run:
-        return created
-
-    for lang in portal_langs.values():
-        translation_rel = i18n.compute_translation_path(rel_english, lang.code)
-        translation_abs = REPO_ROOT / translation_rel
-        if translation_abs.exists():
-            continue
-        stub = i18n.build_stub_content(rel_english, translation_abs, lang, english_path)
-        translation_abs.parent.mkdir(parents=True, exist_ok=True)
-        translation_abs.write_text(stub, encoding="utf-8")
-        print(f"[portal-memo] create {translation_rel.as_posix()}")
-        created = True
     return created
 
 
 def main() -> None:
     ctx = parse_args()
-    annex_langs = load_languages(ANNEX_LANGS)
-    portal_langs = load_languages(PORTAL_LANGS)
-    memo_langs = load_languages(MEMO_LANGS)
 
     changed = False
     changed |= ensure_annex_jobs(ctx.cycle, ctx.suffixes, dry_run=ctx.dry_run)
     for suffix in ctx.suffixes:
-        changed |= ensure_annex_stub(ctx.cycle, suffix, annex_langs, dry_run=ctx.dry_run)
-    changed |= ensure_memo_stub(ctx.cycle, memo_langs, ctx.suffixes, dry_run=ctx.dry_run)
-    changed |= ensure_portal_stub(ctx.cycle, portal_langs, ctx.suffixes, dry_run=ctx.dry_run)
+        changed |= ensure_annex_stub(ctx.cycle, suffix, dry_run=ctx.dry_run)
+    changed |= ensure_memo_stub(ctx.cycle, ctx.suffixes, dry_run=ctx.dry_run)
+    changed |= ensure_portal_stub(ctx.cycle, ctx.suffixes, dry_run=ctx.dry_run)
 
     if ctx.dry_run:
         print("Done (dry-run)")

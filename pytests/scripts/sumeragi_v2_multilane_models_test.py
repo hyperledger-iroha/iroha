@@ -99,7 +99,7 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
     (
         (
             Path(
-                "docs/formal/sumeragi_v2/"
+                "formal/sumeragi_v2/"
                 "SumeragiV2InFlightFirstRelease.tla"
             ),
             "LaneExecutablePayloadV1",
@@ -144,7 +144,7 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
             "MLPayloadV3CarriesExactAdmissionPreimage",
         ),
         (
-            Path("docs/formal/sumeragi_v2/inflight_first_release_fixed.cfg"),
+            Path("formal/sumeragi_v2/inflight_first_release_fixed.cfg"),
             "INVARIANT MLQueuePlanV4PutBatchBound4096\n",
             "",
         ),

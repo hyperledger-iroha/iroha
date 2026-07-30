@@ -21,8 +21,8 @@ const DISPUTE_WARNING_MULTIPLIER: f64 = 1.5;
 const MONITOR_DEADLINE_DAYS: u32 = 5;
 const REPLACEMENT_DEADLINE_DAYS: u32 = 14;
 const ADVISORY_ACK_DAYS: i64 = 2;
-const STEWARD_PLAYBOOK_PATH: &str = "docs/source/sns/steward_replacement_playbook.md";
-const GOVERNANCE_PLAYBOOK_PATH: &str = "docs/source/sns/governance_playbook.md";
+const STEWARD_PLAYBOOK_PATH: &str = "specs/sns/steward_replacement_playbook.md";
+const GOVERNANCE_PLAYBOOK_PATH: &str = "specs/sns/governance_playbook.md";
 
 #[cfg(test)]
 mod portal_stub_tests {
@@ -46,7 +46,7 @@ mod portal_stub_tests {
         let body = fs::read_to_string(&output).expect("read stub");
         assert!(body.contains("id: regulatory-eu-dsa-2026-10"));
         assert!(body.contains("sidebar_label: EU DSA (Oct 2026)"));
-        assert!(body.contains("docs/source/sns/regulatory/eu-dsa/2026-10.md"));
+        assert!(body.contains("specs/sns/regulatory/eu-dsa/2026-10.md"));
         assert!(body.contains("sns-annex:sora-2026-10:start"));
         assert!(body.contains("sns-annex:nexus-2026-10:start"));
         assert!(
@@ -122,7 +122,7 @@ mod portal_stub_tests {
     #[test]
     fn portal_annex_block_prefills_front_matter_metadata() {
         let dir = tempdir().expect("tempdir");
-        let annex_dir = dir.path().join("docs/source/sns/reports/.sora");
+        let annex_dir = dir.path().join("specs/sns/reports/.sora");
         fs::create_dir_all(&annex_dir).expect("create annex dir");
         let annex_body = r#"---
 generated_at: "2026-12-31T01:02:03Z"
@@ -1469,7 +1469,7 @@ pub fn write_portal_stub(opts: PortalStubOptions) -> Result<(), Box<dyn Error>> 
         .map(|suffix| format!(" --suffix {suffix}"))
         .collect::<String>();
     let body = format!(
-        "---\nid: regulatory-eu-dsa-{cycle}\ntitle: EU DSA Hosting & Transparency Guidance – Intake Memo\nsidebar_label: EU DSA ({sidebar_label})\ndescription: Regulatory intake memo stub for the SNS EU DSA KPI annex program ({cycle}).\njurisdiction: EU\nregulation: Digital Services Act (EU) – KPI annex program\nsuffix_scope:\n{suffix_scope}\nowners:\n  guardian: guardian-board\n  rapporteur: gov-council-seat-4\n  steward_ack: sora-foundation-suffix-ops\nstatus: scheduled\ncycle: {cycle}\n---\n\n:::note Canonical Source\nThis page mirrors `docs/source/sns/regulatory/eu-dsa/{cycle}.md` and will be updated once the governance memo is final.\n:::\n\n## 1. Intake Summary (Pending)\n\n- **Bulletin:** Pending governance bulletin for cycle {cycle}.\n- **Key requirements:** reserve annex jobs, capture KPI exports, and update localization stubs before submission.\n- **Submission window:** TBD.\n\n## 2. Checklist\n\n1. Append `{cycle}` to `docs/source/sns/regulatory/annex_jobs.json`.\n2. Run `scripts/add_sns_annex_cycle.py {cycle}{annex_cycle_suffix_args}` to populate annex/resolver stubs.\n3. Replace this stub when the EU DSA memo is finalised and governance publishes the bulletin.\n\n{annex_blocks}\n",
+        "---\nid: regulatory-eu-dsa-{cycle}\ntitle: EU DSA Hosting & Transparency Guidance – Intake Memo\nsidebar_label: EU DSA ({sidebar_label})\ndescription: Regulatory intake memo stub for the SNS EU DSA KPI annex program ({cycle}).\njurisdiction: EU\nregulation: Digital Services Act (EU) – KPI annex program\nsuffix_scope:\n{suffix_scope}\nowners:\n  guardian: guardian-board\n  rapporteur: gov-council-seat-4\n  steward_ack: sora-foundation-suffix-ops\nstatus: scheduled\ncycle: {cycle}\n---\n\n:::note Canonical Source\nThis page mirrors `specs/sns/regulatory/eu-dsa/{cycle}.md` and will be updated once the governance memo is final.\n:::\n\n## 1. Intake Summary (Pending)\n\n- **Bulletin:** Pending governance bulletin for cycle {cycle}.\n- **Key requirements:** reserve annex jobs, capture KPI exports, and update localization stubs before submission.\n- **Submission window:** TBD.\n\n## 2. Checklist\n\n1. Append `{cycle}` to `specs/sns/regulatory/annex_jobs.json`.\n2. Run `scripts/add_sns_annex_cycle.py {cycle}{annex_cycle_suffix_args}` to populate annex/resolver stubs.\n3. Replace this stub when the EU DSA memo is finalised and governance publishes the bulletin.\n\n{annex_blocks}\n",
     );
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
@@ -1548,7 +1548,7 @@ fn render_portal_annex_block(suffix: &str, cycle: &str) -> String {
 
 fn render_portal_annex_block_at_root(root: &Path, suffix: &str, cycle: &str) -> String {
     let marker_id = regulatory_marker_id(suffix, cycle);
-    let annex_path = format!("docs/source/sns/reports/{suffix}/{cycle}.md");
+    let annex_path = format!("specs/sns/reports/{suffix}/{cycle}.md");
     let artifact_path =
         format!("artifacts/sns/regulatory/{suffix}/{cycle}/sns_suffix_analytics.json");
     let metadata = portal_annex_metadata(root, &annex_path, &artifact_path);
@@ -2016,9 +2016,9 @@ fn relative_to_root(path: &Path) -> String {
 fn default_regulatory_hint(suffix: &str, cycle: &str) -> String {
     let sanitized = suffix.trim_start_matches('.');
     if sanitized.is_empty() {
-        format!("docs/source/sns/regulatory/{cycle}.md")
+        format!("specs/sns/regulatory/{cycle}.md")
     } else {
-        format!("docs/source/sns/regulatory/{sanitized}/{cycle}.md")
+        format!("specs/sns/regulatory/{sanitized}/{cycle}.md")
     }
 }
 
@@ -2185,10 +2185,8 @@ mod tests {
         let scorecard = build_scorecard(&source).expect("scorecard");
         let packet = build_handoff_packet(
             &scorecard,
-            Path::new("docs/examples/sns/steward_scorecard_2026q1.json"),
-            Some(Path::new(
-                "docs/source/sns/reports/steward_scorecard_2026q1.md",
-            )),
+            Path::new("fixtures/documentation/sns/steward_scorecard_2026q1.json"),
+            Some(Path::new("specs/sns/reports/steward_scorecard_2026q1.md")),
         )
         .expect("handoff");
         assert_eq!(packet.motions.len(), 1);
@@ -2220,13 +2218,13 @@ mod tests {
         let scorecard = build_scorecard(&source).expect("scorecard");
         let packet = build_handoff_packet(
             &scorecard,
-            Path::new("docs/examples/sns/steward_scorecard_2026q1.json"),
+            Path::new("fixtures/documentation/sns/steward_scorecard_2026q1.json"),
             None,
         )
         .expect("handoff packet");
         let markdown = render_handoff_markdown(&packet);
         assert!(markdown.contains("SNS Steward Hand-off Packet"));
-        assert!(markdown.contains("docs/examples/sns/steward_scorecard_2026q1.json"));
+        assert!(markdown.contains("fixtures/documentation/sns/steward_scorecard_2026q1.json"));
         assert!(markdown.contains("Council replacement motion"));
         assert!(markdown.contains("DAO ratification"));
     }
@@ -2301,7 +2299,7 @@ mod tests {
             suffix: ".sora".into(),
             cycle: "2026-03".into(),
             generated_at: "2026-03-30T00:00:00Z".into(),
-            annex_path: "docs/source/sns/reports/.sora/2026-03.md".into(),
+            annex_path: "specs/sns/reports/.sora/2026-03.md".into(),
             dashboard_path: "dashboards/grafana/sns_suffix_analytics.json".into(),
             dashboard_sha256: "abc123".into(),
             dashboard_title: Some("SNS KPIs".into()),
@@ -2316,12 +2314,12 @@ mod tests {
                 label: Some("Suffix".into()),
                 selection: Some("All".into()),
             }],
-            regulatory_hint: "docs/source/sns/regulatory/sora/2026-03.md".into(),
+            regulatory_hint: "specs/sns/regulatory/sora/2026-03.md".into(),
         };
         let markdown = render_annex_document(&doc);
         assert!(markdown.contains(".sora KPI Annex"));
         assert!(markdown.contains("Grafana dashboard export"));
-        assert!(markdown.contains("docs/source/sns/regulatory/sora/2026-03.md"));
+        assert!(markdown.contains("specs/sns/regulatory/sora/2026-03.md"));
     }
 
     #[test]
@@ -2378,7 +2376,7 @@ mod tests {
             suffix: ".sora".into(),
             cycle: "2026-03".into(),
             generated_at: "2026-03-05T00:00:00Z".into(),
-            annex_path: "docs/source/sns/reports/.sora/2026-03.md".into(),
+            annex_path: "specs/sns/reports/.sora/2026-03.md".into(),
             dashboard_path: "dashboards/grafana/sns_suffix_analytics.json".into(),
             dashboard_sha256: "deadbeef".into(),
             dashboard_title: None,
@@ -2389,7 +2387,7 @@ mod tests {
             time_from: None,
             time_to: None,
             templating: vec![],
-            regulatory_hint: "docs/source/sns/regulatory/sora/2026-03.md".into(),
+            regulatory_hint: "specs/sns/regulatory/sora/2026-03.md".into(),
         };
         update_regulatory_entry(temp.path(), &doc).expect("append block");
         let appended = fs::read_to_string(temp.path()).expect("read memo");

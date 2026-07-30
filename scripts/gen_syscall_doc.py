@@ -16,7 +16,6 @@ from typing import Sequence
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "crates/ivm_abi/src/syscalls.rs"
 SPEC = ROOT / "crates/ivm/spec/syscalls.toml"
-TABLE_SEPARATOR = re.compile(r"^\|[-: |]+\|$")
 CONSTANT = re.compile(r"^pub const (SYSCALL_[A-Za-z0-9_]+): u32 = ([^;]+);$")
 HEX_LITERAL = re.compile(r"0x[0-9A-F]+(?:_[0-9A-F]+)*")
 DECIMAL_LITERAL = re.compile(r"(?:0|[1-9][0-9]*)")
@@ -24,28 +23,6 @@ ASSIGNMENT = re.compile(
     r'^(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<value>"(?:[^"\\]|\\.)*")$'
 )
 EXPECTED_FIELDS = frozenset({"number", "args", "ret", "gas"})
-EXPECTED_LOCALES = (
-    "am",
-    "ar",
-    "az",
-    "ba",
-    "dz",
-    "es",
-    "fr",
-    "he",
-    "hy",
-    "ja",
-    "ka",
-    "kk",
-    "mn",
-    "my",
-    "pt",
-    "ru",
-    "ur",
-    "uz",
-    "zh-hans",
-    "zh-hant",
-)
 USAGE = "usage: gen_syscall_doc.py --write|--check"
 
 
@@ -245,27 +222,6 @@ def build_rows(src: Path = SRC, spec: Path = SPEC) -> list[str]:
     return rows
 
 
-def replace_localized_table(lines: Sequence[str], rows: Sequence[str]) -> list[str]:
-    """Replace only the body of one generated localized syscall table."""
-    separators = [
-        index for index, line in enumerate(lines) if TABLE_SEPARATOR.fullmatch(line)
-    ]
-    if len(separators) != 1:
-        raise RuntimeError(
-            "expected exactly one syscall table separator, "
-            f"found {len(separators)}"
-        )
-    separator = separators[0]
-    first = separator + 1
-    last = next(
-        (index for index in range(first, len(lines)) if not lines[index].strip()),
-        len(lines),
-    )
-    if first == last:
-        raise RuntimeError("no syscall rows found")
-    return list(lines[:first]) + list(rows) + list(lines[last:])
-
-
 def _validate_parent(path: Path) -> None:
     metadata = path.lstat()
     if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
@@ -427,89 +383,11 @@ def sync_canonical_table(
     """Check or atomically publish the canonical generated table."""
 
     if path is None:
-        path = ROOT / "docs/source/ivm_syscalls_generated.md"
+        path = ROOT / "specs/ivm_syscalls_generated.md"
     _sync_prepared_outputs(
         [_prepare_output(path, render(rows))],
         check=check,
     )
-
-
-def localized_table_paths(source_dir: Path) -> tuple[Path, ...]:
-    """Resolve the exact fixed release-locale inventory."""
-
-    _validate_parent(source_dir)
-    expected = tuple(
-        source_dir / f"ivm_syscalls_generated.{locale}.md"
-        for locale in EXPECTED_LOCALES
-    )
-    actual = tuple(sorted(source_dir.glob("ivm_syscalls_generated.*.md")))
-    for path in actual:
-        if path.is_symlink() or not path.is_file():
-            raise RuntimeError(
-                f"localized syscall table must be a regular file: {path}"
-            )
-    if actual != expected:
-        expected_set = set(expected)
-        actual_set = set(actual)
-        missing = sorted(path.name for path in expected_set - actual_set)
-        unexpected = sorted(path.name for path in actual_set - expected_set)
-        raise RuntimeError(
-            "localized syscall tables do not match the fixed release inventory; "
-            f"missing={missing}, unexpected={unexpected}"
-        )
-    return expected
-
-
-def sync_localized_tables(
-    rows: Sequence[str], *, check: bool, source_dir: Path | None = None
-) -> None:
-    """Synchronize every localized generated table with the canonical rows."""
-    if source_dir is None:
-        source_dir = ROOT / "docs/source"
-    outputs: list[PreparedOutput] = []
-    for path in localized_table_paths(source_dir):
-        original = path.read_bytes()
-        try:
-            actual = original.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise RuntimeError(f"{path} is not UTF-8: {error}") from error
-        lines = actual.splitlines()
-        try:
-            updated = replace_localized_table(lines, rows)
-        except RuntimeError as error:
-            raise RuntimeError(f"{error} in {path}") from error
-        expected = "\n".join(updated) + "\n"
-        outputs.append(_prepare_output(path, expected))
-    _sync_prepared_outputs(outputs, check=check)
-
-
-def sync_all_tables(
-    rows: Sequence[str],
-    *,
-    check: bool,
-    canonical_path: Path | None = None,
-    source_dir: Path | None = None,
-) -> None:
-    """Render and validate the complete canonical plus localized destination set."""
-
-    if canonical_path is None:
-        canonical_path = ROOT / "docs/source/ivm_syscalls_generated.md"
-    if source_dir is None:
-        source_dir = ROOT / "docs/source"
-
-    outputs = [_prepare_output(canonical_path, render(rows))]
-    for path in localized_table_paths(source_dir):
-        original = path.read_bytes()
-        try:
-            actual = original.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise RuntimeError(f"{path} is not UTF-8: {error}") from error
-        try:
-            updated = replace_localized_table(actual.splitlines(), rows)
-        except RuntimeError as error:
-            raise RuntimeError(f"{error} in {path}") from error
-        outputs.append(_prepare_output(path, "\n".join(updated) + "\n"))
-    _sync_prepared_outputs(outputs, check=check)
 
 
 def render(rows: Sequence[str]) -> str:
@@ -551,7 +429,7 @@ def main(argv: Sequence[str]) -> int:
         return 2
     try:
         rows = build_rows()
-        sync_all_tables(rows, check=check)
+        sync_canonical_table(rows, check=check)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

@@ -5,6 +5,21 @@ Last updated: 2026-07-30
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
+## Repository structure follow-ups
+
+- Continue extracting cohesive production modules from the exact source-budget
+  exceptions, prioritizing Kura, Torii routing/API, core state, and other files
+  still above 20,000 lines. Preserve public facades and wire behavior; every
+  split must ratchet the checked-in line count downward.
+- Reduce the data-model frontend and monomorphization surface without exceeding
+  the 41-unit compile baseline or its 44-unit hard limit. Prefer bounded
+  internal modules and derive-family isolation over new crates or feature
+  fragmentation.
+- Move additional SDK/code-generation callers onto the focused
+  `norito_codegen_exporter` library. Keep the `xtask` compatibility commands
+  until every documented and CI caller has migrated, then remove only the
+  adapters whose replacement paths have parity evidence.
+
 ## ZK-ACE JavaScript signed-transaction parity
 
 - Design and implement a new typed JavaScript API for the canonical governed
@@ -32,7 +47,7 @@ evidence.
 
 The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
-[`docs/source/sumeragi_v2_multilane_closure_ledger.md`](./docs/source/sumeragi_v2_multilane_closure_ledger.md).
+[`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
 TODO are gone; no remaining lane/autoscale/merge/Native multilane TODO was
 found. This is source implementation closure, not release completion.
@@ -112,7 +127,14 @@ The remaining work is evidence-driven and must stay in order:
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
-  `4/4`; it is not the remaining SDK blocker.
+  `4/4`; it is not the remaining SDK blocker. The standalone Swift replay is
+  now also fresh at `3/3` with a source-built external ABI-21 macOS bridge,
+  fixture SHA-256
+  `ccdfa7dc54301889152a199da01dad4b8b3a469214063f52c338ee3d66c9f0fd`,
+  and suite-source manifest SHA-256
+  `52a6348576719497fd160379e7bae7c06482575a7fde0251ec18bc177f13bdeb`.
+  The remaining SDK blocker is one archived release replay of every required
+  language surface together.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
@@ -171,7 +193,7 @@ remain outside its scope.
 
 The canonical first-release implementation, validation, documentation,
 authority-removal, and rollout-evidence mapping is
-[`docs/source/sorafs/v1_closure_ledger.md`](./docs/source/sorafs/v1_closure_ledger.md).
+[`specs/sorafs/v1_closure_ledger.md`](./specs/sorafs/v1_closure_ledger.md).
 Repository conformance and production promotion are separate: the current
 production aggregate remains blocked with zero recognized lane summaries and
 no trusted foundational envelope. Promotion requires one reviewed production
@@ -2063,7 +2085,7 @@ excluded from the first release.
   `app_attest_public_key_base64` and `device_public_key` must reject, and
   `offline_v2_vectors` must reject noncanonical fixture platform aliases
   instead of mapping them to canonical profiles. The
-  `docs/source/offline_note_v2_attestation.md` contract must describe
+  `specs/offline_note_v2_attestation.md` contract must describe
   structured redemption aliases as rejected. The policy guard's
   `--negative-control-torii-offline-v2-retired-ios-app-attest-profile` and
   `--negative-control-torii-offline-v2-retired-assertion-key-aliases` plus
@@ -5137,7 +5159,7 @@ excluded from the first release.
   guards must preserve the shipped authenticated provider routes while keeping
   only the remaining production service, authoritative repair, and promotion
   surfaces unshipped.
-  `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
+  `fixtures/documentation/sorafs_reference_sdk/` ships a runnable cookbook that validates
   committed fixtures, exercises advert/order/governance signing, checks
   orderbook receipt validation and bundle cross-links, and emits manifest/CAR
   replay outcomes for SDK and release smoke testing. The docs portal SoraFS
@@ -6018,7 +6040,7 @@ excluded from the first release.
   rejecting `x...`, `not-...`, `/...`, `/internal/...`, and canary/evidence/
   local/fixture suffixed fragments so diagnostic command text cannot satisfy an
   exact warning-only exposure check. Those warning-only command scans now cover
-  top-level SoraFS source docs, nested `docs/source/sorafs/**` docs,
+  top-level SoraFS source docs, nested `specs/sorafs/**` docs,
   portal SoraFS docs, and portal i18n SoraFS mirrors, so reserved operator
   commands cannot be published through mirrored runbooks outside the top-level
   plan files. It now also pins deployed AI
@@ -6205,7 +6227,7 @@ excluded from the first release.
   public-route block. The warning-only public
   route scan now shares the broad SoraFS docs path inventory used by reserved
   operator-command checks, covering top-level source docs, nested
-  `docs/source/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
+  `specs/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
   mirrors before mirrored public evidence routes can be published outside the
   reviewed warning context. The same static contract now also pins the
   deployed-only SFM-4c source-entry producer, GAR/moderation/appeal/legal-hold/

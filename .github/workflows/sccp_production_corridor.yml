@@ -42,7 +42,7 @@ on:
       - "crates/iroha_js_host/**"
       - "crates/iroha_torii/**"
       - "csharp/**"
-      - "docs/source/bridge_proofs.md"
+      - "specs/bridge_proofs.md"
       - "fixtures/sccp/**"
       - "integration_tests/**"
       - "IrohaSwift/**"

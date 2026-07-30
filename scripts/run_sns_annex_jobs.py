@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--jobs",
-        default="docs/source/sns/regulatory/annex_jobs.json",
+        default="specs/sns/regulatory/annex_jobs.json",
         help="Path to the JSON file describing annex jobs.",
     )
     parser.add_argument(
@@ -93,7 +93,7 @@ def sanitize_suffix_for_path(suffix: str) -> str:
 
 
 def job_output_path(suffix: str, cycle: str) -> Path:
-    return Path("docs/source/sns/reports") / sanitize_suffix_for_path(suffix) / f"{cycle}.md"
+    return Path("specs/sns/reports") / sanitize_suffix_for_path(suffix) / f"{cycle}.md"
 
 
 def job_dashboard_artifact_path(suffix: str, cycle: str, dashboard_path: Path) -> Path:
@@ -113,7 +113,7 @@ def job_regulatory_entry_path(job: Dict[str, Any]) -> Path:
     if not jurisdiction:
         raise ValueError("job requires `jurisdiction` or explicit `regulatory_entry`")
     cycle = job["cycle"]
-    return Path("docs/source/sns/regulatory") / jurisdiction / f"{cycle}.md"
+    return Path("specs/sns/regulatory") / jurisdiction / f"{cycle}.md"
 
 
 def job_portal_entry_path(job: Dict[str, Any]) -> Optional[Path]:

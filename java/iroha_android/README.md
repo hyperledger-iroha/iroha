@@ -318,7 +318,7 @@ System.out.println(formats.i105Warning);
 ```
 
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
-network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
+network prefix stay aligned with `specs/sns/address_display_guidelines.md`.
 
 ## Kagemusha proof artifacts and device registration
 
@@ -861,7 +861,7 @@ Key evidence paths (also mirrored under `artifacts/android/reports/<version>`):
 
 Every publish invocation automatically runs the manifest/SBOM tasks so
 governance packets can attach the resulting JSON alongside the Maven repository
-snapshot. See `docs/source/sdk/android/publishing_plan.md` for the full release
+snapshot. See `specs/sdk/android/publishing_plan.md` for the full release
 checklist.
 
 ### Observability Hooks
@@ -1062,7 +1062,7 @@ The deterministic seed/attempt mapping ensures reconnect telemetry stays aligned
 ### Connect error taxonomy
 
 `org.hyperledger.iroha.android.connect.error.ConnectError` mirrors the shared taxonomy
-(`docs/source/connect_error_taxonomy.md`) so Android apps emit the same `category`/`code`
+(`specs/connect_error_taxonomy.md`) so Android apps emit the same `category`/`code`
 pairs as the Swift and JavaScript SDKs. Wrap every transport, codec, or queue failure via
 `ConnectErrors.from(Throwable)` (or manually create a `ConnectError` using the builder)
 before forwarding attributes to OpenTelemetry:
@@ -1337,7 +1337,7 @@ active and no native library is loaded (avoiding security warnings in CI).
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
 `Long?`/`LongArray?` outputs instead of `Optional` wrappers. See the CUDA
 operator guide for native setup and the manual smoke harness
-(`docs/source/sdk/android/gpu_operator_guide.md`), which exercises the JNI
+(`specs/sdk/android/gpu_operator_guide.md`), which exercises the JNI
 bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM

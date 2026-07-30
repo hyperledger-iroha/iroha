@@ -7,7 +7,7 @@
 This runbook documents the end-to-end procedure for staging, validating, and
 tearing down Connect preview sessions as required by roadmap milestones **IOS7**
 and **JS4** (`roadmap.md:1340`, `roadmap.md:1656`). Follow these steps whenever
-you demo the Connect strawman (`docs/source/connect_architecture_strawman.md`),
+you demo the Connect strawman (`specs/connect_architecture_strawman.md`),
 exercise the queue/telemetry hooks promised in the SDK roadmaps, or collect
 evidence for `status.md`.
 
@@ -15,10 +15,10 @@ evidence for `status.md`.
 
 | Item | Details | References |
 |------|---------|------------|
-| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `docs/source/sdk/js/quickstart.md#connect-sessions--queueing` |
-| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `docs/source/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
-| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `docs/source/connect_architecture_strawman.md`, `docs/source/sdk/swift/telemetry_redaction.md`, `docs/source/sdk/js/quickstart.md` |
-| Evidence folders | Pick a destination such as `docs/source/status/swift_weekly_digest.md` (weekly digest) and `docs/source/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `docs/source/sdk/swift/readiness/archive/<date>/connect/`. | `docs/source/status/swift_weekly_digest.md`, `docs/source/sdk/swift/connect_risk_tracker.md` |
+| Torii endpoint + Connect policy | Confirm the Torii base URL, `chain_id`, and Connect policy (`ToriiClient.getConnectStatus()` / `getConnectAppPolicy()`). Capture the JSON snapshot in the runbook ticket. | `javascript/iroha_js/src/toriiClient.js`, `specs/sdk/js/quickstart.md#connect-sessions--queueing` |
+| Fixture + bridge versions | Note the Norito fixture hash and bridge build you will use (Swift requires `NoritoBridge.xcframework`, JS requires `@iroha/iroha-js` ≥ the version that shipped `bootstrapConnectPreviewSession`). | `specs/sdk/swift/reproducibility_checklist.md`, `javascript/iroha_js/CHANGELOG.md` |
+| Telemetry dashboards | Ensure the dashboards that chart `connect.queue_depth`, `connect.queue_overflow_total`, `connect.resume_latency_ms`, `swift.connect.session_event`, etc., are reachable (Grafana `Android/Swift Connect` board + exported Prometheus snapshots). | `specs/connect_architecture_strawman.md`, `specs/sdk/swift/telemetry_redaction.md`, `specs/sdk/js/quickstart.md` |
+| Evidence folders | Pick a destination such as `specs/status/swift_weekly_digest.md` (weekly digest) and `specs/sdk/swift/connect_risk_tracker.md` (risk tracker). Store logs, metrics screenshots, and acknowledgements under `specs/sdk/swift/readiness/archive/<date>/connect/`. | `specs/status/swift_weekly_digest.md`, `specs/sdk/swift/connect_risk_tracker.md` |
 
 ## 2. Bootstrap the Preview Session
 
@@ -77,7 +77,7 @@ evidence for `status.md`.
    wallet to ensure the bounded queue and replay hooks log entries. JS/Android
    SDKs emit `ConnectQueueError.overflow(limit)` /
    `.expired(ttlMs)` when they drop frames; Swift should observe the same once
-   IOS7 queue scaffolding lands (`docs/source/connect_architecture_strawman.md`).
+   IOS7 queue scaffolding lands (`specs/connect_architecture_strawman.md`).
    After you record at least one reconnect, run
    ```bash
    iroha connect queue inspect --sid "$SID" --root ~/.iroha/connect --metrics
@@ -97,11 +97,11 @@ evidence for `status.md`.
     reconnect).
   - `connect.replay_success_total` / `connect.replay_error_total`.
   - Swift-specific `swift.connect.session_event` and
-    `swift.connect.frame_latency` exports (`docs/source/sdk/swift/telemetry_redaction.md`).
+    `swift.connect.frame_latency` exports (`specs/sdk/swift/telemetry_redaction.md`).
 - **Dashboards:** Update the Connect board bookmarks with annotation markers.
   Attach screenshots (or JSON exports) to the evidence folder alongside the raw
   OTLP/Prometheus snapshots pulled via the telemetry exporter CLI.
-- **Alerting:** If any Sev 1/2 thresholds trigger (per `docs/source/android_support_playbook.md` §5),
+- **Alerting:** If any Sev 1/2 thresholds trigger (per `specs/android_support_playbook.md` §5),
   page the SDK Program Lead and document the PagerDuty incident ID in the runbook
   ticket before continuing.
 
@@ -118,8 +118,8 @@ evidence for `status.md`.
    next run starts clean. Record the file hash before deletion if you need to
    debug a replay issue.
 3. **File incident notes.** Summarise the run in:
-   - `docs/source/status/swift_weekly_digest.md` (deltas block),
-   - `docs/source/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
+   - `specs/status/swift_weekly_digest.md` (deltas block),
+   - `specs/sdk/swift/connect_risk_tracker.md` (clear or downgrade CR-2
      once telemetry is in place),
    - the JS SDK changelog or recipe if new behaviour was validated.
 4. **Escalate failures:**
@@ -134,7 +134,7 @@ evidence for `status.md`.
 
 | Artefact | Location |
 |----------|----------|
-| SID/deeplink/tokens JSON | `docs/source/sdk/swift/readiness/archive/<date>/connect/session.json` |
+| SID/deeplink/tokens JSON | `specs/sdk/swift/readiness/archive/<date>/connect/session.json` |
 | Dashboard exports (`connect.queue_depth`, etc.) | `.../metrics/` subfolder |
 | PagerDuty / incident IDs | `.../notes.md` |
 | Cleanup confirmation (Torii delete, journal wipe) | `.../cleanup.log` |

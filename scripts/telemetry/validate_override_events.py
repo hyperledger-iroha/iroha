@@ -308,8 +308,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Validate android.telemetry.redaction.override NDJSON feeds"
     )
-    default_events = Path("docs/source/sdk/android/readiness/override_logs/override_events.ndjson")
-    default_ledger = Path("docs/source/sdk/android/telemetry_override_log.md")
+    default_events = Path("specs/sdk/android/readiness/override_logs/override_events.ndjson")
+    default_ledger = Path("specs/sdk/android/telemetry_override_log.md")
     parser.add_argument(
         "--events",
         type=Path,

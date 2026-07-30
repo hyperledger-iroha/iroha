@@ -104,7 +104,7 @@ IrohaSwift/.codex-build/
 docs/portal/node_modules/
 docs/portal/build/
 docs/portal/.docusaurus/
-docs/source/da/_generated/threat_model_report.json
+specs/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes
 .cargo-temp/

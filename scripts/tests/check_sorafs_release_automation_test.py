@@ -247,7 +247,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            '- "docs/source/release_dual_track_automation_plan*.md"',
+            '- "specs/release_dual_track_automation_plan*.md"',
         ),
         (
             ".github/workflows/sorafs-fixtures-nightly.yml",
@@ -854,7 +854,7 @@ def test_validate_release_automation_rejects_checksum_verification_after_signing
             "[`sorafs/release-rollback-yank`](./release-rollback-yank.md)",
         ),
         (
-            "docs/source/sorafs_release_pipeline_plan.md",
+            "specs/sorafs_release_pipeline_plan.md",
             "exactly the five expected target-triple checksum manifests",
         ),
         (
@@ -870,7 +870,7 @@ def test_validate_release_automation_rejects_checksum_verification_after_signing
             "all five native candidate archives",
         ),
         (
-            "docs/examples/sorafs_release_notes.md",
+            "fixtures/documentation/sorafs_release_notes.md",
             "## Rollback / Yank Record",
         ),
     ],
@@ -890,9 +890,9 @@ def test_validate_release_automation_rejects_release_document_drift(
 @pytest.mark.parametrize(
     ("relative", "stale_claim"),
     [
-        ("docs/source/sorafs_release_pipeline_plan.md", "via cross"),
+        ("specs/sorafs_release_pipeline_plan.md", "via cross"),
         (
-            "docs/source/sorafs_release_pipeline_plan.md",
+            "specs/sorafs_release_pipeline_plan.md",
             "exactly the three expected platform checksum manifests",
         ),
         (
@@ -1027,7 +1027,7 @@ def test_validate_release_automation_requires_historical_oidc_finding_remediatio
     tmp_path: Path,
 ) -> None:
     _copy_workflows(tmp_path)
-    relative = "docs/source/sorafs/reports/sf6_security_review.md"
+    relative = "specs/sorafs/reports/sf6_security_review.md"
     document = tmp_path / relative
     source = document.read_text(encoding="utf-8")
     marker = "Removed that CLI surface and all production callers"

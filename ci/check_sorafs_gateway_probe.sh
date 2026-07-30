@@ -26,7 +26,7 @@ GAR_KEY_HEX="$(<"${FIXTURE_DIR}/gar_pub.hex")"
   --pagerduty-routing-key "ci-demo-routing-key" \
   --pagerduty-output "${PD_PAYLOAD}" \
   --pagerduty-detail environment=ci \
-  --pagerduty-detail playbook=docs/source/sorafs_gateway_tls_automation.md \
+  --pagerduty-detail playbook=specs/sorafs_gateway_tls_automation.md \
   --pagerduty-dry-run \
   -- \
   --headers-file "${FIXTURE_DIR}/headers_demo.txt" \

@@ -1,6 +1,6 @@
 //! Deterministic ordering helpers for FASTPQ batches.
 //!
-//! Ordering commitments follow the staged plan in `docs/source/fastpq_plan.md`
+//! Ordering commitments follow the staged plan in `specs/fastpq_plan.md`
 //! and now use the canonical Poseidon2 sponge over Goldilocks with the
 //! `fastpq:v1:ordering` domain tag.
 

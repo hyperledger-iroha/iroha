@@ -106,7 +106,7 @@ The following language stubs track the PSP-facing integration examples:
 - **Rust** – `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
   uses the workspace `iroha` client to craft `RiskQuery` metadata and validate
   admission failures/successes.
-- **TypeScript** – `docs/source/governance_api.md` documents the REST surface
+- **TypeScript** – `specs/governance_api.md` documents the REST surface
   consumed by the lightweight Torii gateway used in the PSP demo dashboard; the
   scripted client lives in `scripts/ci/schedule_fraud_scoring.sh` for smoke
   drills.

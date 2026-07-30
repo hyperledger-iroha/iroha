@@ -116,7 +116,7 @@ config requests Metal.
   (`ci/xcframework-smoke:<lane>:device_tag`) so dashboards can attribute results to the
   correct simulator or StrongBox lane—verify the metadata is present if you adjust the
   pipeline or agent tags.
-- When `make swift-ci` fails, follow the steps in `docs/source/swift_parity_triage.md`
+- When `make swift-ci` fails, follow the steps in `specs/swift_parity_triage.md`
   and review the rendered `mobile_ci` output to determine which lane requires
   regeneration or incident follow-up.
 

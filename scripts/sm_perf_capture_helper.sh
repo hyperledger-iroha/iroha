@@ -294,7 +294,7 @@ cat <<'EOF'
 Notes:
   * Capture the scalar baseline first so the optional comparison step works.
   * After generating the JSON files, commit them together with the benchmark
-    logs and update docs/source/crypto/sm_program.md with the recorded medians.
+    logs and update specs/crypto/sm_program.md with the recorded medians.
   * If the platform lacks NEON (e.g. x86_64), skip the neon-force commands.
 
 Happy benchmarking!

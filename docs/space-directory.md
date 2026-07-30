@@ -2,8 +2,8 @@
 
 This playbook explains how to author, publish, audit, and rotate **Space
 Directory** entries for Nexus dataspaces. It complements the architecture notes
-in `docs/source/nexus.md` and the CBDC onboarding plan
-(`docs/source/cbdc_lane_playbook.md`) by providing hands-on procedures,
+in `specs/nexus.md` and the CBDC onboarding plan
+(`specs/cbdc_lane_playbook.md`) by providing hands-on procedures,
 fixtures, and governance templates.
 
 > **Scope.** The Space Directory serves as the canonical registry for
@@ -16,7 +16,7 @@ fixtures, and governance templates.
 
 | Term | Description | References |
 |------|-------------|------------|
-| Dataspace | Execution context/Lane that runs a governance-approved contract set. | `docs/source/nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
+| Dataspace | Execution context/Lane that runs a governance-approved contract set. | `specs/nexus.md`, `crates/iroha_data_model/src/nexus/mod.rs` |
 | UAID | `UniversalAccountId` (blake2b-32 hash) used to anchor cross-dataspace permissions. | `crates/iroha_data_model/src/nexus/manifest.rs` |
 | Capability Manifest | `AssetPermissionManifest` describing deterministic allow/deny rules for a UAID/dataspace pair (deny wins). | Fixture `fixtures/space_directory/capability/*.manifest.json` |
 | Dataspace Profile | Governance + DA metadata published alongside manifests so operators can reconstruct validator sets, composability whitelists, and audit hooks. | Fixture `fixtures/space_directory/profile/cbdc_lane_profile.json` |
@@ -241,7 +241,7 @@ belong to that slice. Downstream components use this ledger-backed view:
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
   `canonical I105 output` if you need the i105 literals for QR
-  payloads; I105 strings remain the default.【docs/source/torii/portfolio_api.md】
+  payloads; I105 strings remain the default.【specs/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
 
@@ -587,7 +587,7 @@ outside of the scheduler window.
 ## SDK Sample (Rust)
 
 The Rust client can submit the same lifecycle instructions programmatically.
-For a runnable helper check `docs/examples/space_directory_lifecycle.rs`, or
+For a runnable helper check `fixtures/documentation/space_directory_lifecycle.rs`, or
 copy the snippet below to publish a manifest and later expire it without going
 through the CLI:
 

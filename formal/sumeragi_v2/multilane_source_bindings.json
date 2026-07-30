@@ -1,0 +1,2998 @@
+{
+  "schema_version": 3,
+  "closure_mutations": [
+    {
+      "id": "ML-MUT-NAT-01",
+      "classification": "tla_counterexample",
+      "obligation": "MLSeparateParticipantApplication",
+      "mutation_configs": [
+        "multilane_native_same_route_marker_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-NAT-02",
+      "classification": "tla_counterexample",
+      "obligation": "MLNativeSourceClaimInjective",
+      "mutation_configs": [
+        "multilane_native_source_claim_equivocation_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-NAT-03",
+      "classification": "tla_counterexample",
+      "obligation": "MLNativeContiguousActiveRoute",
+      "mutation_configs": [
+        "multilane_native_noncontiguous_route_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-NAT-04",
+      "classification": "tla_counterexample",
+      "obligation": "MLNativeGroupExactCover",
+      "mutation_configs": [
+        "multilane_native_partial_group_application_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-NAT-05",
+      "classification": "tla_counterexample",
+      "obligation": "MLNativeManifestAuthenticates",
+      "mutation_configs": [
+        "multilane_native_forged_manifest_leaf_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-NAT-06",
+      "classification": "tla_counterexample",
+      "obligation": "MLNativeDurabilityPrecedesFrontier",
+      "mutation_configs": [
+        "multilane_native_frontier_before_sidecars_bug.cfg",
+        "multilane_native_hash_only_pruning_bug.cfg",
+        "multilane_native_dropped_startup_repair_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-NAT-07",
+      "classification": "tla_counterexample",
+      "obligation": "MLNativeLatestIndexExact",
+      "mutation_configs": [
+        "multilane_native_ambiguous_latest_index_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-QUEUE-01",
+      "classification": "tla_counterexample",
+      "obligation": "QueuePlanAdmissionRegistryProductionRefinementObligation",
+      "mutation_configs": [
+        "multilane_queue_plan_split_route_public_acceptance_bug.cfg",
+        "multilane_queue_plan_execution_before_global_cas_bug.cfg",
+        "multilane_queue_plan_conflicting_cas_bug.cfg",
+        "multilane_queue_plan_restart_aba_bug.cfg",
+        "multilane_queue_plan_local_expiry_clears_tombstone_bug.cfg",
+        "multilane_queue_plan_deferred_bypass_bug.cfg",
+        "multilane_queue_plan_cancellation_bypass_bug.cfg",
+        "multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg",
+        "multilane_queue_plan_execution_without_exact_binding_bug.cfg",
+        "multilane_queue_plan_duplicate_execution_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-01",
+      "classification": "tla_counterexample",
+      "obligation": "MLReservationSingleOwner",
+      "mutation_configs": [
+        "multilane_autonomous_reserve_before_durable_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-02",
+      "classification": "tla_counterexample",
+      "obligation": "MLReservationIdentityStable",
+      "mutation_configs": [
+        "multilane_autonomous_carrier_drift_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-03",
+      "classification": "tla_counterexample",
+      "obligation": "MLCertifiedBundleDurable",
+      "mutation_configs": [
+        "multilane_autonomous_digest_only_authorization_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-04",
+      "classification": "tla_counterexample",
+      "obligation": "MLMergeCandidateExactPrefix",
+      "mutation_configs": [
+        "multilane_autonomous_noncanonical_merge_prefix_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-05",
+      "classification": "tla_counterexample",
+      "obligation": "MLCarrierExactlyOnce",
+      "mutation_configs": [
+        "multilane_autonomous_duplicate_application_bug.cfg",
+        "multilane_autonomous_release_after_apply_bug.cfg",
+        "multilane_autonomous_release_before_barrier_bug.cfg",
+        "multilane_autonomous_ordinary_anchor_execution_bug.cfg",
+        "multilane_autonomous_skip_canonical_reexecution_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-AUT-06",
+      "classification": "tla_counterexample",
+      "obligation": "MLRestartOwnershipPartition",
+      "mutation_configs": [
+        "multilane_autonomous_aba_release_bug.cfg",
+        "multilane_autonomous_restart_drops_ownership_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-LIFE-01",
+      "classification": "tla_counterexample",
+      "obligation": "MLActivationAfterAtomicCreate",
+      "mutation_configs": [
+        "multilane_autoscale_activation_before_storage_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-LIFE-02",
+      "classification": "tla_counterexample",
+      "obligation": "MLDrainImpliesNoOwnedWork",
+      "mutation_configs": [
+        "multilane_autoscale_early_drain_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-LIFE-03",
+      "classification": "tla_counterexample",
+      "obligation": "MLDrainCertificateMonotonic",
+      "mutation_configs": [
+        "multilane_autoscale_weak_drain_certificate_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-LIFE-04",
+      "classification": "tla_counterexample",
+      "obligation": "MLRetirementConsumesExactIncarnation",
+      "mutation_configs": [
+        "multilane_autoscale_destroy_before_archive_bug.cfg",
+        "multilane_autoscale_incarnation_reuse_bug.cfg",
+        "multilane_autoscale_cleanup_by_lane_id_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-LIFE-05",
+      "classification": "tla_counterexample",
+      "obligation": "MLStageEvidenceMonotonic",
+      "mutation_configs": [
+        "multilane_autonomous_volatile_stage_diagnostics_bug.cfg"
+      ],
+      "source_checks": []
+    },
+    {
+      "id": "ML-MUT-API-01",
+      "classification": "static_release",
+      "obligation": "MLDiagnosticsAreDerived",
+      "mutation_configs": [],
+      "source_checks": [
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "required_tokens": [
+            "pub fn native_amx_participant_applications_diagnostics(",
+            "No adapter/session cache is consulted.",
+            "native_amx_participant_diagnostics_fold_all_durable_stage_transitions",
+            "native_amx_participant_diagnostics_report_same_height_conflict_deterministically"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/routing.rs",
+          "required_tokens": [
+            "pub async fn handle_v1_sumeragi_status(",
+            "pub async fn handle_v1_sumeragi_diagnostics(",
+            "sumeragi_status_json_is_exact_authoritative_v2_schema",
+            "permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ML-MUT-API-02",
+      "classification": "differential_release",
+      "obligation": "MLApiAuthoritySeparation",
+      "mutation_configs": [],
+      "source_checks": [
+        {
+          "path": "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
+          "required_tokens": [
+            "test_sumeragi_status_and_diagnostics_openapi_surfaces_are_disjoint"
+          ]
+        },
+        {
+          "path": "python/iroha_torii_client/tests/test_client.py",
+          "required_tokens": [
+            "test_sumeragi_endpoint_methods_reject_swapped_payload_contracts"
+          ]
+        },
+        {
+          "path": "python/iroha_python/tests/client_sumeragi_v2_status_test.py",
+          "required_tokens": [
+            "test_typed_endpoint_methods_reject_swapped_sumeragi_payloads"
+          ]
+        },
+        {
+          "path": "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
+          "required_tokens": [
+            "func testRustOwnedGroupedNativeAmxV2EndpointSeparation()",
+            "status endpoint must reject a diagnostics-shaped payload",
+            "diagnostics endpoint must reject a status-shaped payload"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ML-MUT-API-03",
+      "classification": "differential_release",
+      "obligation": "MLSdkAcceptSetEqualsRust",
+      "mutation_configs": [],
+      "source_checks": [
+        {
+          "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
+          "required_tokens": [
+            "readonly expected_negative_control_count=50",
+            "openapi|python|javascript|swift|kotlin|java)",
+            "grouped Native AMX V2 negative controls must fail closed",
+            "--suite-source-manifest-sha256"
+          ]
+        },
+        {
+          "path": "fixtures/sumeragi_v2/native_amx_v2_grouped.json",
+          "required_tokens": [
+            "\"format\": \"iroha-native-amx-v2-grouped\"",
+            "\"rust_owner\": \"iroha_data_model::block::consensus\"",
+            "\"negative_controls\": ["
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ML-MUT-API-04",
+      "classification": "differential_release",
+      "obligation": "MLFixtureHasOneCanonicalOwner",
+      "mutation_configs": [],
+      "source_checks": [
+        {
+          "path": "crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs",
+          "required_tokens": [
+            "Pass `--check` to verify",
+            "native_amx_grouped::write_fixture(check_only)"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
+          "required_tokens": [
+            "\"rust_owner\": \"iroha_data_model::block::consensus\"",
+            "pub fn write_fixture(check_only: bool)"
+          ]
+        },
+        {
+          "path": "ci/check_sumeragi_v2_multilane_release_inventory.sh",
+          "required_tokens": [
+            "native-amx-rust-fixture-check command 0",
+            "sumeragi_v2_wire_fixtures -- --check"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ML-MUT-WIRE-01",
+      "classification": "static_release",
+      "obligation": "MLConsensusLayoutAgreement",
+      "mutation_configs": [],
+      "source_checks": [
+        {
+          "path": "scripts/check_no_legacy_codec.sh",
+          "required_tokens": [
+            "retired_native_amx_v1_pattern=",
+            "retired_lane_handoff_pattern=",
+            "No retired Native AMX V1 consensus codecs found.",
+            "No retired lane executable payload handoff codecs found."
+          ]
+        },
+        {
+          "path": "ci/check_sumeragi_v2_multilane_release_inventory.sh",
+          "required_tokens": [
+            "source-sealed-legacy-codec-guard command 0",
+            "bash scripts/check_no_legacy_codec.sh"
+          ]
+        }
+      ]
+    }
+  ],
+  "inflight_first_release_layout_contract": {
+    "claim": "layout_only_no_transition_refinement",
+    "module": "SumeragiV2InFlightFirstRelease",
+    "positive_config": "inflight_first_release_fixed.cfg",
+    "runner": "scripts/formal/run_sumeragi_v2_inflight_first_release.sh",
+    "evidence": "formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md",
+    "required_invariants": [
+      "FirstReleaseTypeInvariant",
+      "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
+      "MLValidatorCarrierOwnership",
+      "MLPutBatchV4BeforeReservationV5",
+      "MLReservationV5BeforeKuraActive",
+      "MLKuraActiveBeforeExecutionInput",
+      "MLExecutionInputBeforeReady",
+      "MLCrashPrefixLossFree",
+      "MLCommitAndReleaseRetainExactScope",
+      "MLExactlyOnceCarrierApplication",
+      "MLQueuePlanV4PutBatchBound4096"
+    ],
+    "mutations": [
+      {
+        "config": "inflight_first_release_reservation_before_put_batch_bug.cfg",
+        "invariant": "MLPutBatchV4BeforeReservationV5"
+      },
+      {
+        "config": "inflight_first_release_kura_before_reservation_bug.cfg",
+        "invariant": "MLReservationV5BeforeKuraActive"
+      },
+      {
+        "config": "inflight_first_release_ready_before_input_bug.cfg",
+        "invariant": "MLExecutionInputBeforeReady"
+      },
+      {
+        "config": "inflight_first_release_crash_drops_durable_bug.cfg",
+        "invariant": "MLCrashPrefixLossFree"
+      },
+      {
+        "config": "inflight_first_release_payload_conflict_bug.cfg",
+        "invariant": "MLPayloadSchemaV2CarriesExactAdmissionPreimage"
+      },
+      {
+        "config": "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "invariant": "MLCommitAndReleaseRetainExactScope"
+      },
+      {
+        "config": "inflight_first_release_release_scope_conflict_bug.cfg",
+        "invariant": "MLCommitAndReleaseRetainExactScope"
+      },
+      {
+        "config": "inflight_first_release_duplicate_apply_bug.cfg",
+        "invariant": "MLExactlyOnceCarrierApplication"
+      },
+      {
+        "config": "inflight_first_release_oversize_put_batch_bug.cfg",
+        "invariant": "MLQueuePlanV4PutBatchBound4096"
+      }
+    ],
+    "production_symbols": [
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "struct",
+        "symbol": "LaneExecutablePayloadV1",
+        "required_tokens": [
+          "pub version: u8",
+          "pub entrypoint_hashes: Vec<Hash>",
+          "pub entrypoints: Vec<TransactionEntrypoint>",
+          "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+          "pub routing_plans: Vec<RoutingPlan>",
+          "pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>",
+          "pub payload_hash: Hash",
+          "pub producer_signature: Vec<u8>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "method",
+        "symbol": "LaneExecutablePayloadV1::new_signed_with_reservations",
+        "required_tokens": [
+          "version: LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
+          "reservation_keys",
+          "routing_plans",
+          "native_amx_receipts",
+          "payload.computed_payload_hash()?",
+          "Signature::try_new",
+          "payload.validate(chain_id_hash, epoch)?"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "kind": "fn",
+        "symbol": "validate_lane_executable_payload_body",
+        "required_tokens": [
+          "version != LANE_EXECUTABLE_PAYLOAD_VERSION_V2",
+          "entrypoints.is_empty()",
+          "entrypoints.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS",
+          "reservation_keys.len() != entrypoints.len()",
+          "routing_plans.len() != entrypoints.len()",
+          "native_amx_receipts.len() != entrypoints.len()",
+          "key.validate().is_err()",
+          "key.lane_incarnation != descriptor.lane_incarnation",
+          "routing_plan.digest() != key.routing_plan_digest",
+          "compute_lane_executable_payload_hash("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/journal.rs",
+        "kind": "struct",
+        "symbol": "QueuePlanJournalRecordV4",
+        "required_tokens": [
+          "pub version: u16",
+          "pub entrypoint: TransactionEntrypoint",
+          "pub entrypoint_hash: HashOf<TransactionEntrypoint>",
+          "pub routing_plan: RoutingPlan",
+          "pub admission_context: QueuePlanAdmissionContextV2",
+          "pub global_admission_identity: Option<QueuePlanGlobalAdmissionIdentityV2>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "struct",
+        "symbol": "LaneQueueReservationKeyV2",
+        "required_tokens": [
+          "pub version: u16",
+          "pub entrypoint_hash: HashOf<TransactionEntrypoint>",
+          "pub queue_plan_admission_binding_hash: Hash",
+          "pub routing_plan_digest: Hash",
+          "pub coordinator_leg: RouteLeg",
+          "pub lane_incarnation: Hash",
+          "pub proposal_height: u64",
+          "pub lane_block_height: u64",
+          "pub lane_block_view: u64",
+          "pub reservation_owner_hash: Hash",
+          "pub proposal_identity_hash: Hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "struct",
+        "symbol": "LaneQueueReservationRecordV5",
+        "required_tokens": [
+          "version: u16",
+          "key: LaneQueueReservationKeyV2",
+          "enqueue_timestamp_ms: u64",
+          "fifo_order: LaneQueueFifoOrderV5"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "fn",
+        "symbol": "reserve_transactions_for_lane_bounded",
+        "required_tokens": [
+          "durable_claim.global_admission_binding()",
+          "QueuePlanAdmissionRegistryMatch::Exact",
+          "version: LANE_QUEUE_RESERVATION_JOURNAL_VERSION",
+          "journal.put_batch(",
+          "restore_popped_hash_locked",
+          "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "struct",
+        "symbol": "LaneBlockExecutionInputArtifact",
+        "required_tokens": [
+          "pub format: LaneBlockExecutionInputArtifactFormat",
+          "pub proposal: LaneBlockProposalV1",
+          "pub autonomous_chain_id_hash: Option<Hash>",
+          "pub autonomous_epoch: Option<u64>",
+          "pub autonomous_payload_hash: Option<Hash>",
+          "pub entrypoint_hashes: Vec<Hash>",
+          "pub entrypoints: Vec<TransactionEntrypoint>",
+          "pub reservation_keys: Vec<LaneQueueReservationKeyV2>",
+          "pub routing_plans: Vec<RoutingPlan>",
+          "pub native_amx_receipts: Vec<Option<NativeAmxReceipt>>"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::validate_lane_block_execution_input_artifact",
+        "required_tokens": [
+          "artifact.reservation_keys.len() != artifact.entrypoints.len()",
+          "artifact.routing_plans.len() != artifact.entrypoints.len()",
+          "artifact.native_amx_receipts.len() != artifact.entrypoints.len()",
+          "key.validate().is_err()",
+          "artifact.entrypoint_hashes != descriptor.accepted_transaction_hashes",
+          "Hash::from(entrypoint.hash()) != expected_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::recover_lane_block_execution_input_source",
+        "required_tokens": [
+          "recover_autonomous_lane_block_payload_with_sidecar_repair",
+          "recover_lane_block_payload_with_sidecar_repair",
+          "LaneBlockPayloadAvailability::DescriptorMismatch"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::persist_lane_block_execution_input",
+        "required_tokens": [
+          "recover_lane_block_execution_input_source(",
+          "if &verified != recovered",
+          "LaneBlockExecutionInputArtifact::new(verified)",
+          "write_lane_block_execution_input_artifact(&artifact)"
+        ]
+      }
+    ],
+    "ordered_source_checks": [
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "fn",
+        "symbol": "reserve_transactions_for_lane_bounded",
+        "tokens": [
+          "durable_claim.global_admission_binding()",
+          "QueuePlanAdmissionRegistryMatch::Exact",
+          "journal.put_batch(",
+          "live_by_hash"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura.rs",
+        "kind": "method",
+        "symbol": "Kura::persist_lane_block_execution_input",
+        "tokens": [
+          "recover_lane_block_execution_input_source(",
+          "if &verified != recovered",
+          "LaneBlockExecutionInputArtifact::new(verified)",
+          "write_lane_block_execution_input_artifact(&artifact)"
+        ]
+      }
+    ],
+    "source_checks": [
+      {
+        "path": "crates/iroha_core/src/lane_consensus.rs",
+        "required_tokens": [
+          "pub(crate) const MAX_LANE_EXECUTABLE_ENTRYPOINTS: usize = MAX_MERGE_EXECUTION_ENTRYPOINTS;",
+          "pub(crate) const LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2;",
+          "unknown.version = LANE_EXECUTABLE_PAYLOAD_VERSION_V2 + 1;"
+        ]
+      },
+      {
+        "path": "crates/iroha_data_model/src/merge.rs",
+        "required_tokens": [
+          "pub const MAX_MERGE_EXECUTION_ENTRYPOINTS: usize = 4_096;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/journal.rs",
+        "required_tokens": [
+          "pub const QUEUE_PLAN_JOURNAL_VERSION: u16 = 4;",
+          "unsupported.version = QUEUE_PLAN_JOURNAL_VERSION + 1;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue/reservation_journal.rs",
+        "required_tokens": [
+          "pub const LANE_QUEUE_RESERVATION_JOURNAL_VERSION: u16 = 5;",
+          "legacy.fifo_order.version = LANE_QUEUE_RESERVATION_JOURNAL_VERSION - 1;"
+        ]
+      },
+      {
+        "path": "scripts/formal/run_sumeragi_v2_tlc.sh",
+        "required_tokens": [
+          "readonly INFLIGHT_FIRST_RELEASE_RUNNER=\"${REPO_ROOT}/scripts/formal/run_sumeragi_v2_inflight_first_release.sh\"",
+          "bash \"$INFLIGHT_FIRST_RELEASE_RUNNER\""
+        ]
+      },
+      {
+        "path": "scripts/write_sumeragi_v2_release_receipt.py",
+        "required_tokens": [
+          "_APALACHE_LAYOUT_ONLY_RESULTS = (",
+          "\"inflight-first-release-layout\"",
+          "\"SumeragiV2InFlightFirstRelease\"",
+          "\"inflight_first_release_fixed.cfg\"",
+          "*_APALACHE_REFINEMENT_RESULTS",
+          "*_APALACHE_LAYOUT_ONLY_RESULTS"
+        ]
+      },
+      {
+        "path": "pytests/scripts/sumeragi_v2_release_receipt_test.py",
+        "required_tokens": [
+          "canonical.replace(\"result_count\\t5\", \"result_count\\t4\", 1)",
+          "\"result\\tinflight-first-release-refinement\\t\"",
+          "\"is not exact source-bound NoError evidence\""
+        ]
+      }
+    ],
+    "forbidden_tokens": [
+      "LaneExecutablePayloadV3",
+      "QueuePlanV5",
+      "QueuePlan V5",
+      "queuePlanV5",
+      "everQueuePlanV5",
+      "PutBatchV5",
+      "reservationV9",
+      "everReservationV9",
+      "FsyncReservationV9",
+      "reservation V9",
+      "MLPayloadV3CarriesExactAdmissionPreimage",
+      "MLPutBatchV5BeforeReservationV9",
+      "MLReservationV9BeforeKuraActive"
+    ]
+  },
+  "models": [
+    {
+      "module": "SumeragiV2AutoscaleLifecycle",
+      "positive_config": "multilane_autoscale_lifecycle_fixed.cfg",
+      "production_refinement_obligation": "AutoscaleLifecycleProductionRefinementObligation",
+      "mutations": [
+        {
+          "config": "multilane_autoscale_early_drain_bug.cfg",
+          "invariant": "MLDrainImpliesNoOwnedWork"
+        },
+        {
+          "config": "multilane_autoscale_destroy_before_archive_bug.cfg",
+          "invariant": "ArchiveBeforeDestroyInvariant"
+        },
+        {
+          "config": "multilane_autoscale_incarnation_reuse_bug.cfg",
+          "invariant": "MLRetirementConsumesExactIncarnation"
+        },
+        {
+          "config": "multilane_autoscale_activation_before_storage_bug.cfg",
+          "invariant": "MLActivationAfterAtomicCreate"
+        },
+        {
+          "config": "multilane_autoscale_weak_drain_certificate_bug.cfg",
+          "invariant": "MLDrainCertificateMonotonic"
+        },
+        {
+          "config": "multilane_autoscale_cleanup_by_lane_id_bug.cfg",
+          "invariant": "MLRetirementConsumesExactIncarnation"
+        }
+      ],
+      "production_symbols": [
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "maybe_apply_nexus_autoscale",
+          "required_tokens": [
+            "select_autoscale_scale_in_action",
+            "apply_autoscale_lane_lifecycle",
+            "record_autoscale_transition_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "preflight_committed_autoscale_lane_geometry",
+          "required_tokens": [
+            "validate_committed_autoscale_lane_lifecycle",
+            "preflight_lane_geometry_updates"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "apply_committed_autoscale_lane_geometry",
+          "required_tokens": [
+            "preflight_committed_autoscale_lane_geometry",
+            "apply_lane_geometry_updates_with_certified_drain_frontiers",
+            "mark_lane_geometry_catalog_published",
+            "rollback_lane_geometry_updates",
+            "updated_lane_incarnations",
+            "updated_lane_incarnation_lineage"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "apply_committed_autoscale_lane_lifecycle",
+          "required_tokens": [
+            "updated_lane_incarnations",
+            "updated_lane_incarnation_lineage",
+            "reset_lane_scoped_runtime_state"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "validate_committed_autoscale_drain_metadata_update",
+          "required_tokens": [
+            "LaneDrainStateV1",
+            "InvalidAutoscaleManagedLane",
+            "evidence_aware_lane_drain_frontier_from_world"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "pending_autoscale_lane_drain_body",
+          "required_tokens": [
+            "autoscale_lane_drain_state_matches_context",
+            "evidence_aware_lane_drain_frontier_from_world",
+            "validate_lane_drain_certificate_body"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "lane_has_drain_blocking_evidence",
+          "required_tokens": [
+            "unmerged_merge_admissible_relay_progress",
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
+            "pending_certified_merge_work_for_lane",
+            "unwrap_or(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "lane_has_pending_work",
+          "required_tokens": [
+            "transaction_selection_durability_faulted",
+            "commit_barriers",
+            "release_barriers",
+            "completed_releases",
+            "routing_plans.iter"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "lane_drain_has_local_blockers",
+          "required_tokens": [
+            "lane_has_drain_blocking_evidence",
+            "lane_has_pending_work",
+            "pending_autonomous_anchor_payloads",
+            "native_sessions.has_pending_votes_for_lane",
+            "PendingMergeStage::Certified"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "lane_executable_payload_carries_lane",
+          "required_tokens": [
+            "reservation.validate",
+            "reservation.routing_plan_digest",
+            "receipt_shape_matches_coordinator_payload",
+            "native_amx_receipt_carries_separate_participant_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "merge_lane_execution_carries_lane",
+          "required_tokens": [
+            "decode_canonical_merge_reservation_key",
+            "reservation.validate",
+            "receipt_shape_matches_coordinator_payload",
+            "native_amx_receipt_carries_separate_participant_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "decode_canonical_merge_reservation_key",
+          "required_tokens": [
+            "norito::decode_canonical",
+            ".ok()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "pending_certified_merge_work_for_lane",
+          "required_tokens": [
+            "entry.active_lanes.iter",
+            "binding.incarnation == lane_incarnation",
+            "native_amx_receipt_requires_separate_participant_application_for",
+            "unwrap_or(true)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "native_amx_receipt_targets_retirement",
+          "required_tokens": [
+            "native_amx_receipt_requires_separate_participant_application_for",
+            "identity.lane_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/lane_consensus.rs",
+          "kind": "fn",
+          "symbol": "validate_lane_drain_certificate",
+          "required_tokens": [
+            "validate_lane_drain_certificate_body",
+            "validate_lane_block_validator_set_fields",
+            "signers_bitmap",
+            "min_quorum",
+            "bls_normal_pop_verify",
+            "bls_normal_verify_preaggregated_same_message"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "SumeragiV2NativeApplicationEvidence",
+      "positive_config": "multilane_native_application_evidence_fixed.cfg",
+      "production_refinement_obligation": "NativeApplicationEvidenceProductionRefinementObligation",
+      "mutations": [
+        {
+          "config": "multilane_native_frontier_before_sidecars_bug.cfg",
+          "invariant": "MLNativeDurabilityPrecedesFrontier"
+        },
+        {
+          "config": "multilane_native_hash_only_pruning_bug.cfg",
+          "invariant": "PrunedEvidenceVerifiableInvariant"
+        },
+        {
+          "config": "multilane_native_same_route_marker_bug.cfg",
+          "invariant": "MLSeparateParticipantApplication"
+        },
+        {
+          "config": "multilane_native_source_claim_equivocation_bug.cfg",
+          "invariant": "MLNativeSourceClaimInjective"
+        },
+        {
+          "config": "multilane_native_noncontiguous_route_bug.cfg",
+          "invariant": "MLNativeContiguousActiveRoute"
+        },
+        {
+          "config": "multilane_native_partial_group_application_bug.cfg",
+          "invariant": "MLNativeGroupExactCover"
+        },
+        {
+          "config": "multilane_native_forged_manifest_leaf_bug.cfg",
+          "invariant": "MLNativeManifestAuthenticates"
+        },
+        {
+          "config": "multilane_native_dropped_startup_repair_bug.cfg",
+          "invariant": "MLNativeDurabilityPrecedesFrontier"
+        },
+        {
+          "config": "multilane_native_ambiguous_latest_index_bug.cfg",
+          "invariant": "MLNativeLatestIndexExact"
+        }
+      ],
+      "production_symbols": [
+        {
+          "path": "crates/iroha_core/src/native_amx.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxSourceSessionClaimV4",
+          "required_tokens": [
+            "source_id",
+            "HashOf<TransactionEntrypoint>",
+            "plan_digest",
+            "round",
+            "epoch",
+            "chain_id_hash",
+            "authority_context_height",
+            "coordinator_lane_id",
+            "coordinator_dataspace_id",
+            "coordinator_lane_incarnation",
+            "planned_coordinator_block_height",
+            "coordinator_lane_block_view",
+            "coordinator_proposal_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxSourceParticipantClaimV4",
+          "required_tokens": [
+            "lane_id",
+            "dataspace_id",
+            "lane_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx.rs",
+          "kind": "fn",
+          "symbol": "record_locked",
+          "required_tokens": [
+            "source_claims",
+            "slot_claims",
+            "PlanEquivocation",
+            "SlotEquivocation",
+            "native_amx_sync_directory_handle",
+            "persist_anchor",
+            "NativeAmxDurableSourceClaimV4::from_body"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_application_role",
+          "required_tokens": [
+            "participant_settlement_hash",
+            "authority_context_height",
+            "participant_previous_block_descriptor_hash",
+            "same_route",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "NativeAmxParticipantApplicationRole::Coordinator"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx.rs",
+          "kind": "fn",
+          "symbol": "native_amx_receipt_requires_separate_participant_application_for",
+          "required_tokens": [
+            "native_amx_participant_application_role",
+            "NativeAmxParticipantApplicationRole::SeparateParticipant",
+            "descriptor.lane_incarnation == lane_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/exec.rs",
+          "kind": "fn",
+          "symbol": "from_result_bearing_block",
+          "required_tokens": [
+            "executed_block_wire_hash",
+            "native_amx_participant_application_role",
+            "MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES",
+            "settlement_source_ids",
+            "settlement.tx_count",
+            "settlement.receipts.len()",
+            "timestamp_ms != application_block_height",
+            "settlement.nexus_fee_receipts.is_empty()",
+            "settlement.native_amx_receipts.is_empty()",
+            "source_ids != group.settlement_source_ids",
+            "NativeAmxApplicationManifestLeafV1"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/exec.rs",
+          "kind": "fn",
+          "symbol": "execution_commitment_from_witness",
+          "required_tokens": [
+            "new_with_native_amx_application_manifest",
+            "native_amx_manifest.root()",
+            "native_amx_manifest.count()",
+            "native_amx_manifest.executed_block_wire_hash()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_native_amx_participant_application_manifest_artifact",
+          "required_tokens": [
+            "MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES",
+            "manifest_leaf_count",
+            "manifest_root",
+            "proof.clone().verify",
+            "NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_native_amx_participant_application_receipt_artifact",
+          "required_tokens": [
+            "MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES",
+            "manifest_artifact_hash",
+            "participant_settlement_hash",
+            "result_hashes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_application_evidence_for_block_under_publication_guard",
+          "required_tokens": [
+            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "v2_finality_artifact_with_archive_under_prune_guard",
+            "native_amx_application_manifest_root",
+            "executed_block_wire_hash",
+            "finality_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_native_amx_post_apply_metadata_under_publication_guard",
+          "required_tokens": [
+            "commit_manifest",
+            "wsv_checkpoint",
+            "checkpoint.commit_manifest_hash",
+            "execution.parent_state_root",
+            "execution.post_state_root",
+            "v2_commit_authority_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "repair_native_amx_participant_application_evidence",
+          "required_tokens": [
+            "prune_lock.lock",
+            "ensure_prune_recovery_not_required",
+            "native_amx_participant_application_evidence_for_block_under_publication_guard",
+            "block, true",
+            "persist_native_amx_participant_application_evidence_under_publication_guard"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_participant_recovery_marker_is_well_formed",
+          "required_tokens": [
+            "frontier_version == 2",
+            "predecessor_height",
+            "checked_add(1)",
+            "application_block_height > 0",
+            "MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES",
+            "lane_incarnation",
+            "descriptor_hash",
+            "proposal_hash",
+            "settlement_hash",
+            "application_block_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "struct",
+          "symbol": "V2LaneWorkLimits",
+          "required_tokens": [
+            "session_capacity",
+            "native_request_capacity",
+            "reply_source_capacity",
+            "merge_share_frame_capacity",
+            "historical_recovery_response_frame_capacity"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkLimits::new",
+          "required_tokens": [
+            "native_request_capacity",
+            "reply_source_capacity",
+            "merge_share_frame_capacity",
+            "historical_recovery_response_frame_capacity"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "struct",
+          "symbol": "OutstandingNativeParticipantRecoveryRequest",
+          "required_tokens": [
+            "request_hash",
+            "request",
+            "eligible_peers",
+            "next_peer_index"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_participant_manifest_contains_exact_recovery_marker",
+          "required_tokens": [
+            "lane_id",
+            "dataspace_id",
+            "lane_incarnation",
+            "participant_height",
+            "participant_view",
+            "predecessor_height",
+            "predecessor_descriptor_hash",
+            "descriptor_hash",
+            "proposal_hash",
+            "settlement_hash",
+            "application_block_height",
+            "application_block_hash",
+            "leaf.members.len"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_participant_recovery_block_matches_finality",
+          "required_tokens": [
+            "native_participant_recovery_marker_is_well_formed",
+            "execution_commitment.validate",
+            "finality.verify",
+            "finality.validate_for_header",
+            "finality.commit_qc.execution_commitment",
+            "executed_block_wire_hash",
+            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "native_amx_application_manifest_root",
+            "native_amx_application_manifest_count",
+            "native_participant_manifest_contains_exact_recovery_marker"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "historical_recovery_response_fits_frame",
+          "required_tokens": [
+            "LaneHistoricalRecoveryResponse",
+            "fair_v2_ingress_required_lane_p2p_frame_bytes",
+            "historical_recovery_response_frame_capacity"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "peer_is_global_finality_signer",
+          "required_tokens": [
+            "height_context",
+            ".roster",
+            "commit_qc.signers.binary_search"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "pending_native_participant_recovery_markers",
+          "required_tokens": [
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
+            "session_capacity",
+            "NativeAmxParticipantRecoveryMarkerV1::from"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "retire_native_participant_recovery_request",
+          "required_tokens": [
+            "native_participant_recovery_requests.remove",
+            "native_participant_recovery_request_owners",
+            "self.effects.retain",
+            "LaneHistoricalRecoveryRequest",
+            "self.effect_keys = self.effects.iter"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "reconcile_native_participant_recovery_requests",
+          "required_tokens": [
+            "pending_native_participant_recovery_markers",
+            "filter(|marker| !pending.contains(marker))",
+            "retire_native_participant_recovery_request"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "service_next_native_participant_recovery_request",
+          "required_tokens": [
+            "output_guard.acquire",
+            "reconcile_native_participant_recovery_requests",
+            "native_participant_recovery_retry_cursor",
+            "schedule_native_participant_recovery_request"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "schedule_native_participant_recovery_request",
+          "required_tokens": [
+            "native_participant_recovery_marker_is_well_formed",
+            "committed_block_hash_at_height",
+            "v2_finality_artifact",
+            "finality.verify",
+            "finality.commit_qc",
+            ".signers",
+            "push_effect",
+            "native_participant_recovery_request_owners",
+            "native_participant_recovery_requests.insert"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "validate_native_participant_recovery_request",
+          "required_tokens": [
+            "LANE_HISTORICAL_RECOVERY_VERSION_V2",
+            "request.certificate.is_some",
+            "request.signer_pops.is_empty",
+            "historical_recovery_request_fits_frame",
+            "lane_route_active",
+            "committed_block_hash_at_height",
+            "v2_finality_artifact",
+            "finality.verify",
+            "requester_is_authorized",
+            "finality_artifact_hash",
+            "execution_commitment"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "serve_historical_recovery_request",
+          "required_tokens": [
+            "validate_native_participant_recovery_request",
+            "peer_is_global_finality_signer",
+            "kura.get_block",
+            "native_participant_recovery_block_matches_finality",
+            "historical_recovery_response_fits_frame",
+            "LaneHistoricalRecoveryResponse"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "accept_native_participant_recovery_response",
+          "required_tokens": [
+            "native_participant_recovery_requests",
+            "pending_native_participant_recovery_markers",
+            "peer_is_global_finality_signer",
+            "native_participant_recovery_block_matches_finality",
+            "cache_block_body",
+            "repair_native_amx_participant_application_evidence",
+            "reconcile_native_participant_recovery_requests",
+            "close_admission_for_restart"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::new_with_output_guard_and_transport",
+          "required_tokens": [
+            "begin_fail_stop_operation",
+            "prune_finalized_pending_certified_merge_entries",
+            "repair_globally_applied_lane_receipts",
+            "hydrate_canonical_lane_artifacts",
+            "drive_lane_sessions",
+            "construction.complete"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::repair_globally_applied_lane_receipts",
+          "required_tokens": [
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
+            "pending_native.len() > self.limits.session_capacity.get()",
+            "kura.get_block",
+            "schedule_native_participant_recovery_request",
+            "repair_native_amx_participant_application_evidence",
+            "unresolved_native",
+            "remains without exact durable evidence after repair"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "method",
+          "symbol": "V2LaneWorkAdapter::has_pending_historical_recovery",
+          "required_tokens": [
+            "historical_recovery_sessions.is_empty",
+            "native_participant_recovery_requests.is_empty",
+            "pending_native_participant_recovery_markers",
+            "Err(_) => true"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "run_inner",
+          "required_tokens": [
+            "service_next_native_participant_recovery_request",
+            "next_lane_retransmit",
+            "retransmit_interval",
+            "schedule_autonomous_new_view_timeouts",
+            "schedule_retransmission",
+            "deadline_after(now, retransmit_interval)",
+            "block_sync_frame_byte_capacity",
+            "has_pending_historical_recovery",
+            "dispatch_lane_work_effects"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "lane_work_limits",
+          "required_tokens": [
+            "reply_source_capacity",
+            "consensus_frame_byte_capacity",
+            "block_sync_frame_byte_capacity",
+            "V2LaneWorkLimits::new",
+            "NonZeroUsize::new"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/mod.rs",
+          "kind": "method",
+          "symbol": "FairV2Ingress::try_push_at",
+          "required_tokens": [
+            "LaneHistoricalRecoveryResponse",
+            "LaneHistoricalRecoveryPayloadV1::CanonicalBlock",
+            "transport_completion_byte_reserve",
+            "MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES",
+            "MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/mod.rs",
+          "kind": "method",
+          "symbol": "SumeragiStartArgs::start",
+          "required_tokens": [
+            "global_plaintext_frame_capacity",
+            "max_frame_bytes_block_sync",
+            "block_sync_frame_byte_capacity",
+            "new_with_source_geometry_and_transport_frame_caps",
+            "SumeragiWorker"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_native_amx_participant_application_evidence_under_publication_guard",
+          "required_tokens": [
+            "get_durable_block_hash",
+            "write_native_amx_participant_application_manifest_artifact_under_publication_guard",
+            "write_native_amx_participant_application_receipt_artifact_under_publication_guard"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "write_native_amx_participant_application_manifest_artifact_under_publication_guard",
+          "required_tokens": [
+            "ensure_prune_recovery_not_required",
+            "get_durable_block_hash",
+            "require_active_lane_incarnation",
+            "native_amx_evidence_namespace_for_entry",
+            "complete_native_amx_evidence_prune_intent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "publish_native_amx_evidence_file_locked",
+            "NativeAmxEvidenceKind::Manifest",
+            "STRICT_INIT_MAX_BLOCK_BYTES",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "write_native_amx_participant_application_receipt_artifact_under_publication_guard",
+          "required_tokens": [
+            "manifest_artifact_hash",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "require_active_lane_artifact",
+            "native_amx_evidence_namespace_for_entry",
+            "complete_native_amx_evidence_prune_intent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "read_native_amx_participant_application_manifest_from_paths_locked",
+            "publish_native_amx_evidence_file_locked",
+            "NativeAmxEvidenceKind::Receipt",
+            "persist_native_amx_participant_receipt_latest_index_locked",
+            "prune_native_amx_evidence_pairs_locked",
+            "progress_mutation_namespace_unchanged",
+            "native_amx_evidence_tracked_bytes_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "enum",
+          "symbol": "NativeAmxEvidenceKind",
+          "required_tokens": [
+            "Manifest",
+            "Receipt"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxEvidencePruneEntryV1",
+          "required_tokens": [
+            "kind: u8",
+            "participant_height: u64",
+            "artifact_hash: Hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxEvidencePruneIntentV1",
+          "required_tokens": [
+            "version: u8",
+            "lane_id: LaneId",
+            "dataspace_id: DataSpaceId",
+            "lane_incarnation: Hash",
+            "entries: Vec<NativeAmxEvidencePruneEntryV1>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxParticipantReceiptLatestIndexV2",
+          "required_tokens": [
+            "version: u8",
+            "lane_id: LaneId",
+            "dataspace_id: DataSpaceId",
+            "lane_incarnation: Hash",
+            "lane_block_height: u64",
+            "participant_proposal_hash: Hash",
+            "participant_settlement_hash: HashOf<LaneBlockCommitment>",
+            "application_block_height: u64",
+            "application_block_hash: HashOf<BlockHeader>",
+            "executed_block_wire_hash: Hash",
+            "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+            "manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "parse_native_amx_evidence_path",
+          "required_tokens": [
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE",
+            "NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE",
+            "NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE",
+            "NativeAmxEvidenceKind::Manifest",
+            "NativeAmxEvidenceKind::Receipt",
+            "NATIVE_AMX_EVIDENCE_TEMP_FILE_SUFFIX",
+            "NATIVE_AMX_EVIDENCE_FILE_SUFFIX",
+            "NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS",
+            "participant_height == 0",
+            "unexpected or legacy Native AMX evidence artifact"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "inventory_native_amx_evidence_files_locked",
+          "required_tokens": [
+            "parse_native_amx_evidence_path",
+            "regular_sidecar_metadata_for",
+            "STRICT_INIT_MAX_BLOCK_BYTES",
+            "native_amx_participant_evidence_retention",
+            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES",
+            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "stable_sidecar_metadata_unchanged",
+            "progress_mutation_namespace_unchanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "publish_native_amx_evidence_file_locked",
+          "required_tokens": [
+            "recover_native_amx_evidence_publication_temp_locked",
+            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES",
+            "publish_bound_noclobber_file_locked",
+            "inventory_native_amx_evidence_files_locked",
+            "validate_native_amx_evidence_file_locked",
+            "read_native_amx_evidence_file_bytes_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "native_amx_evidence_prune_intent_max_bytes_for_retention",
+          "required_tokens": [
+            "native_amx_evidence_prune_intent_max_entries",
+            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "try_reserve_exact",
+            "NativeAmxEvidencePruneIntentV1::VERSION",
+            "norito::encode_canonical",
+            "encoded_len > shared_budget"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_native_amx_evidence_prune_intent_locked",
+          "required_tokens": [
+            "NativeAmxEvidencePruneIntentV1::VERSION",
+            "active_lane_incarnation_marker",
+            "native_amx_evidence_prune_intent_max_entries",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "native_amx_evidence_prune_entry_kind",
+            "participant_height == 0",
+            "artifact_hash",
+            "entries are not strictly ordered",
+            "complete manifest/receipt pairs"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "complete_native_amx_evidence_prune_intent_locked",
+          "required_tokens": [
+            "recover_native_amx_evidence_prune_intent_publication_locked",
+            "decode_native_amx_evidence_prune_intent_bytes",
+            "validate_native_amx_evidence_prune_intent_locked",
+            "Hash::new(artifact_bytes)",
+            "remove_bound_progress_temp_if_present",
+            "sync_native_amx_evidence_namespace"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "prune_native_amx_evidence_pairs_locked",
+          "required_tokens": [
+            "complete_native_amx_evidence_prune_intent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "plan_native_amx_evidence_pair_prune_locked",
+            "NativeAmxEvidencePruneIntentV1::VERSION",
+            "native_amx_evidence_prune_intent_max_bytes",
+            "publish_bound_noclobber_file_locked",
+            "inventory_native_amx_evidence_files_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_request_matches_context",
+          "required_tokens": [
+            "validate_plan_binding",
+            "native_body_matches_context",
+            "native_coordinator_predecessor_is_current"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_coordinator_predecessor_is_current",
+          "required_tokens": [
+            "latest_lane_block_artifact_matching",
+            "coordinator_lane_incarnation",
+            "previous_lane_block_height",
+            "previous_lane_block_descriptor_hash",
+            "lane_block_descriptor_hash",
+            "checked_add(1)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "sign_native_vote_once_with_context",
+          "required_tokens": [
+            "context_is_current(self)",
+            "begin_fail_stop_operation",
+            "signing_guard.record",
+            "signature_preimage"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "rebuild_native_amx_participant_receipt_latest_indexes_on_startup",
+          "required_tokens": [
+            "native_amx_evidence_namespace_for_entry",
+            "complete_native_amx_evidence_prune_intent_locked",
+            "recover_native_amx_evidence_publication_temp_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "inventory_native_amx_evidence_files_locked",
+            "decode_native_amx_manifest_file_locked",
+            "decode_native_amx_receipt_file_locked",
+            "difference(&manifest_payload_heights)",
+            "difference(&receipt_payload_heights)",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "current.matches_receipt",
+            "current.matches_manifest",
+            "is not backed by its exact receipt or QC-authenticated manifest",
+            "persist_native_amx_participant_receipt_latest_index_locked",
+            "prune_native_amx_evidence_pairs_locked",
+            "progress_mutation_namespace_unchanged",
+            "update_disk_usage_delta"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_native_amx_participant_receipt_latest_index_locked",
+          "required_tokens": [
+            "validate_native_amx_participant_receipt_latest_index",
+            "NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES",
+            "replace_bound_native_amx_latest_index_locked",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "persisted != latest"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "replace_bound_native_amx_latest_index_locked",
+          "required_tokens": [
+            "path.parent() != Some(directory)",
+            "read_bound_regular_file_bytes_locked",
+            "discard_native_amx_latest_index_temp_locked",
+            "create_new_bound_progress_temp",
+            "sync_all",
+            "promote_bound_progress_temp",
+            "sync_native_amx_evidence_namespace",
+            "persisted != bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "latest_native_amx_participant_application_receipt_matching",
+          "required_tokens": [
+            "lane_incarnation",
+            "native_amx_evidence_namespace_for_entry",
+            "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "native_amx_participant_receipt_path_for_entry",
+            "latest.matches_receipt",
+            "native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard",
+            "confirmed_latest != latest"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "lane_artifact_required_bytes_for_block",
+          "required_tokens": [
+            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "NativeAmxParticipantApplicationManifestArtifactV1",
+            "NativeAmxParticipantApplicationReceiptArtifact::new",
+            "NativeAmxParticipantReceiptLatestIndexV2::from_receipt",
+            "native_prune_intent_routes.insert",
+            "native_amx_evidence_prune_intent_max_bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "read_geometry_native_amx_per_height_evidence",
+          "required_tokens": [
+            "parse_native_amx_evidence_path",
+            "retained_record_limit",
+            "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
+            "regular_sidecar_metadata_for",
+            "read_regular_sidecar_snapshot",
+            "norito::decode_from_bytes",
+            "norito::to_bytes",
+            "validate_native_amx_participant_application_manifest_artifact",
+            "validate_native_amx_participant_application_receipt_artifact",
+            "file.sync_all",
+            "sync_dir"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "ensure_first_release_lane_retirement_admissible_with_certified_locked",
+          "required_tokens": [
+            "read_geometry_native_amx_per_height_evidence",
+            "require_active_lane_incarnation",
+            "require_active_lane_artifact",
+            "native_amx_participant_receipt_matches_manifest_leaf",
+            "native_amx_retained_windows_are_complete",
+            "decode_native_amx_participant_receipt_latest_index",
+            "latest.matches_receipt",
+            "confirmed_snapshot != artifact_snapshot"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/lane_geometry.rs",
+          "kind": "fn",
+          "symbol": "ensure_archived_lane_work_released",
+          "required_tokens": [
+            "read_geometry_native_amx_per_height_evidence",
+            "native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards",
+            "native_amx_retained_windows_are_complete",
+            "native_amx_participant_application_receipt_matches_manifest_and_available_evidence_under_prune_canonical_and_sidecar_guards",
+            "decode_native_amx_participant_receipt_latest_index_for_route",
+            "latest.matches_receipt",
+            "confirmed_snapshot != artifact_snapshot"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "fn",
+          "symbol": "validate_and_apply",
+          "required_tokens": [
+            "NativeAmxApplicationManifestV1::from_result_bearing_block",
+            "execution_commitment_from_witness",
+            "store_block",
+            "store_v2_finality_artifact",
+            "apply_without_execution_with_verified_v2_finality",
+            "state_block.commit"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "method",
+          "symbol": "V2ApplyService::execute",
+          "required_tokens": [
+            "validate_and_apply",
+            "store_v2_finality_artifact",
+            "persist_post_apply_metadata",
+            "repair_native_amx_participant_application_evidence",
+            "publish_committed_block_merge_entry",
+            "finalize_committed_block_merge_reservations"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_frontier_marker_payloads",
+          "required_tokens": [
+            "participant_settlement_hash",
+            "source_count",
+            "encode_native_amx_participant_frontier_marker"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "stage_native_amx_participant_frontiers",
+          "required_tokens": [
+            "stage_merge_lane_frontier_markers",
+            "decode_exact_native_amx_participant_frontier_marker"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "SumeragiV2AutonomousReservationCarrier",
+      "positive_config": "multilane_autonomous_reservation_carrier_fixed.cfg",
+      "production_refinement_obligation": "AutonomousReservationCarrierProductionRefinementObligation",
+      "mutations": [
+        {
+          "config": "multilane_autonomous_carrier_drift_bug.cfg",
+          "invariant": "MLReservationIdentityStable"
+        },
+        {
+          "config": "multilane_autonomous_duplicate_application_bug.cfg",
+          "invariant": "MLCarrierExactlyOnce"
+        },
+        {
+          "config": "multilane_autonomous_release_after_apply_bug.cfg",
+          "invariant": "NoReleaseAfterApplicationInvariant"
+        },
+        {
+          "config": "multilane_autonomous_release_before_barrier_bug.cfg",
+          "invariant": "ReleaseOrderingInvariant"
+        },
+        {
+          "config": "multilane_autonomous_aba_release_bug.cfg",
+          "invariant": "MLRestartOwnershipPartition"
+        },
+        {
+          "config": "multilane_autonomous_digest_only_authorization_bug.cfg",
+          "invariant": "MLCertifiedBundleDurable"
+        },
+        {
+          "config": "multilane_autonomous_ordinary_anchor_execution_bug.cfg",
+          "invariant": "MLCarrierExactlyOnce"
+        },
+        {
+          "config": "multilane_autonomous_reserve_before_durable_bug.cfg",
+          "invariant": "MLReservationIdentityStable"
+        },
+        {
+          "config": "multilane_autonomous_noncanonical_merge_prefix_bug.cfg",
+          "invariant": "MLMergeCandidateExactPrefix"
+        },
+        {
+          "config": "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
+          "invariant": "MLCarrierExactlyOnce"
+        },
+        {
+          "config": "multilane_autonomous_restart_drops_ownership_bug.cfg",
+          "invariant": "MLReservationSingleOwner"
+        },
+        {
+          "config": "multilane_autonomous_volatile_stage_diagnostics_bug.cfg",
+          "invariant": "MLStageEvidenceMonotonic"
+        }
+      ],
+      "production_symbols": [
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "LaneQueueReservationKeyV2",
+          "required_tokens": [
+            "entrypoint_hash",
+            "queue_plan_admission_binding_hash",
+            "routing_plan_digest",
+            "lane_incarnation",
+            "reservation_owner_hash",
+            "proposal_identity_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "struct",
+          "symbol": "LaneQueueReservationRecordV5",
+          "required_tokens": [
+            "version",
+            "key",
+            "enqueue_timestamp_ms",
+            "fifo_order"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "reserve_transactions_for_lane_bounded",
+          "required_tokens": [
+            "validate_reservation_scope_against_view",
+            "limits.max_scan",
+            "limits.max_transactions",
+            "limits.max_encoded_bytes",
+            "limits.max_gas",
+            "excluded_entrypoint_hashes.contains",
+            "QueuePlanAdmissionRegistryMatch::Exact",
+            "routing_mode.allows",
+            "fifo_order_by_hash",
+            "put_batch",
+            "remove_hashes_from_fifo_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "fifo_with_released_reservations_locked",
+          "required_tokens": [
+            "install_fifo_order_locked",
+            "fifo_order_by_hash",
+            "seen_ordinals",
+            "sort_unstable_by_key"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "release_lane_reservation",
+          "required_tokens": [
+            "fifo_with_released_reservations_locked",
+            "apply_lane_reservation_journal",
+            "journal.release(*key)",
+            "replace_fifo_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "release_lane_reservations_in_order",
+          "required_tokens": [
+            "signed_hashes.insert",
+            "ensure_no_conflict",
+            "fifo_order.ordinal",
+            "fifo_with_released_reservations_locked",
+            ".release_batch",
+            "replace_fifo_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "prepare_lane_reservation_release_barrier",
+          "required_tokens": [
+            "ensure_release_no_conflict",
+            "ordered_keys.iter().all",
+            "apply_lane_reservation_journal",
+            "journal.prepare_release(barrier.clone())",
+            "release_barriers.push"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "finalize_lane_reservation_release_barrier",
+          "required_tokens": [
+            "release_barriers",
+            "ordered_records",
+            "journal.complete_release(completion.clone())",
+            "fifo_with_released_reservations_locked",
+            "journal.forget_release(completion.barrier.clone())",
+            "completed_releases.remove"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "apply_lane_reservation_journal",
+          "required_tokens": [
+            "lane_reservation_journal.lock",
+            "JournalNotInstalled",
+            "operation(journal)",
+            "latch_lane_reservation_durability_fault_locked",
+            "publish_latched_lane_reservation_durability_fault"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+          "kind": "fn",
+          "symbol": "plan_autonomous_lane_reservation_slot",
+          "required_tokens": [
+            "context.validate",
+            "lane_incarnation_at_height",
+            "lane_route_and_incarnation_active_at_height",
+            "v2_known_lane_tip_for_route",
+            "assemble_autonomous_lane_reservation_slot",
+            "PlanningSnapshotChanged"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+          "kind": "fn",
+          "symbol": "autonomous_lane_reservation_identity_hashes_for_proposal",
+          "required_tokens": [
+            "height_context_id",
+            "lane_incarnation",
+            "previous_lane_block_descriptor_hash",
+            "validator_set_hash",
+            "encode_autonomous_lane_reservation_identity_hashes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "schedule_autonomous_lane_production",
+          "required_tokens": [
+            "plan_autonomous_lane_reservation_slot",
+            "reserve_transactions_for_lane_bounded",
+            "LaneQueueReservationSelectionLimits",
+            "max_queue_scan",
+            "block_gas_limit",
+            "drive_pending_autonomous_reservation_batch"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "drive_pending_autonomous_reservation_batch",
+          "required_tokens": [
+            "prepare_v2_lane_payload_plan",
+            "new_signed_with_reservations",
+            "autonomous_lane_payload_envelope",
+            "persist_lane_executable_payload",
+            "insert_autonomous_lane_payload",
+            "fanout_lane_message"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "struct",
+          "symbol": "PendingGlobalSelection",
+          "required_tokens": [
+            "owner",
+            "subject",
+            "GlobalQueueSelectionLease"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "method",
+          "symbol": "LocalProposalOwner::installs_first_exact_lock_for",
+          "required_tokens": [
+            "prior.tag == self.tag",
+            "prior.decided_subject == self.decided_subject",
+            "prior.locked_body.is_none",
+            "round.height == self.tag.height",
+            "round.view == self.tag.view",
+            "locked_subject == subject"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "method",
+          "symbol": "LocalProposalState::reconcile",
+          "required_tokens": [
+            "decided_subject.is_some",
+            "installs_first_exact_lock_for",
+            "global_selection",
+            "continued_exact_work",
+            "candidate_work_wait"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "method",
+          "symbol": "LocalProposalState::defer_candidate_work",
+          "required_tokens": [
+            "heartbeat_only",
+            "candidate_work_wait",
+            "saturating_duration_since",
+            "CANDIDATE_WORK_RECHECK"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "method",
+          "symbol": "LocalProposalState::handle_validation_rejection",
+          "required_tokens": [
+            "self.reconcile",
+            "pending_events",
+            "global_selection",
+            "FatalHeartbeat",
+            "RetryHeartbeat"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
+          "kind": "fn",
+          "symbol": "schedule_local_proposal",
+          "required_tokens": [
+            "schedule_autonomous_lane_production",
+            "defer_candidate_work",
+            "HeartbeatOnlyWorkProvider",
+            "selection_lease",
+            "PendingGlobalSelection",
+            "submit_encoded_body"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_lane_executable_payload",
+          "required_tokens": [
+            "prepare_autonomous_lane_entrypoint_claims_locked",
+            "write_autonomous_lane_block_attempt_locked",
+            "publish_autonomous_lane_block_latest_attempt_locked",
+            "finalize_autonomous_lane_entrypoint_claims_locked",
+            "publish_autonomous_lane_route_latest_attempt_locked",
+            "require_autonomous_lane_entrypoint_claims_released_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_merge_temp_files_unlocked",
+          "required_tokens": [
+            "begin_total_disk_usage_mutation",
+            "path_bytes_before",
+            "sidecar_has_link_count",
+            "sidecar_metadata_same_object",
+            "std::fs::remove_file(&temp_path)",
+            "read_pending_merge_entry_path(&target_path, None)",
+            "pending_merge_entry_paths_unlocked",
+            "update_disk_usage_delta",
+            "accounting_mutation.finish"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "write_autonomous_lane_block_attempt_locked",
+          "required_tokens": [
+            "descriptor.proposal_height",
+            "write_atomic_synced_noclobber",
+            "attach_global_hint_exact",
+            "write_atomic_synced_replace",
+            "write_autonomous_lane_block_view_state_record_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "publish_autonomous_lane_route_latest_attempt_locked",
+          "required_tokens": [
+            "read_autonomous_lane_route_latest_attempt_locked",
+            "pointer.lane_block_height",
+            "pointer.proposal_height",
+            "pointer.lane_incarnation",
+            "write_atomic_synced_replace"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "latest_autonomous_lane_block_artifacts_snapshot",
+          "required_tokens": [
+            "read_autonomous_lane_route_latest_attempt_locked",
+            "read_autonomous_lane_block_attempt_record_locked",
+            "record.retirement.is_some",
+            "recovered.sort_by_key",
+            "recovered.truncate(limit)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup",
+          "required_tokens": [
+            "MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES",
+            "AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES",
+            "write_autonomous_lane_block_view_state_record_locked",
+            "publish_autonomous_lane_block_latest_attempt_locked",
+            "publish_autonomous_lane_route_latest_attempt_locked",
+            "reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "hydrate_canonical_lane_artifacts",
+          "required_tokens": [
+            "latest_autonomous_lane_block_artifacts_snapshot",
+            "hydration_capacity.saturating_add(1)",
+            "close_admission_for_restart",
+            "autonomous_reservation_keys_are_canonical",
+            "pending_autonomous_anchor_payloads"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "write_certified_lane_block_artifact_with_authority",
+          "required_tokens": [
+            "validate_certified_lane_block_artifact",
+            "require_active_lane_artifact",
+            "read_current_autonomous_lane_block_record_self_context_locked",
+            "append_indexed_progress_sidecar",
+            "read_certified_lane_block_artifact_from_paths_durability_attested_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_autonomous_lane_merge_bundle",
+          "required_tokens": [
+            "MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES",
+            "availability_certificate.is_none",
+            "validate_autonomous_lane_block_artifact",
+            "validate_certified_lane_block_artifact",
+            "origin.vote_body(CertPhase::Prepare)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "validate_autonomous_lane_payload_slot",
+          "required_tokens": [
+            "read_autonomous_lane_block_artifact",
+            "read_certified_lane_block_artifact",
+            "latest_certified_lane_block_artifact_matching",
+            "latest_lane_block_artifact_matching",
+            "latest_native_amx_participant_application_receipt_matching",
+            "block.hash()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "validate_execution_context_autonomous_lane_payloads",
+          "required_tokens": [
+            "validate_autonomous_lane_payload_slot",
+            "autonomous_lane_reservation_identity_hashes_for_proposal",
+            "external_entrypoint_hashes",
+            "merge_entrypoint_hashes",
+            "reservation_keys",
+            "anchors must be control-only"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_autonomous_lane_slot_retirement",
+          "required_tokens": [
+            "read_active_certified_lane_block_artifact_from_paths_durability_attested_locked",
+            "retirement = Some",
+            "prepare_autonomous_lane_entrypoint_claim_release_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "finalize_autonomous_lane_slot_release",
+          "required_tokens": [
+            "queue_release_barrier",
+            "record.retirement.as_ref",
+            "finalize_autonomous_lane_entrypoint_claim_release_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "fn",
+          "symbol": "retire_autonomous_lane_slot_and_release_reservations",
+          "required_tokens": [
+            "persist_autonomous_lane_slot_retirement",
+            "queue_release_barrier",
+            "prepare_lane_reservation_release_barrier",
+            "finalize_autonomous_lane_slot_release",
+            "finalize_lane_reservation_release_barrier"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/merge_sidecar.rs",
+          "kind": "fn",
+          "symbol": "authorize",
+          "required_tokens": [
+            "candidate.canonical_bytes",
+            "candidate.canonical_hash",
+            "candidate_encoded_len",
+            "decode_record_candidate",
+            "create_new",
+            "file.sync_all",
+            "fs::rename",
+            "sync_directory"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "authenticate_bounded_merge_sidecar_holders",
+          "required_tokens": [
+            "certified_merge_sidecar_holders",
+            "signer_indices",
+            "validate_signers",
+            "bls_normal_pop_verify",
+            "bls_normal_verify_preaggregated_same_message"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "authenticate_merge_entry_for_height_context",
+          "required_tokens": [
+            "CertifiedMergeLedgerReference::new",
+            "validate_merge_sidecar_reference_bounds",
+            "authenticate_bounded_merge_sidecar_holders"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/block.rs",
+          "kind": "fn",
+          "symbol": "validate_execution_context_merge_reference",
+          "required_tokens": [
+            "authenticated_height_context",
+            "height_context.roster",
+            "signer_indices",
+            "validate_signers",
+            "dual quorum"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "commit_lane_reservation",
+          "required_tokens": [
+            "journal.commit(*key)",
+            "journal.forget_commit(*key)",
+            "commit_barriers",
+            "remove_transaction_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "merge_execution_canonical_order_key",
+          "required_tokens": [
+            "descriptor.lane_id",
+            "descriptor.dataspace_id",
+            "descriptor.lane_incarnation",
+            "descriptor.lane_block_height",
+            "descriptor.proposal_height",
+            "descriptor.lane_block_view",
+            "descriptor.descriptor_hash",
+            "proposal.proposal_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "build_merge_execution_batch_for_consensus",
+          "required_tokens": [
+            "canonical_merged_lane_frontier_from_world",
+            "validate_merge_execution_predecessor_against_frontier",
+            "autonomous_lane_merge_bundle",
+            "read_lane_block_execution_input",
+            "merge_execution_canonical_order_key",
+            "build_merge_execution_batch_from_source_prefix"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "build_merge_execution_batch_from_source_prefix",
+          "required_tokens": [
+            "base_state_height",
+            "base_state_hash",
+            "preexecute_merge_execution_sources",
+            "application_write_set_root",
+            "merge_execution_write_set_root",
+            "expected_post_state_hash",
+            "merge_execution_batch_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "canonical_merged_lane_frontier_from_world",
+          "required_tokens": [
+            "merge_lane_frontier_marker_key",
+            "decode_exact_merge_lane_frontier_marker",
+            "lane_block_height",
+            "lane_block_descriptor_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "validate_merge_execution_predecessor_against_frontier",
+          "required_tokens": [
+            "canonical_merged_lane_frontier_from_world",
+            "previous_lane_block_height",
+            "previous_lane_block_descriptor_hash",
+            "checked_add(1)",
+            "NonContiguousLaneSnapshot"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "preexecute_merge_execution_sources_into",
+          "required_tokens": [
+            "decode_autonomous_lane_merge_bundle",
+            "validate_lane_block_execution_input_with_routing_context",
+            "stage_direct_committed_transactions",
+            "drain_merge_lane_settlement_commitment",
+            "seen_entrypoints",
+            "seen_reservations"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "stage_certified_merge_entry",
+          "required_tokens": [
+            "merge_execution_already_applied",
+            "base_state_hash",
+            "preexecute_merge_execution_sources_into",
+            "validate_merge_execution_commit_surface",
+            "application_write_set_root",
+            "stage_merge_execution_markers",
+            "expected_post_state_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "validate_merge_execution_batch",
+          "required_tokens": [
+            "reservation_keys",
+            "routing_plans",
+            "merge_execution_batch_commitments_match",
+            "entrypoint_hash",
+            "LaneIncarnationMismatch",
+            "validate_merge_execution_predecessor_against_frontier",
+            "merge_execution_canonical_order_key",
+            "previous_order",
+            "strict canonical total order"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply.rs",
+          "kind": "fn",
+          "symbol": "reconcile_lane_reservation_ownership",
+          "required_tokens": [
+            "live_lane_reservations",
+            "has_committed_transaction",
+            "committed_recovered",
+            "committed_merge_queue_reservations",
+            "exact_committed",
+            "commit_lane_reservation",
+            "lane_reservation_release_barriers",
+            "retire_autonomous_lane_slot_and_release_reservations",
+            "reconcile_orphaned_lane_reservations",
+            "lane_incarnation_at_height",
+            "autonomous_lane_payload_matches_reservation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "committed_merge_queue_reservations",
+          "required_tokens": [
+            "validate_indexed_file_length",
+            "transaction_entrypoint_index.lock",
+            "transaction_index.complete",
+            "heights_by_transaction",
+            "heights.next().is_some()",
+            "BTreeMap::<NonZeroUsize",
+            "requested_by_height",
+            "get_merge_entry_by_carrier_height",
+            "certified_merge_queue_reservations",
+            "hashes.contains",
+            "conflicting reservations"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "get_merge_entry_by_carrier_height",
+          "required_tokens": [
+            "get_block_hash",
+            "merge_entry_for_carrier",
+            "block_height.get()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_indexed_file_length",
+          "required_tokens": [
+            "recover_failed_append_tail",
+            "frames_by_epoch",
+            "frame_offset",
+            "payload_len",
+            "metadata",
+            "actual_len != indexed_len"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::autonomous_lane_execution_diagnostics_inner",
+          "required_tokens": [
+            "lane_consensus_lifecycle_snapshot",
+            "routes.truncate(SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)",
+            "latest_autonomous_lane_block_artifacts_snapshot",
+            "latest_certified_lane_block_artifacts_matching",
+            "pending_certified_merge_entries_bounded",
+            "merge_ledger_latest_snapshot",
+            "source_budget",
+            "decode_autonomous_lane_merge_bundle",
+            "read_lane_block_application_receipt",
+            "LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+            "lane_reservation_group_is_finalized_for_diagnostics",
+            "AutonomousLaneDiagnosticEvidence::finish",
+            "rows.sort_by_key",
+            "row.validate()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "State::autonomous_lane_execution_diagnostics_with_queue",
+          "required_tokens": [
+            "autonomous_lane_execution_diagnostics_inner",
+            "Some(queue)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::lane_reservation_group_is_finalized_for_diagnostics",
+          "required_tokens": [
+            "MAX_MERGE_EXECUTION_ENTRYPOINTS",
+            "transaction_selection_durability_faulted",
+            "lane_reservation_journal.lock().is_none()",
+            "live_by_hash",
+            "commit_barriers",
+            "release_barriers",
+            "completed_releases"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::transaction_selection_durability_faulted",
+          "required_tokens": [
+            "plan_journal_durability_faulted",
+            "lane_reservation_durability_faulted"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "method",
+          "symbol": "AutonomousLaneDiagnosticEvidence::finish",
+          "required_tokens": [
+            "self.conflict",
+            "self.application_receipt",
+            "self.queue_finalized",
+            "self.globally_committed",
+            "self.merge_candidate",
+            "self.bundle_durable",
+            "self.lane_certified",
+            "self.availability_certified",
+            "self.payload_durable",
+            "highest_durable_stage",
+            "stuck_reason"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/routing.rs",
+          "kind": "fn",
+          "symbol": "handle_v1_sumeragi_diagnostics",
+          "required_tokens": [
+            "durable_queue.as_ref()",
+            "autonomous_lane_execution_diagnostics_with_queue",
+            "validate_autonomous_lane_executions"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "enum",
+          "symbol": "SumeragiAutonomousLaneExecutionStage",
+          "required_tokens": [
+            "ReservationsDurable",
+            "ExecutablePayloadDurable",
+            "PayloadAvailabilityCertified",
+            "LaneCertified",
+            "CertifiedBundleDurable",
+            "MergeCandidateDurable",
+            "GlobalCarrierCommitted",
+            "KuraWsvApplicationReceiptDurable",
+            "QueueFinalized",
+            "Conflict"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "struct",
+          "symbol": "SumeragiAutonomousLaneExecution",
+          "required_tokens": [
+            "lane_id",
+            "dataspace_id",
+            "lane_incarnation",
+            "proposal_hash",
+            "descriptor_hash",
+            "executable_payload_hash",
+            "source_bundle_hash",
+            "merge_entry_hash",
+            "application_block_height",
+            "application_block_hash",
+            "reservation_count",
+            "transaction_count",
+            "highest_durable_stage",
+            "stuck_reason"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "SumeragiAutonomousLaneExecution::validate",
+          "required_tokens": [
+            "MAX_MERGE_EXECUTION_ENTRYPOINTS",
+            "self.reservation_count != self.transaction_count",
+            "expected_reason",
+            "has_payload",
+            "has_bundle",
+            "has_merge",
+            "has_carrier",
+            "AutonomousLaneEvidenceGeometry::from_presence",
+            "expected_evidence_geometry",
+            "KuraWsvApplicationReceiptDurable",
+            "QueueFinalized",
+            "Conflict"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "SumeragiDiagnosticsStatus::validate_autonomous_lane_executions",
+          "required_tokens": [
+            "SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX",
+            "row.validate()",
+            "row.ordering_key()",
+            "previous >= key",
+            "strictly ordered by exact identity"
+          ]
+        }
+      ]
+    },
+    {
+      "module": "SumeragiV2QueuePlanAdmissionRegistry",
+      "positive_config": "multilane_queue_plan_admission_registry_fixed.cfg",
+      "production_refinement_obligation": "QueuePlanAdmissionRegistryProductionRefinementObligation",
+      "mutations": [
+        {
+          "config": "multilane_queue_plan_split_route_public_acceptance_bug.cfg",
+          "invariant": "MLPublic202Exact"
+        },
+        {
+          "config": "multilane_queue_plan_execution_before_global_cas_bug.cfg",
+          "invariant": "MLQueueEligibilityExact"
+        },
+        {
+          "config": "multilane_queue_plan_conflicting_cas_bug.cfg",
+          "invariant": "MLAdmissionCasUnique"
+        },
+        {
+          "config": "multilane_queue_plan_restart_aba_bug.cfg",
+          "invariant": "MLQueueEligibilityExact"
+        },
+        {
+          "config": "multilane_queue_plan_local_expiry_clears_tombstone_bug.cfg",
+          "invariant": "MLImmutableAdmissionTombstone"
+        },
+        {
+          "config": "multilane_queue_plan_deferred_bypass_bug.cfg",
+          "invariant": "MLPublic202Exact"
+        },
+        {
+          "config": "multilane_queue_plan_cancellation_bypass_bug.cfg",
+          "invariant": "MLCancellationStopsExecution"
+        },
+        {
+          "config": "multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg",
+          "invariant": "MLCertificateDurable"
+        },
+        {
+          "config": "multilane_queue_plan_execution_without_exact_binding_bug.cfg",
+          "invariant": "MLExecutionRequiresExactBinding"
+        },
+        {
+          "config": "multilane_queue_plan_duplicate_execution_bug.cfg",
+          "invariant": "MLAdmissionAtMostOnceExecution"
+        }
+      ],
+      "production_symbols": [
+        {
+          "path": "crates/iroha_core/src/torii_proxy.rs",
+          "kind": "struct",
+          "symbol": "QueuePlanAdmissionBindingV2",
+          "required_tokens": [
+            "version",
+            "chain_id_digest",
+            "request_id",
+            "entrypoint_hash",
+            "routing_plan_digest",
+            "admission_context",
+            "enqueue_timestamp_ms",
+            "journal_record_digest"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/torii_proxy.rs",
+          "kind": "fn",
+          "symbol": "validate_queue_plan_admission_certificate_for_chain_digest_v2",
+          "required_tokens": [
+            "expected_chain_id_digest",
+            "QueuePlanAdmissionCertificateStrengthV2::Quorum",
+            "coordinator",
+            "durability_threshold",
+            "attestations",
+            "validator_set",
+            "verify",
+            "registry_key",
+            "registry_value"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/lib.rs",
+          "kind": "fn",
+          "symbol": "persist_and_wait_for_queue_plan_admission",
+          "required_tokens": [
+            "QueuePlanAdmissionCertificateStrengthV2::Quorum",
+            "persist_pending_queue_plan_admission_certificate",
+            "notify_pending_queue_plan_admission",
+            "wait_for_exact_queue_plan_admission_registry",
+            "QueuePlanAdmissionRegistryWaitOutcome::Exact",
+            "QueuePlanAdmissionRegistryWaitOutcome::Conflict",
+            "QueuePlanAdmissionRegistryWaitOutcome::Malformed",
+            "QueuePlanAdmissionRegistryWaitOutcome::TimedOut"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "method",
+          "symbol": "PendingControlSidecarLimits::combined_bytes_within_limit",
+          "required_tokens": [
+            "pending_merge_bytes.checked_add",
+            "total <= self.aggregate_bytes",
+            "None => false"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "pending_queue_plan_admission_paths_unlocked",
+          "required_tokens": [
+            "self.pending_control_sidecar_limits.queue_plan_admissions",
+            "std::fs::read_dir",
+            "symlink_metadata",
+            "is_symlink",
+            "sidecar_is_single_link",
+            "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES",
+            "merge_bytes_within_limit(total_bytes)",
+            "paths.sort"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "ensure_pending_queue_plan_admission_dir_unlocked",
+          "required_tokens": [
+            "canonical_sidecar_directory",
+            "std::fs::create_dir",
+            "sync_dir"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "create_exclusive_pending_queue_plan_admission_temp",
+          "required_tokens": [
+            "canonical_sidecar_directory",
+            "OFlags::NOFOLLOW",
+            "OFlags::EXCL",
+            "sidecar_is_single_link",
+            "sidecar_metadata_same_object"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_pending_queue_plan_admission_path",
+          "required_tokens": [
+            "read_regular_sidecar_bytes",
+            "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES",
+            "Hash::new",
+            "expected_hash",
+            "pending_queue_plan_admission_path"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "validate_pending_queue_plan_admission_temp_bytes",
+          "required_tokens": [
+            "bytes.is_empty",
+            "MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES",
+            "Hash::new",
+            "hex::encode",
+            "hash_text"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "pending_queue_plan_admission_certificates_bounded",
+          "required_tokens": [
+            "limit == 0",
+            "ensure_prune_recovery_not_required",
+            "pending_merge_entry_paths_unlocked",
+            "pending_queue_plan_admission_paths_unlocked",
+            "combined_bytes_within_limit(merge_bytes, admission_bytes)",
+            "limit.min(self.pending_control_sidecar_limits.queue_plan_admissions)",
+            "read_pending_queue_plan_admission_path"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "persist_pending_queue_plan_admission_certificate",
+          "required_tokens": [
+            "begin_total_disk_usage_mutation",
+            "reconcile_pending_merge_temp_files_unlocked",
+            "reconcile_pending_queue_plan_admission_temp_files_unlocked",
+            "combined_bytes_within_limit",
+            "create_exclusive_pending_queue_plan_admission_temp",
+            "std::fs::hard_link",
+            "sync_all",
+            "add_disk_usage_bytes",
+            "accounting_mutation.finish"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "reconcile_pending_queue_plan_admission_temp_files_unlocked",
+          "required_tokens": [
+            "begin_total_disk_usage_mutation",
+            "path_bytes_before",
+            "sidecar_has_link_count",
+            "stable_count == self.pending_control_sidecar_limits.queue_plan_admissions",
+            "pending_queue_plan_admission_paths_unlocked",
+            "update_disk_usage_delta",
+            "accounting_mutation.finish"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "remove_pending_queue_plan_admission_certificate",
+          "required_tokens": [
+            "read_pending_queue_plan_admission_path",
+            "begin_total_disk_usage_mutation",
+            "std::fs::remove_file",
+            "sync_dir",
+            "sub_disk_usage_bytes",
+            "accounting_mutation.finish"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "kura_disk_usage_bytes",
+          "required_tokens": [
+            "PENDING_MERGE_ENTRIES_DIR",
+            "PENDING_QUEUE_PLAN_ADMISSIONS_DIR",
+            "directory_tree_file_bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "kura_total_disk_usage_bytes",
+          "required_tokens": [
+            "PENDING_MERGE_ENTRIES_DIR",
+            "PENDING_QUEUE_PLAN_ADMISSIONS_DIR",
+            "directory_tree_file_bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/mod.rs",
+          "kind": "method",
+          "symbol": "SumeragiHandle::notify_pending_queue_plan_admission",
+          "required_tokens": [
+            "output_guard.acquire",
+            "ingress_ready.load",
+            "self.wake",
+            "true"
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/lib.rs",
+          "kind": "fn",
+          "symbol": "submit_signed_transaction_for_ingress_globally_synced",
+          "required_tokens": [
+            "durable_plan_admission_claim_with_state",
+            "route_plan_with_state",
+            "execute_torii_transaction_via_proxy",
+            "queue_plan_synced_transport_unavailable"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "stage_queue_plan_admissions",
+          "required_tokens": [
+            "validate_merge_queue_plan_admissions",
+            "queue_plan_admission_registry_marker_key",
+            "queue_plan_admission_registry_marker_payload",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "ExecutionMarkerConflict",
+            "smart_contract_state.insert"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "queue_plan_admission_registry_match_in_view",
+          "required_tokens": [
+            "QueuePlanAdmissionRegistryKeyV2",
+            "decode_exact_queue_plan_admission_registry_marker",
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "QueuePlanAdmissionRegistryMatch::Exact",
+            "QueuePlanAdmissionRegistryMatch::Conflict"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "reserve_transactions_for_lane_bounded",
+          "required_tokens": [
+            "global_admission_binding",
+            "queue_plan_admission_registry_match",
+            "QueuePlanAdmissionRegistryMatch::Absent",
+            "QueuePlanAdmissionRegistryMatch::Exact",
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "queue_plan_admission_binding_hash",
+            "put_batch",
+            "remove_hashes_from_fifo_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "reject_exact_queue_plan_admission_claim",
+          "required_tokens": [
+            "push_remove_lock",
+            "global_admission_binding",
+            "indexed_binding != binding",
+            "tombstone_conflicting_global_admission",
+            "finalize_conflicting_global_admission_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "tombstone_conflicting_global_admission",
+          "required_tokens": [
+            "remove_exact_strict_durable",
+            "binding.entrypoint_hash.clone()",
+            "binding.routing_plan_digest",
+            "binding.journal_record_digest",
+            "QueuePlanJournalExactRemoveResult::Removed",
+            "mark_plan_journal_durability_fault"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "finalize_conflicting_global_admission_locked",
+          "required_tokens": [
+            "hash_as_entrypoint",
+            "routing_plan.digest",
+            "durable_plan_claims.remove",
+            "remove_hashes_from_fifo_locked",
+            "remove_transaction_locked",
+            "removed_hashes.insert"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "replay_plan_journal",
+          "required_tokens": [
+            "recorded_global_admission_identity",
+            "queue_plan_admission_registry_match",
+            "QueuePlanAdmissionRegistryMatch::Conflict",
+            "global_registry_match.is_none()",
+            "durable_plan_claim_context_revalidates_in_view",
+            "journal_removals"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "cull_expired_entries",
+          "required_tokens": [
+            "has_globally_bound_durable_claim",
+            "ring.push_back",
+            "live_reservations",
+            "is_expired_at"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "restore_globally_bound_transaction_guard_locked",
+          "required_tokens": [
+            "durable_plan_claims",
+            "global_admission_identity.is_none()",
+            "global_admission_binding",
+            "validate_for_transaction_and_plan",
+            "txs",
+            "routing_decisions",
+            "routing_plans",
+            "restore_popped_hash_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Drop for TransactionGuard::drop",
+          "required_tokens": [
+            "push_remove_lock",
+            "restore_globally_bound_transaction_guard_locked",
+            "remove_transaction_locked",
+            "accepted_work_validation_fault",
+            "global_transaction_guard_drop"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "refresh_merge_candidates",
+          "required_tokens": [
+            "pending_queue_plan_admission_certificates_bounded",
+            "classify_pending_queue_plan_admission",
+            "PendingQueuePlanAdmissionDisposition::Exact",
+            "PendingQueuePlanAdmissionDisposition::DefinitiveConflict",
+            "PendingQueuePlanAdmissionDisposition::Stale",
+            "reject_exact_queue_plan_admission_claim",
+            "remove_pending_queue_plan_admission_certificate",
+            "PendingQueuePlanAdmissionDisposition::EligibleAbsent"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -120,7 +120,7 @@ cargo run -p iroha_cli --features sm -- \
 > **Tip:** `jq` is used above to save a manual copy/paste step. If it is not available, open `sm2-key.json`, copy the `private_key_hex` field, and pass it to `crypto sm2 export` directly.
 
 > **Migration guide:** When converting an existing network to SM2/SM3/SM4, follow
-> [`docs/source/crypto/sm_config_migration.md`](source/crypto/sm_config_migration.md)
+> [`specs/crypto/sm_config_migration.md`](source/crypto/sm_config_migration.md)
 > for the layered `iroha_config` overrides, manifest regeneration, and rollback
 > planning.
 

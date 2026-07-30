@@ -16,7 +16,7 @@ fn repo_root() -> PathBuf {
 }
 
 fn example_dir() -> PathBuf {
-    repo_root().join("docs/examples/sorafs_capacity_simulation")
+    repo_root().join("fixtures/documentation/sorafs_capacity_simulation")
 }
 
 fn canonical_temp_base() -> PathBuf {

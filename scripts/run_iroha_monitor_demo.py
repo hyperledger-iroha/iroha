@@ -8,16 +8,16 @@ spawn-lite mode and capturing two frames:
 
 It executes the binary via a pseudo-terminal so the TUI renders normally,
 collects the ANSI stream, reduces it to a character grid, and writes SVG
-artifacts under docs/source/images/.
+artifacts under specs/images/.
 
 Usage:
   python3 scripts/run_iroha_monitor_demo.py
 
 Artefacts:
-  docs/source/images/iroha_monitor_demo_overview.svg
-  docs/source/images/iroha_monitor_demo_pipeline.svg
-  docs/source/images/iroha_monitor_demo_overview.ans  (raw capture, debugging)
-  docs/source/images/iroha_monitor_demo_pipeline.ans  (raw capture, debugging)
+  specs/images/iroha_monitor_demo_overview.svg
+  specs/images/iroha_monitor_demo_pipeline.svg
+  specs/images/iroha_monitor_demo_overview.ans  (raw capture, debugging)
+  specs/images/iroha_monitor_demo_pipeline.ans  (raw capture, debugging)
 
 Requirements:
   * Python 3.10+
@@ -179,8 +179,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("docs/source/images"),
-        help="Directory where SVG and .ans dumps are written (default: docs/source/images)",
+        default=Path("specs/images"),
+        help="Directory where SVG and .ans dumps are written (default: specs/images)",
     )
     parser.add_argument(
         "--duration",

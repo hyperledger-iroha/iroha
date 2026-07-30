@@ -730,7 +730,7 @@ const RELAY_ORIGIN_SIGNATURE_DOMAIN: &[u8] = b"iroha:p2p:relay-origin:v1\n";
 /// Largest canonical signature carried by a supported peer identity.
 ///
 /// ML-DSA-65 is wider than every classical, BLS, GOST, and SM2 signature.
-pub const MAX_RELAY_ORIGIN_SIGNATURE_BYTES: usize = 3_309;
+pub const MAX_RELAY_ORIGIN_SIGNATURE_BYTES: usize = Algorithm::MlDsa.signature_payload_len();
 /// Default hop limit for relay forwarding (origin hub hop + spoke hop).
 #[cfg(test)]
 const DEFAULT_RELAY_TTL: u8 = 8;
@@ -904,17 +904,13 @@ fn relay_origin_signature_digest<T: Encode>(
 }
 
 fn relay_origin_signature_len(origin: &PeerId) -> Option<usize> {
-    Some(match origin.public_key().try_algorithm().ok()? {
-        Algorithm::Ed25519 | Algorithm::Secp256k1 => 64,
-        Algorithm::BlsNormal => 96,
-        Algorithm::BlsSmall => 48,
-        Algorithm::MlDsa => MAX_RELAY_ORIGIN_SIGNATURE_BYTES,
-        Algorithm::Gost3410_2012_256ParamSetA
-        | Algorithm::Gost3410_2012_256ParamSetB
-        | Algorithm::Gost3410_2012_256ParamSetC => 64,
-        Algorithm::Gost3410_2012_512ParamSetA | Algorithm::Gost3410_2012_512ParamSetB => 128,
-        Algorithm::Sm2 => 64,
-    })
+    Some(
+        origin
+            .public_key()
+            .try_algorithm()
+            .ok()?
+            .signature_payload_len(),
+    )
 }
 
 /// Return the plaintext wire length of a P2P data frame containing `payload`.

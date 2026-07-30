@@ -68,7 +68,7 @@ Hardening` roadmap line items and will be updated as decisions land.
 - `make gost-bench` wraps the script (pass `GOST_BENCH_ARGS="--tolerance 0.25"` etc.); use
   `make gost-bench-update` to rebaseline (`scripts/update_gost_baseline.sh` is a convenience helper).
   `make gost-dudect` runs the constant-time timing guard in isolation. The full workflow is captured in
-  `docs/source/crypto/gost_performance.md`.
+  `specs/crypto/gost_performance.md`.
 - Streebog (`0.11.0-rc.2`) is mirrored under `vendor/streebog` and patched into the workspace so the
   build no longer depends on crates.io for the hash implementation. Update the mirror when RustCrypto
   publishes a stable `0.11.x` release.

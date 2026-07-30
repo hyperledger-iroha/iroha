@@ -63,7 +63,7 @@ fn kotodama_fences(path: &Path) -> Vec<(usize, String)> {
 fn canonical_documentation_kotodama_fences_compile() {
     let root = repository_root();
     let mut markdown = Vec::new();
-    for relative in ["docs/source", "docs/portal/docs", "docs/portal/i18n"] {
+    for relative in ["specs", "docs/portal/docs", "docs/portal/i18n"] {
         markdown_files(&root.join(relative), &mut markdown);
     }
 

@@ -157,6 +157,6 @@ Android SDKs exactly.
   `ci/xcframework-smoke:<lane>:device_tag`; confirm the metadata is present after editing
   pipelines or agent tags so dashboards can attribute results to the correct simulator or
   StrongBox lane.
-- If the command fails, follow the parity playbook (`docs/source/swift_parity_triage.md`)
+- If the command fails, follow the parity playbook (`specs/swift_parity_triage.md`)
   and inspect the rendered `mobile_ci` output to identify which lane requires regeneration
   or incident follow-up before retrying.

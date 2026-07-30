@@ -70,12 +70,12 @@ def _fixture(
     gate.write_text(
         f"""#!/usr/bin/env bash
 set -euo pipefail
-mkdir -p docs/formal/sumeragi_v2 target/formal/sumeragi_v2
+mkdir -p formal/sumeragi_v2 target/formal/sumeragi_v2
 case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
   fail) exit 73 ;;
   pass|no-marker|duplicate-marker)
     printf '%s\n' '{{"machine_checked_completion":true}}' \
-      >docs/formal/sumeragi_v2/proof_coverage.json
+      >formal/sumeragi_v2/proof_coverage.json
     printf '%s\n' '{{"backend_verification":true}}' \
       >target/formal/sumeragi_v2/proof_evidence.json
     printf '%s\n' '{{"backend_verification":true}}' \

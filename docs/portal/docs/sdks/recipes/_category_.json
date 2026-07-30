@@ -1,8 +1,0 @@
-{
-  "label": "SDK recipes",
-  "position": 3,
-  "link": {
-    "type": "generated-index",
-    "description": "Task-focused SDK snippets with runnable source samples."
-  }
-}

@@ -35,7 +35,7 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
     "docs/portal/docs/sorafs/runbooks-index.md": (
         "[`sorafs/release-rollback-yank`](./release-rollback-yank.md)",
     ),
-    "docs/source/sorafs_release_pipeline_plan.md": (
+    "specs/sorafs_release_pipeline_plan.md": (
         "builds native Linux x86_64/aarch64",
         "executes all three binaries from each clean extraction",
         "`scripts/package_sorafs_cli_candidate.py` assembles the whole platform",
@@ -66,14 +66,14 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "`SORAFS_RELEASE_MANIFEST_VERIFIER_PATH`",
         "No private key or HSM signing operation",
     ),
-    "docs/examples/sorafs_release_notes.md": (
+    "fixtures/documentation/sorafs_release_notes.md": (
         "## Rollback / Yank Record",
         "every package row in `release/version-map.toml`",
         "`<withdrawn | not_published | failed>`",
     ),
 }
 FORBIDDEN_RELEASE_DOCUMENT_CLAIMS: dict[str, tuple[str, ...]] = {
-    "docs/source/sorafs_release_pipeline_plan.md": (
+    "specs/sorafs_release_pipeline_plan.md": (
         "via cross",
         "exactly the three expected platform checksum manifests",
     ),
@@ -161,7 +161,7 @@ RELEASE_AUTH_FORBIDDEN_PATTERNS: tuple[
     ),
 )
 RELEASE_AUTH_HISTORICAL_FINDINGS: dict[str, tuple[str, ...]] = {
-    "docs/source/sorafs/reports/sf6_security_review.md": (
+    "specs/sorafs/reports/sf6_security_review.md": (
         "The retired CLI path derived an ephemeral key from unverified OIDC token bytes",
         "Removed that CLI surface and all production callers",
     ),
@@ -254,13 +254,13 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/check_sorafs_rollout_gate_contract_test.py"',
         '- "python/iroha_python/scripts/release_smoke.sh"',
         '- "python/iroha_python/README.md"',
-        '- "docs/source/sdk/python/release_automation*.md"',
-        '- "docs/source/sdk/python/support_playbook*.md"',
-        '- "docs/source/sorafs_release_pipeline_plan*.md"',
-        '- "docs/source/release_dual_track_automation_plan*.md"',
-        '- "docs/source/release_dual_track_runbook*.md"',
-        '- "docs/source/release_artifact_selection*.md"',
-        '- "docs/source/sora_nexus_operator_onboarding*.md"',
+        '- "specs/sdk/python/release_automation*.md"',
+        '- "specs/sdk/python/support_playbook*.md"',
+        '- "specs/sorafs_release_pipeline_plan*.md"',
+        '- "specs/release_dual_track_automation_plan*.md"',
+        '- "specs/release_dual_track_runbook*.md"',
+        '- "specs/release_artifact_selection*.md"',
+        '- "specs/sora_nexus_operator_onboarding*.md"',
         '- "docs/portal/docs/nexus/nexus-operator-onboarding*.md"',
         '- "CHANGELOG.md"',
         '- "LICENSE"',

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -177,74 +176,3 @@ def test_codegen_metadata_is_generated_from_descriptors(tmp_path: Path) -> None:
     assert metadata["builder_index"]["entry_count"] == 1
     assert "generated_at" not in metadata["instruction_manifest"]
     assert "generated_at" not in metadata["builder_index"]
-
-
-def test_completed_generated_locale_is_refreshed_idempotently(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "instructions.md"
-    source.write_text(
-        "<!-- Auto-generated via scripts/android_codegen_docs.py -->\n"
-        "# Current instructions\n",
-        encoding="utf-8",
-    )
-    translation = tmp_path / "instructions.ja.md"
-    translation.write_text(
-        "---\n"
-        "lang: ja\n"
-        "direction: ltr\n"
-        "source: stale/instructions.md\n"
-        "status: complete\n"
-        "generator: scripts/sync_docs_i18n.py\n"
-        f"source_hash: {'0' * 64}\n"
-        'source_last_modified: "2026-01-01T00:00:00+00:00"\n'
-        "translation_last_reviewed: 2026-01-30\n"
-        "---\n\n"
-        "<!-- Auto-generated via scripts/android_codegen_docs.py -->\n"
-        "# Stale instructions\n",
-        encoding="utf-8",
-    )
-
-    assert (
-        docs_mod.refresh_completed_generated_locale(source, translation)
-        == "update"
-    )
-    refreshed = translation.read_text(encoding="utf-8")
-    expected_hash = hashlib.sha256(source.read_bytes()).hexdigest()
-    assert f"source_hash: {expected_hash}" in refreshed
-    assert "status: complete" in refreshed
-    assert "translation_last_reviewed: 2026-01-30" in refreshed
-    assert "# Current instructions" in refreshed
-    assert "# Stale instructions" not in refreshed
-    assert (
-        docs_mod.refresh_completed_generated_locale(source, translation)
-        == "skip"
-    )
-
-
-def test_completed_human_translation_is_not_refreshed(tmp_path: Path) -> None:
-    source = tmp_path / "instructions.md"
-    source.write_text(
-        "<!-- Auto-generated via scripts/android_codegen_docs.py -->\n"
-        "# Current instructions\n",
-        encoding="utf-8",
-    )
-    translation = tmp_path / "instructions.ja.md"
-    original = (
-        "---\n"
-        "lang: ja\n"
-        "source: instructions.md\n"
-        "status: complete\n"
-        "generator: scripts/sync_docs_i18n.py\n"
-        f"source_hash: {'0' * 64}\n"
-        "translation_last_reviewed: 2026-01-30\n"
-        "---\n\n"
-        "# Android 命令リファレンス\n"
-    )
-    translation.write_text(original, encoding="utf-8")
-
-    assert (
-        docs_mod.refresh_completed_generated_locale(source, translation)
-        == "skip"
-    )
-    assert translation.read_text(encoding="utf-8") == original

@@ -289,6 +289,6 @@ ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:",
   (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
   StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
   appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
+- If the run fails, follow `specs/swift_parity_triage.md` and inspect the
   `mobile_ci` output to determine which lane needs regeneration or further incident
   handling.

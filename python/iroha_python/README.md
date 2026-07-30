@@ -1163,7 +1163,7 @@ draft.settlement_pvp(
 
 Only the `all_or_nothing` atomicity policy is currently supported; the host will reject other modes until their semantics are implemented.
 
-See `docs/source/finance/repo_runbook.md` for operator-facing CLI flows, determinism notes, and automation guidance covering both repo and settlement helpers.
+See `specs/finance/repo_runbook.md` for operator-facing CLI flows, determinism notes, and automation guidance covering both repo and settlement helpers.
 
 For Connect automation, pass `--status-only` to the CLI helper when you only need status telemetry; the helper skips session creation and frame construction in that mode.
 
@@ -1222,7 +1222,7 @@ client.set_connect_admission_manifest(manifest)
 - A step-by-step automation walk-through lives at `python/iroha_python/notebooks/connect_automation.ipynb`; the accompanying notebook runs against mocked Torii endpoints and is executed in CI to ensure the flow stays up to date.
 
 ### Transaction manifests
-For details on choosing bundles vs. images, see `docs/source/release_artifact_selection.md`.
+For details on choosing bundles vs. images, see `specs/release_artifact_selection.md`.
 
 Export manifests without hand-crafted Norito JSON:
 
@@ -1858,7 +1858,7 @@ build/install/import/RPC/package-metadata checks.
 Set `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` to preserve the built wheel and source
 distribution under `dist/` after the smoke completes.
 
-For details on choosing between binary bundles and container images, consult `docs/source/release_artifact_selection.md`.
+For details on choosing between binary bundles and container images, consult `specs/release_artifact_selection.md`.
 
 For a production release, stage the reviewed package candidates and checksums
 through the protected aggregate release workflow. Authentication happens

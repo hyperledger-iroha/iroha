@@ -1502,7 +1502,7 @@ fn default_fastpq_proof_sidecar_max_retries() -> usize {
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
-/// `docs/source/merge_ledger.md`; follow that plan when wiring
+/// `specs/merge_ledger.md`; follow that plan when wiring
 /// global state checkpoints into storage.
 #[derive(Debug)]
 pub struct Kura {

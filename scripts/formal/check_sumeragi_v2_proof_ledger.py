@@ -49152,7 +49152,7 @@ def _certified_response_registration_runner_errors(
     errors: list[str] = []
     structural_contracts = (
         (
-            'readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"',
+            'readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"',
             "repository-relative formal directory",
             1,
         ),
@@ -49384,7 +49384,7 @@ def _decision_recovery_lifecycle_runner_errors(
     errors: list[str] = []
     structural_contracts = (
         (
-            'readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"',
+            'readonly FORMAL_DIR="${REPO_ROOT}/formal/sumeragi_v2"',
             "repository-relative formal directory",
             1,
         ),
@@ -80699,7 +80699,7 @@ def _release_evidence_errors(
 
 
 REPLAY_TRACE_SOURCE_SHA256 = {
-    "docs/formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
+    "formal/sumeragi_v2/SumeragiV2TraceWitness.tla": (
         "c8d716f4dfdfd92618fc68967348b04260904d2afd581682a5a1be48386c3328"
     ),
     "crates/iroha_sumeragi_core/tests/fixtures/tlc_replay_witness.cfg": (
@@ -80851,7 +80851,7 @@ def _replay_trace_source_fidelity_errors(
                 f"{description} exactly once; found {count}"
             )
 
-    witness_relative = "docs/formal/sumeragi_v2/SumeragiV2TraceWitness.tla"
+    witness_relative = "formal/sumeragi_v2/SumeragiV2TraceWitness.tla"
     for fragment, description in (
         ("---- MODULE SumeragiV2TraceWitness ----\n", "the witness module header"),
         ("EXTENDS SumeragiV2\n", "the production-model extension"),

@@ -62,7 +62,7 @@ seiyaku Private {}
 koto check ignored.ko
 ```
 """
-        fences = DOCS.extract_source_fences(Path("docs/source/demo.md"), text)
+        fences = DOCS.extract_source_fences(Path("specs/demo.md"), text)
 
         self.assertEqual(len(fences), 2)
         self.assertEqual(fences[0].source, "seiyaku Plain {}\n")
@@ -83,7 +83,7 @@ koto check ignored.ko
             with self.subTest(message=message), self.assertRaisesRegex(
                 DOCS.DocumentationCheckError, message
             ):
-                DOCS.extract_source_fences(Path("docs/source/demo.md"), text)
+                DOCS.extract_source_fences(Path("specs/demo.md"), text)
 
     def test_rejects_missing_misspelled_aliased_and_nested_labels(self) -> None:
         invalid = (
@@ -99,7 +99,7 @@ koto check ignored.ko
             with self.subTest(text=text), self.assertRaisesRegex(
                 DOCS.DocumentationCheckError, message
             ):
-                DOCS.extract_source_fences(Path("docs/source/demo.md"), text)
+                DOCS.extract_source_fences(Path("specs/demo.md"), text)
 
     def test_extracts_ko_heredocs_without_treating_them_as_mislabeled(self) -> None:
         text = """```sh
@@ -193,24 +193,24 @@ seiyaku Hidden {}
 
     def test_manifest_is_strict_and_binds_grammar_to_checked_documents(self) -> None:
         source = "```kotodama\nseiyaku A {}\n```\n"
-        self.write_document("docs/source/grammar.md", source)
-        self.write_document("docs/source/examples.md", source)
+        self.write_document("specs/grammar.md", source)
+        self.write_document("specs/examples.md", source)
         manifest = self.write_manifest(
             json.dumps(
                 {
                     "schema": 2,
-                    "normative_grammar": "docs/source/grammar.md",
+                    "normative_grammar": "specs/grammar.md",
                     "source_roots": ["docs"],
                     "source_documents": [
-                        "docs/source/grammar.md",
-                        "docs/source/examples.md",
+                        "specs/grammar.md",
+                        "specs/examples.md",
                     ],
                 }
             )
         )
 
         document_set = DOCS.load_document_set(manifest, self.root)
-        self.assertEqual(document_set.grammar, Path("docs/source/grammar.md"))
+        self.assertEqual(document_set.grammar, Path("specs/grammar.md"))
         required_only = DOCS.DocumentSet(
             grammar=document_set.grammar,
             documents=document_set.documents,
@@ -231,18 +231,18 @@ seiyaku Hidden {}
 
     def test_manifest_rejects_duplicates_escape_and_unchecked_grammar(self) -> None:
         source = "```ko\nseiyaku A {}\n```\n"
-        self.write_document("docs/source/grammar.md", source)
-        self.write_document("docs/source/examples.md", source)
+        self.write_document("specs/grammar.md", source)
+        self.write_document("specs/examples.md", source)
 
         duplicate = self.write_manifest(
             json.dumps(
                 {
                     "schema": 2,
-                    "normative_grammar": "docs/source/grammar.md",
+                    "normative_grammar": "specs/grammar.md",
                     "source_roots": ["docs"],
                     "source_documents": [
-                        "docs/source/grammar.md",
-                        "docs/source/grammar.md",
+                        "specs/grammar.md",
+                        "specs/grammar.md",
                     ],
                 }
             )
@@ -254,9 +254,9 @@ seiyaku Hidden {}
             json.dumps(
                 {
                     "schema": 2,
-                    "normative_grammar": "docs/source/grammar.md",
+                    "normative_grammar": "specs/grammar.md",
                     "source_roots": ["docs"],
-                    "source_documents": ["docs/source/examples.md"],
+                    "source_documents": ["specs/examples.md"],
                 }
             )
         )
@@ -278,16 +278,16 @@ seiyaku Hidden {}
 
     def test_manifest_requires_every_document_below_a_scanned_root(self) -> None:
         source = "```ko\nseiyaku A {}\n```\n"
-        self.write_document("docs/source/grammar.md", source)
+        self.write_document("specs/grammar.md", source)
         self.write_document("examples/outside.md", source)
         manifest = self.write_manifest(
             json.dumps(
                 {
                     "schema": 2,
-                    "normative_grammar": "docs/source/grammar.md",
+                    "normative_grammar": "specs/grammar.md",
                     "source_roots": ["docs"],
                     "source_documents": [
-                        "docs/source/grammar.md",
+                        "specs/grammar.md",
                         "examples/outside.md",
                     ],
                 }
@@ -301,9 +301,9 @@ seiyaku Hidden {}
 
     def test_each_inventoried_document_must_contain_source(self) -> None:
         grammar = self.write_document(
-            "docs/source/grammar.md", "```kotodama\nseiyaku A {}\n```\n"
+            "specs/grammar.md", "```kotodama\nseiyaku A {}\n```\n"
         )
-        empty = self.write_document("docs/source/examples.md", "# No source\n")
+        empty = self.write_document("specs/examples.md", "# No source\n")
         document_set = DOCS.DocumentSet(
             grammar=grammar.relative_to(self.root),
             documents=(grammar.relative_to(self.root), empty.relative_to(self.root)),
@@ -408,13 +408,13 @@ seiyaku Hidden {}
         fences = DOCS.collect_source_fences(document_set, ROOT)
 
         self.assertEqual(
-            document_set.grammar, Path("docs/source/kotodama_grammar.md")
+            document_set.grammar, Path("specs/kotodama_grammar.md")
         )
         self.assertEqual(
             document_set.documents,
             (
-                Path("docs/source/kotodama_grammar.md"),
-                Path("docs/source/kotodama_examples.md"),
+                Path("specs/kotodama_grammar.md"),
+                Path("specs/kotodama_examples.md"),
             ),
         )
         self.assertEqual(document_set.source_roots, (Path("docs"),))

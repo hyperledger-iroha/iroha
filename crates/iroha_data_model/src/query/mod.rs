@@ -675,11 +675,14 @@ impl QueryRegistry {
             ctor: ctor::<T>,
         };
         if let Some(previous) = self.entries.iter().find(|previous| {
-            previous.wire_id == entry.wire_id && previous.type_name != entry.type_name
+            previous.type_name != entry.type_name
+                && (previous.type_name == entry.wire_id
+                    || previous.wire_id == entry.type_name
+                    || previous.wire_id == entry.wire_id)
         }) {
             panic!(
-                "query wire id collision: `{}` is registered for both `{}` and `{}`",
-                entry.wire_id, previous.type_name, entry.type_name
+                "query registry key collision between `{}` and `{}`",
+                previous.type_name, entry.type_name
             );
         }
         if let Some(previous) = self
@@ -813,21 +816,16 @@ fn decode_query_from_registries(
     builtin: &QueryRegistry,
     installed: Option<&QueryRegistry>,
 ) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
-    builtin.decode(name, bytes).or_else(|| {
-        installed.and_then(|registry| registry.decode(name, bytes))
-    })
+    builtin
+        .decode(name, bytes)
+        .or_else(|| installed.and_then(|registry| registry.decode(name, bytes)))
 }
 
 fn decode_registered_query(
     name: &str,
     bytes: &[u8],
 ) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
-    decode_query_from_registries(
-        name,
-        bytes,
-        builtin_query_registry(),
-        QUERY_REGISTRY.get(),
-    )
+    decode_query_from_registries(name, bytes, builtin_query_registry(), QUERY_REGISTRY.get())
 }
 
 fn builtin_query_registry() -> &'static QueryRegistry {
@@ -4055,8 +4053,7 @@ mod json_roundtrip_tests {
         type DomainQuery = ErasedIterQuery<Domain>;
 
         let builtin = QueryRegistry::new().register_with_id::<DomainQuery>(WIRE_ID);
-        let installed =
-            QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
+        let installed = QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
         let query = DomainQuery::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),
@@ -4070,21 +4067,17 @@ mod json_roundtrip_tests {
             WIRE_ID
         );
         for lookup_key in [type_name, WIRE_ID, CUSTOM_WIRE_ID] {
-            let decoded = decode_query_from_registries(
-                lookup_key,
-                &payload,
-                &builtin,
-                Some(&installed),
-            )
-                .expect("query lookup key is registered")
-                .expect("query payload decodes");
+            let decoded =
+                decode_query_from_registries(lookup_key, &payload, &builtin, Some(&installed))
+                    .expect("query lookup key is registered")
+                    .expect("query payload decodes");
             assert_eq!(decoded.as_ref().type_name_key(), type_name);
             assert_eq!(decoded.as_ref().encode_bytes(), payload);
         }
     }
 
     #[test]
-    #[should_panic(expected = "query wire id collision")]
+    #[should_panic(expected = "query registry key collision")]
     fn query_registry_rejects_wire_id_collisions() {
         type DomainQuery = ErasedIterQuery<Domain>;
         type AccountQuery = ErasedIterQuery<crate::account::Account>;
@@ -4092,6 +4085,17 @@ mod json_roundtrip_tests {
         let _registry = QueryRegistry::new()
             .register_with_id::<DomainQuery>("query.collision")
             .register_with_id::<AccountQuery>("query.collision");
+    }
+
+    #[test]
+    #[should_panic(expected = "query registry key collision")]
+    fn query_registry_rejects_wire_id_and_type_name_collisions() {
+        type DomainQuery = ErasedIterQuery<Domain>;
+        type AccountQuery = ErasedIterQuery<crate::account::Account>;
+
+        let _registry = QueryRegistry::new()
+            .register_with_id::<DomainQuery>(std::any::type_name::<AccountQuery>())
+            .register::<AccountQuery>();
     }
 
     #[cfg(feature = "fast_dsl")]
