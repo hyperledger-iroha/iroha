@@ -129,6 +129,32 @@ PROOF
     <2> QED BY <2>5, <2>6
   <1> QED BY <1>1
 
+THEOREM SerializedLocalPredecessorStrictlyDecreasesRuntimeReach ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => RuntimeReachRank(node)' < RuntimeReachRank(node)
+BY SMT
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncOlderLocalLifecyclePrecedesServeIngress,
+       RuntimeReachRank
+
+THEOREM LocalTargetOnlyTurnStrictlyDecreasesRuntimeReach ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressTargetOnlyTurn(node)
+    => RuntimeReachRank(node)' < RuntimeReachRank(node)
+BY SMT
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration, AsyncServeIngressTargetOnlyTurn,
+       RuntimeReachRank
+
 THEOREM ProducerAdmissionRecordsCausalDebt ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
@@ -312,6 +338,21 @@ BY SMT
        AsyncConfiguration, LocalAdmissionStep,
        DrainableIngressTurnReachRank
 
+THEOREM SerializedLocalPredecessorDecreasesDrainableIngressTurnReach ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => DrainableIngressTurnReachRank(node)'
+         < DrainableIngressTurnReachRank(node)
+BY SMT
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncOlderLocalLifecyclePrecedesServeIngress,
+       DrainableIngressTurnReachRank
+
 THEOREM ExhaustedIngressStepDecreasesDrainableIngressTurnReach ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
@@ -336,6 +377,19 @@ BY SMT
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
        AsyncConfiguration, SerializedRuntimeStep,
+       DrainableIngressTurnReachRank
+
+THEOREM OlderRuntimeInterleaveDecreasesDrainableIngressTurnReach ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimePrecedesServeIngressStep(node)
+    => DrainableIngressTurnReachRank(node)'
+         < DrainableIngressTurnReachRank(node)
+BY SMT
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration,
+       SerializedRuntimePrecedesServeIngressStep,
        DrainableIngressTurnReachRank
 
 THEOREM ExactTicketTurnDecreasesDrainableIngressTurnReach ==
@@ -1036,7 +1090,8 @@ PROOF
                    THEN @ ELSE request.tc.view + 1]
            /\ generation' =
                 [generation EXCEPT ![request.node] =
-                   IF @ < MaxGeneration THEN @ + 1 ELSE @]
+                   IF StrictSameRoundTcUpgrade(request.node, request.tc)
+                   THEN @ + 1 ELSE 0]
       BY <2>1 DEF PersistInstallTC
     <2>3. /\ request \in InstallTcWalSet
            /\ request.node \in ValidatorIds
@@ -1051,10 +1106,10 @@ PROOF
            /\ candidate.consumerView = nodeView[request.node]
       BY <1>1, <2>1 DEF CandidateConsumerCurrent
     <2>5. CASE StrictSameRoundTcUpgrade(request.node, request.tc)
-      <3>1. /\ generation[request.node] < MaxGeneration
+      <3>1. /\ GenerationCanIncrement(generation[request.node])
              /\ candidate.consumerGeneration = generation[request.node]
         BY <1>1, <2>1, <2>4, <2>5
-           DEF StrictSameRoundTcUpgrade, CandidateConsumerCurrent
+           DEF CandidateConsumerCurrent
       <3>2. generation'[request.node] = generation[request.node] + 1
         BY <2>2, <2>3, <3>1, Isa
       <3>3. candidate.consumerGeneration # generation'[candidate.node]
@@ -1942,13 +1997,6 @@ BY RangeConcatenation, Isa
        RestartPrepareReplay, RestartLockedCommitReplay,
        RestartCandidate, AsyncCandidateAtConsumer,
        AsyncCandidateWithIdentity, SequenceSet
-
-THEOREM RestartSignatureReplayIsNeverTombstoneSuppressed ==
-  \A node:
-    \A candidate \in SequenceSet(RestartSignatureReplay(node)):
-      ~AsyncCandidateRestartReplayTombstoned(candidate)
-BY RestartSignatureReplayCommandsAreSignatures,
-   AsyncRestartScopedCandidateIsNeverReplayTombstoned
 
 THEOREM RestartLockedBodyAndSignatureReplayAreDisjoint ==
   \A node:

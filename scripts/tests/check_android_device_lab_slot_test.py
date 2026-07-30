@@ -2099,7 +2099,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
 
     def test_krv4_artifact_limit_matches_core_and_rejects_next_byte(self) -> None:
-        maximum = 4 * 1024 * 1024 * 1024
+        maximum = 5 * 1024 * 1024 * 1024
         self.assertEqual(device_lab.MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES, maximum)
         self.assertFalse(device_lab._kagemusha_krv4_size_exceeds_bound(maximum))
         self.assertTrue(device_lab._kagemusha_krv4_size_exceeds_bound(maximum + 1))

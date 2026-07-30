@@ -34,7 +34,9 @@ CONSTANTS
 Heights == 0..MaxHeight
 FiniteViews == 0..MaxView
 Views == ViewDomain
-Generations == 0..MaxGeneration
+Generations == IF ViewDomain = Nat THEN Nat ELSE 0..MaxGeneration
+GenerationCanIncrement(value) ==
+  ViewDomain = Nat \/ value < MaxGeneration
 Phases == {"Prepare", "Commit"}
 NoRank == -1
 Ranks == {NoRank} \cup Views
@@ -593,7 +595,6 @@ StrictSameRoundTcUpgrade(node, tc) ==
   /\ NodeInstalledTC(node, tc.view)
   /\ TcHighRank(tc) > highestRank[node]
   /\ TcHighRank(tc) > lockRank[node]
-  /\ generation[node] < MaxGeneration
 
 InstalledTcAuthorizesCommitVote(commitVote) == FALSE
 
@@ -928,6 +929,11 @@ ModelConfiguration ==
   /\ 0 \in ViewDomain
   /\ \A roundView \in ViewDomain: 0..roundView \subseteq ViewDomain
   /\ MaxGeneration \in Nat
+  \* Finite TLC instances use the same representable width for every view-
+  \* local generation episode.  The temporal proof uses mathematical Nat for
+  \* both domains; this is a type correspondence, not a liveness budget.
+  /\ \/ ViewDomain = Nat
+     \/ ViewDomain \subseteq 0..MaxGeneration
   /\ EpochLength \in Nat \ {0}
   /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
   /\ Len(LeaderStarts) = MaxHeight + 1
@@ -2047,11 +2053,13 @@ PersistInstallTC(request) ==
   IN /\ request \in pendingInstallTC
      /\ \/ tc.view >= nodeView[node]
         \/ sameRoundUpgrade
+     /\ (sameRoundUpgrade => GenerationCanIncrement(generation[node]))
      /\ nodeView' =
           [nodeView EXCEPT ![node] =
              IF sameRoundUpgrade THEN @ ELSE tc.view + 1]
      /\ generation' =
-          [generation EXCEPT ![node] = IF @ < MaxGeneration THEN @ + 1 ELSE @]
+          [generation EXCEPT ![node] =
+             IF sameRoundUpgrade THEN @ + 1 ELSE 0]
      /\ lastInstalledTc' = [lastInstalledTc EXCEPT ![node] = tc]
      /\ highestPrepareQc' =
           [highestPrepareQc EXCEPT ![node] =
@@ -2203,9 +2211,11 @@ Crash(node) ==
 
 Restart(node) ==
   /\ node \in ValidatorIds \ up
-  /\ generation[node] < MaxGeneration
   /\ up' = up \cup {node}
-  /\ generation' = [generation EXCEPT ![node] = @ + 1]
+  \* Restart denotes a complete process replacement. Crash and the outer
+  \* asynchronous reset have destroyed every old completion sender/queue;
+  \* durable semantic tombstones remain outside this process-local counter.
+  /\ generation' = [generation EXCEPT ![node] = 0]
   /\ UNCHANGED <<height, context, contextHistory, nodeView, gst,
                  availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
@@ -2439,6 +2449,7 @@ TypeInvariant ==
        /\ PrepareQcSubject(lockPrepareQc[node]) = lockSubject[node]
        /\ PrepareQcRank(highestPrepareQc[node]) = highestRank[node]
        /\ PrepareQcSubject(highestPrepareQc[node]) = highestSubject[node]
+       /\ generation[node] <= highestRank[node] + 1
        /\ (lockPrepareQc[node] # NoPrepareQC
              => lockPrepareQc[node] \in prepareQCs)
        /\ (highestPrepareQc[node] # NoPrepareQC

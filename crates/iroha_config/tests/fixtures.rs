@@ -3053,6 +3053,7 @@ fn minimal_config_snapshot() {
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,
+                    kagemusha_catalog_qualification_seal_path: None,
                     kagemusha_max_decoded_bytes: 268435456,
                 },
                 router: Router {

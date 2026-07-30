@@ -5246,8 +5246,13 @@ impl Header {
         Ok(())
     }
 
-    /// Read a header from the given reader and validate it.
-    pub(crate) fn read(mut r: impl Read) -> Result<Self, Error> {
+    /// Read and validate one fixed-size Norito archive header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an archive-header error when the magic, version, compression,
+    /// feature flags, or fixed-width fields are invalid or incomplete.
+    pub fn read(mut r: impl Read) -> Result<Self, Error> {
         let mut magic = [0u8; 4];
         r.read_exact(&mut magic)?;
         if magic != MAGIC {

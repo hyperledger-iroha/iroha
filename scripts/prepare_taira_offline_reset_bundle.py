@@ -6,11 +6,15 @@ validator identities and runtime-only sidecars are preserved.  It always
 creates a new bundle, replaces the archived genesis with an already
 offline-bootstrapped canonical Taira genesis, copies an authenticated
 Kagemusha V4 catalog and its reviewed operator identity into the bundle,
-signs genesis, and leaves every validator with brand-new empty storage.
+signs genesis, leaves every validator with brand-new empty storage, and binds
+every generated config to the release-tree-addressed root qualification seal
+that the deployment controller will create.
 
 No secret value is written to stdout.  The command-submission signer is read
 from the same owner-private file as the genesis signer and is only persisted
-inside owner-private runtime configs.
+inside owner-private runtime configs.  Preparation rejects the archived
+command key and requires the explicitly pinned command authority to be the
+canonical Taira account derived from the fresh genesis public key.
 """
 
 from __future__ import annotations
@@ -73,9 +77,13 @@ PUBLIC_TAIRA_OFFLINE_ASSET_METADATA = {
 PUBLIC_TAIRA_OFFLINE_ESCROW_ACCOUNT = (
     "testuﾛ1Nｿyｵn2PHﾕG6VxﾊﾁpﾏR1uｼM8JｻXBpYcﾆﾎRKjAWvｾALWT5T"
 )
-PUBLIC_TAIRA_COMMAND_AUTHORITY = (
-    "testuﾛ1PﾑﾛﾖｵiiCFzﾈｹN9ﾔEﾅsｽgM9ｦﾑnrｲﾕdmﾜAｦﾙtgﾈﾗx5YQSA3"
+PUBLIC_TAIRA_FEE_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+TAIRA_I105_ALPHABET = tuple(
+    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ"
 )
+TAIRA_I105_CHECKSUM_LEN = 6
+TAIRA_I105_BECH32M_CONST = 0x2BC830A3
 PUBLIC_TAIRA_RELEASE_ACTIVATION_HEIGHT = 2
 PUBLIC_TAIRA_RELEASE_MINIMUM_WITHDRAWAL_HEIGHT = 1_000_000
 # Four validators share one roughly 460 GiB APFS volume.  Bound every node's
@@ -98,14 +106,15 @@ CRYPTOGRAPHIC_REVIEW_FILE_NAME = "cryptographic-review.evidence"
 PROMOTION_RECORD_FILE_NAME = "promotion-record-v4.norito"
 OPERATOR_IDENTITY_FILE_NAME = "operator-identity.json"
 TAIRA_RELEASE_INSTALL_ROOT = Path("/Library/SORA/Taira/releases")
+TAIRA_QUALIFICATION_SEAL_ROOT = Path("/Library/SORA/Taira/seals")
 KAGEMUSHA_RELEASE_GENERATION = "production-gate-real-artifacts-v4"
 KAGEMUSHA_BRIDGE_ABI_VERSION = 21
 KAGEMUSHA_MAX_HOPS = 8
 # Keep the packager's fail-closed per-file corridor identical to the runtime's
 # non-configurable KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4.  The
-# reviewed compact-V5 processed proving key is 3,856,699,286 bytes, so retaining
-# the retired 3 GiB corridor here would reject a release that core accepts.
-KAGEMUSHA_ARTIFACT_MAX_BYTES = 4 * 1024 * 1024 * 1024
+# reviewed compact-V5 processed proving key is 4,594,903,830 bytes, so retaining
+# the stale 4 GiB corridor here would reject a release that core accepts.
+KAGEMUSHA_ARTIFACT_MAX_BYTES = 5 * 1024 * 1024 * 1024
 KAGEMUSHA_ARTIFACT_ROLES = (
     "step_eq_params_ipa",
     "step_eq_proving_key",
@@ -1113,10 +1122,186 @@ def require_private_key(path: Path) -> str:
     return value
 
 
+def _convert_to_base32(data: bytes) -> list[int]:
+    """Convert canonical account bytes into the I105 checksum base."""
+
+    accumulator = 0
+    bits = 0
+    result: list[int] = []
+    for byte in data:
+        accumulator = (accumulator << 8) | byte
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            result.append((accumulator >> bits) & 0x1F)
+    if bits:
+        result.append((accumulator << (5 - bits)) & 0x1F)
+    return result
+
+
+def _bech32_polymod(values: list[int]) -> int:
+    """Return the checksum polymod used by canonical I105 account literals."""
+
+    generators = (
+        0x3B6A57B2,
+        0x26508E6D,
+        0x1EA119FA,
+        0x3D4233DD,
+        0x2A1462B3,
+    )
+    checksum = 1
+    for value in values:
+        top = checksum >> 25
+        checksum = ((checksum & 0x1FF_FFFF) << 5) ^ value
+        for index, generator in enumerate(generators):
+            if (top >> index) & 1:
+                checksum ^= generator
+    return checksum
+
+
+def _taira_i105_checksum_digits(canonical: bytes) -> list[int]:
+    """Return the six canonical I105 checksum digits for an account."""
+
+    values = [ord(character) >> 5 for character in "snx"]
+    values.append(0)
+    values.extend(ord(character) & 0x1F for character in "snx")
+    values.extend(_convert_to_base32(canonical))
+    values.extend([0] * TAIRA_I105_CHECKSUM_LEN)
+    polymod = _bech32_polymod(values) ^ TAIRA_I105_BECH32M_CONST
+    return [
+        (
+            polymod
+            >> (5 * (TAIRA_I105_CHECKSUM_LEN - 1 - index))
+        )
+        & 0x1F
+        for index in range(TAIRA_I105_CHECKSUM_LEN)
+    ]
+
+
+def command_authority_for_genesis_public_key(
+    genesis_public_key: str,
+) -> str:
+    """Derive the canonical Taira I105 account for one Ed25519 public key."""
+
+    if GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None:
+        fail("genesis public key is not canonical Ed25519")
+    # AccountAddress V1, single-key class, normalisation V1; single-key
+    # controller; Ed25519 curve; 32-byte public-key payload.
+    canonical = (
+        b"\x02\x00\x01\x20"
+        + bytes.fromhex(genesis_public_key.removeprefix("ed0120"))
+    )
+    leading_zeroes = len(canonical) - len(canonical.lstrip(b"\0"))
+    value = int.from_bytes(canonical, "big")
+    digits: list[int] = []
+    while value:
+        value, remainder = divmod(value, len(TAIRA_I105_ALPHABET))
+        digits.append(remainder)
+    encoded_digits = [0] * leading_zeroes + list(reversed(digits))
+    if not encoded_digits:
+        encoded_digits = [0]
+    return "test" + "".join(
+        TAIRA_I105_ALPHABET[digit]
+        for digit in (
+            *encoded_digits,
+            *_taira_i105_checksum_digits(canonical),
+        )
+    )
+
+
+def require_command_authority(
+    value: object,
+    *,
+    genesis_public_key: str,
+) -> str:
+    """Require the explicit pin to equal the fresh genesis-key authority."""
+
+    expected = command_authority_for_genesis_public_key(genesis_public_key)
+    if not isinstance(value, str) or value != expected:
+        fail(
+            "command authority must equal the canonical Taira I105 account "
+            "derived from the fresh genesis public key"
+        )
+    return value
+
+
+def source_command_private_key_sha256(source_bundle: Path) -> bytes:
+    """Hash the archived command key without returning or logging its value."""
+
+    source = parse_config(source_bundle / "validator-secrets.toml")
+    shared = source.get("shared")
+    if not isinstance(shared, dict):
+        fail("source bundle lacks the shared runtime secrets table")
+    private_key = shared.get("kagemusha_commands_private_key")
+    if (
+        not isinstance(private_key, str)
+        or GENESIS_PRIVATE_KEY_RE.fullmatch(private_key) is None
+    ):
+        fail("source bundle lacks one canonical Kagemusha command key")
+    return hashlib.sha256(private_key.encode("ascii")).digest()
+
+
+def require_rotated_command_key_projection(
+    bundle: Path,
+    *,
+    command_private_key: str,
+    previous_private_key_sha256: bytes,
+) -> None:
+    """Require the fresh key in every deployable projection and nowhere stale."""
+
+    fresh_sha256 = hashlib.sha256(command_private_key.encode("ascii")).digest()
+    if fresh_sha256 == previous_private_key_sha256:
+        fail("fresh reset must rotate the archived Kagemusha command key")
+
+    projections: tuple[tuple[Path, tuple[str, ...]], ...] = (
+        (
+            bundle / "base-config.toml",
+            ("torii", "kagemusha_commands", "private_key"),
+        ),
+        (
+            bundle / "validator-secrets.toml",
+            ("shared", "kagemusha_commands_private_key"),
+        ),
+        *(
+            (
+                bundle / "rendered" / slug / "config.toml",
+                ("torii", "kagemusha_commands", "private_key"),
+            )
+            for slug in VALIDATOR_SLUGS
+        ),
+    )
+    for path, keys in projections:
+        current: object = parse_config(path)
+        for key in keys:
+            if not isinstance(current, dict):
+                fail("fresh reset command-key projection is incomplete")
+            current = current.get(key)
+        if (
+            not isinstance(current, str)
+            or GENESIS_PRIVATE_KEY_RE.fullmatch(current) is None
+            or hashlib.sha256(current.encode("ascii")).digest()
+            == previous_private_key_sha256
+            or current != command_private_key
+        ):
+            fail("fresh reset command-key projection is stale or inconsistent")
+
+
 def quote_toml(value: str) -> str:
     """Render one TOML basic string."""
 
     return json.dumps(value, ensure_ascii=False)
+
+
+def qualification_seal_path(release_tree_sha256: str) -> Path:
+    """Return the sole root-trusted seal path for one release-tree identity."""
+
+    release_tree_sha256 = require_sha256(
+        release_tree_sha256, "Kagemusha release tree SHA-256"
+    )
+    return (
+        TAIRA_QUALIFICATION_SEAL_ROOT
+        / f"kagemusha-v4-{release_tree_sha256}.norito"
+    )
 
 
 def replace_top_level_assignment(text: str, key: str, value: str) -> str:
@@ -1217,6 +1402,32 @@ def replace_section_assignment(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def remove_section_assignment(text: str, section: str, key: str) -> str:
+    """Remove exactly one assignment from one exact TOML table."""
+
+    lines = text.splitlines()
+    header = f"[{section}]"
+    starts = [index for index, line in enumerate(lines) if line.strip() == header]
+    if len(starts) != 1:
+        fail(f"config must contain exactly one [{section}] table")
+    start = starts[0]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].strip().startswith("["):
+            end = index
+            break
+    matches = [
+        index
+        for index in range(start + 1, end)
+        if not lines[index].strip().startswith("#")
+        and lines[index].strip().partition("=")[0].strip() == key
+    ]
+    if len(matches) != 1:
+        fail(f"config must contain exactly one [{section}].{key} assignment")
+    del lines[matches[0]]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def replace_or_insert_section_assignment(
     text: str,
     section: str,
@@ -1290,6 +1501,7 @@ def runtime_config_text(
     release_root = TAIRA_RELEASE_INSTALL_ROOT / release_tree_sha256
     policy = release_root / RELEASE_POLICY_FILE_NAME
     catalog = release_root / RELEASE_CATALOG_DIRECTORY_NAME
+    catalog_seal = qualification_seal_path(release_tree_sha256)
     signed_genesis = bundle / "genesis.signed.nrt"
     text = replace_top_level_assignment(
         source, "chain", quote_toml(PUBLIC_TAIRA_CHAIN_ID)
@@ -1340,6 +1552,10 @@ def runtime_config_text(
             ),
             f"kagemusha_release_policy_path = {quote_toml(str(policy))}",
             f"kagemusha_artifact_dir = {quote_toml(str(catalog))}",
+            (
+                "kagemusha_catalog_qualification_seal_path = "
+                f"{quote_toml(str(catalog_seal))}"
+            ),
             "kagemusha_max_decoded_bytes = 268435456",
         ],
     )
@@ -1883,11 +2099,17 @@ def validate_genesis_release_binding(
 def genesis_summary(
     path: Path,
     *,
+    command_authority: str,
+    genesis_public_key: str,
     release: dict[str, object] | None = None,
     operator_identity: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Decode and validate the fixed public Taira genesis envelope."""
 
+    command_authority = require_command_authority(
+        command_authority,
+        genesis_public_key=genesis_public_key,
+    )
     raw = require_private_file(path, MAX_GENESIS_BYTES)
     payload = decode_json_object(raw, "offline genesis")
     if payload.get("chain") != PUBLIC_TAIRA_CHAIN_ID:
@@ -1934,6 +2156,7 @@ def genesis_summary(
     registrations: list[dict[str, object]] = []
     aliases: list[dict[str, object]] = []
     asset_mints: list[dict[str, object]] = []
+    fee_mints: list[dict[str, object]] = []
     explicit_command_authority_registrations = 0
     for instruction in instructions:
         if not isinstance(instruction, dict):
@@ -1949,7 +2172,7 @@ def genesis_summary(
             account = register.get("Account")
             if (
                 isinstance(account, dict)
-                and account.get("id") == PUBLIC_TAIRA_COMMAND_AUTHORITY
+                and account.get("id") == command_authority
             ):
                 explicit_command_authority_registrations += 1
         alias = instruction.get("SetAssetDefinitionAlias")
@@ -1964,11 +2187,12 @@ def genesis_summary(
             if (
                 isinstance(asset, dict)
                 and isinstance(asset.get("destination"), str)
-                and asset["destination"].startswith(
-                    f"{PUBLIC_TAIRA_OFFLINE_ASSET_ID}#"
-                )
             ):
-                asset_mints.append(asset)
+                destination = asset["destination"]
+                if destination.startswith(f"{PUBLIC_TAIRA_OFFLINE_ASSET_ID}#"):
+                    asset_mints.append(asset)
+                if destination.startswith(f"{PUBLIC_TAIRA_FEE_ASSET_ID}#"):
+                    fee_mints.append(asset)
 
     if len(registrations) != 1:
         fail(
@@ -1999,6 +2223,30 @@ def genesis_summary(
         fail(
             "offline genesis must not explicitly register the implicit "
             "genesis/command authority"
+        )
+    expected_fee_destination = (
+        f"{PUBLIC_TAIRA_FEE_ASSET_ID}#{command_authority}"
+    )
+    command_fee_ready = False
+    for mint in fee_mints:
+        if mint.get("destination") != expected_fee_destination:
+            continue
+        raw_quantity = mint.get("object")
+        if isinstance(raw_quantity, bool) or not isinstance(
+            raw_quantity, (str, int, float)
+        ):
+            continue
+        try:
+            quantity = Decimal(str(raw_quantity))
+            if quantity.is_finite() and quantity > 0:
+                command_fee_ready = True
+                break
+        except InvalidOperation:
+            continue
+    if not command_fee_ready:
+        fail(
+            "offline genesis does not fund the explicitly pinned command "
+            "authority with the canonical Taira fee asset"
         )
     online_backing_source_ready = False
     for mint in asset_mints:
@@ -2036,6 +2284,7 @@ def genesis_summary(
     required_markers = (
         PUBLIC_TAIRA_OFFLINE_ASSET_ID,
         PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS,
+        command_authority,
         "offline.enabled",
         "ActivateKagemushaRecursiveReleaseV4",
         "RegisterVerifyingKey",
@@ -2068,7 +2317,7 @@ def genesis_summary(
         "offline_asset_name": PUBLIC_TAIRA_OFFLINE_ASSET_NAME,
         "offline_asset_metadata": PUBLIC_TAIRA_OFFLINE_ASSET_METADATA,
         "offline_asset_alias": PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS,
-        "command_authority": PUBLIC_TAIRA_COMMAND_AUTHORITY,
+        "command_authority": command_authority,
         "online_backing_source_ready": True,
         "sha256": hashlib.sha256(raw).hexdigest(),
     }
@@ -2193,10 +2442,15 @@ def parse_config(path: Path) -> dict[str, object]:
 
 
 def validate_runtime_config(
-    config: dict[str, object], bundle: Path, release_tree_sha256: str
+    config: dict[str, object],
+    bundle: Path,
+    release_tree_sha256: str,
+    genesis_public_key: str,
 ) -> None:
     """Enforce the exact mandatory-offline runtime projection."""
 
+    if GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None:
+        fail("expected genesis public key is not canonical Ed25519")
     if (
         config.get("chain") != PUBLIC_TAIRA_CHAIN_ID
         or config.get("chain_discriminant") != PUBLIC_TAIRA_CHAIN_DISCRIMINANT
@@ -2242,6 +2496,7 @@ def validate_runtime_config(
     release_root = TAIRA_RELEASE_INSTALL_ROOT / release_tree_sha256
     expected_policy = release_root / RELEASE_POLICY_FILE_NAME
     expected_catalog = release_root / RELEASE_CATALOG_DIRECTORY_NAME
+    expected_seal = qualification_seal_path(release_tree_sha256)
     if (
         not isinstance(offline, dict)
         or offline.get("enabled") is not True
@@ -2252,10 +2507,18 @@ def validate_runtime_config(
         }
         or offline.get("kagemusha_release_policy_path") != str(expected_policy)
         or offline.get("kagemusha_artifact_dir") != str(expected_catalog)
+        or offline.get("kagemusha_catalog_qualification_seal_path")
+        != str(expected_seal)
     ):
         fail("validator config lacks the exact mandatory offline settlement projection")
-    if genesis.get("file") != str(bundle / "genesis.signed.nrt"):
-        fail("validator config does not use the bundle's signed genesis")
+    if (
+        genesis.get("file") != str(bundle / "genesis.signed.nrt")
+        or genesis.get("public_key") != genesis_public_key
+    ):
+        fail(
+            "validator config does not use the bundle's signed genesis "
+            "and fresh public key"
+        )
 
 
 def staged_check_config_text(
@@ -2269,7 +2532,12 @@ def staged_check_config_text(
     installed_root = TAIRA_RELEASE_INSTALL_ROOT / release_tree_sha256
     expected_policy = str(installed_root / RELEASE_POLICY_FILE_NAME)
     expected_catalog = str(installed_root / RELEASE_CATALOG_DIRECTORY_NAME)
-    if source.count(expected_policy) != 1 or source.count(expected_catalog) != 1:
+    expected_seal = str(qualification_seal_path(release_tree_sha256))
+    if (
+        source.count(expected_policy) != 1
+        or source.count(expected_catalog) != 1
+        or source.count(expected_seal) != 1
+    ):
         fail("final runtime config lacks one exact installed release-path binding")
     text = replace_section_assignment(
         source,
@@ -2277,13 +2545,18 @@ def staged_check_config_text(
         "kagemusha_release_policy_path",
         quote_toml(str(bundle / "kagemusha" / RELEASE_POLICY_FILE_NAME)),
     )
-    return replace_section_assignment(
+    text = replace_section_assignment(
         text,
         "settlement.offline",
         "kagemusha_artifact_dir",
         quote_toml(
             str(bundle / "kagemusha" / RELEASE_CATALOG_DIRECTORY_NAME)
         ),
+    )
+    return remove_section_assignment(
+        text,
+        "settlement.offline",
+        "kagemusha_catalog_qualification_seal_path",
     )
 
 
@@ -2294,6 +2567,7 @@ def update_manifest(
     kagami: Path,
     source_commit: str,
     genesis_public_key: str,
+    command_authority: str,
     manifest_sha256: str,
     release_attestation_sha256: str,
     release_tree_sha256_value: str,
@@ -2302,6 +2576,10 @@ def update_manifest(
 ) -> None:
     """Seal all v21 identities into the reset manifest."""
 
+    command_authority = require_command_authority(
+        command_authority,
+        genesis_public_key=genesis_public_key,
+    )
     manifest_path = bundle / "reset-manifest.json"
     manifest = json.loads(
         require_private_file(manifest_path, 1024 * 1024).decode("utf-8")
@@ -2341,7 +2619,7 @@ def update_manifest(
             "offline_asset_metadata": PUBLIC_TAIRA_OFFLINE_ASSET_METADATA,
             "offline_asset_scale": PUBLIC_TAIRA_OFFLINE_ASSET_SCALE,
             "offline_escrow_account": PUBLIC_TAIRA_OFFLINE_ESCROW_ACCOUNT,
-            "command_authority": PUBLIC_TAIRA_COMMAND_AUTHORITY,
+            "command_authority": command_authority,
             "kagemusha_manifest_sha256": manifest_sha256,
             "kagemusha_release_attestation_sha256": (
                 release_attestation_sha256
@@ -2411,9 +2689,18 @@ def check_bundle(
         or manifest.get("offline_asset_scale") != PUBLIC_TAIRA_OFFLINE_ASSET_SCALE
         or manifest.get("offline_escrow_account")
         != PUBLIC_TAIRA_OFFLINE_ESCROW_ACCOUNT
-        or manifest.get("command_authority") != PUBLIC_TAIRA_COMMAND_AUTHORITY
     ):
         fail("v21 reset manifest projection is invalid")
+    genesis_public_key = manifest.get("genesis_public_key")
+    if (
+        not isinstance(genesis_public_key, str)
+        or GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None
+    ):
+        fail("v21 reset manifest lacks one canonical genesis public key")
+    command_authority = require_command_authority(
+        manifest.get("command_authority"),
+        genesis_public_key=genesis_public_key,
+    )
     expected_binary = require_sha256(
         expected_irohad_sha256, "expected irohad SHA-256"
     )
@@ -2447,6 +2734,8 @@ def check_bundle(
     operator_identity = operator_identity_binding(operator_raw, release)
     genesis = genesis_summary(
         bundle / "genesis.json",
+        command_authority=command_authority,
+        genesis_public_key=genesis_public_key,
         release=release,
         operator_identity=operator_identity,
     )
@@ -2462,6 +2751,18 @@ def check_bundle(
         or genesis["sha256"] != manifest.get("unsigned_genesis_sha256")
     ):
         fail("v21 genesis identity does not match the reset manifest")
+    base_config_path = bundle / "base-config.toml"
+    if sha256(base_config_path) != manifest.get("base_config_sha256"):
+        fail("v21 base config does not match the reset manifest")
+    release_tree_digest = manifest.get("kagemusha_release_tree_sha256")
+    if not isinstance(release_tree_digest, str):
+        fail("v21 manifest lacks the Kagemusha release tree identity")
+    validate_runtime_config(
+        parse_config(base_config_path),
+        bundle,
+        release_tree_digest,
+        genesis_public_key,
+    )
     config_hashes = manifest.get("configs")
     if not isinstance(config_hashes, dict) or set(config_hashes) != set(
         VALIDATOR_SLUGS
@@ -2472,10 +2773,12 @@ def check_bundle(
         config_path = workdir / "config.toml"
         if sha256(config_path) != config_hashes.get(slug):
             fail(f"v21 config identity mismatch for {slug}")
-        release_tree_digest = manifest.get("kagemusha_release_tree_sha256")
-        if not isinstance(release_tree_digest, str):
-            fail("v21 manifest lacks the Kagemusha release tree identity")
-        validate_runtime_config(parse_config(config_path), bundle, release_tree_digest)
+        validate_runtime_config(
+            parse_config(config_path),
+            bundle,
+            release_tree_digest,
+            genesis_public_key,
+        )
         storage = workdir / "storage"
         require_private_directory(storage)
         if any(storage.iterdir()):
@@ -2516,6 +2819,7 @@ def check_bundle(
         "offline_asset_alias": PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS,
         "offline_asset_name": PUBLIC_TAIRA_OFFLINE_ASSET_NAME,
         "offline_escrow_account": PUBLIC_TAIRA_OFFLINE_ESCROW_ACCOUNT,
+        "command_authority": command_authority,
         "online_backing_source_ready": True,
         "activation_height": PUBLIC_TAIRA_RELEASE_ACTIVATION_HEIGHT,
         "manifest_sha256": manifest["kagemusha_manifest_sha256"],
@@ -2530,6 +2834,10 @@ def check_bundle(
 def prepare(args: argparse.Namespace) -> dict[str, object]:
     """Prepare, sign, seal, and preflight one new v21 bundle."""
 
+    command_authority = require_command_authority(
+        args.command_authority,
+        genesis_public_key=args.genesis_public_key,
+    )
     if (
         GENESIS_PUBLIC_KEY_RE.fullmatch(args.genesis_public_key) is None
     ):
@@ -2540,10 +2848,22 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     if not output.is_absolute():
         fail("output bundle must be absolute")
     command_private_key = require_private_key(args.genesis_private_key_file)
+    previous_private_key_sha256 = source_command_private_key_sha256(
+        args.source_bundle
+    )
+    if (
+        hashlib.sha256(command_private_key.encode("ascii")).digest()
+        == previous_private_key_sha256
+    ):
+        fail("fresh reset must rotate the archived Kagemusha command key")
     operator_identity_raw = require_private_file(
         args.operator_identity, 64 * 1024
     )
-    genesis_summary(args.offline_genesis)
+    genesis_summary(
+        args.offline_genesis,
+        command_authority=command_authority,
+        genesis_public_key=args.genesis_public_key,
+    )
     require_regular_file(args.irohad, 2 * 1024 * 1024 * 1024, executable=True)
     require_regular_file(args.kagami, 2 * 1024 * 1024 * 1024, executable=True)
     irohad_sha256 = sha256(args.irohad)
@@ -2620,6 +2940,8 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         )
         genesis_summary(
             output / "genesis.json",
+            command_authority=command_authority,
+            genesis_public_key=args.genesis_public_key,
             release=release,
             operator_identity=operator_identity,
         )
@@ -2637,6 +2959,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                     command_private_key=command_private_key,
                 ).encode("utf-8"),
             )
+        require_rotated_command_key_projection(
+            output,
+            command_private_key=command_private_key,
+            previous_private_key_sha256=previous_private_key_sha256,
+        )
         signed_genesis = output / "genesis.signed.nrt"
         signed_genesis.unlink()
         validator_one = output / "rendered" / VALIDATOR_SLUGS[0]
@@ -2665,6 +2992,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             kagami=args.kagami,
             source_commit=args.source_commit,
             genesis_public_key=args.genesis_public_key,
+            command_authority=command_authority,
             manifest_sha256=manifest_sha256,
             release_attestation_sha256=str(
                 release["release_attestation_sha256"]
@@ -2723,6 +3051,7 @@ def parser() -> argparse.ArgumentParser:
         "--genesis-private-key-file", type=Path, required=True
     )
     prepare_parser.add_argument("--genesis-public-key", required=True)
+    prepare_parser.add_argument("--command-authority", required=True)
     prepare_parser.add_argument("--kagami", type=Path, required=True)
     prepare_parser.add_argument("--irohad", type=Path, required=True)
     prepare_parser.add_argument("--source-commit", required=True)

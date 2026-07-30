@@ -50,7 +50,12 @@ scripts/build_kagemusha_candidate_apple_native.sh \
 The builder source-seals before and after Cargo, compiles only
 `aarch64-apple-ios` with `kagemusha-candidate-evidence-lab`, verifies the two
 Apple phase symbols and do-not-ship marker, and writes a closed native build
-manifest.
+manifest. Both `--target-dir` and `--output-dir` must name new paths beneath
+existing real, owner-private parents; the builder refuses existing paths so a
+stale native artifact cannot be reused. The device runner rehashes every
+manifest-listed XCFramework input, compiles from a private staged copy,
+rehashes it after Xcode completes, and retains the consumed plist, marker,
+headers, module map, and static archive in the signed raw inventory.
 
 ## Run the two physical launches
 
@@ -144,7 +149,11 @@ scripts/check_kagemusha_candidate_ios_evidence.py \
 The signed canonical payload excludes only
 `signature` and `signature_payload_sha256`. The validator denies unknown
 fields, verifies the trusted key identity and Ed25519 signature, rehashes the
-entire exact raw-file inventory, and rechecks every cross-file invariant.
+entire exact raw-file inventory, and rechecks every cross-file invariant. It
+implements strict RFC 8032 Ed25519 directly from immutable, no-follow PEM
+snapshots, so a mutable `PATH` or a key-path replacement cannot select the
+cryptographic result. Every retained JSON document must also use the exact
+canonical byte envelope.
 
 For promotion, copy only the signed JSON to the authenticated release as
 `physical-device-benchmark.evidence`; retain the raw tree owner-private outside

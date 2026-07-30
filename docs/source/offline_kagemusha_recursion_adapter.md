@@ -241,6 +241,15 @@ minimum unusable rows, and parent-proof byte bound. Its default value is an
 invalid sentinel; neither local configuration nor FFI input may replace the
 value authenticated by the manifest.
 
+The compact `proof_step_count` is runtime witness data. StepEq copy-constrains
+that public cell to the exact step field inside the native operation relation
+and range-checks it as a `u32`; it must never be assigned through a dynamic
+`assert_is_const`. Key generation uses step one, so placing that value in a
+fixed column would make step two and every later recursive transition
+incompatible with the authenticated proving and verifying key. Release
+validation therefore includes a real step-one-to-step-two proof chain under
+the same final key pair, followed by terminal verification.
+
 Bootstrap payload version 5 also authenticates the exact cumulative
 virtual-region breakpoints captured from the final key-generation circuit for
 each phase. Decoding rejects a phase-count mismatch, non-increasing or
@@ -260,7 +269,7 @@ materializing an n-by-m grid, and converts one coefficient column at a time.
 Empty-bootstrap assembly keeps an identity permutation implicit and
 materializes union-find state only on the first nontrivial copy. Verifier-key
 construction builds, commits, and drops one permutation polynomial at a time,
-avoiding retention of the complete reviewed 123-column permutation inventory.
+avoiding retention of the complete reviewed 534-column permutation inventory.
 Those streamed commitments complete before assigned fixed columns and
 bit-packed selectors expand into degree-sized field polynomials. The ordinary
 borrowed Halo2 entrypoints remain available, and the consuming paths produce
@@ -278,7 +287,7 @@ verifier domain alongside them.
 
 The consuming quotient evaluator preserves the ordinary prover's constraint
 and Horner order but transforms only one degree-sized copy-permutation sigma
-chunk at a time. For the reviewed 123-column permutation this keeps at most two
+chunk at a time. For the reviewed 534-column permutation this keeps at most two
 sigma cosets live instead of retaining the full permutation inventory.
 Instance conversion is deferred until its Lagrange allocation can be
 consumed, and configure metadata, selector polynomials, and the evaluator graph
@@ -295,8 +304,9 @@ in a disposable one-worker pool. Large MSMs alone acquire process-wide
 admission before scalar/base preprocessing and run in a fixed two-worker
 window pool, bounding concurrent preprocessing, window buckets, and allocator
 caches without changing accumulator order. The checked static admission
-estimate is 8,271,167,488 bytes (7.703125 GiB), not a physical RSS prediction;
-the 16 GiB supervisor remains authoritative.
+estimate is 9,747,562,496 bytes (9.078125 GiB), not a physical RSS prediction;
+it remains below the reviewed 12 GiB exact-profile preflight ceiling, and the
+16 GiB supervisor remains authoritative.
 
 Each live V4 step carries the exact operation vector, ordered parent state and
 lineage slots, post-proof and branch folds, deferred-equation audit words, and
@@ -414,18 +424,19 @@ between runs.
 
 Generation also computes every ParamsIPA, processed verifier-key, and processed
 proving-key length from the authenticated circuit shape before allocating IPA
-parameters. The reviewed compact profile is degree 16 with `[360]` advice,
-`[37, 0, 0]` lookup-advice, one fixed, and one instance column. The two trailing
+parameters. The reviewed compact profile is degree 16 with `[443]` advice,
+`[47, 0, 0]` lookup-advice, one fixed, and one instance column. The two trailing
 zero lookup phases are canonical `BaseCircuitBuilder` output, not allocated
 advice phases. Its exact per-parity encodings are 4,194,372 bytes for ParamsIPA,
-29,386 bytes for the processed VK, and 3,856,699,286 bytes for the processed PK.
+35,018 bytes for the processed VK, and 4,594,903,830 bytes for the processed PK.
 Proving keys serialize directly into bounded owner-private staging files and are framed by streaming reads; Eq and Ep
 processed keys are never retained together or copied through a release-sized
 `Vec`. The final verifier- and proving-key circuits are consumed after
 post-synthesis breakpoint extraction or validation and before key assembly.
 Generation then stages the exact processed key before handing its owned value
-and the witness-only calibration circuit to the consuming prover. The 4 GiB
-PK role cap and 16 GiB aggregate generation guard are fixed. The complete
+and the witness-only calibration circuit to the consuming prover. The 5 GiB
+PK role cap, 12 GiB exact-profile preflight ceiling, and 16 GiB aggregate
+generation guard are fixed. The complete
 outer generation lifecycle runs inside a disposable one-worker Rayon pool, so
 FFT and quotient scratch cannot multiply the resident key and worker-local FFT
 caches are released at the end of the attempt. Large MSMs use the process-wide

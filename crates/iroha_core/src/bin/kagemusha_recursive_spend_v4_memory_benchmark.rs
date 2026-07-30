@@ -28,8 +28,8 @@ use iroha_data_model::offline::{
 
 const SUBCOMMAND: &str = "measure-compact-k16";
 const EXPECTED_PARAMETERS_BYTES: usize = 4_194_372;
-const EXPECTED_VERIFYING_KEY_BYTES: usize = 29_386;
-const EXPECTED_PROVING_KEY_BYTES: u64 = 3_856_699_286;
+const EXPECTED_VERIFYING_KEY_BYTES: usize = 35_018;
+const EXPECTED_PROVING_KEY_BYTES: u64 = 4_594_903_830;
 
 fn benchmark_error(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())

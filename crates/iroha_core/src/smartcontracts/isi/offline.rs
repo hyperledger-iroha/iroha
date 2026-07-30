@@ -2,7 +2,9 @@
 
 mod kagemusha_terminal_registry_v4;
 
-pub use kagemusha_terminal_registry_v4::KagemushaReleaseCatalogV4;
+pub use kagemusha_terminal_registry_v4::{
+    KagemushaCatalogQualificationSealV1, KagemushaReleaseCatalogV4,
+};
 
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
@@ -6673,6 +6675,35 @@ pub mod isi {
         Ok(())
     }
 
+    /// Reject overlap between a new top-up note and either confidential-state namespace.
+    fn ensure_kagemusha_v4_topup_note_is_fresh(
+        zk_state: &crate::state::ZkAssetState,
+        note_commitment: [u8; 32],
+        spend_nullifier: [u8; 32],
+    ) -> Result<(), InstructionExecutionError> {
+        if zk_state.commitments.contains(&note_commitment) {
+            return Err(labeled_invariant(
+                "duplicate_output",
+                "Kagemusha top-up note commitment already exists",
+            ));
+        }
+        if zk_state.nullifiers.contains(&note_commitment) {
+            return Err(labeled_invariant(
+                "proof_binding",
+                "Kagemusha top-up note commitment collides with an already spent nullifier",
+            ));
+        }
+        if zk_state.nullifiers.contains(&spend_nullifier)
+            || zk_state.commitments.contains(&spend_nullifier)
+        {
+            return Err(labeled_invariant(
+                "duplicate_nullifier",
+                "Kagemusha top-up spend nullifier collides with existing confidential state",
+            ));
+        }
+        Ok(())
+    }
+
     fn ensure_kagemusha_v4_anchor_matches_topup_request(
         anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
         request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
@@ -7468,29 +7499,11 @@ pub mod isi {
                 )
                 .into());
             }
-            if zk_state
-                .commitments
-                .contains(&request.current_note.note_commitment)
-            {
-                return Err(labeled_invariant(
-                    "duplicate_output",
-                    "Kagemusha top-up note commitment already exists",
-                )
-                .into());
-            }
-            if zk_state
-                .nullifiers
-                .contains(&request.current_note.spend_nullifier)
-                || zk_state
-                    .commitments
-                    .contains(&request.current_note.spend_nullifier)
-            {
-                return Err(labeled_invariant(
-                    "duplicate_nullifier",
-                    "Kagemusha top-up spend nullifier collides with existing confidential state",
-                )
-                .into());
-            }
+            ensure_kagemusha_v4_topup_note_is_fresh(
+                &zk_state,
+                request.current_note.note_commitment,
+                request.current_note.spend_nullifier,
+            )?;
             let mut commitments_after = zk_state.commitments.clone();
             commitments_after.push(request.current_note.note_commitment);
             let authoritative_finalized_root =
@@ -7918,6 +7931,41 @@ pub mod isi {
                     .to_string()
                     .starts_with("kagemusha_v4_redemption_")
             );
+        }
+
+        #[test]
+        fn kagemusha_topup_note_freshness_rejects_all_state_namespace_collisions() {
+            const EXISTING_COMMITMENT: [u8; 32] = [0x51; 32];
+            const SPENT_NULLIFIER: [u8; 32] = [0x52; 32];
+            const FRESH_COMMITMENT: [u8; 32] = [0x53; 32];
+            const FRESH_NULLIFIER: [u8; 32] = [0x54; 32];
+
+            let mut zk_state = crate::state::ZkAssetState::default();
+            zk_state.commitments.push(EXISTING_COMMITMENT);
+            assert!(zk_state.nullifiers.insert(SPENT_NULLIFIER));
+
+            ensure_kagemusha_v4_topup_note_is_fresh(&zk_state, FRESH_COMMITMENT, FRESH_NULLIFIER)
+                .expect("disjoint top-up note material must remain admissible");
+
+            for (note_commitment, spend_nullifier, expected_label) in [
+                (EXISTING_COMMITMENT, FRESH_NULLIFIER, "duplicate_output"),
+                (FRESH_COMMITMENT, SPENT_NULLIFIER, "duplicate_nullifier"),
+                (FRESH_COMMITMENT, EXISTING_COMMITMENT, "duplicate_nullifier"),
+                (SPENT_NULLIFIER, FRESH_NULLIFIER, "proof_binding"),
+            ] {
+                let error = ensure_kagemusha_v4_topup_note_is_fresh(
+                    &zk_state,
+                    note_commitment,
+                    spend_nullifier,
+                )
+                .expect_err("every commitment/nullifier namespace collision must fail closed");
+                assert!(
+                    error.to_string().contains(&format!(
+                        "{OFFLINE_REJECTION_REASON_PREFIX}{expected_label}:"
+                    )),
+                    "unexpected collision rejection for {expected_label}: {error}"
+                );
+            }
         }
 
         #[test]

@@ -42,6 +42,11 @@ const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
 const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 2 + 3;
 const MAX_INGRESS_SEMANTIC_KEYS: usize = 1024;
+// Scheduler priority is physical ownership evidence, not part of the logical
+// reducer occurrence. Keep the legacy key field at one canonical value so
+// existing snapshot layout remains unchanged while Normal/Progress rerouting
+// coalesces to the same service identity.
+const ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS: u8 = u8::MAX;
 
 /// Maximum adapter effects returned by one serialized runtime invocation.
 ///
@@ -588,6 +593,7 @@ impl FinalizedV2Height {
 ///
 /// The tuple field is private so networking code cannot manufacture the token
 /// without passing [`SumeragiV2Adapter::authenticate`].
+#[derive(Clone)]
 pub(crate) struct AuthenticatedConsensusMessage(wire::ConsensusMessageV2);
 
 impl AuthenticatedConsensusMessage {
@@ -1604,7 +1610,45 @@ enum ServicedCandidatePolicy {
     Suppress,
 }
 
-fn serviced_candidate_policy(event: &reducer::Event) -> Option<ServicedCandidatePolicy> {
+/// Closed adapter-event projection used by the serviced-identity bound.
+///
+/// These are exactly the reducer input classes which may retain a transient
+/// or durable-terminal service record. The formal model projects its more
+/// detailed command stages onto this same eleven-class carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum ServicedCandidateStage {
+    LocalProposalReady,
+    ProposalReceived,
+    VoteReceived,
+    QuorumCertificateReceived,
+    TimeoutVoteReceived,
+    TimeoutCertificateReceived,
+    TimeoutElapsed,
+    BodyAvailable,
+    BodyStored,
+    ValidationCompleted,
+    ApplicationCompleted,
+}
+
+impl ServicedCandidateStage {
+    const ALL: [Self; 11] = [
+        Self::LocalProposalReady,
+        Self::ProposalReceived,
+        Self::VoteReceived,
+        Self::QuorumCertificateReceived,
+        Self::TimeoutVoteReceived,
+        Self::TimeoutCertificateReceived,
+        Self::TimeoutElapsed,
+        Self::BodyAvailable,
+        Self::BodyStored,
+        Self::ValidationCompleted,
+        Self::ApplicationCompleted,
+    ];
+    const COUNT: usize = Self::ALL.len();
+}
+
+fn serviced_candidate_stage(event: &reducer::Event) -> Option<ServicedCandidateStage> {
     match event {
         // Replay and retransmission are control triggers, not final candidate
         // service. Their concrete spawned/replayed occurrences receive their
@@ -1622,19 +1666,78 @@ fn serviced_candidate_policy(event: &reducer::Event) -> Option<ServicedCandidate
         // forever. Within one process the reducer's exact EventTag and
         // signature fence already reject duplicate or stale callbacks.
         | reducer::Event::Signed { .. } => None,
-        reducer::Event::LocalProposalReady { .. }
-        | reducer::Event::ProposalReceived { .. }
-        | reducer::Event::VoteReceived { .. }
-        | reducer::Event::QuorumCertificateReceived { .. }
-        | reducer::Event::TimeoutVoteReceived { .. }
-        | reducer::Event::TimeoutCertificateReceived { .. }
-        | reducer::Event::TimeoutElapsed { .. }
-        | reducer::Event::BodyAvailable { .. }
-        | reducer::Event::BodyStored { .. }
-        | reducer::Event::ValidationCompleted { .. }
-        | reducer::Event::ApplicationCompleted { .. } => {
-            Some(ServicedCandidatePolicy::Suppress)
+        reducer::Event::LocalProposalReady { .. } => {
+            Some(ServicedCandidateStage::LocalProposalReady)
         }
+        reducer::Event::ProposalReceived { .. } => {
+            Some(ServicedCandidateStage::ProposalReceived)
+        }
+        reducer::Event::VoteReceived { .. } => Some(ServicedCandidateStage::VoteReceived),
+        reducer::Event::QuorumCertificateReceived { .. } => {
+            Some(ServicedCandidateStage::QuorumCertificateReceived)
+        }
+        reducer::Event::TimeoutVoteReceived { .. } => {
+            Some(ServicedCandidateStage::TimeoutVoteReceived)
+        }
+        reducer::Event::TimeoutCertificateReceived { .. } => {
+            Some(ServicedCandidateStage::TimeoutCertificateReceived)
+        }
+        reducer::Event::TimeoutElapsed { .. } => Some(ServicedCandidateStage::TimeoutElapsed),
+        reducer::Event::BodyAvailable { .. } => Some(ServicedCandidateStage::BodyAvailable),
+        reducer::Event::BodyStored { .. } => Some(ServicedCandidateStage::BodyStored),
+        reducer::Event::ValidationCompleted { .. } => {
+            Some(ServicedCandidateStage::ValidationCompleted)
+        }
+        reducer::Event::ApplicationCompleted { .. } => {
+            Some(ServicedCandidateStage::ApplicationCompleted)
+        }
+    }
+}
+
+fn serviced_candidate_policy(event: &reducer::Event) -> Option<ServicedCandidatePolicy> {
+    serviced_candidate_stage(event).map(|_| ServicedCandidatePolicy::Suppress)
+}
+
+fn is_authenticated_ingress_event(event: &reducer::Event) -> bool {
+    matches!(
+        event,
+        reducer::Event::ProposalReceived { .. }
+            | reducer::Event::VoteReceived { .. }
+            | reducer::Event::QuorumCertificateReceived { .. }
+            | reducer::Event::TimeoutVoteReceived { .. }
+            | reducer::Event::TimeoutCertificateReceived { .. }
+    )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServicedCandidateRecordKind {
+    /// Same-process memory which prevents an applied identity from re-entering
+    /// after an equal-rank owner temporarily covers the same reducer stage.
+    Transient,
+    /// Restart-stable memory for an exact internal lifecycle which drained
+    /// after its asynchronous owner disappeared.
+    DurableTerminal,
+}
+
+/// Classify the only dispositions which consume a serviced-identity slot.
+///
+/// Authenticated junk, stale/policy rejection, and ordinary duplicates remain
+/// marker-free. An applied authenticated occurrence is not junk: retaining its
+/// route-neutral identity for the rest of this process generation closes the
+/// A -> B -> A replenishment episode while a same-height restart still clears
+/// it and permits volatile quorum/pipeline reconstruction.
+fn serviced_candidate_record_kind(
+    event: &reducer::Event,
+    disposition: reducer::StepDisposition,
+) -> Option<ServicedCandidateRecordKind> {
+    if disposition == reducer::StepDisposition::Applied {
+        Some(ServicedCandidateRecordKind::Transient)
+    } else if !is_authenticated_ingress_event(event)
+        && disposition == reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork)
+    {
+        Some(ServicedCandidateRecordKind::DurableTerminal)
+    } else {
+        None
     }
 }
 
@@ -2044,17 +2147,87 @@ const fn semantic_ingress_capacity(roster_len: usize) -> usize {
     MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))
 }
 
-/// Maximum same-view serviced identities retained durably.
+/// Maximum distinct service stages which one immutable lifecycle can cross.
 ///
-/// This is the union of already reviewed ownership geometry: the bounded
-/// semantic-ingress table, Completion and Normal deferred lanes, and the
-/// roster-derived Progress lane. It introduces no configuration or
-/// environment knob.
+/// This is mechanically derived from the closed reducer-event projection
+/// accepted by [`serviced_candidate_policy`], not duplicated as a magic
+/// number. It is neither a wire field nor a deployment knob.
+const SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE: usize = ServicedCandidateStage::COUNT;
+const _: () = assert!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE == 11);
+
+/// Dormant restart/historical roots in the reviewed lifecycle geometry.
+///
+/// The formal model uses the same fixed `AsyncDormantDurableLifecycleCapacity`.
+const CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY: usize = 8;
+
+/// Existing runtime/effect capacities which bound active candidate roots.
+///
+/// Production passes the already validated Sumeragi v2 queue configuration
+/// into adapter construction. This internal value is not serialized and does
+/// not add a configuration surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ServicedCandidateCapacityGeometry {
+    runtime_command_capacity: usize,
+    effect_work_capacity: usize,
+}
+
+impl ServicedCandidateCapacityGeometry {
+    /// Bind the existing runtime command and effect-work capacities.
+    pub(crate) const fn new(runtime_command_capacity: usize, effect_work_capacity: usize) -> Self {
+        Self {
+            runtime_command_capacity,
+            effect_work_capacity,
+        }
+    }
+}
+
+// Standalone adapter fixtures are paired with the existing 1024-command and
+// 1024-effect test defaults. Production construction always supplies the
+// validated height configuration explicitly through the runner.
+const DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY: ServicedCandidateCapacityGeometry =
+    ServicedCandidateCapacityGeometry::new(MAX_DEFERRED_INPUTS, MAX_DEFERRED_INPUTS);
+
+const fn candidate_lifecycle_capacity(
+    roster_len: usize,
+    geometry: ServicedCandidateCapacityGeometry,
+) -> usize {
+    let serviced = semantic_ingress_capacity(roster_len)
+        .saturating_add(MAX_DEFERRED_INPUTS)
+        .saturating_add(MAX_DEFERRED_INPUTS)
+        .saturating_add(deferred_progress_capacity(roster_len));
+    let active = geometry
+        .runtime_command_capacity
+        // One root plus at most three causal continuations per runtime owner.
+        .saturating_add(geometry.runtime_command_capacity.saturating_mul(3))
+        .saturating_add(geometry.effect_work_capacity)
+        .saturating_add(CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY);
+    serviced
+        .saturating_add(active)
+        // The due timeout clock owns one disjoint lifecycle reservation.
+        .saturating_add(1)
+}
+
+/// Maximum same-view serviced identities retained by one adapter generation.
+///
+/// This is the complete reviewed lifecycle geometry: service queues, active
+/// runtime roots, their bounded three-child causal continuations, effect work,
+/// dormant durable replay, and the disjoint timeout clock. Multiplying by the
+/// exact eleven-class reducer-event projection also covers a retained service
+/// marker while the same causal lifecycle remains active.
+const fn serviced_candidate_capacity_with_geometry(
+    roster_len: usize,
+    geometry: ServicedCandidateCapacityGeometry,
+) -> usize {
+    candidate_lifecycle_capacity(roster_len, geometry)
+        .saturating_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE)
+}
+
+#[cfg(test)]
 const fn serviced_candidate_capacity(roster_len: usize) -> usize {
-    semantic_ingress_capacity(roster_len)
-        .saturating_add(MAX_DEFERRED_INPUTS)
-        .saturating_add(MAX_DEFERRED_INPUTS)
-        .saturating_add(deferred_progress_capacity(roster_len))
+    serviced_candidate_capacity_with_geometry(
+        roster_len,
+        DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY,
+    )
 }
 
 /// Completion variant staged directly in the Busy-deferred lane by seam tests.
@@ -2280,6 +2453,15 @@ impl AdapterOutcome {
     pub(crate) const fn deferred_admission_ordinal(&self) -> Option<u128> {
         self.deferred_admission_ordinal
     }
+
+    /// Whether Busy backpressure retained no adapter-owned occurrence and the
+    /// serialized runtime must keep the exact physical command in its FIFO.
+    pub(crate) const fn requires_runtime_retry(&self) -> bool {
+        matches!(
+            self.disposition,
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        ) && self.deferred_admission_ordinal.is_none()
+    }
 }
 
 /// Signature aggregation boundary used when the reducer forms a local QC or TC.
@@ -2488,6 +2670,8 @@ pub(crate) struct SumeragiV2Adapter {
     /// pipeline state only in memory, so persisting its marker would suppress
     /// the retransmission needed to reconstruct that state after a crash.
     durable_serviced_candidates: BTreeMap<ServicedCandidateKey, wire::View>,
+    /// Source-derived bound frozen with the adjacent durable store.
+    serviced_candidate_capacity: usize,
     serviced_candidates_decision_reclaimed: bool,
     registry: WireRegistry,
     fingerprints: AdapterFingerprints,
@@ -2579,6 +2763,36 @@ impl SumeragiV2Adapter {
         )
     }
 
+    /// Open using the already validated runtime/effect ownership geometry.
+    ///
+    /// The production runner uses this constructor so a configured command
+    /// queue larger than the standalone fixture default cannot exhaust the
+    /// serviced-identity table while its legitimate lifecycles remain active.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_with_capacity_geometry(
+        wal_path: impl Into<PathBuf>,
+        verified_context: VerifiedHeightContext,
+        local_validator: Option<wire::ValidatorIndex>,
+        generation: reducer::Generation,
+        consensus_key_hash: [u8; 32],
+        fingerprints: AdapterFingerprints,
+        capacity_geometry: ServicedCandidateCapacityGeometry,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
+    ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
+        Self::open_with_aggregator_and_publication_with_capacity(
+            wal_path,
+            verified_context,
+            local_validator,
+            generation,
+            consensus_key_hash,
+            fingerprints,
+            Box::<BlsNormalSignatureAggregator>::default(),
+            true,
+            capacity_geometry,
+            deferred_admission_ordinals,
+        )
+    }
+
     /// Open and replay the adapter without publishing its initial reducer
     /// status.
     ///
@@ -2605,6 +2819,32 @@ impl SumeragiV2Adapter {
             fingerprints,
             Box::<BlsNormalSignatureAggregator>::default(),
             false,
+            deferred_admission_ordinals,
+        )
+    }
+
+    /// Open with deferred status publication and the validated queue geometry.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_deferred_status_with_capacity_geometry(
+        wal_path: impl Into<PathBuf>,
+        verified_context: VerifiedHeightContext,
+        local_validator: Option<wire::ValidatorIndex>,
+        generation: reducer::Generation,
+        consensus_key_hash: [u8; 32],
+        fingerprints: AdapterFingerprints,
+        capacity_geometry: ServicedCandidateCapacityGeometry,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
+    ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
+        Self::open_with_aggregator_and_publication_with_capacity(
+            wal_path,
+            verified_context,
+            local_validator,
+            generation,
+            consensus_key_hash,
+            fingerprints,
+            Box::<BlsNormalSignatureAggregator>::default(),
+            false,
+            capacity_geometry,
             deferred_admission_ordinals,
         )
     }
@@ -2645,6 +2885,33 @@ impl SumeragiV2Adapter {
         publish_initial_status: bool,
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
+        Self::open_with_aggregator_and_publication_with_capacity(
+            wal_path,
+            verified_context,
+            local_validator,
+            generation,
+            consensus_key_hash,
+            fingerprints,
+            aggregator,
+            publish_initial_status,
+            DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY,
+            deferred_admission_ordinals,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_with_aggregator_and_publication_with_capacity(
+        wal_path: impl Into<PathBuf>,
+        verified_context: VerifiedHeightContext,
+        local_validator: Option<wire::ValidatorIndex>,
+        generation: reducer::Generation,
+        consensus_key_hash: [u8; 32],
+        fingerprints: AdapterFingerprints,
+        aggregator: Box<dyn SignatureAggregator>,
+        publish_initial_status: bool,
+        capacity_geometry: ServicedCandidateCapacityGeometry,
+        deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
+    ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         let VerifiedHeightContext {
             context: wire_context,
             proofs_of_possession,
@@ -2658,13 +2925,15 @@ impl SumeragiV2Adapter {
             .transpose()?;
         let chain_hash: [u8; 32] = Hash::new(wire_context.chain_id.encode()).into();
         let serviced_candidate_owner: [u8; 32] = fingerprints.node.into();
+        let serviced_candidate_capacity =
+            serviced_candidate_capacity_with_geometry(wire_context.roster.len(), capacity_geometry);
         let (serviced_candidate_store, restored_serviced_candidates) =
             ServicedCandidateStore::open(
                 &wal_path,
                 wire_context.id(),
                 wire_context.height,
                 serviced_candidate_owner,
-                serviced_candidate_capacity(wire_context.roster.len()),
+                serviced_candidate_capacity,
             )
             .map_err(AdapterError::ServicedCandidateStore)?;
         let wal = SafetyWal::open(
@@ -2720,6 +2989,7 @@ impl SumeragiV2Adapter {
             serviced_candidate_store,
             serviced_candidates: restored_serviced_candidates.records.clone(),
             durable_serviced_candidates: restored_serviced_candidates.records,
+            serviced_candidate_capacity,
             serviced_candidates_decision_reclaimed: restored_serviced_candidates.decision_reclaimed,
             registry,
             fingerprints,
@@ -2953,6 +3223,18 @@ impl SumeragiV2Adapter {
             .chain(&self.deferred_progress_inputs)
             .chain(&self.deferred_inputs)
             .filter(|input| input.retag_authenticated_ingress)
+            .map(|input| input.admission_ordinal)
+            .collect()
+    }
+
+    /// Exact actor-global ordinals retained by every Busy-deferred input.
+    /// Runtime lifecycle ownership uses this complete set; the authenticated
+    /// subset above remains the separate fair-ingress carrier authority.
+    pub(crate) fn all_deferred_admission_ordinals(&self) -> BTreeSet<u128> {
+        self.deferred_completions
+            .iter()
+            .chain(&self.deferred_progress_inputs)
+            .chain(&self.deferred_inputs)
             .map(|input| input.admission_ordinal)
             .collect()
     }
@@ -4540,6 +4822,336 @@ impl SumeragiV2Adapter {
         self.step(reducer::Event::ApplicationCompleted { tag, subject })
     }
 
+    /// Decide whether an exact internal callback still needs a serialized
+    /// runtime admission.
+    ///
+    /// The projection uses cloned registry/reducer state, so malformed, stale,
+    /// monotone-complete, and durably tombstoned callbacks consume neither an
+    /// admission ordinal nor a physical FIFO slot. Authenticated wire ingress
+    /// deliberately bypasses this seam and remains governed by canonical
+    /// authentication and semantic-delivery ownership.
+    pub(crate) fn preflight_runtime_command_admission(
+        &self,
+        tag: reducer::EventTag,
+        command: &super::v2_runtime::AdapterCommand,
+    ) -> super::v2_runtime::RuntimeCommandAdmissionPreflight {
+        use super::v2_runtime::{AdapterCommand, RuntimeCommandAdmissionPreflight as Preflight};
+
+        if matches!(command, AdapterCommand::Authenticated(_)) {
+            return Preflight::Admit;
+        }
+        if self.fail_closed || !self.replay_complete {
+            return Preflight::Reject;
+        }
+
+        let projected = (|| -> Result<_, AdapterError> {
+            let mut registry = self.registry.clone();
+            let (event, completion_evidence) = match command {
+                AdapterCommand::Authenticated(_) => unreachable!("handled above"),
+                AdapterCommand::LocalProposalReady {
+                    manifest,
+                    durable_receipt,
+                    validated_receipt,
+                } => {
+                    if durable_receipt.context_id() != self.wire_context.id()
+                        || durable_receipt.round() != manifest.round
+                        || durable_receipt.subject() != manifest.subject
+                        || durable_receipt.manifest_hash() != HashOf::new(manifest)
+                        || validated_receipt.durable() != durable_receipt
+                    {
+                        return Err(AdapterError::DurableBodyMismatch);
+                    }
+                    let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
+                    let round = registry.round_to_core(manifest.round, &self.wire_context)?;
+                    registry.register_execution_commitment(
+                        round,
+                        core_manifest.subject(),
+                        validated_receipt.execution_commitment(),
+                    )?;
+                    (
+                        reducer::Event::LocalProposalReady {
+                            tag,
+                            manifest: core_manifest,
+                        },
+                        Some(BodyPipelineCompletionEvidence::LocalProposalReady {
+                            manifest: manifest.clone(),
+                            durable_receipt: durable_receipt.clone(),
+                            validated_receipt: validated_receipt.clone(),
+                        }),
+                    )
+                }
+                AdapterCommand::BodyAvailable { manifest } => {
+                    let round = registry.round_to_core(manifest.round, &self.wire_context)?;
+                    let subject = registry.register_subject(manifest.subject)?;
+                    let core_manifest = registry.manifest_to_core(manifest, &self.wire_context)?;
+                    if core_manifest.subject() != subject {
+                        return Err(AdapterError::DurableBodyMismatch);
+                    }
+                    (
+                        reducer::Event::BodyAvailable {
+                            tag,
+                            round,
+                            subject,
+                        },
+                        Some(BodyPipelineCompletionEvidence::BodyAvailable {
+                            manifest: manifest.clone(),
+                        }),
+                    )
+                }
+                AdapterCommand::BodyStored {
+                    round,
+                    subject,
+                    receipt,
+                } => {
+                    if receipt.context_id() != self.wire_context.id()
+                        || receipt.round() != *round
+                        || receipt.subject() != *subject
+                    {
+                        return Err(AdapterError::DurableBodyMismatch);
+                    }
+                    let core_round = registry.round_to_core(*round, &self.wire_context)?;
+                    let core_subject = registry.register_subject(*subject)?;
+                    let manifest = registry
+                        .manifests
+                        .get(&(core_round, core_subject))
+                        .ok_or(AdapterError::MissingManifest)?;
+                    if receipt.manifest_hash() != HashOf::new(manifest) {
+                        return Err(AdapterError::DurableBodyMismatch);
+                    }
+                    (
+                        reducer::Event::BodyStored {
+                            tag,
+                            round: core_round,
+                            subject: core_subject,
+                        },
+                        Some(BodyPipelineCompletionEvidence::BodyStored {
+                            round: *round,
+                            subject: *subject,
+                            receipt: receipt.clone(),
+                        }),
+                    )
+                }
+                AdapterCommand::ValidationSucceeded {
+                    round,
+                    subject,
+                    receipt,
+                } => {
+                    if receipt.durable().context_id() != self.wire_context.id()
+                        || receipt.durable().round() != *round
+                        || receipt.durable().subject() != *subject
+                    {
+                        return Err(AdapterError::DurableBodyMismatch);
+                    }
+                    let core_round = registry.round_to_core(*round, &self.wire_context)?;
+                    let core_subject = registry.register_subject(*subject)?;
+                    let manifest = registry
+                        .manifests
+                        .get(&(core_round, core_subject))
+                        .ok_or(AdapterError::MissingManifest)?;
+                    if receipt.durable().manifest_hash() != HashOf::new(manifest) {
+                        return Err(AdapterError::DurableBodyMismatch);
+                    }
+                    registry.register_execution_commitment(
+                        core_round,
+                        core_subject,
+                        receipt.execution_commitment(),
+                    )?;
+                    (
+                        reducer::Event::ValidationCompleted {
+                            tag,
+                            round: core_round,
+                            subject: core_subject,
+                            valid: true,
+                        },
+                        Some(BodyPipelineCompletionEvidence::ValidationSucceeded {
+                            round: *round,
+                            subject: *subject,
+                            receipt: receipt.clone(),
+                        }),
+                    )
+                }
+                AdapterCommand::ValidationFailed { round, subject } => {
+                    let core_round = registry.round_to_core(*round, &self.wire_context)?;
+                    let core_subject = registry.register_subject(*subject)?;
+                    (
+                        reducer::Event::ValidationCompleted {
+                            tag,
+                            round: core_round,
+                            subject: core_subject,
+                            valid: false,
+                        },
+                        Some(BodyPipelineCompletionEvidence::ValidationFailed {
+                            round: *round,
+                            subject: *subject,
+                        }),
+                    )
+                }
+                AdapterCommand::SignatureCompleted(signature) => (
+                    reducer::Event::Signed {
+                        tag,
+                        signature: reducer::OpaqueSignature::new(signature.clone()),
+                    },
+                    None,
+                ),
+                AdapterCommand::ApplicationCompleted(subject) => (
+                    reducer::Event::ApplicationCompleted {
+                        tag,
+                        subject: registry.register_subject(*subject)?,
+                    },
+                    None,
+                ),
+            };
+            Ok((event, completion_evidence))
+        })();
+        let Ok((event, completion_evidence)) = projected else {
+            return Preflight::Reject;
+        };
+
+        // Internal completions retain their originating reducer incarnation.
+        // A delayed completion from an obsolete incarnation is a harmless
+        // stutter, but it must be discarded before allocating a new runtime
+        // ordinal. The exact payload was validated above first so a malformed
+        // internal callback cannot hide behind a stale tag.
+        if tag != self.reducer.current_tag() {
+            return Preflight::Coalesce;
+        }
+
+        if self
+            .serviced_candidate(
+                &event,
+                DeferredPriority::Completion,
+                completion_evidence.as_ref(),
+                None,
+            )
+            .is_some_and(|(key, _, _)| self.serviced_candidates.contains_key(&key))
+        {
+            return Preflight::Coalesce;
+        }
+
+        // The reducer's persistence/signing fences intentionally report Busy
+        // before dispatching an event to its phase handler. Consult the
+        // phase-specific monotone facts first so an exact callback which has
+        // already handed ownership to its successor cannot be admitted again
+        // merely because unrelated durable work is now fenced.
+        let phase_fact = match &event {
+            reducer::Event::LocalProposalReady { manifest, .. } => {
+                let round = reducer::Round::new(tag.height(), tag.view());
+                let classify_proposal = |proposal: &reducer::Proposal| {
+                    (proposal.round() == round).then(|| {
+                        if proposal.manifest() == manifest {
+                            Preflight::Coalesce
+                        } else {
+                            Preflight::Reject
+                        }
+                    })
+                };
+                self.reducer
+                    .pending_persistence_record()
+                    .and_then(|record| match record {
+                        reducer::WalRecord::ProposalIntent(proposal) => classify_proposal(proposal),
+                        _ => None,
+                    })
+                    .or_else(|| {
+                        self.reducer
+                            .durable_state()
+                            .proposal_intent(round)
+                            .and_then(classify_proposal)
+                    })
+                    .or_else(|| {
+                        self.reducer
+                            .awaiting_signature()
+                            .and_then(|signable| match signable {
+                                reducer::SignableMessage::Proposal(proposal) => {
+                                    classify_proposal(proposal)
+                                }
+                                reducer::SignableMessage::Vote(_)
+                                | reducer::SignableMessage::TimeoutVote(_) => None,
+                            })
+                    })
+                    .or_else(|| {
+                        self.reducer
+                            .durable_state()
+                            .decision()
+                            .and_then(|decision| {
+                                let exact_decided_body = decision.proposal_round() == round
+                                    && decision.subject() == manifest.subject();
+                                (exact_decided_body
+                                    && (self.reducer.applied_subject() == Some(decision.subject())
+                                        || self.reducer.body_state(round, decision.subject())
+                                            == reducer::BodyState::Validated))
+                                    .then_some(Preflight::Coalesce)
+                            })
+                    })
+            }
+            reducer::Event::BodyAvailable { round, subject, .. } => {
+                (self.reducer.body_state(*round, *subject) != reducer::BodyState::Missing)
+                    .then_some(Preflight::Coalesce)
+            }
+            reducer::Event::BodyStored { round, subject, .. } => {
+                match self.reducer.body_state(*round, *subject) {
+                    reducer::BodyState::Missing | reducer::BodyState::Available => None,
+                    reducer::BodyState::Durable
+                    | reducer::BodyState::Validated
+                    | reducer::BodyState::Invalid => Some(Preflight::Coalesce),
+                }
+            }
+            reducer::Event::ValidationCompleted {
+                round,
+                subject,
+                valid,
+                ..
+            } => match (self.reducer.body_state(*round, *subject), *valid) {
+                (reducer::BodyState::Missing | reducer::BodyState::Durable, _) => None,
+                (reducer::BodyState::Validated, true)
+                | (reducer::BodyState::Invalid, false)
+                | (reducer::BodyState::Available, _) => Some(Preflight::Coalesce),
+                (reducer::BodyState::Validated, false) | (reducer::BodyState::Invalid, true) => {
+                    Some(Preflight::Reject)
+                }
+            },
+            reducer::Event::Signed { .. } => self
+                .reducer
+                .awaiting_signature()
+                .is_none()
+                .then_some(Preflight::Coalesce),
+            reducer::Event::ApplicationCompleted { subject, .. } => {
+                self.reducer.applied_subject().map(|applied| {
+                    if applied == *subject {
+                        Preflight::Coalesce
+                    } else {
+                        Preflight::Reject
+                    }
+                })
+            }
+            reducer::Event::ResumeAfterReplay { .. }
+            | reducer::Event::ProposalReceived { .. }
+            | reducer::Event::VoteReceived { .. }
+            | reducer::Event::QuorumCertificateReceived { .. }
+            | reducer::Event::TimeoutVoteReceived { .. }
+            | reducer::Event::TimeoutCertificateReceived { .. }
+            | reducer::Event::TimeoutElapsed { .. }
+            | reducer::Event::RetransmitElapsed { .. }
+            | reducer::Event::Persisted { .. }
+            | reducer::Event::PersistenceFailed { .. } => None,
+        };
+        if let Some(preflight) = phase_fact {
+            return preflight;
+        }
+
+        let mut projected_reducer = self.reducer.clone();
+        match projected_reducer.step(event) {
+            Ok(outcome) => match outcome.disposition() {
+                reducer::StepDisposition::Applied
+                | reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+                | reducer::StepDisposition::Ignored(reducer::IgnoreReason::NoMatchingWork) => {
+                    Preflight::Admit
+                }
+                reducer::StepDisposition::Ignored(_) => Preflight::Coalesce,
+            },
+            Err(_) => Preflight::Reject,
+        }
+    }
+
     /// Consume an applied height after Kura has durably associated the exact
     /// canonical block and CommitQC artifact.
     ///
@@ -5154,7 +5766,7 @@ impl SumeragiV2Adapter {
     fn serviced_candidate(
         &self,
         event: &reducer::Event,
-        priority: DeferredPriority,
+        _priority: DeferredPriority,
         completion_evidence: Option<&BodyPipelineCompletionEvidence>,
         authenticated_wire_identity: Option<&[u8]>,
     ) -> Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)> {
@@ -5177,7 +5789,6 @@ impl SumeragiV2Adapter {
             None => projection.push(0),
         }
         projection.push(phase);
-        projection.push(priority.code());
         append_serviced_candidate_event(&mut projection, event);
         append_deferred_projection_completion_evidence(&mut projection, completion_evidence);
         // Authenticated network inputs have one semantic reducer occurrence
@@ -5215,7 +5826,7 @@ impl SumeragiV2Adapter {
                 source_view,
                 target,
                 phase,
-                priority.code(),
+                ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS,
                 deferred_event_kind(event).code(),
                 evidence,
             ),
@@ -5229,14 +5840,44 @@ impl SumeragiV2Adapter {
         AdapterError::ServicedCandidateStore(reason)
     }
 
+    /// Reserve bounded serviced-identity capacity before mutating the reducer.
+    ///
+    /// The fast path needs no speculative reducer step. Only a theoretically
+    /// full table projects the deterministic transition on a clone, allowing
+    /// ignored Byzantine/stale traffic to remain marker-free while refusing a
+    /// genuinely consuming transition before its physical owner is released.
+    fn ensure_serviced_candidate_capacity_before_step(
+        &mut self,
+        event: &reducer::Event,
+        candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
+    ) -> Result<(), AdapterError> {
+        let Some((key, _, _)) = candidate else {
+            return Ok(());
+        };
+        if self.serviced_candidates.contains_key(&key) {
+            return Ok(());
+        }
+        let capacity = self.serviced_candidate_capacity;
+        if self.serviced_candidates.len() < capacity {
+            return Ok(());
+        }
+
+        let mut projected = self.reducer.clone();
+        let disposition = projected.step(event.clone())?.disposition();
+        if serviced_candidate_record_kind(event, disposition).is_none() {
+            return Ok(());
+        }
+        Err(self.fail_serviced_candidate_store(format!(
+            "derived serviced-candidate capacity {capacity} is exhausted before semantic service"
+        )))
+    }
+
     /// Mark one non-Busy reducer occurrence before its final owner is returned
     /// to the caller or serialized runtime.
     ///
-    /// Every service receives a process-generation marker. Only an exact
-    /// deferred owner which the reducer terminally discarded receives the
-    /// restart-stable marker: successful proposal, vote, timeout-vote, and
-    /// body-pipeline transitions can own volatile reducer state which must be
-    /// reconstructed from retransmission after a crash.
+    /// Applied occurrences retain a process-generation marker through the
+    /// same-view episode. Only an exact internal callback drained after its
+    /// asynchronous item disappeared also receives the restart-stable marker.
     fn record_serviced_candidate(
         &mut self,
         candidate: Option<(ServicedCandidateKey, wire::View, ServicedCandidatePolicy)>,
@@ -5259,7 +5900,7 @@ impl SumeragiV2Adapter {
             // reclamation.
             return Ok(());
         }
-        let capacity = serviced_candidate_capacity(self.wire_context.roster.len());
+        let capacity = self.serviced_candidate_capacity;
         let process_marker_exists = self.serviced_candidates.contains_key(&key);
         if !process_marker_exists && self.serviced_candidates.len() >= capacity {
             return Err(self.fail_serviced_candidate_store(format!(
@@ -5269,7 +5910,10 @@ impl SumeragiV2Adapter {
         if !process_marker_exists {
             assert_eq!(self.serviced_candidates.insert(key, service_view), None);
         }
-        if !durable_terminal_retirement || self.durable_serviced_candidates.contains_key(&key) {
+        if !durable_terminal_retirement {
+            return Ok(());
+        }
+        if self.durable_serviced_candidates.contains_key(&key) {
             return Ok(());
         }
         if self.durable_serviced_candidates.len() >= capacity {
@@ -5464,6 +6108,7 @@ impl SumeragiV2Adapter {
                 },
             });
         }
+        self.ensure_serviced_candidate_capacity_before_step(&queued, serviced_candidate)?;
         let outcome = self.reducer.step(event)?;
         let disposition = outcome.disposition();
         self.record_reducer_outcome(&queued, disposition, outcome.effects());
@@ -5505,7 +6150,11 @@ impl SumeragiV2Adapter {
         // Concatenating them here would erase the reducer transition boundary
         // and could exceed the executor's retained-batch capacity.
         let effects = self.drive_effects(outcome.into_effects())?;
-        self.record_serviced_candidate(serviced_candidate, false)?;
+        let record_kind = serviced_candidate_record_kind(&queued, disposition);
+        let serviced_candidate = record_kind.and(serviced_candidate);
+        let durable_terminal_retirement =
+            record_kind == Some(ServicedCandidateRecordKind::DurableTerminal);
+        self.record_serviced_candidate(serviced_candidate, durable_terminal_retirement)?;
         if let Some(admission) = admission {
             self.record_ingress_delivery(admission);
         }
@@ -5891,11 +6540,31 @@ impl SumeragiV2Adapter {
     pub(crate) fn drain_deferred_with_evidence(
         &mut self,
     ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
+        let eligible = self.all_deferred_admission_ordinals();
+        self.drain_deferred_with_evidence_for_ordinals(&eligible)
+    }
+
+    /// Service one deferred transition from the exact lifecycle-minimal set
+    /// selected by the serialized runtime.
+    ///
+    /// The adapter still owns class rotation within that set.  Passing the set
+    /// across the runtime/adapter seam prevents a later Completion, Progress,
+    /// or Normal occurrence from overtaking an older causal lifecycle merely
+    /// because it occupies the cursor's next class.
+    pub(crate) fn drain_deferred_with_evidence_for_ordinals(
+        &mut self,
+        eligible: &BTreeSet<u128>,
+    ) -> Result<Option<(Vec<AdapterEffect>, DeferredServiceEvidence)>, AdapterError> {
         self.ensure_ingress()?;
         if !self.deferred_work_is_serviceable() {
             return Ok(None);
         }
-        let Some(selection) = self.pop_deferred_next()? else {
+        let active = self.all_deferred_admission_ordinals();
+        if eligible.is_empty() || !eligible.is_subset(&active) {
+            self.fail_closed = true;
+            return Err(AdapterError::DeferredServiceOwnershipViolation);
+        }
+        let Some(selection) = self.pop_deferred_next_eligible(eligible)? else {
             return Ok(None);
         };
         if !selection.evidence.validate_exact()
@@ -5934,6 +6603,12 @@ impl SumeragiV2Adapter {
             self.log_body_progress(&input.event, disposition, 0);
             return Ok(Some((Vec::new(), selection.evidence)));
         }
+        if let Err(error) =
+            self.ensure_serviced_candidate_capacity_before_step(&input.event, serviced_candidate)
+        {
+            self.retain_failed_serviced_deferred_owner(input);
+            return Err(error);
+        }
         let event = input.event.clone();
         let observed_event = event.clone();
         let outcome = self.reducer.step(event)?;
@@ -5947,8 +6622,10 @@ impl SumeragiV2Adapter {
             return Err(self.fail_deferred_service_contract());
         }
         let effects = self.drive_effects(outcome.into_effects())?;
+        let record_kind = serviced_candidate_record_kind(&observed_event, disposition);
+        let serviced_candidate = record_kind.and(serviced_candidate);
         let durable_terminal_retirement =
-            matches!(disposition, reducer::StepDisposition::Ignored(_));
+            record_kind == Some(ServicedCandidateRecordKind::DurableTerminal);
         if let Err(error) =
             self.record_serviced_candidate(serviced_candidate, durable_terminal_retirement)
         {
@@ -6020,40 +6697,71 @@ impl SumeragiV2Adapter {
         }
     }
 
+    #[cfg(test)]
     fn pop_deferred_next(&mut self) -> Result<Option<DeferredServiceSelection>, AdapterError> {
+        let eligible = self.all_deferred_admission_ordinals();
+        self.pop_deferred_next_eligible(&eligible)
+    }
+
+    fn pop_deferred_next_eligible(
+        &mut self,
+        eligible: &BTreeSet<u128>,
+    ) -> Result<Option<DeferredServiceSelection>, AdapterError> {
         let queue_lengths_before = self.deferred_queue_lengths();
         let service_cursor_before = self.next_deferred_priority;
         for _ in 0..3 {
             let priority = self.next_deferred_priority;
             self.next_deferred_priority = self.next_deferred_priority.next();
             let selected = match priority {
-                DeferredPriority::Completion => self.deferred_completions.pop_front(),
-                DeferredPriority::Progress => self.deferred_progress_inputs.pop_front(),
-                DeferredPriority::Normal => self.deferred_inputs.pop_front(),
+                DeferredPriority::Completion => self
+                    .deferred_completions
+                    .iter()
+                    .position(|input| eligible.contains(&input.admission_ordinal))
+                    .and_then(|position| self.deferred_completions.remove(position)),
+                DeferredPriority::Progress => self
+                    .deferred_progress_inputs
+                    .iter()
+                    .position(|input| eligible.contains(&input.admission_ordinal))
+                    .and_then(|position| self.deferred_progress_inputs.remove(position)),
+                DeferredPriority::Normal => self
+                    .deferred_inputs
+                    .iter()
+                    .position(|input| eligible.contains(&input.admission_ordinal))
+                    .and_then(|position| self.deferred_inputs.remove(position)),
             };
             let Some(selected) = selected else {
                 continue;
             };
-            for (skipped_priority, oldest) in [
-                (
-                    DeferredPriority::Completion,
-                    self.deferred_completions.front_mut(),
-                ),
-                (
-                    DeferredPriority::Progress,
-                    self.deferred_progress_inputs.front_mut(),
-                ),
-                (DeferredPriority::Normal, self.deferred_inputs.front_mut()),
+            for skipped_priority in [
+                DeferredPriority::Completion,
+                DeferredPriority::Progress,
+                DeferredPriority::Normal,
             ] {
-                if skipped_priority != priority
-                    && let Some(oldest) = oldest
-                {
-                    let Some(next_debt) = oldest.eligible_skips.checked_add(1) else {
-                        self.fail_closed = true;
-                        return Err(AdapterError::DeferredServiceDebtOverflow);
-                    };
-                    oldest.eligible_skips = next_debt;
+                if skipped_priority == priority {
+                    continue;
                 }
+                let oldest = match skipped_priority {
+                    DeferredPriority::Completion => self
+                        .deferred_completions
+                        .iter_mut()
+                        .find(|input| eligible.contains(&input.admission_ordinal)),
+                    DeferredPriority::Progress => self
+                        .deferred_progress_inputs
+                        .iter_mut()
+                        .find(|input| eligible.contains(&input.admission_ordinal)),
+                    DeferredPriority::Normal => self
+                        .deferred_inputs
+                        .iter_mut()
+                        .find(|input| eligible.contains(&input.admission_ordinal)),
+                };
+                let Some(oldest) = oldest else {
+                    continue;
+                };
+                let Some(next_debt) = oldest.eligible_skips.checked_add(1) else {
+                    self.fail_closed = true;
+                    return Err(AdapterError::DeferredServiceDebtOverflow);
+                };
+                oldest.eligible_skips = next_debt;
             }
             let mut input = selected;
             let original_event = input.event.clone();
@@ -9014,6 +9722,24 @@ mod tests {
         )
     }
 
+    fn open_test_with_capacity_geometry(
+        directory: &TempDir,
+        capacity_geometry: ServicedCandidateCapacityGeometry,
+    ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
+        SumeragiV2Adapter::open_with_aggregator_and_publication_with_capacity(
+            directory.path().join("capacity-safety.wal"),
+            verified_genesis(context()),
+            Some(0),
+            reducer::Generation::new(1),
+            [0x12; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            true,
+            capacity_geometry,
+            deferred_admission_ordinals(),
+        )
+    }
+
     fn assert_registry_eq(actual: &WireRegistry, expected: &WireRegistry) {
         assert_eq!(actual.wire_context, expected.wire_context);
         assert_eq!(actual.context_id, expected.context_id);
@@ -9068,7 +9794,7 @@ mod tests {
     }
 
     #[test]
-    fn transient_serviced_candidates_block_a_b_a_but_reopen_after_restart() {
+    fn direct_internal_discard_tombstones_a_b_a_and_survives_restart() {
         let directory = TempDir::new().expect("temporary directory");
         let a_marker = 0x31;
         let b_marker = 0x32;
@@ -9094,6 +9820,7 @@ mod tests {
                 reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
             );
             assert_eq!(adapter.serviced_candidate_count_for_test(), initial + 2);
+            assert_eq!(adapter.durable_serviced_candidates.len(), initial + 2);
             assert_eq!(
                 adapter
                     .step(a)
@@ -9115,22 +9842,22 @@ mod tests {
             Box::new(TestAggregator),
             deferred_admission_ordinals(),
         )
-        .expect("reopen after clearing generation-scoped service markers");
+        .expect("reopen with exact direct-discard terminal records");
         assert!(startup.is_empty());
         let retained = restarted.serviced_candidate_count_for_test();
         assert_eq!(
-            retained, 0,
-            "ordinary service markers cannot survive loss of their volatile reducer state"
+            retained, 2,
+            "direct and deferred internal NoMatchingWork discards are restart-stable"
         );
         let restarted_a = unowned_body_event(&restarted, a_marker);
-        assert_ne!(
+        assert_eq!(
             restarted
                 .step(restarted_a)
-                .expect("re-admit A after process generation changes")
+                .expect("coalesce A after process generation changes")
                 .disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
-        assert_eq!(restarted.serviced_candidate_count_for_test(), retained + 1);
+        assert_eq!(restarted.serviced_candidate_count_for_test(), retained);
     }
 
     #[test]
@@ -9152,6 +9879,16 @@ mod tests {
                 signer: 1,
                 signature: vec![0x35],
             }));
+        let replacement =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                round,
+                proposal_round: round,
+                phase: wire::GlobalPhase::Prepare,
+                subject: subject(0x35),
+                execution_commitment: execution_commitment(0x35),
+                signer: 2,
+                signature: vec![0x36],
+            }));
         {
             let (mut adapter, startup) = open_test(&directory).expect("open adapter");
             assert!(startup.is_empty());
@@ -9165,8 +9902,39 @@ mod tests {
             assert_eq!(adapter.serviced_candidate_count_for_test(), 1);
             assert!(
                 adapter.durable_serviced_candidates.is_empty(),
-                "a volatile quorum contribution cannot become a restart tombstone"
+                "a volatile quorum contribution is process-local, never a restart tombstone"
             );
+            let first_key = IngressSemanticKey::Vote {
+                round,
+                phase: wire::GlobalPhase::Prepare,
+                signer: 1,
+            };
+            adapter.ingress_deliveries.remove(&first_key);
+            adapter.ingress_equivocations.remove(&first_key);
+            assert_eq!(
+                adapter
+                    .receive_authenticated(AuthenticatedConsensusMessage::for_test(replacement,))
+                    .expect("service equal-rank candidate B")
+                    .disposition(),
+                reducer::StepDisposition::Applied
+            );
+            assert_eq!(adapter.serviced_candidate_count_for_test(), 2);
+            let replacement_key = IngressSemanticKey::Vote {
+                round,
+                phase: wire::GlobalPhase::Prepare,
+                signer: 2,
+            };
+            adapter.ingress_deliveries.remove(&replacement_key);
+            adapter.ingress_equivocations.remove(&replacement_key);
+            assert_eq!(
+                adapter
+                    .receive_authenticated(AuthenticatedConsensusMessage::for_test(vote.clone()))
+                    .expect("coalesce candidate A after equal-rank replacement B")
+                    .disposition(),
+                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate),
+                "same-generation A -> B -> A service must not resurrect A"
+            );
+            assert_eq!(adapter.serviced_candidate_count_for_test(), 2);
             assert!(
                 adapter
                     .status()
@@ -9174,7 +9942,7 @@ mod tests {
                     .liveness
                     .prepare_quorums
                     .iter()
-                    .any(|quorum| quorum.round == round && quorum.signer_count == 1)
+                    .any(|quorum| quorum.round == round && quorum.signer_count == 2)
             );
         }
 
@@ -9476,7 +10244,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn aggregate_signer_subset_carriers_coalesce_to_one_semantic_candidate() {
+    fn aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -9517,11 +10285,20 @@ mod tests {
             let candidate = adapter
                 .serviced_candidate(
                     &reducer::Event::QuorumCertificateReceived { tag, certificate },
-                    DeferredPriority::Progress,
+                    if variant % 2 == 0 {
+                        DeferredPriority::Normal
+                    } else {
+                        DeferredPriority::Progress
+                    },
                     None,
                     Some(&carrier),
                 )
                 .expect("QC has a service identity");
+            assert_eq!(
+                candidate.0.class(),
+                ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS,
+                "scheduler priority is excluded from the logical key"
+            );
             match qc_key {
                 Some(expected) => assert_eq!(
                     candidate.0, expected,
@@ -9535,7 +10312,8 @@ mod tests {
         }
         assert_eq!(
             adapter.serviced_candidate_count_for_test(),
-            marker_count + 1
+            marker_count + 1,
+            "all valid QC carrier variants share one transient identity"
         );
 
         let mut tc_key = None;
@@ -9560,7 +10338,11 @@ mod tests {
             let candidate = adapter
                 .serviced_candidate(
                     &reducer::Event::TimeoutCertificateReceived { tag, certificate },
-                    DeferredPriority::Progress,
+                    if variant % 2 == 0 {
+                        DeferredPriority::Normal
+                    } else {
+                        DeferredPriority::Progress
+                    },
                     None,
                     Some(&carrier),
                 )
@@ -9611,7 +10393,11 @@ mod tests {
             let candidate = adapter
                 .serviced_candidate(
                     &reducer::Event::TimeoutVoteReceived { tag, vote },
-                    DeferredPriority::Progress,
+                    if variant % 2 == 0 {
+                        DeferredPriority::Normal
+                    } else {
+                        DeferredPriority::Progress
+                    },
                     None,
                     Some(&carrier),
                 )
@@ -9675,7 +10461,11 @@ mod tests {
             let candidate = adapter
                 .serviced_candidate(
                     &reducer::Event::ProposalReceived { tag, proposal },
-                    DeferredPriority::Normal,
+                    if variant % 2 == 0 {
+                        DeferredPriority::Normal
+                    } else {
+                        DeferredPriority::Progress
+                    },
                     None,
                     Some(&carrier),
                 )
@@ -9717,7 +10507,11 @@ mod tests {
             let candidate = adapter
                 .serviced_candidate(
                     &reducer::Event::VoteReceived { tag, vote },
-                    DeferredPriority::Normal,
+                    if variant % 2 == 0 {
+                        DeferredPriority::Normal
+                    } else {
+                        DeferredPriority::Progress
+                    },
                     None,
                     Some(&carrier),
                 )
@@ -9742,9 +10536,18 @@ mod tests {
     #[test]
     fn serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner() {
         let directory = TempDir::new().expect("temporary directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        let geometry = ServicedCandidateCapacityGeometry::new(7, 3);
+        let (mut adapter, startup) = open_test_with_capacity_geometry(&directory, geometry)
+            .expect("open adapter with non-default production geometry");
         assert!(startup.is_empty());
-        let capacity = serviced_candidate_capacity(adapter.wire_context.roster.len());
+        let capacity =
+            serviced_candidate_capacity_with_geometry(adapter.wire_context.roster.len(), geometry);
+        assert_eq!(adapter.serviced_candidate_capacity, capacity);
+        assert_ne!(
+            capacity,
+            serviced_candidate_capacity(adapter.wire_context.roster.len()),
+            "the configured runtime/effect geometry must replace the fixture default"
+        );
         adapter.serviced_candidates.clear();
         for index in 0..capacity {
             let mut evidence = [0_u8; 32];
@@ -9774,6 +10577,7 @@ mod tests {
             );
         }
         let retained = adapter.serviced_candidates.clone();
+        let reducer_before = adapter.reducer.clone();
         let overflow = unowned_body_event(&adapter, 0x42);
         assert!(matches!(
             adapter.step(overflow),
@@ -9784,6 +10588,10 @@ mod tests {
         assert_eq!(
             adapter.serviced_candidates, retained,
             "capacity exhaustion cannot evict a prior tombstone"
+        );
+        assert_eq!(
+            adapter.reducer, reducer_before,
+            "capacity must be reserved before the consuming reducer transition"
         );
     }
 
@@ -10827,7 +11635,8 @@ mod tests {
         adapter
             .step(predecision_b)
             .expect("service pre-Decision candidate B");
-        assert!(adapter.serviced_candidate_count_for_test() >= 3);
+        assert_eq!(adapter.serviced_candidate_count_for_test(), 2);
+        assert_eq!(adapter.durable_serviced_candidates.len(), 2);
         let decided_subject = subject(0x7d);
         let leader = adapter.wire_context.leader(0);
         let proposal = proposal(&adapter.wire_context, leader, decided_subject);
@@ -10867,14 +11676,16 @@ mod tests {
         let applied = adapter
             .local_proposal_ready(adapter.current_tag(), manifest, &durable, &validated)
             .expect("transfer trusted local validation to the Decision");
-        assert!(matches!(
-            applied.effects(),
-            [AdapterEffect::Apply {
-                subject,
-                certificate,
-                ..
-            }] if *subject == decided_subject && certificate == &decision
-        ));
+        let apply_tag = match applied.effects() {
+            [
+                AdapterEffect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                },
+            ] if *subject == decided_subject && certificate == &decision => *tag,
+            effects => panic!("unexpected exact Decision application effects: {effects:?}"),
+        };
         assert!(matches!(
             adapter.status().expect("liveness snapshot").liveness.last_progress,
             Some(wire::SumeragiV2ProgressTransitionStatus {
@@ -10887,6 +11698,28 @@ mod tests {
             adapter.serviced_candidate_count_for_test(),
             0,
             "post-Decision application progress cannot resurrect candidate tombstones"
+        );
+        let completed = adapter
+            .application_completed(apply_tag, decided_subject)
+            .expect("retire the exact Decision application lifecycle");
+        assert_eq!(completed.disposition(), reducer::StepDisposition::Applied);
+        assert!(completed.effects().is_empty());
+        for attempt in 0..3 {
+            let retransmit = adapter
+                .retransmit_elapsed(adapter.current_tag())
+                .unwrap_or_else(|error| panic!("post-drain retransmission {attempt}: {error}"));
+            assert!(
+                retransmit.effects().is_empty(),
+                "a drained exact Decision lifecycle cannot recreate physical Fetch/Store/Validate/Apply work: {:?}",
+                retransmit.effects()
+            );
+        }
+        assert!(adapter.deferred_completions.is_empty());
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        assert_eq!(
+            adapter.serviced_candidate_count_for_test(),
+            0,
+            "monotone applied state, not a recycled dormant ordinal or tombstone, suppresses resurrection"
         );
     }
 
@@ -13743,7 +14576,8 @@ mod tests {
             .expect("one deferred TimeoutVote owner is serviceable");
         let successor_tag = adapter.current_tag();
         assert_eq!(successor_tag.view(), current_round.view + 1);
-        assert!(successor_tag.generation() > post_upgrade_tag.generation());
+        assert!(successor_tag.strictly_advances(post_upgrade_tag));
+        assert_eq!(successor_tag.generation(), reducer::Generation::INITIAL);
         assert_eq!(
             adapter.wal.recovered_records().len(),
             wal_records_before_service + 1,
@@ -13943,7 +14777,7 @@ mod tests {
             "a same-generation duplicate cannot replace deferred ownership"
         );
 
-        let generation_before_tc = adapter.current_tag().generation();
+        let tag_before_tc = adapter.current_tag();
         let completed_signature = adapter
             .signature_completed(replay_tag, vec![0xB6])
             .expect("complete the signature before draining the older timeout")
@@ -13956,7 +14790,8 @@ mod tests {
         let installed_effects = adapter
             .drain_deferred()
             .expect("service the timeout before the later locked vote");
-        assert!(adapter.current_tag().generation() > generation_before_tc);
+        assert!(adapter.current_tag().strictly_advances(tag_before_tc));
+        assert_eq!(adapter.current_tag().generation(), reducer::Generation::INITIAL);
         assert!(installed_effects.iter().any(|effect| matches!(
             effect,
             AdapterEffect::EnterView {
@@ -14034,7 +14869,7 @@ mod tests {
     }
 
     #[test]
-    fn prelock_current_commit_is_readmitted_after_exact_lock_persistence() {
+    fn prelock_current_commit_is_readmitted_with_priority_neutral_service_identity() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -14081,14 +14916,29 @@ mod tests {
         assert!(!delivered.locked_commit_progress);
         assert_eq!(
             adapter.serviced_candidate_count_for_test(),
-            serviced_before + 1
+            serviced_before,
+            "authenticated policy discards cannot allocate candidate markers"
         );
+        assert!(adapter.durable_serviced_candidates.is_empty());
+        let wire::ConsensusMessageV2Payload::Vote(normal_vote) = &remote_commit.payload else {
+            unreachable!("fixture is a Commit vote")
+        };
+        let normal_vote = adapter
+            .registry
+            .vote_to_core(normal_vote, &adapter.wire_context)
+            .expect("project the marker-free pre-lock occurrence");
         let normal_candidate = adapter
-            .serviced_candidates
-            .keys()
-            .copied()
-            .find(|candidate| candidate.class() == DeferredPriority::Normal.code())
-            .expect("premature Commit owns its Normal-class tombstone");
+            .serviced_candidate(
+                &reducer::Event::VoteReceived {
+                    tag: adapter.current_tag(),
+                    vote: normal_vote,
+                },
+                DeferredPriority::Normal,
+                None,
+                None,
+            )
+            .expect("pre-lock occurrence still has an exact rank identity")
+            .0;
         adapter.ingress_deliveries.remove(&key);
         adapter.ingress_equivocations.remove(&key);
         let marker_count = adapter.serviced_candidate_count_for_test();
@@ -14097,14 +14947,14 @@ mod tests {
                 .receive_authenticated(AuthenticatedConsensusMessage::for_test(
                     remote_commit.clone(),
                 ))
-                .expect("candidate marker coalesces retransmission after ingress-table reset")
+                .expect("marker-free policy discard remains reducer-idempotent")
                 .disposition(),
-            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
         );
         assert_eq!(
             adapter.serviced_candidate_count_for_test(),
             marker_count,
-            "same-class replay cannot consume another tombstone"
+            "same-class policy replay cannot consume a tombstone"
         );
 
         let prepare = wire::QuorumCertificate {
@@ -14210,15 +15060,15 @@ mod tests {
                 progress_input.completion_evidence.as_ref(),
                 progress_input.authenticated_wire_identity.as_deref(),
             )
-            .expect("exact-lock Commit has a Progress-class service identity")
+            .expect("exact-lock Commit has a route-neutral service identity")
             .0;
         assert_eq!(
             progress_candidate.class(),
-            DeferredPriority::Progress.code()
+            ROUTE_NEUTRAL_SERVICED_CANDIDATE_CLASS
         );
-        assert_ne!(
+        assert_eq!(
             normal_candidate, progress_candidate,
-            "the lock consumer epoch is a distinct service class"
+            "the same authenticated Commit occurrence must coalesce across Normal/Progress routing"
         );
         let delivered = adapter
             .ingress_deliveries
@@ -14244,12 +15094,11 @@ mod tests {
             .drain_deferred()
             .expect("give the deferred remote owner its serialized runtime turn");
         assert!(adapter.deferred_progress_inputs.is_empty());
-        assert!(adapter.serviced_candidates.contains_key(&normal_candidate));
         assert!(
-            adapter
-                .serviced_candidates
-                .contains_key(&progress_candidate)
+            adapter.serviced_candidates.contains_key(&normal_candidate),
+            "the priority-neutral applied Commit remains coalesced for this process generation"
         );
+        assert!(adapter.durable_serviced_candidates.is_empty());
         assert!(
             adapter
                 .status()
@@ -14268,7 +15117,7 @@ mod tests {
         assert_eq!(
             adapter
                 .receive_authenticated(AuthenticatedConsensusMessage::for_test(remote_commit))
-                .expect("Progress marker suppresses replay after ingress-table reset")
+                .expect("monotone Commit-vote state suppresses replay after ingress reset")
                 .disposition(),
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
@@ -14386,7 +15235,7 @@ mod tests {
             reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
         );
 
-        let generation_before_tc = adapter.current_tag().generation();
+        let tag_before_tc = adapter.current_tag();
         let timeout = wire::TimeoutCertificate {
             round: wire_round,
             groups: vec![wire::TimeoutVoteGroup {
@@ -14414,7 +15263,8 @@ mod tests {
                 _ => None,
             })
             .expect("TC installation must reconstruct the exact local locked Commit vote");
-        assert!(adapter.current_tag().generation() > generation_before_tc);
+        assert!(adapter.current_tag().strictly_advances(tag_before_tc));
+        assert_eq!(adapter.current_tag().generation(), reducer::Generation::INITIAL);
         assert_eq!(adapter.reducer.volatile_evidence_counts().0, 0);
         assert_eq!(
             adapter.active_subject,
@@ -15268,6 +16118,48 @@ mod tests {
     }
 
     #[test]
+    fn deferred_selector_services_only_the_runtime_lifecycle_minimum_set() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let tag = adapter.current_tag();
+        let input = |ordinal, priority| DeferredInput {
+            admission_ordinal: ordinal,
+            admission_capability: DeferredAdmissionCapability::for_test(ordinal),
+            event: reducer::Event::TimeoutElapsed { tag },
+            completion_evidence: None,
+            retag_authenticated_ingress: false,
+            priority,
+            protected_progress: false,
+            admission: None,
+            authenticated_wire_identity: None,
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
+        };
+        adapter
+            .deferred_completions
+            .push_back(input(10, DeferredPriority::Completion));
+        adapter
+            .deferred_inputs
+            .push_back(input(11, DeferredPriority::Normal));
+        adapter
+            .deferred_inputs
+            .push_back(input(1, DeferredPriority::Normal));
+        adapter.next_deferred_priority = DeferredPriority::Completion;
+
+        let selection = adapter
+            .pop_deferred_next_eligible(&BTreeSet::from([1]))
+            .expect("lifecycle-filtered deferred selection remains exact")
+            .expect("the runtime-minimal deferred owner is present");
+        assert_eq!(selection.evidence.admission_ordinal, 1);
+        assert_eq!(selection.evidence.priority, DeferredPriority::Normal);
+        assert_eq!(adapter.deferred_completions[0].admission_ordinal, 10);
+        assert_eq!(adapter.deferred_inputs[0].admission_ordinal, 11);
+        assert_eq!(adapter.deferred_completions[0].eligible_skips, 0);
+        assert_eq!(adapter.deferred_inputs[0].eligible_skips, 0);
+    }
+
+    #[test]
     fn deferred_service_debt_overflow_is_typed_and_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
@@ -15786,27 +16678,49 @@ mod tests {
         );
         assert_eq!(semantic_ingress_capacity(0), MAX_INGRESS_SEMANTIC_KEYS);
         assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 8);
+        assert_eq!(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE, 11);
+        assert_eq!(
+            BTreeSet::from(ServicedCandidateStage::ALL.map(|stage| stage as u8)).len(),
+            SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE,
+            "the closed adapter-event projection has eleven distinct classes"
+        );
         assert_eq!(
             serviced_candidate_capacity(4),
-            MAX_INGRESS_SEMANTIC_KEYS + 8 + MAX_DEFERRED_INPUTS * 2 + 11,
-            "durable serviced identities use only the existing ownership partitions"
+            (MAX_INGRESS_SEMANTIC_KEYS
+                + 8
+                + MAX_DEFERRED_INPUTS * 2
+                + 11
+                + MAX_DEFERRED_INPUTS * 4
+                + MAX_DEFERRED_INPUTS
+                + CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY
+                + 1)
+                * SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE,
+            "serviced identities cover active causal/effect/clock owners as well as service queues"
         );
         for roster_len in [0, 1, 4, wire::MAX_VALIDATORS_PER_HEIGHT] {
-            let ownership_partitions = [
-                semantic_ingress_capacity(roster_len),
-                MAX_DEFERRED_INPUTS,
-                MAX_DEFERRED_INPUTS,
-                deferred_progress_capacity(roster_len),
-            ];
             assert_eq!(
                 serviced_candidate_capacity(roster_len),
-                ownership_partitions
-                    .into_iter()
-                    .fold(0_usize, usize::saturating_add),
-                "the durable bound is constructed only from ingress, Completion, Normal, and \
-                 roster-derived Progress owners for roster size {roster_len}"
+                candidate_lifecycle_capacity(
+                    roster_len,
+                    DEFAULT_SERVICED_CANDIDATE_CAPACITY_GEOMETRY,
+                )
+                .saturating_mul(SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE),
+                "the bound is the complete reviewed lifecycle geometry times the exact stage \
+                 carrier for roster size {roster_len}"
             );
         }
+        let configured = ServicedCandidateCapacityGeometry::new(4_096, 777);
+        assert_eq!(
+            candidate_lifecycle_capacity(4, configured),
+            semantic_ingress_capacity(4)
+                + MAX_DEFERRED_INPUTS * 2
+                + deferred_progress_capacity(4)
+                + 4_096 * 4
+                + 777
+                + CANDIDATE_LIFECYCLE_DURABLE_REPLAY_CAPACITY
+                + 1,
+            "runtime and effect ownership are derived from the supplied production configuration"
+        );
     }
 
     #[test]
@@ -16513,12 +17427,9 @@ mod tests {
         );
         assert!(adapter.deferred_progress_inputs.is_empty());
         assert_eq!(
-            adapter
-                .serviced_candidates
-                .get(&original_candidate.0)
-                .copied(),
-            Some(second_tag.view()),
-            "the logical source key retains only its consumer-episode reclamation metadata"
+            adapter.serviced_candidates.get(&original_candidate.0),
+            None,
+            "retagged authenticated policy discard remains marker-free"
         );
         let retained_count = adapter.serviced_candidate_count_for_test();
         adapter
@@ -16526,8 +17437,8 @@ mod tests {
             .expect("an exact same-episode source occurrence coalesces");
         assert_eq!(
             adapter.serviced_candidate_count_for_test(),
-            retained_count,
-            "coalescing the same logical source cannot consume another tombstone slot"
+            retained_count + 1,
+            "a transient same-source projection remains owned until strict episode exit"
         );
 
         let applied = adapter

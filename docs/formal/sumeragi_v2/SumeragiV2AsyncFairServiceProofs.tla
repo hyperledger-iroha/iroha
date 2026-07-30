@@ -91,10 +91,12 @@ BY Isa DEF CommandSuccessors, InstallCommandSuccessors,
            AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
            NoItemCandidate, AsyncCandidate
 
-THEOREM InstallAdvancesDeliveryGeneration ==
+THEOREM InstallAdvancesDeliveryTag ==
   \A request:
     PersistInstallTC(request)
-      => generation'[request.node] = generation[request.node] + 1
+      => \/ nodeView'[request.node] > nodeView[request.node]
+         \/ /\ nodeView'[request.node] = nodeView[request.node]
+            /\ generation'[request.node] > generation[request.node]
 BY Isa DEF PersistInstallTC
 
 THEOREM PersistLockCommitPrunesSupersededVotePools ==
@@ -161,7 +163,7 @@ BY PrepareVoteAdmissionIsCurrentView,
    CompletedVoteSignatureExcludesLocalNetworkDelivery,
    InstallClearsLocalVolatileVotePool,
    InstallQueuesExactActiveLockedCommitForResigning,
-   InstallAdvancesDeliveryGeneration,
+   InstallAdvancesDeliveryTag,
    PersistLockCommitPrunesSupersededVotePools,
    PersistLockCommitPreservesSurvivingVotePools
    DEF VoteDeliveryEpochAction
@@ -388,6 +390,7 @@ PROOF
 THEOREM LocalProducerAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => ENABLED LocalAdmissionStep(node)
@@ -400,6 +403,7 @@ BY SelectedProducerCanAdvance, ExpandENABLED, Isa
 THEOREM LocalDuplicateCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ CandidateInFlight(HeadCausalCandidate(node))
@@ -441,6 +445,7 @@ LocalCompletionCausalStep(node) ==
 THEOREM LocalCompletionCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -449,6 +454,7 @@ THEOREM LocalCompletionCausalAdmissionIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Local"
+                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
                 /\ LocalAdmissionCanAdvance(node)
                 /\ SelectedLocalSource(node) = "Causal"
                 /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -503,6 +509,7 @@ LocalCommandCausalStep(node) ==
 THEOREM LocalCommandCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -511,6 +518,7 @@ THEOREM LocalCommandCausalAdmissionIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Local"
+                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
                 /\ LocalAdmissionCanAdvance(node)
                 /\ SelectedLocalSource(node) = "Causal"
                 /\ ~CandidateInFlight(HeadCausalCandidate(node))
@@ -543,6 +551,7 @@ PROOF
 THEOREM LocalCausalAdmissionIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Causal"
     => ENABLED LocalAdmissionStep(node)
@@ -551,6 +560,7 @@ BY LocalDuplicateCausalAdmissionIsEnabled,
    LocalCommandCausalAdmissionIsEnabled, Isa
 
 LocalPhaseAdvanceStep(node) ==
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
   /\ RecordBlockedCausalDebt(node)
@@ -572,11 +582,13 @@ LocalPhaseAdvanceStep(node) ==
 THEOREM LocalPhaseAdvanceIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ ~LocalAdmissionCanAdvance(node)
     => ENABLED LocalAdmissionStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Local"
+                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
                 /\ ~LocalAdmissionCanAdvance(node)
          PROVE ENABLED LocalAdmissionStep(node)
     <2>1. ENABLED LocalPhaseAdvanceStep(node)
@@ -604,7 +616,8 @@ PROOF
 
 THEOREM LocalAdmissionStepIsEnabled ==
   \A node \in ValidatorIds:
-    asyncRunnerPhase[node] = "Local"
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
       => ENABLED LocalAdmissionStep(node)
 BY LocalProducerAdmissionIsEnabled,
    LocalCausalAdmissionIsEnabled,
@@ -1252,6 +1265,24 @@ PROOF
     <2> QED BY <2>1
   <1> QED BY <1>1
 
+(***************************************************************************
+The Runtime leaf witnesses below construct the scheduler transition without
+choosing its Serve-ingress gate.  The production relation applies that gate
+after the leaf is known enabled: an empty ticket set selects the ordinary
+serialized action, while a strictly older Runtime lifecycle selects the one
+permitted predecessor interleave.  Keeping this wrapper proof-only prevents
+either production arm from silently assuming the other's state predicate.
+***************************************************************************)
+UngatedSerializedRuntimeStep(node) ==
+  /\ asyncRunnerPhase[node] = "Runtime"
+  /\ UNCHANGED AsyncIoVars
+  /\ UNCHANGED AsyncLocalAdmissionVars
+  /\ RuntimeStep(node)
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Local"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
 IdleSerializedRuntimeStep(node) ==
   /\ IdleRuntimeStep(node)
   /\ UNCHANGED AsyncIoVars
@@ -1269,7 +1300,7 @@ THEOREM IdleSerializedRuntimeIsEnabled ==
     /\ ~TimeoutDue(node)
     /\ ~RetransmitDue(node)
     /\ ~NodeQueueNonempty(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
@@ -1278,21 +1309,22 @@ PROOF
                 /\ ~TimeoutDue(node)
                 /\ ~RetransmitDue(node)
                 /\ ~NodeQueueNonempty(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED IdleSerializedRuntimeStep(node)
       BY ExpandENABLED, Isa
          DEF IdleSerializedRuntimeStep, IdleRuntimeStep,
              LeaveCausalQueues, AsyncIoVars, AsyncDeferredVars, vars
     <2>2. IdleSerializedRuntimeStep(node) \in BOOLEAN
       BY Isa DEF IdleSerializedRuntimeStep, IdleRuntimeStep
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
-    <2>4. IdleSerializedRuntimeStep(node) => SerializedRuntimeStep(node)
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
+    <2>4. IdleSerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
-         DEF IdleSerializedRuntimeStep, SerializedRuntimeStep,
+         DEF IdleSerializedRuntimeStep, UngatedSerializedRuntimeStep,
              RuntimeStep
     <2>5. ENABLED IdleSerializedRuntimeStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1314,7 +1346,7 @@ THEOREM DirectRetransmitRuntimeIsEnabled ==
     /\ ~TimeoutDue(node)
     /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
     /\ RetransmitDue(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
@@ -1323,7 +1355,7 @@ PROOF
                 /\ ~TimeoutDue(node)
                 /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
                 /\ RetransmitDue(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DirectRetransmitSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF DirectRetransmitSerializedStep, DirectRetransmitStep,
@@ -1331,15 +1363,15 @@ PROOF
              AsyncIoVars, AsyncDeferredVars, vars
     <2>2. DirectRetransmitSerializedStep(node) \in BOOLEAN
       BY Isa DEF DirectRetransmitSerializedStep, DirectRetransmitStep
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DirectRetransmitSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DirectRetransmitSerializedStep,
-             SerializedRuntimeStep, RuntimeStep
+             UngatedSerializedRuntimeStep, RuntimeStep
     <2>5. ENABLED DirectRetransmitSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1359,14 +1391,14 @@ THEOREM DeferredRetransmitRuntimeIsEnabled ==
     /\ ~DeferredWorkServiceable(node)
     /\ DeferredTagExecutable(node)
     /\ ~DeferredTimeoutExecutable(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
                 /\ ~DeferredWorkServiceable(node)
                 /\ DeferredTagExecutable(node)
                 /\ ~DeferredTimeoutExecutable(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DeferredRetransmitSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF DeferredRetransmitSerializedStep,
@@ -1376,16 +1408,16 @@ PROOF
     <2>2. DeferredRetransmitSerializedStep(node) \in BOOLEAN
       BY Isa DEF DeferredRetransmitSerializedStep,
                  DeferredRetransmitStep
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DeferredRetransmitSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DeferredRetransmitSerializedStep,
-             SerializedRuntimeStep, RuntimeStep,
+             UngatedSerializedRuntimeStep, RuntimeStep,
              DeferredTagStep
     <2>5. ENABLED DeferredRetransmitSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1435,7 +1467,7 @@ THEOREM DeferredHandoffSkipRuntimeIsEnabled ==
     /\ ~DeferredHandoffMatches(node, NextDeferredCommand(node))
     /\ (~CommandDispatchable(NextDeferredCommand(node))
           \/ NextDeferredCommand(node).class # "Completion")
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
@@ -1446,7 +1478,7 @@ PROOF
                      node, NextDeferredCommand(node))
                 /\ (~CommandDispatchable(NextDeferredCommand(node))
                       \/ NextDeferredCommand(node).class # "Completion")
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DeferredHandoffSkipSerializedStep(node)
       BY ExpandENABLED, Isa
          DEF DeferredHandoffSkipSerializedStep, SerializedRunnerReset,
@@ -1454,18 +1486,18 @@ PROOF
     <2>2. DeferredHandoffSkipSerializedStep(node) \in BOOLEAN
       BY Isa DEF DeferredHandoffSkipSerializedStep,
                  SerializedRunnerReset
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DeferredHandoffSkipSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DeferredHandoffSkipSerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
+             SerializedRunnerReset, UngatedSerializedRuntimeStep,
              RuntimeStep, DeferredDrainStep,
              DeferredHandoffAllowsExecution,
              DeferredHandoffBlocksExecution
     <2>5. ENABLED DeferredHandoffSkipSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1488,13 +1520,13 @@ THEOREM DeferredDrainDiscardRuntimeIsEnabled ==
     /\ asyncRunnerPhase[node] = "Runtime"
     /\ DeferredWorkServiceable(node)
     /\ ~CommandDispatchable(NextDeferredCommand(node))
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
                 /\ DeferredWorkServiceable(node)
                 /\ ~CommandDispatchable(NextDeferredCommand(node))
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DeferredDrainDiscardSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF DeferredDrainDiscardSerializedStep,
@@ -1505,17 +1537,17 @@ PROOF
       BY Isa DEF DeferredDrainDiscardSerializedStep,
                  SerializedRunnerReset,
                  RemoveNextDeferredCommand, DiscardCommand
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DeferredDrainDiscardSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DeferredDrainDiscardSerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
+             SerializedRunnerReset, UngatedSerializedRuntimeStep,
              RuntimeStep, DeferredDrainStep,
              DeferredWorkServiceable
     <2>5. ENABLED DeferredDrainDiscardSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1543,14 +1575,14 @@ THEOREM FifoDeferRuntimeIsEnabled ==
     /\ FifoRuntimeSelected(node)
     /\ ~CommandDispatchable(NextNodeCommand(node))
     /\ ~NodeIdle(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
                 /\ FifoRuntimeSelected(node)
                 /\ ~CommandDispatchable(NextNodeCommand(node))
                 /\ ~NodeIdle(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED FifoDeferSerializedStep(node)
       BY ExpandENABLED, Isa
          DEF FifoDeferSerializedStep, SerializedRunnerReset,
@@ -1559,15 +1591,16 @@ PROOF
     <2>2. FifoDeferSerializedStep(node) \in BOOLEAN
       BY Isa DEF FifoDeferSerializedStep, SerializedRunnerReset,
                  RemoveNextNodeCommand, DeferCommand
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
-    <2>4. FifoDeferSerializedStep(node) => SerializedRuntimeStep(node)
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
+    <2>4. FifoDeferSerializedStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF FifoDeferSerializedStep, SerializedRunnerReset,
-             SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+             UngatedSerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
              FifoRuntimeSelected
     <2>5. ENABLED FifoDeferSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1595,14 +1628,14 @@ THEOREM FifoDiscardRuntimeIsEnabled ==
     /\ FifoRuntimeSelected(node)
     /\ ~CommandDispatchable(NextNodeCommand(node))
     /\ NodeIdle(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
                 /\ FifoRuntimeSelected(node)
                 /\ ~CommandDispatchable(NextNodeCommand(node))
                 /\ NodeIdle(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED FifoDiscardSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF FifoDiscardSerializedStep, SerializedRunnerReset,
@@ -1611,16 +1644,16 @@ PROOF
     <2>2. FifoDiscardSerializedStep(node) \in BOOLEAN
       BY Isa DEF FifoDiscardSerializedStep, SerializedRunnerReset,
                  RemoveNextNodeCommand, DiscardCommand
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. FifoDiscardSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF FifoDiscardSerializedStep, SerializedRunnerReset,
-             SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+             UngatedSerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
              FifoRuntimeSelected
     <2>5. ENABLED FifoDiscardSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1657,7 +1690,7 @@ THEOREM DirectTimeoutDeferredRuntimeIsEnabled ==
     /\ ~DeferredTagExecutable(node)
     /\ TimeoutDue(node)
     /\ ~BeginTimeoutEnabled(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
@@ -1665,7 +1698,7 @@ PROOF
                 /\ ~DeferredTagExecutable(node)
                 /\ TimeoutDue(node)
                 /\ ~BeginTimeoutEnabled(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DirectTimeoutDeferredSerializedStep(node)
       BY ExpandENABLED, Isa
          DEF DirectTimeoutDeferredSerializedStep,
@@ -1674,16 +1707,16 @@ PROOF
     <2>2. DirectTimeoutDeferredSerializedStep(node) \in BOOLEAN
       BY Isa DEF DirectTimeoutDeferredSerializedStep,
                  SerializedRunnerReset
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DirectTimeoutDeferredSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DirectTimeoutDeferredSerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
+             SerializedRunnerReset, UngatedSerializedRuntimeStep,
              RuntimeStep, DirectTimeoutStep
     <2>5. ENABLED DirectTimeoutDeferredSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1717,14 +1750,14 @@ THEOREM DeferredTimeoutNoBeginRuntimeIsEnabled ==
     /\ ~DeferredWorkServiceable(node)
     /\ DeferredTimeoutExecutable(node)
     /\ ~BeginTimeoutEnabled(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
                 /\ ~DeferredWorkServiceable(node)
                 /\ DeferredTimeoutExecutable(node)
                 /\ ~BeginTimeoutEnabled(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DeferredTimeoutNoBeginSerializedStep(node)
       BY ExpandENABLED, Isa
          DEF DeferredTimeoutNoBeginSerializedStep,
@@ -1733,17 +1766,17 @@ PROOF
     <2>2. DeferredTimeoutNoBeginSerializedStep(node) \in BOOLEAN
       BY Isa DEF DeferredTimeoutNoBeginSerializedStep,
                  SerializedRunnerReset
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DeferredTimeoutNoBeginSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DeferredTimeoutNoBeginSerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
+             SerializedRunnerReset, UngatedSerializedRuntimeStep,
              RuntimeStep, DeferredTagExecutable, DeferredTagStep,
              DeferredTimeoutStep
     <2>5. ENABLED DeferredTimeoutNoBeginSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1779,7 +1812,7 @@ THEOREM DirectTimeoutBeginRuntimeIsEnabled ==
     /\ ~DeferredTagExecutable(node)
     /\ TimeoutDue(node)
     /\ BeginTimeoutEnabled(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
@@ -1787,7 +1820,7 @@ PROOF
                 /\ ~DeferredTagExecutable(node)
                 /\ TimeoutDue(node)
                 /\ BeginTimeoutEnabled(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DirectTimeoutBeginSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF BeginTimeoutEnabled, DirectTimeoutBeginSerializedStep,
@@ -1796,16 +1829,16 @@ PROOF
     <2>2. DirectTimeoutBeginSerializedStep(node) \in BOOLEAN
       BY Isa DEF DirectTimeoutBeginSerializedStep,
                  SerializedRunnerReset, BeginTimeout
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DirectTimeoutBeginSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DirectTimeoutBeginSerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
+             SerializedRunnerReset, UngatedSerializedRuntimeStep,
              RuntimeStep, DirectTimeoutStep
     <2>5. ENABLED DirectTimeoutBeginSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1839,14 +1872,14 @@ THEOREM DeferredTimeoutBeginRuntimeIsEnabled ==
     /\ ~DeferredWorkServiceable(node)
     /\ DeferredTimeoutExecutable(node)
     /\ BeginTimeoutEnabled(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
                 /\ ~DeferredWorkServiceable(node)
                 /\ DeferredTimeoutExecutable(node)
                 /\ BeginTimeoutEnabled(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED UngatedSerializedRuntimeStep(node)
     <2>1. ENABLED DeferredTimeoutBeginSerializedStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF BeginTimeoutEnabled, DeferredTimeoutBeginSerializedStep,
@@ -1855,17 +1888,17 @@ PROOF
     <2>2. DeferredTimeoutBeginSerializedStep(node) \in BOOLEAN
       BY Isa DEF DeferredTimeoutBeginSerializedStep,
                  SerializedRunnerReset, BeginTimeout
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
     <2>4. DeferredTimeoutBeginSerializedStep(node)
-             => SerializedRuntimeStep(node)
+             => UngatedSerializedRuntimeStep(node)
       BY <1>1, Isa
          DEF DeferredTimeoutBeginSerializedStep,
-             SerializedRunnerReset, SerializedRuntimeStep,
+             SerializedRunnerReset, UngatedSerializedRuntimeStep,
              RuntimeStep, DeferredTagExecutable, DeferredTagStep,
              DeferredTimeoutStep
     <2>5. ENABLED DeferredTimeoutBeginSerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
+             => ENABLED UngatedSerializedRuntimeStep(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -1914,7 +1947,7 @@ THEOREM RejectSelectedExecutionRuntimeIsEnabled ==
        /\ ExecutionRuntimeSelected(node)
        /\ CommandDispatchable(command)
        /\ ENABLED ExecuteRejectAuthenticatedJunk(command)
-       => ENABLED SerializedRuntimeStep(node)
+       => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds
          PROVE LET command == SelectedRuntimeCommand(node)
@@ -1922,13 +1955,13 @@ PROOF
                   /\ ExecutionRuntimeSelected(node)
                   /\ CommandDispatchable(command)
                   /\ ENABLED ExecuteRejectAuthenticatedJunk(command)
-                  => ENABLED SerializedRuntimeStep(node)
+                  => ENABLED UngatedSerializedRuntimeStep(node)
     <2> DEFINE Command == SelectedRuntimeCommand(node)
     <2>1. ASSUME /\ asyncRunnerPhase[node] = "Runtime"
                   /\ ExecutionRuntimeSelected(node)
                   /\ CommandDispatchable(Command)
                   /\ ENABLED ExecuteRejectAuthenticatedJunk(Command)
-           PROVE ENABLED SerializedRuntimeStep(node)
+           PROVE ENABLED UngatedSerializedRuntimeStep(node)
       <3>1. ENABLED RejectSelectedExecutionSerializedStep(node)
         BY <2>1, ExpandENABLED, Isa
            DEF RejectSelectedExecutionSerializedStep,
@@ -1944,22 +1977,22 @@ PROOF
                    SelectedExecutionSchedulerFrame,
                    SerializedRunnerReset,
                    ExecuteRejectAuthenticatedJunk
-      <3>3. SerializedRuntimeStep(node) \in BOOLEAN
-        BY Isa DEF SerializedRuntimeStep, RuntimeStep
+      <3>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+        BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
       <3>4. RejectSelectedExecutionSerializedStep(node)
-               => SerializedRuntimeStep(node)
+               => UngatedSerializedRuntimeStep(node)
         BY <2>1, Isa
            DEF RejectSelectedExecutionSerializedStep,
                SelectedExecutionSchedulerFrame,
                SelectedRuntimeCommand, SerializedRunnerReset,
-               SerializedRuntimeStep, RuntimeStep,
+               UngatedSerializedRuntimeStep, RuntimeStep,
                DeferredDrainStep, FifoRuntimeStep,
                FifoRuntimeSelected, ExecutionRuntimeSelected,
                DeferredHandoffAllowsExecution,
                DeferredHandoffBlocksExecution,
                ExecuteCommand, Command
       <3>5. ENABLED RejectSelectedExecutionSerializedStep(node)
-               => ENABLED SerializedRuntimeStep(node)
+               => ENABLED UngatedSerializedRuntimeStep(node)
         BY <3>2, <3>3, <3>4, ENABLEDaxioms
       <3> QED BY <3>1, <3>5
     <2> QED BY <2>1
@@ -1976,19 +2009,19 @@ THEOREM SelectedExecutionRuntimeIsEnabled ==
     IN /\ asyncRunnerPhase[node] = "Runtime"
        /\ ExecutionRuntimeSelected(node)
        /\ CommandDispatchable(command)
-       => ENABLED SerializedRuntimeStep(node)
+       => ENABLED UngatedSerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds
          PROVE LET command == SelectedRuntimeCommand(node)
                IN /\ asyncRunnerPhase[node] = "Runtime"
                   /\ ExecutionRuntimeSelected(node)
                   /\ CommandDispatchable(command)
-                  => ENABLED SerializedRuntimeStep(node)
+                  => ENABLED UngatedSerializedRuntimeStep(node)
     <2> DEFINE Command == SelectedRuntimeCommand(node)
     <2>1. ASSUME /\ asyncRunnerPhase[node] = "Runtime"
                   /\ ExecutionRuntimeSelected(node)
                   /\ CommandDispatchable(Command)
-           PROVE ENABLED SerializedRuntimeStep(node)
+           PROVE ENABLED UngatedSerializedRuntimeStep(node)
       <3>1. ENABLED SelectedExecutionSerializedStep(node)
         BY <2>1, ExpandENABLED, Isa
            DEF SelectedExecutionSerializedStep,
@@ -2028,22 +2061,22 @@ PROOF
         BY Isa DEF SelectedExecutionSerializedStep,
                    SelectedExecutionSchedulerFrame,
                    SerializedRunnerReset, ExecuteCommand
-      <3>3. SerializedRuntimeStep(node) \in BOOLEAN
-        BY Isa DEF SerializedRuntimeStep, RuntimeStep
+      <3>3. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+        BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
       <3>4. SelectedExecutionSerializedStep(node)
-               => SerializedRuntimeStep(node)
+               => UngatedSerializedRuntimeStep(node)
         BY <2>1, Isa
            DEF SelectedExecutionSerializedStep,
                SelectedExecutionSchedulerFrame,
                SelectedRuntimeCommand, SerializedRunnerReset,
-               SerializedRuntimeStep, RuntimeStep,
+               UngatedSerializedRuntimeStep, RuntimeStep,
                DeferredDrainStep, FifoRuntimeStep,
                FifoRuntimeSelected, ExecutionRuntimeSelected,
                DeferredHandoffAllowsExecution,
                DeferredHandoffBlocksExecution,
                CommandDispatchable, Command
       <3>5. ENABLED SelectedExecutionSerializedStep(node)
-               => ENABLED SerializedRuntimeStep(node)
+               => ENABLED UngatedSerializedRuntimeStep(node)
         BY <3>2, <3>3, <3>4, ENABLEDaxioms
       <3> QED BY <3>1, <3>5
     <2> QED BY <2>1
@@ -2059,16 +2092,16 @@ THEOREM DeferredBusyCompletionRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
     /\ DeferredBusyCompletionSelected(node)
-    => ENABLED SerializedRuntimeStep(node)
+    => ENABLED UngatedSerializedRuntimeStep(node)
 BY SelectedExecutionRuntimeIsEnabled, Isa
    DEF DeferredBusyCompletionSelected, DeferredBusyServiceFence,
        DeferredWorkServiceable, ExecutionRuntimeSelected,
        SelectedRuntimeCommand, FifoRuntimeSelected
 
-THEOREM SerializedRuntimeStepIsEnabled ==
+THEOREM UngatedSerializedRuntimeStepIsEnabled ==
   \A node \in ValidatorIds:
     asyncRunnerPhase[node] = "Runtime"
-      => ENABLED SerializedRuntimeStep(node)
+      => ENABLED UngatedSerializedRuntimeStep(node)
 BY DeferredDrainDiscardRuntimeIsEnabled,
    DeferredRetransmitRuntimeIsEnabled,
    DirectTimeoutDeferredRuntimeIsEnabled,
@@ -2084,6 +2117,197 @@ BY DeferredDrainDiscardRuntimeIsEnabled,
    DEF ExecutionRuntimeSelected, FifoRuntimeSelected,
        DeferredTagExecutable, DeferredWorkServiceable
 
+(***************************************************************************
+Apply the production Serve-ingress gate only after the selected Runtime leaf
+has supplied a successor.  These are the three exact Runtime scheduler arms;
+none of them treats ticket replenishment as progress or adds fairness.
+***************************************************************************)
+THEOREM NoServeIngressTicketSerializedRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED UngatedSerializedRuntimeStep(node)
+      BY <1>1, UngatedSerializedRuntimeStepIsEnabled
+    <2>2. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. UngatedSerializedRuntimeStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF UngatedSerializedRuntimeStep, SerializedRuntimeStep
+    <2>5. ENABLED UngatedSerializedRuntimeStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM OlderRuntimePrecedesServeIngressStepIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
+    => ENABLED SerializedRuntimePrecedesServeIngressStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+                /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
+         PROVE ENABLED SerializedRuntimePrecedesServeIngressStep(node)
+    <2>1. ENABLED UngatedSerializedRuntimeStep(node)
+      BY <1>1, UngatedSerializedRuntimeStepIsEnabled
+    <2>2. UngatedSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF UngatedSerializedRuntimeStep, RuntimeStep
+    <2>3. SerializedRuntimePrecedesServeIngressStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimePrecedesServeIngressStep, RuntimeStep
+    <2>4. UngatedSerializedRuntimeStep(node)
+             => SerializedRuntimePrecedesServeIngressStep(node)
+      BY <1>1, Isa
+         DEF UngatedSerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep
+    <2>5. ENABLED UngatedSerializedRuntimeStep(node)
+             => ENABLED SerializedRuntimePrecedesServeIngressStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM ServeIngressTargetOnlyTurnIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+    /\ asyncRunnerPhase[node] \in {"Runtime", "Local"}
+    /\ ~( /\ asyncRunnerPhase[node] = "Runtime"
+           /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node))
+    /\ ~( /\ asyncRunnerPhase[node] = "Local"
+           /\ AsyncOlderLocalLifecyclePrecedesServeIngress(node))
+    => ENABLED AsyncServeIngressTargetOnlyTurn(node)
+BY ExpandENABLED, Isa
+   DEF AsyncServeIngressTargetOnlyTurn,
+       AsyncLocalAdmissionVars, AsyncIoVars, AsyncDeferredVars, vars
+
+THEOREM OlderLocalPrecedesServeIngressStepIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncOlderLocalLifecyclePrecedesServeIngress(node)
+    => ENABLED SerializedLocalPrecedesServeIngressStep(node)
+BY SelectedProducerCanAdvance, SelectedCausalCanAdvance,
+   HeadTailProperties, ExpandENABLED, IsaT(300)
+   DEF SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncOlderLocalLifecyclePrecedesServeIngress,
+       AdmitProducerCompletion, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata, OtherLocalSource,
+       EnqueueCandidate, LeaveCausalQueues,
+       AsyncIoVars, AsyncDeferredVars, vars
+
+LocalServeSchedulerStep(node) ==
+  \/ LocalAdmissionStep(node)
+  \/ SerializedLocalPrecedesServeIngressStep(node)
+  \/ AsyncServeIngressTargetOnlyTurn(node)
+
+RuntimeServeSchedulerStep(node) ==
+  \/ SerializedRuntimeStep(node)
+  \/ SerializedRuntimePrecedesServeIngressStep(node)
+  \/ AsyncServeIngressTargetOnlyTurn(node)
+
+THEOREM LocalServeSchedulerStepIsEnabled ==
+  \A node \in ValidatorIds:
+    asyncRunnerPhase[node] = "Local"
+      => ENABLED LocalServeSchedulerStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                asyncRunnerPhase[node] = "Local"
+         PROVE ENABLED LocalServeSchedulerStep(node)
+    <2>1. LocalServeSchedulerStep(node) \in BOOLEAN
+      BY Isa DEF LocalServeSchedulerStep, LocalAdmissionStep,
+                 SerializedLocalPrecedesServeIngressStep,
+                 AsyncServeIngressTargetOnlyTurn
+    <2>2. CASE AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+      <3>1. ENABLED LocalAdmissionStep(node)
+        BY <1>1, <2>2, LocalAdmissionStepIsEnabled
+      <3>2. LocalAdmissionStep(node) \in BOOLEAN
+        BY Isa DEF LocalAdmissionStep
+      <3>3. LocalAdmissionStep(node) => LocalServeSchedulerStep(node)
+        BY DEF LocalServeSchedulerStep
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
+    <2>3. CASE AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+      <3>1. CASE AsyncOlderLocalLifecyclePrecedesServeIngress(node)
+        <4>1. ENABLED SerializedLocalPrecedesServeIngressStep(node)
+          BY <1>1, <3>1,
+             OlderLocalPrecedesServeIngressStepIsEnabled
+        <4>2. SerializedLocalPrecedesServeIngressStep(node) \in BOOLEAN
+          BY Isa DEF SerializedLocalPrecedesServeIngressStep
+        <4>3. SerializedLocalPrecedesServeIngressStep(node)
+                 => LocalServeSchedulerStep(node)
+          BY DEF LocalServeSchedulerStep
+        <4> QED BY <2>1, <4>1, <4>2, <4>3, ENABLEDaxioms
+      <3>2. CASE ~AsyncOlderLocalLifecyclePrecedesServeIngress(node)
+        <4>1. ENABLED AsyncServeIngressTargetOnlyTurn(node)
+          BY <1>1, <2>3, <3>2,
+             ServeIngressTargetOnlyTurnIsEnabled
+        <4>2. AsyncServeIngressTargetOnlyTurn(node) \in BOOLEAN
+          BY Isa DEF AsyncServeIngressTargetOnlyTurn
+        <4>3. AsyncServeIngressTargetOnlyTurn(node)
+                 => LocalServeSchedulerStep(node)
+          BY DEF LocalServeSchedulerStep
+        <4> QED BY <2>1, <4>1, <4>2, <4>3, ENABLEDaxioms
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM RuntimeServeSchedulerStepIsEnabled ==
+  \A node \in ValidatorIds:
+    asyncRunnerPhase[node] = "Runtime"
+      => ENABLED RuntimeServeSchedulerStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                asyncRunnerPhase[node] = "Runtime"
+         PROVE ENABLED RuntimeServeSchedulerStep(node)
+    <2>1. RuntimeServeSchedulerStep(node) \in BOOLEAN
+      BY Isa
+         DEF RuntimeServeSchedulerStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn, RuntimeStep
+    <2>2. CASE AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+      <3>1. ENABLED SerializedRuntimeStep(node)
+        BY <1>1, <2>2,
+           NoServeIngressTicketSerializedRuntimeIsEnabled
+      <3>2. SerializedRuntimeStep(node) \in BOOLEAN
+        BY Isa DEF SerializedRuntimeStep, RuntimeStep
+      <3>3. SerializedRuntimeStep(node)
+               => RuntimeServeSchedulerStep(node)
+        BY DEF RuntimeServeSchedulerStep
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
+    <2>3. CASE /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+                  /\ AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
+      <3>1. ENABLED SerializedRuntimePrecedesServeIngressStep(node)
+        BY <1>1, <2>3,
+           OlderRuntimePrecedesServeIngressStepIsEnabled
+      <3>2. SerializedRuntimePrecedesServeIngressStep(node) \in BOOLEAN
+        BY Isa
+           DEF SerializedRuntimePrecedesServeIngressStep, RuntimeStep
+      <3>3. SerializedRuntimePrecedesServeIngressStep(node)
+               => RuntimeServeSchedulerStep(node)
+        BY DEF RuntimeServeSchedulerStep
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
+    <2>4. CASE /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+                  /\ ~AsyncOlderRuntimeLifecyclePrecedesServeIngress(node)
+      <3>1. ENABLED AsyncServeIngressTargetOnlyTurn(node)
+        BY <1>1, <2>4, ServeIngressTargetOnlyTurnIsEnabled
+      <3>2. AsyncServeIngressTargetOnlyTurn(node) \in BOOLEAN
+        BY Isa DEF AsyncServeIngressTargetOnlyTurn
+      <3>3. AsyncServeIngressTargetOnlyTurn(node)
+               => RuntimeServeSchedulerStep(node)
+        BY DEF RuntimeServeSchedulerStep
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, ENABLEDaxioms
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
 NodeServiceFrame(node) ==
   /\ UNCHANGED asyncNow
   /\ asyncNodeServiceDeadlines' =
@@ -2096,41 +2320,52 @@ RecoveryRunNodeGuard(node) ==
   \/ /\ ResponsiveReplayDraining(node)
      /\ ~NodeIdle(node)
      /\ asyncIngressReady[node] = <<>>
+     /\ \/ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+        \/ asyncRunnerPhase[node] = "Ingress"
 
 LocalRunNodeStep(node) ==
-  LocalAdmissionStep(node) /\ NodeServiceFrame(node)
+  LocalServeSchedulerStep(node) /\ NodeServiceFrame(node)
 
-THEOREM EnabledLocalAdmissionLiftsToRunNode ==
+THEOREM EnabledLocalServeSchedulerLiftsToRunNode ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ RecoveryRunNodeGuard(node)
-    /\ ENABLED LocalAdmissionStep(node)
+    /\ ENABLED LocalServeSchedulerStep(node)
     => ENABLED RunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
                 /\ RecoveryRunNodeGuard(node)
-                /\ ENABLED LocalAdmissionStep(node)
+                /\ ENABLED LocalServeSchedulerStep(node)
          PROVE ENABLED RunNode(node)
     <2>1. ENABLED LocalRunNodeStep(node)
       BY <1>1, ExpandENABLED, Isa
          DEF LocalRunNodeStep, NodeServiceFrame,
+             LocalServeSchedulerStep,
              LocalAdmissionStep, AdmitProducerCompletion,
              AdmitCausalHead, UpdateLocalAdmissionMetadata,
              SelectedLocalSource, PreferredLocalSource,
              LocalSourceCanAdmit, OtherLocalSource,
              EnqueueCandidate, LeaveCausalQueues,
-             AsyncIoVars, AsyncDeferredVars, vars
+             SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             AsyncServeIngressTargetOnlyTurn,
+             AsyncIoVars, AsyncDeferredVars,
+             AsyncLocalAdmissionVars, vars
     <2>2. LocalRunNodeStep(node) \in BOOLEAN
       BY Isa DEF LocalRunNodeStep, NodeServiceFrame,
-                 LocalAdmissionStep
+                 LocalServeSchedulerStep,
+                 LocalAdmissionStep,
+                 SerializedLocalPrecedesServeIngressStep,
+                 AsyncServeIngressTargetOnlyTurn
     <2>3. RunNode(node) \in BOOLEAN
       BY Isa DEF RunNode
     <2>4. LocalRunNodeStep(node) => RunNode(node)
       BY <1>1, Isa
          DEF LocalRunNodeStep, NodeServiceFrame,
+             LocalServeSchedulerStep,
              RecoveryRunNodeGuard, RunNode, RunNodeWork
     <2>5. ENABLED LocalRunNodeStep(node) => ENABLED RunNode(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
@@ -2174,27 +2409,30 @@ PROOF
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
 
-SerializedRunNodeStep(node) ==
-  SerializedRuntimeStep(node) /\ NodeServiceFrame(node)
+RuntimeServeSchedulerRunNodeStep(node) ==
+  RuntimeServeSchedulerStep(node) /\ NodeServiceFrame(node)
 
-THEOREM EnabledSerializedRuntimeLiftsToRunNode ==
+THEOREM EnabledRuntimeServeSchedulerLiftsToRunNode ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ node \in up
     /\ ~NodeHasApplication(node)
     /\ RecoveryRunNodeGuard(node)
-    /\ ENABLED SerializedRuntimeStep(node)
+    /\ ENABLED RuntimeServeSchedulerStep(node)
     => ENABLED RunNode(node)
 PROOF
   <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
                 /\ node \in up
                 /\ ~NodeHasApplication(node)
                 /\ RecoveryRunNodeGuard(node)
-                /\ ENABLED SerializedRuntimeStep(node)
+                /\ ENABLED RuntimeServeSchedulerStep(node)
          PROVE ENABLED RunNode(node)
-    <2>1. ENABLED SerializedRunNodeStep(node)
+    <2>1. ENABLED RuntimeServeSchedulerRunNodeStep(node)
       BY <1>1, ExpandENABLED, Isa
-         DEF SerializedRunNodeStep, NodeServiceFrame,
+         DEF RuntimeServeSchedulerRunNodeStep,
+             RuntimeServeSchedulerStep, NodeServiceFrame,
              SerializedRuntimeStep, RuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn,
              DeferredDrainStep, DeferredTagStep,
              DeferredTimeoutStep, DeferredRetransmitStep,
              DirectTimeoutStep, FifoRuntimeStep,
@@ -2230,17 +2468,23 @@ PROOF
              NoSendItem, RemoveNextNodeCommand,
              RemoveNextDeferredCommand, DeferCommand, DiscardCommand,
              AppendCausalSuccessors, LeaveCausalQueues,
-             AsyncAuxVars, AsyncIoVars, AsyncDeferredVars, vars
-    <2>2. SerializedRunNodeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRunNodeStep, NodeServiceFrame,
-                 SerializedRuntimeStep, RuntimeStep
+             AsyncAuxVars, AsyncIoVars, AsyncDeferredVars,
+             AsyncLocalAdmissionVars, vars
+    <2>2. RuntimeServeSchedulerRunNodeStep(node) \in BOOLEAN
+      BY Isa DEF RuntimeServeSchedulerRunNodeStep,
+                 RuntimeServeSchedulerStep, NodeServiceFrame,
+                 SerializedRuntimeStep,
+                 SerializedRuntimePrecedesServeIngressStep,
+                 AsyncServeIngressTargetOnlyTurn, RuntimeStep
     <2>3. RunNode(node) \in BOOLEAN
       BY Isa DEF RunNode
-    <2>4. SerializedRunNodeStep(node) => RunNode(node)
+    <2>4. RuntimeServeSchedulerRunNodeStep(node) => RunNode(node)
       BY <1>1, Isa
-         DEF SerializedRunNodeStep, NodeServiceFrame,
+         DEF RuntimeServeSchedulerRunNodeStep,
+             RuntimeServeSchedulerStep, NodeServiceFrame,
              RecoveryRunNodeGuard, RunNode, RunNodeWork
-    <2>5. ENABLED SerializedRunNodeStep(node) => ENABLED RunNode(node)
+    <2>5. ENABLED RuntimeServeSchedulerRunNodeStep(node)
+             => ENABLED RunNode(node)
       BY <2>2, <2>3, <2>4, ENABLEDaxioms
     <2> QED BY <2>1, <2>5
   <1> QED BY <1>1
@@ -2268,20 +2512,20 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
     <2>3. CASE asyncRunnerPhase[node] = "Local"
-      <3>1. ENABLED LocalAdmissionStep(node)
-        BY <2>1, <2>3, LocalAdmissionStepIsEnabled
+      <3>1. ENABLED LocalServeSchedulerStep(node)
+        BY <2>1, <2>3, LocalServeSchedulerStepIsEnabled
       <3> QED BY <1>1, <3>1,
-           EnabledLocalAdmissionLiftsToRunNode
+           EnabledLocalServeSchedulerLiftsToRunNode
     <2>4. CASE asyncRunnerPhase[node] = "Ingress"
       <3>1. ENABLED IngressDrainStep(node)
         BY <2>1, <2>4, IngressDrainStepIsEnabled
       <3> QED BY <1>1, <3>1,
            EnabledIngressDrainLiftsToRunNode
     <2>5. CASE asyncRunnerPhase[node] = "Runtime"
-      <3>1. ENABLED SerializedRuntimeStep(node)
-        BY <2>1, <2>5, SerializedRuntimeStepIsEnabled
+      <3>1. ENABLED RuntimeServeSchedulerStep(node)
+        BY <2>1, <2>5, RuntimeServeSchedulerStepIsEnabled
       <3> QED BY <1>1, <3>1,
-           EnabledSerializedRuntimeLiftsToRunNode
+           EnabledRuntimeServeSchedulerLiftsToRunNode
     <2> QED BY <2>2, <2>3, <2>4, <2>5
   <1> QED BY <1>1
 
@@ -3117,6 +3361,7 @@ THEOREM ResponsiveReplayRunNodeEnabledWhileReplaying ==
   => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
 BY ResponsiveUnappliedRunNodeIsEnabled, ExpandENABLED, Isa
    DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+       AsyncRecoveryExecutionInvariant,
        AsyncRecoveryReplayingPending, ResponsiveReplayRunNode,
        RecoveryRunNodeGuard,
        ResponsiveReplayQuarantined, ResponsiveReplayDraining,
@@ -3270,432 +3515,11 @@ THEOREM AsyncRecoveryReplayLeadsToRecoveredReady ==
 BY AsyncRecoveryReplayLeadsToDrainingOrRecovered,
    AsyncRecoverySignatureDrainObligation, PTL
 
-THEOREM CoreBracketNextDoesNotDecreaseGeneration ==
-  /\ TypeInvariant
-  /\ [Next]_vars
-  => \A node \in ValidatorIds:
-       generation[node] <= generation'[node]
-BY SMTT(180), Isa
-   DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal,
-       PersistProposal, CompleteProposalSignature,
-       ByzantineBroadcastProposal, DeliverProposal,
-       FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody, RejectBody, ValidateDecidedBody, ValidateLockedBody,
-       BeginPrepare, PersistPrepare, CompleteVoteSignature,
-       ByzantineBroadcastVote, DeliverVote, FormPrepareQC,
-       DeliverQC, BeginObservePrepare, PersistObservePrepare,
-       BeginLockCommit, PersistLockCommit, FormCommitQC,
-       BeginDecision, PersistDecision, BeginTimeout,
-       PersistTimeout, CompleteTimeoutSignature,
-       ByzantineBroadcastTimeout, DeliverTimeout, FormTC,
-       DeliverTC, BeginInstallTC, PersistInstallTC,
-       FetchCertifiedBody, ApplyDecision, Crash, Restart,
-       ResumeProposal, ResumeVote, ResumeTimeout, DropProposal,
-       TypeInvariant, Generations, vars
-
-THEOREM RecoveryGenerationBudgetIsNatural ==
-  AsyncStrongTypeInvariant => RecoveryGenerationBudget \in Nat
-PROOF
-  <1>1. ASSUME AsyncStrongTypeInvariant
-         PROVE RecoveryGenerationBudget \in Nat
-    <2>1. /\ IsFiniteSet(Responsive)
-           /\ IsFiniteSet(Generations)
-           /\ IsFiniteSet(Responsive \X Generations)
-      BY <1>1, FS_Interval, FS_Subset, FS_Product
-         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
-             Safety, TypeInvariant, ModelConfiguration,
-             QuorumConfiguration, ValidatorIds, Generations
-    <2>2. IsFiniteSet(RecoveryGenerationSlots)
-      BY <2>1, FS_Subset DEF RecoveryGenerationSlots
-    <2> QED BY <2>2, FS_CardinalityType
-         DEF RecoveryGenerationBudget
-  <1> QED BY <1>1
-
-THEOREM AsyncNextDoesNotIncreaseRecoveryGenerationBudget ==
-  /\ AsyncStrongTypeInvariant
-  /\ AsyncNext
-  => RecoveryGenerationBudget' <= RecoveryGenerationBudget
-PROOF
-  <1>1. ASSUME AsyncStrongTypeInvariant,
-              AsyncNext
-         PROVE RecoveryGenerationBudget' <= RecoveryGenerationBudget
-    <2>1. TypeInvariant
-      BY <1>1
-         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
-    <2>2. \A node \in ValidatorIds:
-             generation[node] <= generation'[node]
-      BY <1>1, <2>1, CoreBracketNextDoesNotDecreaseGeneration
-         DEF AsyncNext
-    <2>3. RecoveryGenerationSlots' \subseteq RecoveryGenerationSlots
-      BY <1>1, <2>2, Isa
-         DEF RecoveryGenerationSlots, Generations
-    <2>4. /\ IsFiniteSet(Responsive)
-           /\ IsFiniteSet(Generations)
-           /\ IsFiniteSet(Responsive \X Generations)
-      BY <1>1, FS_Interval, FS_Subset, FS_Product
-         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
-             Safety, TypeInvariant, ModelConfiguration,
-             QuorumConfiguration, ValidatorIds, Generations
-    <2>5. IsFiniteSet(RecoveryGenerationSlots)
-      BY <2>4, FS_Subset DEF RecoveryGenerationSlots
-    <2>6. Cardinality(RecoveryGenerationSlots') <=
-             Cardinality(RecoveryGenerationSlots)
-      BY <2>3, <2>5, FS_Subset
-    <2> QED BY <2>6 DEF RecoveryGenerationBudget
-  <1> QED BY <1>1
-
-THEOREM AsyncBracketNextDoesNotIncreaseRecoveryGenerationBudget ==
-  /\ AsyncStrongTypeInvariant
-  /\ [AsyncNext]_AsyncAllVars
-  => RecoveryGenerationBudget' <= RecoveryGenerationBudget
-BY AsyncNextDoesNotIncreaseRecoveryGenerationBudget, Isa
-   DEF AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
-       RecoveryGenerationBudget, RecoveryGenerationSlots, vars
-
-THEOREM ResponsiveRestartConsumesOneGenerationSlot ==
-  /\ AsyncStrongTypeInvariant
-  /\ PreGstResponsiveRestart
-  => RecoveryGenerationBudget' < RecoveryGenerationBudget
-PROOF
-  <1>1. ASSUME AsyncStrongTypeInvariant,
-              PreGstResponsiveRestart
-         PROVE RecoveryGenerationBudget' < RecoveryGenerationBudget
-    <2> DEFINE Node == asyncRecoveryNode
-    <2> DEFINE Lost == <<Node, generation[Node] + 1>>
-    <2>1. /\ Node \in Responsive
-           /\ Node \in ValidatorIds
-           /\ generation[Node] \in Generations
-           /\ generation[Node] < MaxGeneration
-           /\ generation' =
-                [generation EXCEPT ![Node] = @ + 1]
-      BY <1>1, SMT
-         DEF Node, PreGstResponsiveRestart, Restart,
-             AsyncStrongTypeInvariant, StrongInductiveInvariant,
-             Safety, TypeInvariant, AsyncRecoveryTypeInvariant,
-             ModelConfiguration
-    <2>2. /\ generation[Node] + 1 \in Generations
-           /\ Lost \in Responsive \X Generations
-           /\ Lost \in RecoveryGenerationSlots
-      BY <2>1, SMT
-         DEF Generations, Lost, RecoveryGenerationSlots
-    <2>3. RecoveryGenerationSlots' =
-             RecoveryGenerationSlots \ {Lost}
-      BY <2>1, Isa
-         DEF RecoveryGenerationSlots, Lost, Generations
-    <2>4. /\ IsFiniteSet(Responsive)
-           /\ IsFiniteSet(Generations)
-           /\ IsFiniteSet(Responsive \X Generations)
-      BY <1>1, FS_Interval, FS_Subset, FS_Product
-         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
-             Safety, TypeInvariant, ModelConfiguration,
-             QuorumConfiguration, ValidatorIds, Generations
-    <2>5. IsFiniteSet(RecoveryGenerationSlots)
-      BY <2>4, FS_Subset DEF RecoveryGenerationSlots
-    <2>6. Cardinality(RecoveryGenerationSlots \ {Lost}) =
-             Cardinality(RecoveryGenerationSlots) - 1
-      BY <2>2, <2>5, FS_RemoveElement
-    <2>7. Cardinality(RecoveryGenerationSlots) \in Nat \ {0}
-      BY <2>2, <2>5, FS_CardinalityType, FS_EmptySet, SMT
-    <2>8. Cardinality(RecoveryGenerationSlots \ {Lost}) <
-             Cardinality(RecoveryGenerationSlots)
-      BY <2>6, <2>7, SMT
-    <2> QED BY <2>3, <2>8 DEF RecoveryGenerationBudget
-  <1> QED BY <1>1
-
-THEOREM AsyncRecoveredReadyLeadsToGstOrEligible ==
-  \A initialContext:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryRecoveredReady
-            ~> (gst \/ AsyncRecoveryEligibleReady))
-PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE AsyncSpecAt(initialContext)
-                 => (AsyncRecoveryRecoveredReady
-                       ~> (gst \/ AsyncRecoveryEligibleReady))
-    <2>1. AsyncRecoveryRecoveredReady /\ [AsyncNext]_AsyncAllVars
-            => AsyncRecoveryRecoveredReady'
-                 \/ (gst \/ AsyncRecoveryEligibleReady)'
-      BY AsyncRecoveredReadyStep
-    <2>2. AsyncRecoveryRecoveredReady
-            => ENABLED <<AsyncSetGST>>_AsyncAllVars
-      BY AsyncSetGstEnabledWhileReady
-    <2>3. <<AsyncSetGST>>_AsyncAllVars
-            => (gst \/ AsyncRecoveryEligibleReady)'
-      BY AsyncSetGstEstablishesGst
-    <2>4. AsyncSpecAt(initialContext)
-            => WF_AsyncAllVars(AsyncSetGST)
-      BY DEF AsyncSpecAt, AsyncFairnessAt
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
-         DEF AsyncSpecAt
-  <1> QED BY <1>1
-
-THEOREM AsyncStrongTypeCoversRecoveryCycleState ==
-  AsyncStrongTypeInvariant /\ ~gst => AsyncRecoveryCycleState
-BY Isa
-   DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       AsyncRecoveryCycleState, AsyncRecoveryEligibleReady,
-       AsyncRecoveryRequiredPending, AsyncRecoveryReplayPending,
-       AsyncRecoveryReplayingPending, AsyncRecoveryRecoveredReady,
-       AsyncRecoveryPhases
-
-THEOREM AsyncRecoveryCycleAtBudgetStep ==
-  \A budget \in Nat:
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncRecoveryCycleAtBudget(budget)
-    /\ [AsyncNext]_AsyncAllVars
-    => \/ AsyncRecoveryCycleAtBudget(budget)'
-       \/ gst'
-       \/ LowerAsyncRecoveryCycle(budget)'
-PROOF
-  <1>1. ASSUME NEW budget \in Nat,
-                AsyncStrongTypeInvariant,
-                AsyncRecoveryCycleAtBudget(budget),
-                [AsyncNext]_AsyncAllVars
-         PROVE \/ AsyncRecoveryCycleAtBudget(budget)'
-               \/ gst'
-               \/ LowerAsyncRecoveryCycle(budget)'
-    <2>1. AsyncStrongTypeInvariant'
-      BY <1>1, AsyncBracketNextPreservesStrongTypeInvariant
-    <2>2. /\ RecoveryGenerationBudget' \in Nat
-           /\ RecoveryGenerationBudget' <= budget
-      BY <1>1, <2>1, RecoveryGenerationBudgetIsNatural,
-         AsyncBracketNextDoesNotIncreaseRecoveryGenerationBudget
-         DEF AsyncRecoveryCycleAtBudget
-    <2>3. CASE gst'
-      BY <2>3
-    <2>4. CASE ~gst'
-      <3>1. AsyncRecoveryCycleState'
-        BY <2>1, <2>4, AsyncStrongTypeCoversRecoveryCycleState
-      <3>2. CASE RecoveryGenerationBudget' = budget
-        BY <3>1, <3>2 DEF AsyncRecoveryCycleAtBudget
-      <3>3. CASE RecoveryGenerationBudget' < budget
-        BY <2>2, <3>1, <3>3, Isa
-           DEF LowerAsyncRecoveryCycle, AsyncRecoveryCycleAtBudget,
-               SetLessThan, OpToRel
-      <3> QED BY <2>2, <3>2, <3>3, SMT
-    <2> QED BY <2>3, <2>4
-  <1> QED BY <1>1
-
-THEOREM AsyncRecoveryRequiredAtBudgetLeadsLowerCycle ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryRequiredAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)))
-PROOF
-  <1>1. ASSUME NEW initialContext, NEW budget \in Nat
-         PROVE AsyncSpecAt(initialContext)
-                 => (AsyncRecoveryRequiredAtBudget(budget)
-                       ~> (gst \/ LowerAsyncRecoveryCycle(budget)))
-    <2>1. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
-      BY AsyncSpecAlwaysStrongTypeInvariant
-    <2>2. /\ AsyncStrongTypeInvariant
-           /\ AsyncRecoveryRequiredAtBudget(budget)
-           /\ [AsyncNext]_AsyncAllVars
-          => \/ AsyncRecoveryRequiredAtBudget(budget)'
-             \/ gst'
-             \/ LowerAsyncRecoveryCycle(budget)'
-      BY AsyncRecoveryRequiredStep,
-         AsyncRecoveryCycleAtBudgetStep,
-         ResponsiveRestartConsumesOneGenerationSlot,
-         SMTT(60), Isa
-         DEF AsyncRecoveryRequiredAtBudget,
-             AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState,
-             AsyncRecoveryRequiredPending,
-             AsyncRecoveryReplayPending,
-             AsyncNext, AsyncNonCrashStep,
-             PreGstResponsiveRestart, AsyncAllVars
-    <2>3. /\ AsyncStrongTypeInvariant
-           /\ AsyncRecoveryRequiredAtBudget(budget)
-          => ENABLED <<PreGstResponsiveRestart>>_AsyncAllVars
-      BY AsyncResponsiveRestartEnabledWhileRequired
-         DEF AsyncRecoveryRequiredAtBudget
-    <2>4. /\ AsyncStrongTypeInvariant
-           /\ AsyncRecoveryRequiredAtBudget(budget)
-           /\ <<PreGstResponsiveRestart>>_AsyncAllVars
-          => (gst \/ LowerAsyncRecoveryCycle(budget))'
-      BY ResponsiveRestartConsumesOneGenerationSlot,
-         AsyncResponsiveRestartEstablishesReplayPending,
-         AsyncBracketNextPreservesStrongTypeInvariant,
-         RecoveryGenerationBudgetIsNatural, Isa
-         DEF AsyncRecoveryRequiredAtBudget,
-             LowerAsyncRecoveryCycle, AsyncRecoveryCycleAtBudget,
-             AsyncRecoveryCycleState, AsyncRecoveryReplayPending,
-             SetLessThan, OpToRel, AsyncAllVars
-    <2>5. AsyncSpecAt(initialContext)
-            => WF_AsyncAllVars(PreGstResponsiveRestart)
-      BY DEF AsyncSpecAt, AsyncFairnessAt
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
-         DEF AsyncSpecAt
-  <1> QED BY <1>1
-
-THEOREM AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryEligibleAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)
-                  \/ AsyncRecoveryRequiredAtBudget(budget)))
-BY AsyncEligibleReadyLeadsToGstOrRecovery,
-   AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL
-   DEF AsyncRecoveryEligibleAtBudget,
-       AsyncRecoveryRequiredAtBudget,
-       AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState
-
-THEOREM AsyncRecoveryEligibleAtBudgetLeadsLowerCycle ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryEligibleAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)))
-BY AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired,
-   AsyncRecoveryRequiredAtBudgetLeadsLowerCycle, PTL
-
-THEOREM AsyncRecoveryRecoveredAtBudgetLeadsLowerCycleOrEligible ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryRecoveredAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)
-                  \/ AsyncRecoveryEligibleAtBudget(budget)))
-BY AsyncRecoveredReadyLeadsToGstOrEligible,
-   AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL
-   DEF AsyncRecoveryRecoveredAtBudget,
-       AsyncRecoveryEligibleAtBudget,
-       AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState
-
-THEOREM AsyncRecoveryRecoveredAtBudgetLeadsLowerCycle ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryRecoveredAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)))
-BY AsyncRecoveryRecoveredAtBudgetLeadsLowerCycleOrEligible,
-   AsyncRecoveryEligibleAtBudgetLeadsLowerCycle, PTL
-
-THEOREM AsyncRecoveryReplayAtBudgetLeadsLowerCycleOrRecovered ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryReplayAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)
-                  \/ AsyncRecoveryRecoveredAtBudget(budget)))
-BY AsyncRecoveryReplayLeadsToRecoveredReady,
-   AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL
-   DEF AsyncRecoveryReplayAtBudget,
-       AsyncRecoveryRecoveredAtBudget,
-       AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState
-
-THEOREM AsyncRecoveryReplayAtBudgetLeadsLowerCycle ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryReplayAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)))
-BY AsyncRecoveryReplayAtBudgetLeadsLowerCycleOrRecovered,
-   AsyncRecoveryRecoveredAtBudgetLeadsLowerCycle, PTL
-
-THEOREM AsyncRecoveryReplayingAtBudgetLeadsLowerCycleOrRecovered ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryReplayingAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)
-                  \/ AsyncRecoveryRecoveredAtBudget(budget)))
-BY AsyncRecoverySignatureDrainObligation,
-   AsyncSpecAlwaysStrongTypeInvariant,
-   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL
-   DEF AsyncRecoveryReplayingAtBudget,
-       AsyncRecoveryRecoveredAtBudget,
-       AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState
-
-THEOREM AsyncRecoveryReplayingAtBudgetLeadsLowerCycle ==
-  \A initialContext:
-    \A budget \in Nat:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryReplayingAtBudget(budget)
-            ~> (gst \/ LowerAsyncRecoveryCycle(budget)))
-BY AsyncRecoveryReplayingAtBudgetLeadsLowerCycleOrRecovered,
-   AsyncRecoveryRecoveredAtBudgetLeadsLowerCycle, PTL
-
-THEOREM AsyncRecoveryCycleTakesWellFoundedStep ==
-  \A initialContext:
-    AsyncSpecAt(initialContext)
-      => \A budget \in Nat:
-           AsyncRecoveryCycleAtBudget(budget)
-             ~> (gst \/ LowerAsyncRecoveryCycle(budget))
-BY AsyncRecoveryEligibleAtBudgetLeadsLowerCycle,
-   AsyncRecoveryRequiredAtBudgetLeadsLowerCycle,
-   AsyncRecoveryReplayAtBudgetLeadsLowerCycle,
-   AsyncRecoveryReplayingAtBudgetLeadsLowerCycle,
-   AsyncRecoveryRecoveredAtBudgetLeadsLowerCycle,
-   PTL
-   DEF AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState,
-       AsyncRecoveryEligibleAtBudget,
-       AsyncRecoveryRequiredAtBudget,
-       AsyncRecoveryReplayAtBudget,
-       AsyncRecoveryReplayingAtBudget,
-       AsyncRecoveryRecoveredAtBudget
-
-THEOREM AsyncRecoveredReadyLeadsToGst ==
-  \A initialContext:
-    AsyncSpecAt(initialContext)
-      => (AsyncRecoveryRecoveredReady ~> gst)
-PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE AsyncSpecAt(initialContext)
-                 => (AsyncRecoveryRecoveredReady ~> gst)
-    <2>1. AsyncSpecAt(initialContext)
-            => \A budget \in Nat:
-                 AsyncRecoveryCycleAtBudget(budget)
-                   ~> (gst \/ \E lower \in SetLessThan(
-                         budget, OpToRel(<, Nat), Nat):
-                         AsyncRecoveryCycleAtBudget(lower))
-      BY AsyncRecoveryCycleTakesWellFoundedStep
-         DEF LowerAsyncRecoveryCycle
-    <2>2. IsWellFoundedOn(OpToRel(<, Nat), Nat)
-      BY NatLessThanWellFounded
-    <2>3. AsyncSpecAt(initialContext)
-            => \A budget \in Nat:
-                 AsyncRecoveryCycleAtBudget(budget) ~> gst
-      BY <2>1, <2>2, WellFoundedLeadsTo
-    <2>4. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
-      BY AsyncSpecAlwaysStrongTypeInvariant
-    <2>5. AsyncStrongTypeInvariant /\ AsyncRecoveryRecoveredReady
-            => \E budget \in Nat:
-                 AsyncRecoveryCycleAtBudget(budget)
-      BY RecoveryGenerationBudgetIsNatural
-         DEF AsyncRecoveryCycleAtBudget, AsyncRecoveryCycleState
-    <2> QED BY <2>3, <2>4, <2>5, PTL
-  <1> QED BY <1>1
-
-THEOREM AsyncGstEventually ==
-  \A initialContext:
-    AsyncSpecAt(initialContext) => <>gst
-PROOF
-  <1>1. ASSUME NEW initialContext
-         PROVE AsyncSpecAt(initialContext) => <>gst
-    <2>1. AsyncSpecAt(initialContext) => AsyncRecoveryEligibleReady
-      BY AsyncInitStartsRecoveryEligibleReady DEF AsyncSpecAt
-    <2>2. AsyncSpecAt(initialContext)
-            => (AsyncRecoveryEligibleReady
-                  ~> (gst \/ AsyncRecoveryRequiredPending))
-      BY AsyncEligibleReadyLeadsToGstOrRecovery
-    <2>3. AsyncSpecAt(initialContext)
-            => (AsyncRecoveryRequiredPending
-                  ~> AsyncRecoveryReplayPending)
-      BY AsyncRecoveryRequiredLeadsToReplayRequired
-    <2>4. AsyncSpecAt(initialContext)
-            => (AsyncRecoveryReplayPending
-                  ~> AsyncRecoveryRecoveredReady)
-      BY AsyncRecoveryReplayLeadsToRecoveredReady
-    <2>5. AsyncSpecAt(initialContext)
-            => (AsyncRecoveryRecoveredReady ~> gst)
-      BY AsyncRecoveredReadyLeadsToGst
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
-  <1> QED BY <1>1
-
+(***************************************************************************
+GST is an explicit liveness condition.  Crash/restart before GST may repeat
+without consuming a protocol-owned resource, so no finite process-generation
+budget is used to derive GST.  The recovery replay lemmas above are local
+corridor facts only; all release liveness theorems begin from `gst` or an
+explicit `<>gst` premise.
+***************************************************************************)
 =============================================================================

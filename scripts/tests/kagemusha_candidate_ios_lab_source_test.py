@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import pathlib
+import re
 import subprocess
+import tempfile
 import unittest
 
 
@@ -62,6 +66,12 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
             check=True,
             cwd=ROOT,
         )
+        for script in (BUILD, RUNNER):
+            source = script.read_text(encoding="utf-8")
+            blocks = re.findall(r"<<'PY'\n(.*?)\nPY\n", source, flags=re.DOTALL)
+            self.assertTrue(blocks, script)
+            for index, block in enumerate(blocks):
+                compile(block, f"{script.name}:heredoc:{index}", "exec")
 
     def test_native_module_is_physical_ios_only(self) -> None:
         source = LIB.read_text(encoding="utf-8")
@@ -87,6 +97,16 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
         self.assertIn('"reviewed_source_closure_descriptor_sha256"', source)
         self.assertIn('"artifact_inventory"', source)
         self.assertIn("causal_events.len() != 28", source)
+        for exact_count_check in (
+            "init.bundle.statement.proof_step_count != 1",
+            "split_one.recipient_bundle.statement.proof_step_count != 2",
+            "change_one.statement.proof_step_count != 2",
+            "split_two.recipient_bundle.statement.proof_step_count != 3",
+            "final_change.statement.proof_step_count != 3",
+            "verify_one.summary.proof_step_count != 2",
+            "verify_two.summary.proof_step_count != 3",
+        ):
+            self.assertIn(exact_count_check, source)
         positions = [source.index(f'"{operation}"') for operation in EXPECTED_OPERATIONS]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(len(set(positions)), 28)
@@ -126,6 +146,64 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
         self.assertIn("testRestartPhase", source)
         self.assertIn("-parallel-testing-enabled NO", source.replace("\\\n", " "))
         self.assertNotIn("platform=iOS Simulator", source)
+        self.assertEqual(source.count('verify_native_framework "'), 3)
+        self.assertIn(
+            "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/"
+            "ios-arm64/Headers/module.modulemap",
+            source,
+        )
+        project_root = source.index('PROJECT_ROOT="$TRANSIENT/project"')
+        project_mkdir = source.index('mkdir -- "$PROJECT_ROOT"', project_root)
+        project_generate = source.index('"$XCODEGEN_BINARY" generate', project_root)
+        self.assertLess(project_mkdir, project_generate)
+
+    def test_native_framework_verifier_accepts_only_manifest_bound_inputs(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        verifier = re.findall(r"<<'PY'\n(.*?)\nPY\n", source, flags=re.DOTALL)[0]
+        relatives = (
+            "Info.plist",
+            ".kagemusha-candidate-evidence-lab-do-not-ship-v2",
+            "ios-arm64/libNoritoBridgeCandidateLab.a",
+            "ios-arm64/Headers/connect_norito_bridge.h",
+            "ios-arm64/Headers/connect_norito_bridge_base.h",
+            "ios-arm64/Headers/module.modulemap",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            framework = root / "NoritoBridgeCandidateLab.xcframework"
+            files: dict[str, str] = {}
+            for index, relative in enumerate(relatives):
+                path = framework / relative
+                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                payload = f"native-input-{index}\n".encode("ascii")
+                path.write_bytes(payload)
+                path.chmod(0o600)
+                files[f"NoritoBridgeCandidateLab.xcframework/{relative}"] = (
+                    hashlib.sha256(payload).hexdigest()
+                )
+            for path in framework.rglob("*"):
+                if path.is_dir():
+                    path.chmod(0o700)
+            framework.chmod(0o700)
+            manifest = root / "native-build-manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {"files": files},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="ascii",
+            )
+            manifest.chmod(0o600)
+            subprocess.run(
+                ["/usr/bin/python3", "-I", "-", str(manifest), str(framework)],
+                input=verifier,
+                text=True,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
 
     def test_xcode_project_links_only_external_candidate_framework(self) -> None:
         source = PROJECT.read_text(encoding="utf-8")
@@ -143,6 +221,19 @@ class CandidateIOSLabSourceTest(unittest.TestCase):
         self.assertIn("CODE_SIGN_MEASUREMENTS_FIELDS", validator)
         self.assertIn("TEST_RESULT_FIELDS", validator)
         self.assertIn("CAUSAL_OPERATIONS", validator)
+        self.assertIn("NATIVE_BUILD_RAW_BINDINGS", validator)
+        self.assertIn(
+            "MAX_RAW_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024",
+            validator,
+        )
+        self.assertIn(
+            "MAX_DECLARED_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024 * 1024",
+            gate,
+        )
+        self.assertIn(
+            'maximum = 5 * 1024 * 1024 * 1024 if relative.endswith(".a")',
+            RUNNER.read_text(encoding="utf-8"),
+        )
         self.assertIn("KAGEMUSHA_IOS_DEVICE_EVIDENCE_ROOT", gate)
         self.assertIn("check_kagemusha_candidate_ios_evidence.py", gate)
         self.assertIn('artifact_digests.get("input/candidate-v4.norito")', gate)

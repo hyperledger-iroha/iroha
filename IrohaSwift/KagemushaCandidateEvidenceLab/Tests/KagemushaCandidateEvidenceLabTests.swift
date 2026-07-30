@@ -50,6 +50,12 @@ private func canonicalJSON(_ value: Any) throws -> Data {
     return data
 }
 
+private func recordedAtUTC() -> String {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter.string(from: Date())
+}
+
 private func documentsDirectory() throws -> URL {
     let urls = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
     try require(urls.count == 1, "application Documents directory is unavailable")
@@ -656,7 +662,7 @@ private func commonReceipt(
         "phase": phase,
         "process_id": Int(getpid()),
         "launch_nonce_sha256": sha256(launchNonce),
-        "recorded_at_utc": ISO8601DateFormatter().string(from: Date()),
+        "recorded_at_utc": recordedAtUTC(),
         "monotonic_nanos": NSNumber(value: DispatchTime.now().uptimeNanoseconds),
         "resource_ceiling_bytes": NSNumber(value: resourceCeilingBytes),
         "candidate_record_sha256": session.candidateRecordSHA256,

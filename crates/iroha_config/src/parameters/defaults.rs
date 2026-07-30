@@ -4483,6 +4483,12 @@ pub mod settlement {
         pub const fn kagemusha_artifact_dir() -> Option<PathBuf> {
             None
         }
+
+        /// No prequalified Kagemusha catalog is trusted unless an operator configures its seal.
+        #[must_use]
+        pub const fn kagemusha_catalog_qualification_seal_path() -> Option<PathBuf> {
+            None
+        }
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

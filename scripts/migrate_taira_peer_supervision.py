@@ -40,7 +40,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Sequence
 
 PEER_COUNT = 4
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 CONFIRMATION = "ADOPT-EXISTING-TAIRA-STORAGE"
 DEFAULT_LABEL_PREFIX = "io.soramitsu.taira.validator"
 SUPERVISOR_SOURCE = Path(__file__).with_name("taira_peer_supervisor.py")
@@ -280,7 +280,9 @@ def inspect_process(pid: int) -> ProcessIdentity:
         uid = int(fields[1])
         gid = int(fields[2])
     except ValueError as exc:
-        raise MigrationError(f"could not parse process ownership for pid {pid}") from exc
+        raise MigrationError(
+            f"could not parse process ownership for pid {pid}"
+        ) from exc
     cwd_result = subprocess.run(
         ["/usr/sbin/lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
         check=False,
@@ -333,9 +335,7 @@ def command_argv(command: str) -> list[str]:
         ) from exc
 
 
-def require_peer_command(
-    process: ProcessIdentity, binary: Path, config: Path
-) -> None:
+def require_peer_command(process: ProcessIdentity, binary: Path, config: Path) -> None:
     """Require the validator command to exactly match its planned binary/config."""
 
     expected = [str(binary), "--sora", "--config", str(config)]
@@ -354,19 +354,16 @@ def require_legacy_controller_command(
     for runner in allowed_runners:
         runner_text = str(runner)
         absolute_pattern = (
-            rf"(?<![A-Za-z0-9_./-]){re.escape(runner_text)}"
-            rf"(?![A-Za-z0-9_./-])"
+            rf"(?<![A-Za-z0-9_./-]){re.escape(runner_text)}" rf"(?![A-Za-z0-9_./-])"
         )
         if re.search(absolute_pattern, process.command):
             return runner
         relative_token = f"./{runner.name}"
         relative_pattern = (
-            rf"(?<![A-Za-z0-9_./-]){re.escape(relative_token)}"
-            rf"(?![A-Za-z0-9_./-])"
+            rf"(?<![A-Za-z0-9_./-]){re.escape(relative_token)}" rf"(?![A-Za-z0-9_./-])"
         )
         base_pattern = (
-            rf"(?<![A-Za-z0-9_./-]){re.escape(str(base))}"
-            rf"(?![A-Za-z0-9_./-])"
+            rf"(?<![A-Za-z0-9_./-]){re.escape(str(base))}" rf"(?![A-Za-z0-9_./-])"
         )
         if re.search(base_pattern, process.command) and re.search(
             relative_pattern, process.command
@@ -439,8 +436,10 @@ def safe_stage_asset(stage: Path, relative: str) -> Path:
     """Resolve one manifest asset name without permitting path traversal."""
 
     pure = PurePosixPath(relative)
-    if pure.is_absolute() or not pure.parts or any(
-        part in ("", ".", "..") for part in pure.parts
+    if (
+        pure.is_absolute()
+        or not pure.parts
+        or any(part in ("", ".", "..") for part in pure.parts)
     ):
         raise MigrationError(f"unsafe staged asset path: {relative!r}")
     target = stage.joinpath(*pure.parts)
@@ -531,12 +530,18 @@ def launchd_plist(
         str(storage["inode"]),
         "--pid-file",
         peer["supervised_pid_file"],
+        "--terminal-unhealthy-file",
+        peer["terminal_unhealthy_file"],
+        "--restart-generation",
+        runtime["restart_generation"],
         "--initial-backoff-seconds",
         str(runtime["initial_backoff_seconds"]),
         "--maximum-backoff-seconds",
         str(runtime["maximum_backoff_seconds"]),
         "--stable-uptime-seconds",
         str(runtime["stable_uptime_seconds"]),
+        "--rapid-fatal-uptime-seconds",
+        str(runtime["rapid_fatal_uptime_seconds"]),
     ]
     if runtime["binary_stat_sealed"]:
         binary = manifest["binary"]
@@ -609,8 +614,7 @@ def create_plan(
     allowed_runners = [
         normalize_absolute(path)
         for path in (
-            args.legacy_runner
-            or [base / "run-canonical.sh", base / "launchd-run.sh"]
+            args.legacy_runner or [base / "run-canonical.sh", base / "launchd-run.sh"]
         )
     ]
     for runner in allowed_runners:
@@ -618,16 +622,15 @@ def create_plan(
     existing_runners = [path for path in allowed_runners if path.exists()]
     if not existing_runners:
         raise MigrationError("none of the approved legacy runner paths exists")
-    runner_identities = [file_identity(path, executable=True) for path in existing_runners]
+    runner_identities = [
+        file_identity(path, executable=True) for path in existing_runners
+    ]
 
     runtime_uid = base_identity.uid
     runtime_gid = base_identity.gid
     if runtime_uid == 0:
         raise MigrationError("refusing to install validators that would run as root")
-    if (
-        genesis_identity.uid != runtime_uid
-        or genesis_identity.gid != runtime_gid
-    ):
+    if genesis_identity.uid != runtime_uid or genesis_identity.gid != runtime_gid:
         raise MigrationError("canonical genesis owner differs from deployment owner")
     try:
         runtime_user = pwd.getpwuid(runtime_uid).pw_name
@@ -714,6 +717,11 @@ def create_plan(
                 "supervised_pid_file": str(
                     install_dir / "pids" / f"validator-{index + 1}.pid"
                 ),
+                "terminal_unhealthy_file": str(
+                    install_dir
+                    / "terminal"
+                    / f"validator-{index + 1}-terminal-unhealthy.json"
+                ),
             }
         )
     if len(parent_pids) != 1:
@@ -739,10 +747,7 @@ def create_plan(
         raise MigrationError(
             "--maximum-backoff-seconds must be at least the initial backoff"
         )
-    if (
-        not math.isfinite(args.stable_uptime_seconds)
-        or args.stable_uptime_seconds <= 0
-    ):
+    if not math.isfinite(args.stable_uptime_seconds) or args.stable_uptime_seconds <= 0:
         raise MigrationError("--stable-uptime-seconds must be positive")
     if args.launchd_throttle_seconds <= 0:
         raise MigrationError("--launchd-throttle-seconds must be positive")
@@ -750,6 +755,30 @@ def create_plan(
         raise MigrationError("--termination-timeout-seconds must be positive")
     if args.health_timeout_seconds <= 0:
         raise MigrationError("--health-timeout-seconds must be positive")
+    if (
+        not math.isfinite(args.rapid_fatal_uptime_seconds)
+        or args.rapid_fatal_uptime_seconds <= 0
+    ):
+        raise MigrationError("--rapid-fatal-uptime-seconds must be positive")
+    if args.restart_generation is not None and not is_sha256(args.restart_generation):
+        raise MigrationError(
+            "--restart-generation must be one lowercase SHA-256 digest"
+        )
+    restart_generation = (
+        args.restart_generation
+        or hashlib.sha256(
+            json.dumps(
+                {
+                    "binary": binary_identity.sha256,
+                    "configs": [peer["config"]["sha256"] for peer in peers],
+                    "schema": "taira-supervision-restart-generation-v1",
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ).hexdigest()
+    )
 
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -775,6 +804,8 @@ def create_plan(
             "initial_backoff_seconds": args.initial_backoff_seconds,
             "maximum_backoff_seconds": args.maximum_backoff_seconds,
             "stable_uptime_seconds": args.stable_uptime_seconds,
+            "rapid_fatal_uptime_seconds": args.rapid_fatal_uptime_seconds,
+            "restart_generation": restart_generation,
             "launchd_throttle_seconds": args.launchd_throttle_seconds,
             "termination_timeout_seconds": args.termination_timeout_seconds,
             "health_timeout_seconds": args.health_timeout_seconds,
@@ -834,7 +865,9 @@ def atomic_write(path: Path, body: bytes, mode: int) -> None:
     path.chmod(mode)
 
 
-def write_plan(output_dir: Path, manifest: dict[str, Any], assets: dict[str, bytes]) -> str:
+def write_plan(
+    output_dir: Path, manifest: dict[str, Any], assets: dict[str, bytes]
+) -> str:
     """Write a new immutable-by-convention staging directory and return its digest."""
 
     if output_dir.exists() or output_dir.is_symlink():
@@ -1008,10 +1041,7 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
             raise MigrationError("manifest would run validators as root")
         if base_identity.uid != runtime_uid or base_identity.gid != runtime_gid:
             raise MigrationError("manifest base owner differs from runtime owner")
-        if (
-            genesis_identity.uid != runtime_uid
-            or genesis_identity.gid != runtime_gid
-        ):
+        if genesis_identity.uid != runtime_uid or genesis_identity.gid != runtime_gid:
             raise MigrationError("manifest genesis owner differs from runtime owner")
         if (
             not isinstance(manifest["runtime_user"]["name"], str)
@@ -1049,9 +1079,12 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
             expected_pid_file = install_dir / "pids" / f"validator-{number}.pid"
             if Path(peer["supervised_pid_file"]) != expected_pid_file:
                 raise MigrationError("manifest supervised PID path is inconsistent")
-            legacy_process = validate_manifest_process_identity(
-                peer["legacy_process"]
+            expected_terminal_file = (
+                install_dir / "terminal" / f"validator-{number}-terminal-unhealthy.json"
             )
+            if Path(peer["terminal_unhealthy_file"]) != expected_terminal_file:
+                raise MigrationError("manifest terminal-unhealthy path is inconsistent")
+            legacy_process = validate_manifest_process_identity(peer["legacy_process"])
             working_directory = validate_manifest_path_identity(
                 peer["working_directory"], expected_kind="directory"
             )
@@ -1123,7 +1156,9 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
             config_paths.add(config_path)
             port = int(peer["torii_port"])
             if not 1 <= port <= 65535 or port in ports:
-                raise MigrationError("manifest contains invalid or duplicate Torii port")
+                raise MigrationError(
+                    "manifest contains invalid or duplicate Torii port"
+                )
             ports.add(port)
 
         assets = manifest["assets"]
@@ -1156,15 +1191,22 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
             if key == "binary":
                 binary_stat_sealed = manifest["runtime"]["binary_stat_sealed"]
                 if not isinstance(binary_stat_sealed, bool):
-                    raise MigrationError(
-                        "manifest binary stat-seal policy is invalid"
-                    )
+                    raise MigrationError("manifest binary stat-seal policy is invalid")
                 if binary_stat_sealed:
                     require_root_controlled_executable_chain(Path(identity.path))
                 else:
                     require_descendant(
                         Path(identity.path), base, "manifest validator binary"
                     )
+        runtime = manifest["runtime"]
+        if (
+            not is_sha256(runtime["restart_generation"])
+            or not isinstance(runtime["rapid_fatal_uptime_seconds"], (int, float))
+            or isinstance(runtime["rapid_fatal_uptime_seconds"], bool)
+            or not math.isfinite(runtime["rapid_fatal_uptime_seconds"])
+            or runtime["rapid_fatal_uptime_seconds"] <= 0
+        ):
+            raise MigrationError("manifest fatal-loop policy is invalid")
     except (KeyError, TypeError, ValueError) as exc:
         raise MigrationError("manifest structure is invalid") from exc
     return manifest
@@ -1305,9 +1347,7 @@ def inspect_supervised_peers_once(
         pid_file = Path(peer["supervised_pid_file"])
         pid, pid_identity = parse_pid_file(pid_file)
         if pid_identity.uid != runtime_uid or pid_identity.gid != runtime_gid:
-            raise MigrationError(
-                f"supervised PID file owner changed: {pid_file}"
-            )
+            raise MigrationError(f"supervised PID file owner changed: {pid_file}")
         process = process_inspector(pid)
         require_peer_command(process, binary, Path(peer["config"]["path"]))
         if process.uid != runtime_uid or process.gid != runtime_gid:
@@ -1394,6 +1434,7 @@ def apply_plan(args: argparse.Namespace) -> None:
     install_dir = Path(manifest["install"]["directory"])
     logs_dir = Path(manifest["install"]["logs_dir"])
     pids_dir = install_dir / "pids"
+    terminal_dir = install_dir / "terminal"
     launch_daemons_dir = Path(manifest["install"]["launch_daemons_dir"])
     if str(launch_daemons_dir) != "/Library/LaunchDaemons":
         raise MigrationError(
@@ -1411,11 +1452,14 @@ def apply_plan(args: argparse.Namespace) -> None:
         )
         if result.returncode == 0:
             raise MigrationError(f"launchd job is already loaded: {peer['label']}")
-        run_checked(["/usr/bin/plutil", "-lint", str(stage / "launchd" / destination.name)])
+        run_checked(
+            ["/usr/bin/plutil", "-lint", str(stage / "launchd" / destination.name)]
+        )
 
     ensure_install_directory(install_dir, uid=uid, gid=gid, mode=0o700)
     ensure_install_directory(pids_dir, uid=uid, gid=gid, mode=0o700)
     ensure_install_directory(logs_dir, uid=uid, gid=gid, mode=0o700)
+    ensure_install_directory(terminal_dir, uid=uid, gid=gid, mode=0o700)
     installed_supervisor = Path(manifest["install"]["supervisor"])
     copy_new_file(
         authenticated_assets[SUPERVISOR_SOURCE.name],
@@ -1524,9 +1568,15 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         default=sys.executable,
         help="absolute Python executable recorded in LaunchDaemons",
     )
-    parser.add_argument("--config", action="append", help="repeat four times in peer order")
-    parser.add_argument("--storage", action="append", help="repeat four times in peer order")
-    parser.add_argument("--pid-file", action="append", help="repeat four times in peer order")
+    parser.add_argument(
+        "--config", action="append", help="repeat four times in peer order"
+    )
+    parser.add_argument(
+        "--storage", action="append", help="repeat four times in peer order"
+    )
+    parser.add_argument(
+        "--pid-file", action="append", help="repeat four times in peer order"
+    )
     parser.add_argument(
         "--legacy-runner",
         action="append",
@@ -1543,6 +1593,14 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--initial-backoff-seconds", type=float, default=1.0)
     parser.add_argument("--maximum-backoff-seconds", type=float, default=30.0)
     parser.add_argument("--stable-uptime-seconds", type=float, default=120.0)
+    parser.add_argument("--rapid-fatal-uptime-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--restart-generation",
+        help=(
+            "optional lowercase SHA-256 generation token; changing it clears "
+            "a prior identity-matched terminal-unhealthy latch"
+        ),
+    )
     parser.add_argument("--launchd-throttle-seconds", type=int, default=10)
     parser.add_argument("--termination-timeout-seconds", type=int, default=60)
     parser.add_argument("--health-timeout-seconds", type=int, default=900)
@@ -1584,9 +1642,7 @@ def main(argv: list[str] | None = None) -> int:
             digest = write_plan(output_dir, manifest, assets)
             print(f"staged={output_dir}")
             print(f"manifest_sha256={digest}")
-            print(
-                "No validator, controller, launchd job, or storage path was changed."
-            )
+            print("No validator, controller, launchd job, or storage path was changed.")
         else:
             apply_plan(args)
     except (MigrationError, OSError, ValueError) as exc:

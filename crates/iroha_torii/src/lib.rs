@@ -13316,7 +13316,7 @@ async fn handler_offline_recipient_lineage(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
+    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
         iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
     >,
 ) -> Result<NoritoBody<iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage>, Error>
@@ -14392,7 +14392,7 @@ mod offline_kagemusha_readiness_tests {
 async fn handler_offline_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
+    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
         iroha_torii_shared::offline_api::OfflineRedeemRequest,
     >,
 ) -> Result<AxResponse, Error> {
@@ -14404,7 +14404,7 @@ async fn handler_offline_redeem(
 async fn handler_offline_top_up(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoOnly(request): crate::utils::extractors::NoritoOnly<
+    crate::utils::extractors::OfflineNorito(request): crate::utils::extractors::OfflineNorito<
         iroha_torii_shared::offline_api::OfflineTopUpRequest,
     >,
 ) -> Result<AxResponse, Error> {
@@ -54589,6 +54589,8 @@ impl Torii {
             offline_top_up_body_limit(transaction_max_content_len);
         let offline_redeem_body_limit_bytes =
             offline_redeem_body_limit(transaction_max_content_len);
+        let offline_recipient_lineage_body_limit_bytes =
+            <iroha_torii_shared::offline_api::OfflineRecipientLineageRequest as crate::utils::extractors::OfflineCanonicalNoritoSchema>::MAX_BODY_BYTES;
         builder.route(
             &route_catalog::offline::READINESS,
             catalog_get(handler_offline_readiness),
@@ -54596,7 +54598,7 @@ impl Torii {
         builder.route(
             &route_catalog::offline::RECIPIENT_LINEAGE,
             catalog_post(handler_offline_recipient_lineage).layer(DefaultBodyLimit::max(
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+                offline_recipient_lineage_body_limit_bytes,
             )),
         );
         builder.route(

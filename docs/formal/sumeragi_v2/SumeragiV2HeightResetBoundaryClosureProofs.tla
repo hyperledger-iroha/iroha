@@ -5,7 +5,7 @@ EXTENDS SumeragiV2HeightProductivityFrontierProofs
 Exact reset-boundary closure decomposition.
 
 This leaf discharges every due scheduler owner without confusing a merely
-enabled action with an immediately productive one:
+  enabled action with an immediately productive one:
 
   * a due node-service turn removes a weight-two node blocker and can create
     at most one weight-one I/O blocker;
@@ -21,9 +21,11 @@ transport-completion ownership gates.  Neither case is an immediate
 `PostGstProductiveEffect`, and an idle Runtime-to-Local reset is not promoted
 to one.  Instead, the temporal suffix proves that, while no immediate
 productive action exists, every still-undecided fixed voter is at Runtime;
-its exact weakly fair runner resets it to Local, which exposes productivity or
-a durable Decision.  Stable Decision receipts are then accumulated by finite
-induction over the frozen roster.  The final equivalence therefore discharges
+its exact weakly fair runner either completes one finite Runtime episode into
+Local or gives an admitted exact Serve owner its target-only Ingress turn.
+Either successor exposes productivity or a durable Decision.  Stable Decision
+receipts are then accumulated by finite induction over the frozen roster.  The
+final equivalence therefore discharges
 the strictly smaller ingress-ownership residual without relabelling a reset as
 productive work.
 
@@ -148,7 +150,12 @@ BY AsyncStrongTypeProjectsAsyncType,
        AsyncResponsiveOnlineArchiveServers,
        AsyncResponsiveArchiveServers, AsyncIoQueueDepth,
        PostGstRunNode, RunNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       IngressDrainStep, SerializedRunnerRuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, AsyncConfiguration
 
 THEOREM DueHistoricalRecoveryRunNodeHasBlockerHandoff ==
@@ -169,7 +176,12 @@ BY AsyncStrongTypeProjectsAsyncType,
        AsyncResponsiveArchiveServers, AsyncIoQueueDepth,
        PostGstRunHistoricalRecoveryNode,
        RunHistoricalRecoveryNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       LocalAdmissionStep, SelectedLocalAdmissionAdvance,
+       SerializedLocalPrecedesServeIngressStep,
+       IngressDrainStep, SerializedRunnerRuntimeStep,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, AsyncConfiguration
 
 THEOREM DueHistoricalServerHasBlockerHandoff ==
@@ -311,22 +323,7 @@ THEOREM GstHistoricalRecoveryRunNodeIsEnabled ==
     /\ AsyncStrongTypeInvariant
     /\ gst
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
-BY AsyncStrongTypeProjectsAsyncType,
-   HistoricalRecoveryTargetsAreValidators,
-   LocalAdmissionStepIsEnabled, IngressDrainStepIsEnabled,
-   SerializedRuntimeStepIsEnabled,
-   GstExcludesResponsiveReplayQuarantine,
-   ExpandENABLED, Isa
-   DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
-       AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
-       AsyncRuntimeScalarTypeInvariant,
-       AsyncHistoricalRecoveryTypeInvariant,
-       PostGstRunHistoricalRecoveryNode,
-       RunHistoricalRecoveryNode, RunNodeWork,
-       LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
-       RuntimeStep, AsyncNonCrashOuterFrame, AsyncCoreOuterFrame,
-       AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
-       AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+BY HistoricalRecoveryRunnerEnabledAfterGst
 
 THEOREM GstHistoricalServerIsEnabled ==
   \A node \in AsyncResponsiveAppliedArchiveServers:
@@ -1771,7 +1768,11 @@ THEOREM IdleRuntimeResetDecreasesOnlyResetAwareReach ==
 BY SMT
    DEF IdleSerializedRuntimeReset,
        PostGstRunNode, RunNode, RunNodeWork,
-       SerializedRuntimeStep, IdleRuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, IdleRuntimeStep,
        RuntimeStep, ResetAwareIngressReachRank,
        RuntimeReachRank
 
@@ -1793,7 +1794,12 @@ BY IdleRuntimeResetDecreasesOnlyResetAwareReach,
    IngressBoundaryDependencyRankInCarrier, Isa
    DEF IdleSerializedRuntimeReset,
        PostGstRunNode, RunNode, RunNodeWork,
-       SerializedRuntimeStep, RuntimeStep, IdleRuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, IdleRuntimeStep,
        IngressBoundaryDependencyRank,
        IngressBoundaryDependencyOrdering,
        IngressCapacityTailOrdering,
@@ -1861,7 +1867,11 @@ BY ExpandENABLED, Isa
        IdleSerializedRuntimeReset,
        HeightProductivityResetBoundary,
        PostGstRunNode, RunNode, RunNodeWork,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        IdleRuntimeStep, AsyncNonCrashOuterFrame,
        AsyncCoreOuterFrame, AsyncAllVars,
        AsyncSchedulerVars, AsyncRecoveryVars,
@@ -1887,7 +1897,11 @@ BY Isa
        LiveProtectedServeRankDecreaseStep,
        ActiveScheduledCandidates, ActiveIoJobs,
        PostGstRunNode, RunNode, RunNodeWork,
-       SerializedRuntimeStep, RuntimeStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn, RuntimeStep,
        IdleRuntimeStep, RuntimeReachRank,
        PostGstNodeServiceBlockers,
        PostGstIoServiceBlockers,
@@ -2150,8 +2164,9 @@ the temporal reset-boundary exit has a smaller scheduler proof.  In any state
 without an immediately productive action, every still-undecided responsive
 voter must be at Runtime: Local and Ingress are already covered by the strict
 `RuntimeReachRank` certificate.  The exact weakly fair `PostGstRunNode` action
-then returns that voter to Local.  Its successor either records a Decision or
-immediately exposes the Local certificate.
+then returns that voter to Local after ordinary or older Runtime work, or moves
+it directly to Ingress for an admitted exact Serve owner.  Its successor either
+records a Decision or immediately exposes the Local/Ingress certificate.
 
 The per-voter result is accumulated over the frozen one-height roster.  Durable
 Decision receipts make each finite prefix stable; no fairness over an
@@ -2215,16 +2230,31 @@ PROOF
                 asyncRunnerPhase[node] = "Runtime",
                 PostGstRunNode(node)
          PROVE <<PostGstRunNode(node)>>_AsyncAllVars
-    <2>1. /\ node \in ValidatorIds
-           /\ SerializedRuntimeStep(node)
-      BY <1>1, AsyncCurrentResponsiveVotersAreValidators, Isa
-         DEF PostGstRunNode, RunNode, RunNodeWork
-    <2>2. asyncRunnerPhase'[node] = "Local"
-      BY <1>1, <2>1, SerializedRuntimeReturnsToLocalWithBudget
-    <2>3. asyncRunnerPhase'[node] # asyncRunnerPhase[node]
-      BY <1>1, <2>2
-    <2> QED BY <1>1, <2>3, Isa
-         DEF AsyncAllVars, AsyncSchedulerVars
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+    <2>2. \/ SerializedRunnerRuntimeStep(node)
+           \/ AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, RunNodeWorkConcreteActionCaseSplit, Isa
+         DEF PostGstRunNode, RunNode,
+             LocalAdmissionStep, IngressDrainStep,
+             SerializedLocalPrecedesServeIngressStep
+    <2>3. CASE SerializedRunnerRuntimeStep(node)
+      <3>1. asyncRunnerPhase'[node] = "Local"
+        BY <1>1, <2>1, <2>3,
+           SerializedRuntimeReturnsToLocalWithBudget
+      <3>2. asyncRunnerPhase'[node] # asyncRunnerPhase[node]
+        BY <1>1, <3>1
+      <3> QED BY <1>1, <3>2, Isa
+           DEF AsyncAllVars, AsyncSchedulerVars
+    <2>4. CASE AsyncServeIngressTargetOnlyTurn(node)
+      <3>1. asyncRunnerPhase'[node] = "Ingress"
+        BY <2>1, <2>4,
+           AsyncServeIngressTargetOnlyTurnJumpsToIngress
+      <3>2. asyncRunnerPhase'[node] # asyncRunnerPhase[node]
+        BY <1>1, <3>1
+      <3> QED BY <1>1, <3>2, Isa
+           DEF AsyncAllVars, AsyncSchedulerVars
+    <2> QED BY <2>2, <2>3, <2>4
   <1> QED BY <1>1
 
 THEOREM RuntimePostGstRunNodeExposesProductivityOrDecision ==
@@ -2247,26 +2277,40 @@ PROOF
          PROVE HeightResetNodeExit(node)'
     <2>1. /\ AsyncTypeInvariant
            /\ node \in ValidatorIds
-           /\ SerializedRuntimeStep(node)
       BY <1>1, AsyncStrongTypeProjectsAsyncType,
-         AsyncCurrentResponsiveVotersAreValidators, Isa
-         DEF PostGstRunNode, RunNode, RunNodeWork
-    <2>2. /\ asyncRunnerPhase'[node] = "Local"
-           /\ gst'
+         AsyncCurrentResponsiveVotersAreValidators
+    <2>2. \/ SerializedRunnerRuntimeStep(node)
+           \/ AsyncServeIngressTargetOnlyTurn(node)
+      BY <1>1, RunNodeWorkConcreteActionCaseSplit, Isa
+         DEF PostGstRunNode, RunNode,
+             LocalAdmissionStep, IngressDrainStep,
+             SerializedLocalPrecedesServeIngressStep
+    <2>3. asyncRunnerPhase'[node] \in {"Local", "Ingress"}
+      <3>1. CASE SerializedRunnerRuntimeStep(node)
+        BY <2>1, <3>1, SerializedRuntimeReturnsToLocalWithBudget
+      <3>2. CASE AsyncServeIngressTargetOnlyTurn(node)
+        BY <2>1, <3>2,
+           AsyncServeIngressTargetOnlyTurnJumpsToIngress
+      <3> QED BY <2>2, <3>1, <3>2
+    <2>4. /\ gst'
            /\ AsyncCurrentResponsiveVoters'
                 = AsyncCurrentResponsiveVoters
-      BY <1>1, <2>1,
-         SerializedRuntimeReturnsToLocalWithBudget, Isa
+      BY <1>1, <2>2, Isa
          DEF PostGstRunNode, RunNode, RunNodeWork,
+             SerializedLocalPrecedesServeIngressStep,
+             SelectedLocalAdmissionAdvance,
+             SerializedRunnerRuntimeStep, SerializedRuntimeStep,
+             SerializedRuntimePrecedesServeIngressStep,
+             AsyncServeIngressTargetOnlyTurn,
              AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
-    <2>3. CASE NodeHasDecision(node)'
-      BY <2>3 DEF HeightResetNodeExit
-    <2>4. CASE ~NodeHasDecision(node)'
+    <2>5. CASE NodeHasDecision(node)'
+      BY <2>5 DEF HeightResetNodeExit
+    <2>6. CASE ~NodeHasDecision(node)'
       <3>1. ImmediateProductiveFairActionReady'
-        BY <1>1, <2>2, <2>4,
+        BY <1>1, <2>3, <2>4, <2>6,
            GstUndecidedLocalOrIngressRunnerIsImmediatelyProductive
       <3> QED BY <3>1 DEF HeightResetNodeExit
-    <2> QED BY <2>3, <2>4
+    <2> QED BY <2>5, <2>6
   <1> QED BY <1>1
 
 THEOREM HeightResetNodePendingEnablesFairRuntimeReset ==

@@ -31,10 +31,7 @@ AdvanceContext(subject) ==
      /\ context' = nextContext
      /\ contextHistory' = contextHistory \cup {nextContext}
      /\ nodeView' = [node \in ValidatorIds |-> 0]
-     /\ generation' =
-          [node \in ValidatorIds |->
-             IF generation[node] < MaxGeneration
-             THEN generation[node] + 1 ELSE generation[node]]
+     /\ generation' = [node \in ValidatorIds |-> 0]
      /\ lastInstalledTc' =
           [node \in ValidatorIds |-> NoTimeoutCertificate]
      /\ lockPrepareQc' = [node \in ValidatorIds |-> NoPrepareQC]

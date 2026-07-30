@@ -10953,6 +10953,8 @@ pub struct Offline {
     pub kagemusha_release_policy_path: Option<PathBuf>,
     /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
     pub kagemusha_artifact_dir: Option<PathBuf>,
+    /// Root-trusted canonical seal for a fully qualified Kagemusha catalog.
+    pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
     /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
     pub kagemusha_max_decoded_bytes: u64,
 }
@@ -10966,6 +10968,8 @@ impl Default for Offline {
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
+            kagemusha_catalog_qualification_seal_path:
+                defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
             kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
     }
@@ -12473,6 +12477,7 @@ mod tests {
         assert!(offline.escrow_required);
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
+        assert!(offline.kagemusha_catalog_qualification_seal_path.is_none());
         assert_eq!(
             offline.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES

@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncDeadlockProofs ----
-EXTENDS SumeragiV2AsyncStage2Proofs
+EXTENDS SumeragiV2AsyncFiniteRunnerEpisodeProofs
 
 (***************************************************************************
 Productive deadlock freedom includes concrete terminating local work.
@@ -169,10 +169,16 @@ THEOREM RunNodePrefixStrictlyDecreasesLocalWork ==
     /\ AsyncTypeInvariant
     /\ node \in AsyncCurrentResponsiveVoters
                    \cup asyncHistoricalRecoveryTargets
-    /\ (LocalAdmissionStep(node) \/ IngressDrainStep(node))
+    /\ (LocalAdmissionStep(node)
+          \/ IngressDrainStep(node)
+          \/ SerializedLocalPrecedesServeIngressStep(node)
+          \/ (AsyncServeIngressTargetOnlyTurn(node)
+                /\ asyncRunnerPhase[node] = "Local"))
     => RunnerPrefixLocalWorkDecreaseStep
 BY LocalAdmissionStrictlyDecreasesRuntimeReach,
-   IngressDrainStrictlyDecreasesRuntimeReach, Isa
+   IngressDrainStrictlyDecreasesRuntimeReach,
+   SerializedLocalPredecessorStrictlyDecreasesRuntimeReach,
+   LocalTargetOnlyTurnStrictlyDecreasesRuntimeReach, Isa
    DEF RunnerPrefixLocalWorkDecreaseStep,
        AsyncHistoricalRecoveryTypeInvariant
 
@@ -182,11 +188,16 @@ THEOREM RuntimeInvocationStrictlyDecreasesOverdueTransportWork ==
      source \in AsyncIngressSources:
     /\ DueSourcePackets(recipient, source) # {}
     /\ ~NodeHasApplication(recipient)
-    /\ SerializedRuntimeStep(recipient)
+    /\ (SerializedRuntimeStep(recipient)
+          \/ SerializedRuntimePrecedesServeIngressStep(recipient)
+          \/ (AsyncServeIngressTargetOnlyTurn(recipient)
+                /\ asyncRunnerPhase[recipient] = "Runtime"))
     => OverdueTransportRuntimeInvocationDecreaseStep
 BY Isa
    DEF OverdueTransportRuntimeInvocationDecreaseStep,
-       RuntimeInvocationDebt, SerializedRuntimeStep
+       RuntimeInvocationDebt, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       AsyncServeIngressTargetOnlyTurn
 
 THEOREM RunnerServiceStrictlyClearsDueGate ==
   \A node \in ValidatorIds:
@@ -1113,7 +1124,7 @@ PostStateHistoricalRecoveryRunnerEnvelope(node) ==
 
 PostStateHistoricalRecoveryLocalRunnerWitness(node) ==
   /\ gst
-  /\ LocalAdmissionStep(node)
+  /\ LocalServeSchedulerStep(node)
   /\ PostStateHistoricalRecoveryRunnerEnvelope(node)
 
 PostStateHistoricalRecoveryIngressRunnerWitness(node) ==
@@ -1123,7 +1134,7 @@ PostStateHistoricalRecoveryIngressRunnerWitness(node) ==
 
 PostStateHistoricalRecoveryRuntimeRunnerWitness(node) ==
   /\ gst
-  /\ SerializedRuntimeStep(node)
+  /\ RuntimeServeSchedulerStep(node)
   /\ PostStateHistoricalRecoveryRunnerEnvelope(node)
 
 HistoricalRecoveryRunnerCurrentGuard(node) ==
@@ -1201,6 +1212,7 @@ THEOREM HistoricalRecoveryLocalPhaseAdvanceBaseEnabled ==
   \A node \in ValidatorIds:
     /\ HistoricalRecoveryRunnerCurrentGuard(node)
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ ~LocalAdmissionCanAdvance(node)
     => ENABLED HistoricalRecoveryLocalPhaseAdvanceBaseWitness(node)
 BY AutoUSE, ExpandENABLED, Isa
@@ -1215,12 +1227,14 @@ THEOREM HistoricalRecoveryLocalPhaseAdvanceEnabled ==
   \A node \in ValidatorIds:
     /\ HistoricalRecoveryRunnerCurrentGuard(node)
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ ~LocalAdmissionCanAdvance(node)
     => ENABLED RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 HistoricalRecoveryRunnerCurrentGuard(node),
                 asyncRunnerPhase[node] = "Local",
+                AsyncServeIngressLifecycleOwnerIdentities(node) = {},
                 ~LocalAdmissionCanAdvance(node)
          PROVE ENABLED
                  RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
@@ -1249,7 +1263,8 @@ BY PostStateHistoricalLockRestartNonCrashOuterFrameRefinesExact, Isa
        PostStateHistoricalRecoveryRunnerEnvelope,
        PostStateHistoricalLockRestartNonCrashOuterFrame,
        PostGstRunHistoricalRecoveryNode,
-       RunHistoricalRecoveryNode, RunNodeWork, NodeServiceFrame
+       RunHistoricalRecoveryNode, RunNodeWork, NodeServiceFrame,
+       LocalServeSchedulerStep, RuntimeServeSchedulerStep
 
 THEOREM EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact ==
   \A node:
@@ -1286,6 +1301,7 @@ authority, rank, subject, or work owner.
 
 DirectLocalProducerAdmissionStep(node) ==
   /\ asyncRunnerPhase[node] = "Local"
+  /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ UNCHANGED AsyncDeferredVars
   /\ LocalAdmissionCanAdvance(node)
   /\ SelectedLocalSource(node) = "Producer"
@@ -1388,7 +1404,8 @@ THEOREM DirectHistoricalRecoveryLocalProducerRefinesPostState ==
 BY DirectHistoricalRecoveryLocalProducerUsesProductionAdmission,
    DirectHistoricalRecoveryLocalProducerProvidesEnvelope, Isa
    DEF DirectHistoricalRecoveryLocalProducerWitness,
-       PostStateHistoricalRecoveryLocalRunnerWitness
+       PostStateHistoricalRecoveryLocalRunnerWitness,
+       LocalServeSchedulerStep
 
 THEOREM DirectHistoricalRecoveryLocalProducerRefinesExact ==
   \A node:
@@ -1454,6 +1471,7 @@ PROOF
 DirectLocalCausalDuplicateAdmissionStep(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN /\ asyncRunnerPhase[node] = "Local"
+     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ UNCHANGED AsyncDeferredVars
      /\ LocalAdmissionCanAdvance(node)
      /\ SelectedLocalSource(node) = "Causal"
@@ -1575,7 +1593,8 @@ THEOREM DirectHistoricalRecoveryLocalCausalDuplicateRefinesPostState ==
 BY DirectHistoricalRecoveryLocalCausalDuplicateUsesProductionAdmission,
    DirectHistoricalRecoveryLocalCausalDuplicateProvidesEnvelope, Isa
    DEF DirectHistoricalRecoveryLocalCausalDuplicateWitness,
-       PostStateHistoricalRecoveryLocalRunnerWitness
+       PostStateHistoricalRecoveryLocalRunnerWitness,
+       LocalServeSchedulerStep
 
 THEOREM DirectHistoricalRecoveryLocalCausalDuplicateRefinesExact ==
   \A node:
@@ -1643,6 +1662,7 @@ PROOF
 DirectLocalCausalCompletionAdmissionStep(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN /\ asyncRunnerPhase[node] = "Local"
+     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ UNCHANGED AsyncDeferredVars
      /\ LocalAdmissionCanAdvance(node)
      /\ SelectedLocalSource(node) = "Causal"
@@ -1772,7 +1792,8 @@ THEOREM DirectHistoricalRecoveryLocalCausalCompletionRefinesPostState ==
 BY DirectHistoricalRecoveryLocalCausalCompletionUsesProductionAdmission,
    DirectHistoricalRecoveryLocalCausalCompletionProvidesEnvelope, Isa
    DEF DirectHistoricalRecoveryLocalCausalCompletionWitness,
-       PostStateHistoricalRecoveryLocalRunnerWitness
+       PostStateHistoricalRecoveryLocalRunnerWitness,
+       LocalServeSchedulerStep
 
 THEOREM DirectHistoricalRecoveryLocalCausalCompletionRefinesExact ==
   \A node:
@@ -1842,6 +1863,7 @@ PROOF
 DirectLocalCausalCommandAdmissionStep(node) ==
   LET candidate == HeadCausalCandidate(node)
   IN /\ asyncRunnerPhase[node] = "Local"
+     /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ UNCHANGED AsyncDeferredVars
      /\ LocalAdmissionCanAdvance(node)
      /\ SelectedLocalSource(node) = "Causal"
@@ -1962,7 +1984,8 @@ THEOREM DirectHistoricalRecoveryLocalCausalCommandRefinesPostState ==
 BY DirectHistoricalRecoveryLocalCausalCommandUsesProductionAdmission,
    DirectHistoricalRecoveryLocalCausalCommandProvidesEnvelope, Isa
    DEF DirectHistoricalRecoveryLocalCausalCommandWitness,
-       PostStateHistoricalRecoveryLocalRunnerWitness
+       PostStateHistoricalRecoveryLocalRunnerWitness,
+       LocalServeSchedulerStep
 
 THEOREM DirectHistoricalRecoveryLocalCausalCommandRefinesExact ==
   \A node:
@@ -2034,16 +2057,18 @@ THEOREM SelectedLocalSourceIsKnown ==
 BY Isa
    DEF SelectedLocalSource, PreferredLocalSource, OtherLocalSource
 
-THEOREM DirectHistoricalRecoveryLocalRunnerCaller ==
+THEOREM DirectHistoricalRecoveryNoTicketLocalRunnerCaller ==
   \A node \in ValidatorIds:
     /\ HistoricalRecoveryRunnerCurrentGuard(node)
     /\ asyncRunnerPhase[node] = "Local"
+    /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
     /\ ENABLED LocalAdmissionStep(node)
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 HistoricalRecoveryRunnerCurrentGuard(node),
                 asyncRunnerPhase[node] = "Local",
+                AsyncServeIngressLifecycleOwnerIdentities(node) = {},
                 ENABLED LocalAdmissionStep(node)
          PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
     <2>1. /\ gst
@@ -2123,13 +2148,36 @@ PROOF
              AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
     <2>2. CASE asyncRunnerPhase[node] = "Local"
-      <3>1. ENABLED LocalAdmissionStep(node)
-        BY <2>1b, <2>2, LocalAdmissionStepIsEnabled
-      <3>2. HistoricalRecoveryRunnerCurrentGuard(node)
+      <3>1. HistoricalRecoveryRunnerCurrentGuard(node)
         BY <1>1, <2>1c, <2>1d
            DEF HistoricalRecoveryRunnerCurrentGuard
-      <3> QED BY <2>1b, <2>2, <3>1, <3>2,
-           DirectHistoricalRecoveryLocalRunnerCaller
+      <3>2. CASE AsyncServeIngressLifecycleOwnerIdentities(node) = {}
+        <4>1. ENABLED LocalAdmissionStep(node)
+          BY <2>1b, <2>2, <3>2, LocalAdmissionStepIsEnabled
+        <4> QED BY <2>1b, <2>2, <3>1, <3>2, <4>1,
+             DirectHistoricalRecoveryNoTicketLocalRunnerCaller
+      <3>3. CASE AsyncServeIngressLifecycleOwnerIdentities(node) # {}
+        <4>1. ENABLED AsyncServeIngressTargetOnlyTurn(node)
+          BY <2>1b, <2>2, <3>3,
+             ServeIngressTargetOnlyTurnIsEnabled
+        <4>2. ENABLED
+                 PostStateHistoricalRecoveryLocalRunnerWitness(node)
+          BY <1>1, <2>1c, <2>1d, <2>2, <3>3, <4>1,
+             AutoUSE, ExpandENABLED, Isa
+             DEF PostStateHistoricalRecoveryLocalRunnerWitness,
+                 LocalServeSchedulerStep,
+                 PostStateHistoricalRecoveryRunnerEnvelope,
+                 PostStateHistoricalLockRestartNonCrashOuterFrame,
+                 PostStateHistoricalLockRestartAuthorityFrame,
+                 HistoricalRecoveryTarget,
+                 NodeServiceFrame, AsyncCoreOuterFrame,
+                 AsyncRecoveryControlVars
+        <4>3. ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+          BY <4>2, AutoUSE, ExpandENABLED, Isa
+             DEF PostStateHistoricalRecoveryRunnerWitness
+        <4> QED BY <4>3,
+             EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
+      <3> QED BY <3>2, <3>3
     <2>3. CASE asyncRunnerPhase[node] = "Ingress"
       <3>1. ENABLED IngressDrainStep(node)
         BY <2>1b, <2>3, IngressDrainStepIsEnabled
@@ -2150,13 +2198,14 @@ PROOF
       <3> QED BY <3>3,
            EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
     <2>4. CASE asyncRunnerPhase[node] = "Runtime"
-      <3>1. ENABLED SerializedRuntimeStep(node)
-        BY <2>1b, <2>4, SerializedRuntimeStepIsEnabled
+      <3>1. ENABLED RuntimeServeSchedulerStep(node)
+        BY <2>1b, <2>4, RuntimeServeSchedulerStepIsEnabled
       <3>2. ENABLED
                 PostStateHistoricalRecoveryRuntimeRunnerWitness(node)
         BY <1>1, <2>1c, <2>1d, <3>1,
            AutoUSE, ExpandENABLED, Isa
            DEF PostStateHistoricalRecoveryRuntimeRunnerWitness,
+               RuntimeServeSchedulerStep,
                PostStateHistoricalRecoveryRunnerEnvelope,
                PostStateHistoricalLockRestartNonCrashOuterFrame,
                PostStateHistoricalLockRestartAuthorityFrame,
@@ -2419,6 +2468,9 @@ PROOF
              RunNode, RunHistoricalRecoveryNode
     <2>2. CASE LocalAdmissionStep(recipient)
                     \/ IngressDrainStep(recipient)
+                    \/ SerializedLocalPrecedesServeIngressStep(recipient)
+                    \/ (AsyncServeIngressTargetOnlyTurn(recipient)
+                          /\ asyncRunnerPhase[recipient] = "Local")
       <3>1. RunnerPrefixLocalWorkDecreaseStep
         BY <1>1, <2>2,
            RunNodePrefixStrictlyDecreasesLocalWork
@@ -2433,6 +2485,9 @@ PROOF
            AsyncFairStrictStepIsParameterizedProductive
            DEF AsyncTerminatingLocalWorkDecreaseStep
     <2>3. CASE SerializedRuntimeStep(recipient)
+                    \/ SerializedRuntimePrecedesServeIngressStep(recipient)
+                    \/ (AsyncServeIngressTargetOnlyTurn(recipient)
+                          /\ asyncRunnerPhase[recipient] = "Runtime")
       <3>1. OverdueTransportRuntimeInvocationDecreaseStep
         BY <1>1, <2>3,
            RuntimeInvocationStrictlyDecreasesOverdueTransportWork
@@ -3113,10 +3168,13 @@ THEOREM StarvationFreedomObligation ==
 PROOF
   <1>1. ASSUME NEW initialContext
          PROVE StarvationFreedomProperty(AsyncSpecAt(initialContext))
-    <2>1. ProtectedServiceRanksProgressProperty(
+    <2>1. ProtectedServiceFiniteRunnerEpisodeClosureProperty(
              AsyncSpecAt(initialContext))
-      BY ProtectedServiceRankProgressObligation
-    <2> QED BY <2>1, ProtectedServiceRankProgressImpliesStarvation,
+      BY AsyncSpecProvidesProtectedServiceFiniteRunnerEpisodeClosure
+    <2>2. ProtectedServiceRanksProgressProperty(
+             AsyncSpecAt(initialContext))
+      BY <2>1, ProtectedServiceRankProgressObligation
+    <2> QED BY <2>2, ProtectedServiceRankProgressImpliesStarvation,
                PTL
   <1> QED BY <1>1
 

@@ -129,6 +129,11 @@ candidate and scenario binaries directly, hashes them before and after use, and
 records both binary hashes plus Cargo/rustc identities. Wrapper, runner, target,
 linker, preload, compiler-flag, Git, and Python environment injection is
 removed; the source seal runs with isolated Python mode.
+The scenario authority receives the account chain discriminant as an explicit
+required CLI value; this Taira-only staging path pins it to `369`. Parsing and
+canonical AccountId re-encoding occur under that same scoped discriminant, so
+the process default (`753` for SORA) cannot rewrite or reject a valid Taira
+recipient.
 
 The candidate authority canonically decodes `CandidateV4`, extracts and
 serializes its embedded manifest, validates the exact inventory and each
@@ -179,7 +184,10 @@ compile fixture. The Gradle property used by that check admits exactly
 staging, installation, instrumentation, and evidence export are rejected. The
 physical-evidence runner never enables this property. This check catches Kotlin
 or Android plugin integration failures without pretending to be device
-evidence.
+evidence. Generated candidate assets and JNI inputs are registered through the
+AGP Variant API. The check clones the warmed `modules-2` dependency cache into
+an owner-private read-only snapshot, while Gradle keeps all writable state in a
+fresh fixture-local user home; it never symlinks a live Gradle cache.
 
 ## Physical-device sequence and authority inputs
 

@@ -94,6 +94,8 @@ BY DecisionRecoveryCertificateHasResponsiveRemoteBodySource,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode, AsyncServiceActivationFrameVars,
        DirectCommitCertificateDiscoveryStep,
        DirectHistoricalCommitCertificateDiscoveryStep,
        ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
@@ -105,6 +107,10 @@ BY DecisionRecoveryCertificateHasResponsiveRemoteBodySource,
        PreGstResponsiveReplay, DriveResponsiveReplayHead,
        FinishResponsiveReplay, RearmResponsiveRecovery,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        ExecuteCommand, ExecuteDecisionFetch,
        ExecuteRequestCertifiedBody, ExecutePersistDecision,
@@ -254,10 +260,16 @@ BY CompletionDeferralRetainsCandidate,
        AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
        AsyncNonRunnerStep, RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, OpenHistoricalRecovery,
+       AsyncEnterIndexedServiceActivation,
+       AsyncActivateServiceNode, AsyncServiceActivationFrameVars,
        ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
        EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
        AsyncNetworkStep, AdmitIngressPacket, AsyncFaultStep,
        LocalAdmissionStep, IngressDrainStep, SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,
        ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand,
        ExecuteDecisionFetch, ExecuteRequestCertifiedBody, ExecuteApply,
@@ -374,7 +386,7 @@ PROOF
              ~> DecisionCertifiedResponseOutcome(node, qc)
       BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
          DecisionRecoveryCertificateHasResponsiveRemoteBodySource,
-         StarvationFreedomObligation, PTL, IsaT(600)
+         PTL, IsaT(600)
          DEF DecisionCertifiedRequestSetActive,
              DecisionCertifiedRequestActive,
              DecisionCertifiedResponseOutcome,
@@ -461,9 +473,14 @@ PROOF
 
 THEOREM ApplicationCompletionProgressObligation ==
   \A initialContext:
-    ApplicationCompletionProgressProperty(AsyncSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ApplicationCompletionProgressProperty(
+           AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ApplicationCompletionProgressProperty(
                  AsyncSpecAt(initialContext))
     <2>1. StarvationFreedomProperty(AsyncSpecAt(initialContext))
@@ -489,9 +506,13 @@ PROOF
 
 THEOREM ApplicationLivenessObligation ==
   \A initialContext:
-    ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => ApplicationLivenessProperty(AsyncSpecAt(initialContext))
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE ApplicationLivenessProperty(AsyncSpecAt(initialContext))
     <2>1. ApplicationCompletionProgressProperty(
              AsyncSpecAt(initialContext))
@@ -506,9 +527,13 @@ PROOF
 
 THEOREM OneHeightCompletionObligation ==
   \A initialContext:
-    OneHeightCompletionLiveness(initialContext)
+    ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+      AsyncSpecAt(initialContext))
+      => OneHeightCompletionLiveness(initialContext)
 PROOF
-  <1>1. ASSUME NEW initialContext
+  <1>1. ASSUME NEW initialContext,
+                ProtectedServiceFiniteRunnerEpisodeClosureProperty(
+                  AsyncSpecAt(initialContext))
          PROVE OneHeightCompletionLiveness(initialContext)
     <2>1. RotatingLeaderProgressProperty(
              AsyncLiveSpecAt(initialContext))

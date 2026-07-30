@@ -299,7 +299,7 @@
     },
     {
       "id": "rotating-leader-liveness",
-      "requirement": "Under AsyncLiveSpecAt(initialContext), including the explicit finite AsyncInstallGenerationBudget premise, every post-GST undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide",
+      "requirement": "Under AsyncLiveSpecAt(initialContext), which is exactly the asynchronous transition and fairness specification with no finite-counter premise, every post-GST undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide. Checked install-generation exhaustion remains explicit liveness debt",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "RotatingLeaderProgressObligation",
       "status": "specified_unproved"
@@ -327,14 +327,14 @@
     },
     {
       "id": "genesis-height-successor-handoff",
-      "requirement": "Under AsyncLiveChainSpec, which conjoins the concrete genesis asynchronous chain product with the explicit finite AsyncInstallGenerationBudget premise, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous",
+      "requirement": "Under AsyncLiveChainSpec, which is exactly the concrete genesis asynchronous chain product with no finite-counter premise, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous and checked install-generation exhaustion remains explicit liveness debt",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "GenesisHeightSuccessorHandoffObligation",
       "status": "specified_unproved"
     },
     {
       "id": "height-liveness",
-      "requirement": "Under IndexedLiveChainSpec, which keeps the per-context finite IndexedInstallGenerationBudgetPremise explicit, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal",
+      "requirement": "Under IndexedLiveChainSpec, which is exactly the indexed chain product with no per-context finite-counter premise, every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal; checked install-generation exhaustion remains explicit liveness debt",
       "module": "SumeragiV2ChainLivenessProofs",
       "symbol": "HeightLivenessObligation",
       "status": "specified_unproved"

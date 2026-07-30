@@ -12,6 +12,12 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).parents[1] / "stage_kagemusha_candidate_android_lab.py"
+ROOT = SCRIPT.parents[1]
+HARNESS = (
+    ROOT
+    / "kotlin/kagemusha-candidate-evidence-lab/src/androidTest/java/"
+    "org/hyperledger/iroha/sdk/kagemusha/candidate/lab/CandidateLabHarness.kt"
+)
 SPEC = importlib.util.spec_from_file_location("stage_kagemusha_candidate_android_lab", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 stage = importlib.util.module_from_spec(SPEC)
@@ -177,6 +183,46 @@ class CandidateStagerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_device_lifecycle_requires_exact_recursive_steps(self) -> None:
+        source = HARNESS.read_text(encoding="utf-8")
+        for exact_binding in (
+            "init.branch.hopCount == 0 && init.branch.proofStepCount == 1",
+            "hopOne.recipient.proofStepCount == 2",
+            "hopOneChange.proofStepCount == 2",
+            "hopTwo.recipient.proofStepCount == 3",
+            "hopTwoChange.proofStepCount == 3",
+            "requireVerified(verifyFirst, restoredHopOne.recipient.amount, 1, 2)",
+            "requireVerified(verifyMultiHop, restoredHopTwo.recipient.amount, 2, 3)",
+            "projection.proofStepCount == expectedProofSteps",
+        ):
+            self.assertIn(exact_binding, source)
+        self.assertNotIn("minimumHops", source)
+
+    def test_redeem_native_call_passes_taira_chain_discriminant(self) -> None:
+        source = HARNESS.read_text(encoding="utf-8")
+        call_start = source.index(
+            "KagemushaCandidateLabNative.nativeBuildRedeemRequestV4("
+        )
+        call_prefix = source[call_start : call_start + 500]
+        self.assertIn(
+            "recipient,\n"
+            "                TAIRA_I105_CHAIN_DISCRIMINANT,\n"
+            "                atomicUnits,",
+            call_prefix,
+        )
+        self.assertIn(
+            "u32be(TAIRA_I105_CHAIN_DISCRIMINANT)",
+            source,
+        )
+        self.assertIn("private const val TAIRA_I105_CHAIN_DISCRIMINANT = 369", source)
+
+    def test_scenario_authority_pins_the_public_taira_discriminant(self) -> None:
+        self.assertEqual(stage.PUBLIC_TAIRA_CHAIN_DISCRIMINANT, 369)
+        source = SCRIPT.read_text(encoding="utf-8")
+        invocation = source[source.index("scenario = subprocess.run(") :]
+        self.assertIn('"--account-chain-discriminant"', invocation)
+        self.assertIn("str(PUBLIC_TAIRA_CHAIN_DISCRIMINANT)", invocation)
+
     def report_bytes(self) -> bytes:
         return (json.dumps(self.fixture.report, sort_keys=True) + "\n").encode()
 
@@ -198,7 +244,7 @@ class CandidateStagerTests(unittest.TestCase):
             stage.parse_validation_report(self.report_bytes())
 
     def test_report_parser_accepts_exact_artifact_limit_and_rejects_next_byte(self) -> None:
-        maximum = 4 * 1024 * 1024 * 1024
+        maximum = 5 * 1024 * 1024 * 1024
         self.assertEqual(stage.MAX_ARTIFACT_BYTES, maximum)
         artifacts = self.fixture.report["artifacts"]
         assert isinstance(artifacts, list)

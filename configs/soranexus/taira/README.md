@@ -131,13 +131,24 @@ into multi-second stalls.
   config directly from the same validator roster used for per-validator
   `config.toml` generation so public Torii ingress cannot drift onto stale
   loopback ports.
+- `scripts/deploy_taira_v21_reset.py`: performs the authenticated four-validator
+  fresh-reset cutover and requires a fresh lowercase 64-hex
+  `--restart-generation`. It emits identity-scoped terminal-unhealthy paths
+  for all four supervisors and fails immediately if any current-generation
+  marker appears during initial health, consensus advancement, or the child
+  restart proof.
 - `scripts/migrate_taira_peer_supervision.py`: creates a sealed, read-only
   adoption plan for an existing four-peer macOS deployment, then performs an
   explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
   `launchd-run.sh` to four independent launchd jobs without replacing storage.
 - `scripts/taira_peer_supervisor.py`: launchd-owned single-validator restart
   loop used by the migration. It guards the planned binary, config, and storage
-  identities and caps exponential child-restart backoff.
+  identities and caps exponential child-restart backoff. Three consecutive
+  identical normalized fatal exits inside the rapid-start window atomically
+  publish a bounded mode-0600 terminal-unhealthy fingerprint and leave the
+  supervisor alive without spawning a fourth child. The marker contains only
+  its schema, hit count, and SHA-256 fingerprints; it never contains child
+  stderr, commands, config contents, keys, or paths.
 
   The live reset controller may hash a separately root-controlled validator
   binary once and seal its device, inode, size, mtime, and ctime into every
@@ -487,12 +498,23 @@ only the native Apple App Attest and Android KeyMint roots and keeps both
 platform policies fail-closed.
 
 ```bash
+fresh_genesis_public_key='<fresh-ed0120-public-key>'
+fresh_authority="$(
+  /absolute/path/from/sealed-build-report/iroha \
+    tools address convert \
+    --profile taira \
+    --format json \
+    "${fresh_genesis_public_key}" |
+  /opt/homebrew/bin/python3 -c \
+    'import json, sys; p=json.load(sys.stdin); assert p["i105"]["network_prefix"] == 369; print(p["i105"]["value"])'
+)"
+
 cargo run -p iroha_kagami --bin kagami -- \
   kagemusha prepare-taira-testnet-bootstrap-v4 \
   --genesis /absolute/path/to/fresh-taira-genesis.json \
   --release-bundle /absolute/private/path/taira-release \
-  --genesis-authority '<taira-i105-account>' \
-  --command-authority '<taira-i105-account>' \
+  --genesis-authority "${fresh_authority}" \
+  --command-authority "${fresh_authority}" \
   --fee-mint 1000000 \
   --ios-team-id '<apple-team-id>' \
   --ios-bundle-id '<ios-bundle-id>' \
@@ -508,12 +530,18 @@ The emitted manifest enables `offline.enabled` on the existing scale-2 Taira
 asset `7ZepsJTHCVLKsrFFNZGSRGZgvBhv`, renames it to `ds`, rebinds it as
 `ds#boi.is`, and replaces the legacy display metadata with code `DS`, ISO
 currency `ILS`, symbol `₪`, and display name `Digital Shekel`. It preserves the
-opaque asset ID, fixed scale, mintability, balances, and total supply. The
-helper derives the canonical escrow, registers it plus a distinct missing
-command account, treats the genesis signer as the account that `irohad`
-implicitly creates before height one, registers and binds all three base
-verifiers, grants the exact activation/device/escrow permissions, funds the
-command authority, and atomically activates the authenticated Eq/Ep release.
+opaque asset ID, fixed scale, mintability, balances, and total supply. Use the
+newly sealed `iroha` binary for the address conversion and require JSON
+`i105.network_prefix = 369`; do not reuse a legacy global-profile conversion.
+The reset uses one freshly generated key pair for both genesis and command
+signing. The helper derives the canonical escrow, treats that shared
+genesis/command authority as the account that `irohad` implicitly creates
+before height one, registers and binds all three base verifiers, grants the
+exact activation/device/escrow permissions, funds the shared authority, and
+atomically activates the authenticated Eq/Ep release. The reset packager must
+receive the same value through `--command-authority`; it independently derives
+the Taira I105 literal from the fresh genesis public key and rejects any
+mismatch or archived command-key reuse.
 It also refuses a source genesis without non-zero public `ds#boi.is` liquidity outside escrow: top-up
 atomically moves that exact user balance into escrow, and redemption can only
 draw against finalized top-up provenance. The builder also replaces the legacy
@@ -611,6 +639,8 @@ existing storage directories. Each live peer's exact working directory is
 sealed separately from its storage inode; they are intentionally not assumed
 to be the same path. The printed manifest digest seals those process, binary,
 config, PID-file, working-directory, storage, and generated plist identities.
+The terminal-latch contract is supervision manifest schema v4; pre-latch v3
+plans are rejected and must be regenerated rather than reinterpreted.
 Review the manifest and plists before scheduling the cutover. Generic adoption
 uses the supervisor's full-hash path for a binary below the non-root-owned
 deployment base. Supplying a separately installed root-controlled `--irohad`
@@ -640,7 +670,16 @@ independently rechecks the separate storage inode before every child start,
 forwards shutdown signals, and restarts only that validator with exponential
 backoff capped by
 `--maximum-backoff-seconds` (30 seconds by default). launchd also throttles a
-supervisor-level crash loop.
+supervisor-level crash loop. The peer supervisor additionally stops a
+deterministic startup-fatal loop after three identical normalized rapid exits.
+It keeps the launchd-owned supervisor process alive, removes the child PID
+file, and durably publishes an owner-private terminal-unhealthy fingerprint.
+An unchanged binary/config/restart-generation binding remains latched across a
+supervisor or launchd restart. A changed binary digest/stat identity, config
+digest, or explicit `--restart-generation` selects a new binding and permits a
+fresh start; changing only the generation is the operator-controlled reset for
+an otherwise identical deployment. Nonfatal, signaled, slow, or non-identical
+exits continue the same capped exponential retry policy.
 
 Binary, config, working-directory, or storage replacement is fail-closed after
 migration. Render a new reviewed plan before an intentional
@@ -1284,6 +1323,41 @@ For contract or IVM execution, add the command's positive `--gas-limit`; the
 CLI binds it inside `fee_payment`. Do not put `fee_sponsor`, `gas_asset_id`, or
 `gas_limit` in transaction metadata.
 
+## Qualification-sealed public Taira layout
+
+The public Taira reset does not use the validator-owned Kagemusha directories
+shown in the generic deployment examples below. The reset controller installs
+the exact admitted `irohad` binary and release tree under a release-specific
+`/Library/SORA/Taira/releases/<release-tree-sha256>/...` root. Every qualified
+directory is owned by root and the validator runtime group with mode `0550`;
+every qualified file has the same ownership and mode `0440`. This keeps the
+tree immutable to the non-root validator while allowing that runtime identity
+to read it. Generated validator configs point only at that installed policy
+and artifact tree.
+
+Before starting a validator, the controller injects the matching
+`settlement.offline.kagemusha_catalog_qualification_seal_path`:
+
+```text
+/Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito
+```
+
+It then runs the exact installed binary as root with `--check-config`, the
+locally available genesis, and
+`--write-kagemusha-catalog-qualification-seal` set to that same path. This
+no-bind pass performs full catalog and genesis authentication and publishes a
+new root-owned mode `0444` seal without replacing any existing path. Normal
+validator startup may run as its non-root service identity, but the policy,
+artifact, executable, and seal path chains remain root-controlled and only
+readable by that identity. A new release tree always receives a new seal
+filename.
+
+Do not recursively `chown` any public-lane qualified source or seal path to uid
+1001 or `iroha`; doing so invalidates the root-trust invariant and makes sealed
+startup fail closed. Keep `/Library/SORA/Taira/seals` separate from the policy,
+artifact, and executable directories because publishing the seal changes its
+parent directory identity.
+
 ## Containerized validator deployment
 
 Use this path when the validator host should run the published Docker image
@@ -1291,6 +1365,12 @@ instead of locally installed `irohad` binaries. The primary wrapper is
 `taira-validator-container.sh`, which uses plain `docker` and therefore works
 on hosts that lack the Compose plugin. `docker-compose.validator.yml` remains
 available as an optional convenience for environments that do have Compose.
+The uid-1001 Kagemusha layout in this section is an unsealed development or
+private-testnet example. It is not valid for the qualification-sealed public
+Taira lane. A public container deployment must instead mount the
+controller-installed `/Library/SORA/Taira/releases/<release-tree-sha256>`
+source tree and release-specific seal read-only, and use the injected generated
+configuration described above.
 
 1. Publish or otherwise load the image you intend to run on the host, verify
    its signed release authority, and retain the admitted manifest digest or
@@ -1302,6 +1382,8 @@ available as an optional convenience for environments that do have Compose.
 2. Render the validator config bundle from your user-local roster and secrets:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 3. Install the rendered config and storage directories on the validator host:
+   - the ownership commands in this step apply only to the unsealed generic
+     layout; never apply them to public-lane qualified source or seal paths
    - `sudo install -d -m 0700 -o 1001 -g 1001 /etc/iroha/taira-validator`
    - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
    - `sudo install -d -m 0700 -o 1001 -g 1001 /var/lib/iroha/taira-validator/kagemusha/v4`
@@ -1362,6 +1444,12 @@ Optional container overrides:
 Install the validator from the repo checkout so the live process cannot drift
 away from the shipped MCP-enabled config:
 
+The `iroha:iroha` Kagemusha ownership examples below describe an unsealed
+generic deployment. They must not be used for the public lane. Public Taira
+uses the controller-installed, root-controlled release tree, executable, and
+release-specific seal described in
+[Qualification-sealed public Taira layout](#qualification-sealed-public-taira-layout).
+
 1. Check out this repository on the validator host, for example at
    `/opt/iroha`.
 2. Build a rollout bundle from the exact runtime revision you intend to ship:
@@ -1403,6 +1491,8 @@ away from the shipped MCP-enabled config:
      `streaming_identity_*`, `sorafs_council_public_keys`, and
      `sorafs_council_signature_threshold` fields because the checked-in template
      intentionally leaves those deployment values as fail-closed placeholders
+   - the following `iroha`-owned paths are for the unsealed generic layout
+     only; never recursively chown the public-lane qualified tree or seal
    - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator`
    - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator-1`
    - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator/kagemusha/v4`

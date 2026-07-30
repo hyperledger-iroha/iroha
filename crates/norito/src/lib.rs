@@ -10214,6 +10214,17 @@ where
     T: NoritoSerialize,
     for<'de> T: NoritoDeserialize<'de>,
 {
+    use std::io::Cursor;
+
+    // Canonical frames are always uncompressed and use the fixed default
+    // layout. Reject either condition from the fixed-size header before a
+    // forged uncompressed-length field can reserve a decompression buffer or
+    // an alternate layout can influence reconstruction.
+    let header = core::Header::read(Cursor::new(bytes))?;
+    if header.compression != Compression::None || header.flags != core::default_encode_flags() {
+        return Err(Error::NonCanonicalEncoding);
+    }
+
     let defaults = canonical_decode_limits(bytes.len());
     with_decode_limits(defaults, || {
         let _canonical_flags = core::DecodeFlagsGuard::enter(core::default_encode_flags());
@@ -10314,6 +10325,20 @@ mod canonical_codec_tests {
 
         assert!(matches!(
             decode_canonical::<Vec<String>>(&compressed),
+            Err(Error::NonCanonicalEncoding)
+        ));
+    }
+
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
+    #[test]
+    fn canonical_decode_rejects_compression_before_decode_allocation_budget() {
+        let value = vec!["compressed expansion".to_owned(); 4096];
+        let compressed = to_compressed_bytes(&value, Some(CompressionConfig::default()))
+            .expect("encode compressed expansion fixture");
+        let no_decode_resources = DecodeLimits::new(0, 0, 0, 0, 0);
+
+        assert!(matches!(
+            decode_canonical_with_limits::<Vec<String>>(&compressed, no_decode_resources),
             Err(Error::NonCanonicalEncoding)
         ));
     }

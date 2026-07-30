@@ -3,12 +3,19 @@
 
 Without ``--apply`` this command is strictly read-only: it authenticates the
 binary, supervisor, reset bundle, current four-job launchd cohort, disk
-headroom, and a read-only directory fsync barrier.  ``--apply`` additionally
-requires root, installs content-addressed root-owned code, replaces all four
+headroom, and a read-only directory fsync barrier.  An explicitly authorized
+reset of an already-degraded testnet may use ``--allow-absent-old-child`` only
+when an exact loaded old supervisor has neither a PID file nor any child
+process.  ``--apply`` additionally requires root, installs content-addressed
+root-owned code, has that exact binary fully qualify the catalog once and
+publish its immutable root-owned seal, then validates all four configs through
+the sealed fast path before mutating the old cohort.  It replaces all four
 LaunchDaemons as one cohort, proves mandatory offline readiness and advancing
 consensus, and proves one supervised child can restart without replacing its
-supervisor.  Any failure after the old cohort is stopped restores all four old
-plists and jobs.
+supervisor.  Any failed rollout removes only a seal whose returned identity it
+owns and restores the old release/cohort.  If the writer publishes a seal but
+fails before returning its identity, the controller preserves that unattributed
+seal and its installed release for explicit operator recovery.
 
 The controller never prints config contents, process command lines, HTTP
 bodies, or other runtime signing material.
@@ -34,13 +41,11 @@ import stat
 import subprocess
 import sys
 import time
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable, NoReturn, Sequence
-
+from typing import Any, Callable, NoReturn, Optional, Sequence
 
 PEER_COUNT = 4
 CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
@@ -62,11 +67,17 @@ DEFAULT_MINIMUM_FREE_BYTES = 16 * 1024 * 1024 * 1024
 DEFAULT_MAXIMUM_FSYNC_LATENCY_MS = 250
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 240
 RESTART_PROOF_TIMEOUT_SECONDS = 45
+CONFIG_CHECK_TIMEOUT_SECONDS = 180
+# The one-time gate streams the full catalog twice (roughly 18.4 GB today);
+# keep its APFS bound separate from the strict sealed fast-path checks.
+CATALOG_QUALIFICATION_TIMEOUT_SECONDS = 3_600
 MAX_BINARY_BYTES = 2 * 1024 * 1024 * 1024
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_HTTP_BYTES = 4 * 1024 * 1024
-MAX_RELEASE_FILE_BYTES = 4 * 1024 * 1024 * 1024
+MAX_QUALIFICATION_SEAL_BYTES = 8 * 1024 * 1024
+MAX_TERMINAL_UNHEALTHY_BYTES = 1024
+MAX_RELEASE_FILE_BYTES = 5 * 1024 * 1024 * 1024
 MAX_BUNDLE_BYTES = 64 * 1024 * 1024 * 1024
 EXPECTED_RELEASE_FILE_COUNT = 16
 RELEASE_ATTESTATION_FILE_NAME = "release-attestation-v4.norito"
@@ -113,10 +124,15 @@ VALIDATOR_NAMES = {"codec", "config.toml", "configs", "manifests", "runtime", "s
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 BLOCK_HASH_RE = re.compile(r"(?:hash:)?([0-9A-Fa-f]{64})")
+TERMINAL_UNHEALTHY_SCHEMA = "taira-terminal-unhealthy-v1"
 INSTALL_ROOT = Path("/Library/SORA/Taira")
 LAUNCH_DAEMONS = Path("/Library/LaunchDaemons")
 DEFAULT_SUPERVISOR_PYTHON = Path("/usr/bin/python3")
 DEPLOYMENT_LOCK = INSTALL_ROOT / "deploy-v21.lock"
+MACOS_ACL_INSPECTOR = Path("/bin/ls")
+MACOS_ACL_CLEARER = Path("/bin/chmod")
+MACOS_ACL_COMMAND_TIMEOUT_SECONDS = 5
+MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES = 64 * 1024
 
 
 class DeploymentError(RuntimeError):
@@ -154,6 +170,125 @@ def require_commit(value: str, label: str = "expected source commit") -> str:
     if COMMIT_RE.fullmatch(value) is None or value == "0" * 40:
         fail(f"{label} must be one full nonzero lowercase Git object id")
     return value
+
+
+def qualification_seal_path(release_tree_sha256: str) -> Path:
+    """Return the exact root-trusted seal path for one release-tree identity."""
+
+    release_tree_sha256 = require_sha256(
+        release_tree_sha256, "Kagemusha release tree SHA-256"
+    )
+    return INSTALL_ROOT / "seals" / f"kagemusha-v4-{release_tree_sha256}.norito"
+
+
+def _run_bounded_macos_acl_command(
+    program: Path, option: str, path: Path, label: str
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one absolute macOS ACL tool with bounded time and retained output."""
+
+    if not program.is_absolute() or program not in {
+        MACOS_ACL_INSPECTOR,
+        MACOS_ACL_CLEARER,
+    }:
+        fail(f"macOS ACL command is not one pinned absolute tool: {program}")
+    try:
+        result = subprocess.run(
+            [str(program), option, str(path)],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=MACOS_ACL_COMMAND_TIMEOUT_SECONDS,
+            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DeploymentError(
+            f"bounded macOS ACL command failed for {label}: {path}"
+        ) from error
+    if (
+        len(result.stdout) > MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES
+        or len(result.stderr) > MACOS_ACL_COMMAND_MAX_OUTPUT_BYTES
+    ):
+        fail(f"macOS ACL command output exceeded its bound for {label}: {path}")
+    return result
+
+
+def require_acl_free_path(
+    path: Path,
+    label: str,
+    *,
+    descriptor: Optional[int] = None,
+) -> os.stat_result:
+    """Require a stable path, and on macOS prove it has no extended ACL."""
+
+    before = path.lstat()
+    if descriptor is not None and metadata_identity(
+        os.fstat(descriptor)
+    ) != metadata_identity(before):
+        fail(f"{label} name does not identify its opened inode: {path}")
+    if sys.platform == "darwin":
+        result = _run_bounded_macos_acl_command(
+            MACOS_ACL_INSPECTOR, "-ldeq", path, label
+        )
+        if (
+            result.returncode != 0
+            or result.stderr
+            or not result.stdout.endswith(b"\n")
+            or result.stdout.count(b"\n") != 1
+        ):
+            fail(f"{label} must not have an extended ACL: {path}")
+    after = path.lstat()
+    if metadata_identity(after) != metadata_identity(before):
+        fail(f"{label} changed during ACL validation: {path}")
+    if descriptor is not None and metadata_identity(
+        os.fstat(descriptor)
+    ) != metadata_identity(after):
+        fail(f"{label} name changed from its opened inode: {path}")
+    return after
+
+
+def clear_owned_temporary_acl(path: Path, descriptor: int, label: str) -> None:
+    """Clear inherited macOS ACLs only on one unpublished, owned temp inode."""
+
+    before_path = path.lstat()
+    before_opened = os.fstat(descriptor)
+    if (
+        metadata_identity(before_path) != metadata_identity(before_opened)
+        or not stat.S_ISREG(before_opened.st_mode)
+        or before_opened.st_nlink != 1
+        or before_opened.st_uid != os.geteuid()
+    ):
+        fail(f"{label} temporary name does not identify its owned opened inode")
+    if sys.platform == "darwin":
+        result = _run_bounded_macos_acl_command(MACOS_ACL_CLEARER, "-N", path, label)
+        if result.returncode != 0 or result.stdout or result.stderr:
+            fail(f"failed to clear inherited ACL from {label}: {path}")
+    after_path = path.lstat()
+    after_opened = os.fstat(descriptor)
+    stable_before = (
+        before_opened.st_dev,
+        before_opened.st_ino,
+        before_opened.st_mode,
+        before_opened.st_uid,
+        before_opened.st_gid,
+        before_opened.st_nlink,
+        before_opened.st_size,
+        before_opened.st_mtime_ns,
+    )
+    stable_after = (
+        after_opened.st_dev,
+        after_opened.st_ino,
+        after_opened.st_mode,
+        after_opened.st_uid,
+        after_opened.st_gid,
+        after_opened.st_nlink,
+        after_opened.st_size,
+        after_opened.st_mtime_ns,
+    )
+    if stable_after != stable_before or metadata_identity(
+        after_path
+    ) != metadata_identity(after_opened):
+        fail(f"{label} changed while its inherited ACL was cleared")
+    require_acl_free_path(path, label, descriptor=descriptor)
 
 
 def canonical_path(path: Path, label: str) -> Path:
@@ -252,7 +387,9 @@ def parse_json_bytes(raw: bytes, label: str) -> dict[str, Any]:
     return payload
 
 
-def require_private_entry(path: Path, owner_uid: int, owner_gid: int, *, directory: bool) -> os.stat_result:
+def require_private_entry(
+    path: Path, owner_uid: int, owner_gid: int, *, directory: bool
+) -> os.stat_result:
     """Require one owner-private bundle entry with a stable type and owner."""
 
     info = path.lstat()
@@ -289,7 +426,9 @@ def inspect_private_bundle_tree(bundle: Path, owner_uid: int, owner_gid: int) ->
         current_path = Path(current)
         require_private_entry(current_path, owner_uid, owner_gid, directory=True)
         for name in directory_names:
-            require_private_entry(current_path / name, owner_uid, owner_gid, directory=True)
+            require_private_entry(
+                current_path / name, owner_uid, owner_gid, directory=True
+            )
         for name in file_names:
             info = require_private_entry(
                 current_path / name, owner_uid, owner_gid, directory=False
@@ -300,18 +439,230 @@ def inspect_private_bundle_tree(bundle: Path, owner_uid: int, owner_gid: int) ->
     return total
 
 
+CONFIG_PROJECTION_FIELDS: dict[tuple[str, ...], dict[str, str]] = {
+    (): {
+        "chain": "string",
+        "chain_discriminant": "integer",
+    },
+    ("network",): {"address": "string"},
+    ("torii",): {"address": "string"},
+    ("torii", "kagemusha_commands"): {"enabled": "boolean"},
+    ("nexus", "storage"): {"local_budget_bytes": "integer"},
+    ("nexus", "storage", "disk_budget_weights"): {
+        "kura_blocks_bps": "integer",
+        "wsv_snapshots_bps": "integer",
+        "sorafs_bps": "integer",
+        "soranet_spool_bps": "integer",
+        "soravpn_spool_bps": "integer",
+    },
+    ("settlement", "offline"): {
+        "enabled": "boolean",
+        "escrow_required": "boolean",
+        "kagemusha_release_policy_path": "string",
+        "kagemusha_artifact_dir": "string",
+        "kagemusha_catalog_qualification_seal_path": "string",
+    },
+    ("genesis",): {"file": "string"},
+}
+TOML_TABLE_RE = re.compile(r"^\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]$")
+TOML_ARRAY_TABLE_RE = re.compile(r"^\[\[([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\]\]$")
+TOML_ASSIGNMENT_RE = re.compile(r"^([A-Za-z0-9_-]+)\s*=\s*(.*)$")
+TOML_UNSIGNED_INTEGER_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
+TOML_HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
+
+
+def _strip_toml_comment(line: str, label: str, line_number: int) -> str:
+    """Strip a TOML comment without mistaking ``#`` inside a string."""
+
+    quote: Optional[str] = None
+    escaped = False
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote is None:
+            if character == "#":
+                return line[:index]
+            if character in ('"', "'"):
+                if line[index : index + 3] == character * 3:
+                    fail(
+                        f"{label} uses an unsupported multiline string "
+                        f"at line {line_number}"
+                    )
+                quote = character
+        elif quote == '"':
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quote = None
+        elif character == "'":
+            quote = None
+        index += 1
+    if quote is not None or escaped:
+        fail(f"{label} has an unterminated string at line {line_number}")
+    return line
+
+
+def _decode_toml_string(value: str, label: str, line_number: int) -> str:
+    """Decode one single-line TOML basic or literal string."""
+
+    if len(value) < 2 or value[0] not in ('"', "'"):
+        fail(f"{label} has a malformed string at line {line_number}")
+    quote = value[0]
+    output: list[str] = []
+    index = 1
+    while index < len(value):
+        character = value[index]
+        if character == quote:
+            if index != len(value) - 1:
+                fail(f"{label} has trailing data at line {line_number}")
+            return "".join(output)
+        if quote == "'" or character != "\\":
+            if ord(character) < 0x20 or ord(character) == 0x7F:
+                fail(f"{label} contains a control character at line {line_number}")
+            output.append(character)
+            index += 1
+            continue
+        index += 1
+        if index >= len(value):
+            fail(f"{label} has an incomplete escape at line {line_number}")
+        escape = value[index]
+        simple_escapes = {
+            '"': '"',
+            "\\": "\\",
+            "b": "\b",
+            "t": "\t",
+            "n": "\n",
+            "f": "\f",
+            "r": "\r",
+        }
+        if escape in simple_escapes:
+            output.append(simple_escapes[escape])
+            index += 1
+            continue
+        if escape not in ("u", "U"):
+            fail(f"{label} has an invalid escape at line {line_number}")
+        width = 4 if escape == "u" else 8
+        digits = value[index + 1 : index + 1 + width]
+        if len(digits) != width or TOML_HEX_RE.fullmatch(digits) is None:
+            fail(f"{label} has an invalid Unicode escape at line {line_number}")
+        codepoint = int(digits, 16)
+        if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+            fail(f"{label} has an invalid Unicode scalar at line {line_number}")
+        output.append(chr(codepoint))
+        index += width + 1
+    fail(f"{label} has an unterminated string at line {line_number}")
+
+
+def _decode_projection_value(
+    raw: str, value_type: str, label: str, line_number: int
+) -> object:
+    """Decode one required projected TOML scalar with no coercion."""
+
+    value = raw.strip()
+    if value_type == "string":
+        return _decode_toml_string(value, label, line_number)
+    if value_type == "boolean":
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        fail(f"{label} has a malformed boolean at line {line_number}")
+    if TOML_UNSIGNED_INTEGER_RE.fullmatch(value) is None:
+        fail(f"{label} has a malformed integer at line {line_number}")
+    return int(value)
+
+
+def parse_config_projection_text(text: str, label: str) -> dict[str, Any]:
+    """Extract exactly the fail-closed validator fields consumed by preflight."""
+
+    projected: dict[str, Any] = {}
+    current_table: tuple[str, ...] = ()
+    seen_tables: set[tuple[str, ...]] = {()}
+    seen_fields: set[tuple[tuple[str, ...], str]] = set()
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = _strip_toml_comment(raw_line, label, line_number).strip()
+        if not line:
+            continue
+        if line.startswith("["):
+            array_match = TOML_ARRAY_TABLE_RE.fullmatch(line)
+            table_match = TOML_TABLE_RE.fullmatch(line)
+            if array_match is None and table_match is None:
+                fail(f"{label} has a malformed table header at line {line_number}")
+            table_text = (
+                array_match.group(1)
+                if array_match is not None
+                else table_match.group(1)
+            )
+            current_table = tuple(table_text.split("."))
+            if current_table in CONFIG_PROJECTION_FIELDS:
+                if array_match is not None:
+                    fail(
+                        f"{label} declares required table {table_text} as an array "
+                        f"at line {line_number}"
+                    )
+                if current_table in seen_tables:
+                    fail(
+                        f"{label} duplicates required table {table_text} "
+                        f"at line {line_number}"
+                    )
+                seen_tables.add(current_table)
+            continue
+        assignment = TOML_ASSIGNMENT_RE.fullmatch(line)
+        required = CONFIG_PROJECTION_FIELDS.get(current_table)
+        if assignment is None:
+            if required is not None and any(
+                re.match(rf"^{re.escape(key)}(?:\s|=|$)", line) for key in required
+            ):
+                fail(
+                    f"{label} has a malformed required assignment "
+                    f"at line {line_number}"
+                )
+            continue
+        key, raw_value = assignment.groups()
+        if required is None or key not in required:
+            continue
+        identity = (current_table, key)
+        if identity in seen_fields:
+            dotted = ".".join((*current_table, key))
+            fail(f"{label} duplicates required field {dotted} at line {line_number}")
+        seen_fields.add(identity)
+        value = _decode_projection_value(
+            raw_value,
+            required[key],
+            label,
+            line_number,
+        )
+        destination = projected
+        for component in current_table:
+            child = destination.setdefault(component, {})
+            if not isinstance(child, dict):
+                fail(f"{label} has an ambiguous required table projection")
+            destination = child
+        destination[key] = value
+
+    missing = [
+        ".".join((*table, key))
+        for table, fields in CONFIG_PROJECTION_FIELDS.items()
+        for key in fields
+        if (table, key) not in seen_fields
+    ]
+    if missing:
+        fail(f"{label} lacks required fields: {', '.join(sorted(missing))}")
+    return projected
+
+
 def parse_toml(path: Path, owner_uid: int, owner_gid: int) -> dict[str, Any]:
-    """Decode one bounded private validator config."""
+    """Extract one bounded private validator config projection."""
 
     require_private_entry(path, owner_uid, owner_gid, directory=False)
     raw, _ = read_regular(path, MAX_CONFIG_BYTES)
     try:
-        payload = tomllib.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
-        raise DeploymentError(f"validator config is invalid TOML: {path}") from error
-    if not isinstance(payload, dict):
-        fail(f"validator config is not a TOML table: {path}")
-    return payload
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise DeploymentError(f"validator config is not UTF-8: {path}") from error
+    return parse_config_projection_text(text, f"validator config {path}")
 
 
 def address_port(value: object, label: str) -> int:
@@ -385,17 +736,19 @@ def release_tree_sha256(root: Path, owner_uid: int, owner_gid: int) -> str:
     return digest
 
 
-def require_manifest_hash(manifest: dict[str, Any], field: str, path: Path, maximum: int) -> str:
+def require_manifest_hash(
+    manifest: dict[str, Any], field: str, path: Path, maximum: int
+) -> tuple[str, os.stat_result]:
     """Require a file digest to equal its reset-manifest binding."""
 
     expected = manifest.get(field)
     if not isinstance(expected, str):
         fail(f"reset manifest omitted {field}")
     require_sha256(expected, f"reset manifest {field}")
-    actual, _ = sha256_regular(path, maximum)
+    actual, info = sha256_regular(path, maximum)
     if actual != expected:
         fail(f"reset manifest {field} does not match {path.name}")
-    return actual
+    return actual, info
 
 
 @dataclasses.dataclass(frozen=True)
@@ -411,6 +764,9 @@ class PeerPlan:
     storage: Path
     config: Path
     config_sha256: str
+    config_identity: tuple[int, ...]
+    workdir_identity: tuple[int, ...]
+    storage_identity: tuple[int, ...]
     workdir_device: int
     workdir_inode: int
     storage_device: int
@@ -428,6 +784,8 @@ class BundlePlan:
     runtime_group: str
     manifest: dict[str, Any]
     manifest_sha256: str
+    manifest_identity: tuple[int, ...]
+    signed_genesis_identity: tuple[int, ...]
     release: ReleasePlan
     peers: tuple[PeerPlan, ...]
     bundle_bytes: int
@@ -560,17 +918,29 @@ def validate_config_projection(
 ) -> None:
     """Require exact public-Taira, storage, port, and mandatory-offline config."""
 
-    if config.get("chain") != CHAIN_ID or config.get("chain_discriminant") != CHAIN_DISCRIMINANT:
+    if (
+        config.get("chain") != CHAIN_ID
+        or config.get("chain_discriminant") != CHAIN_DISCRIMINANT
+    ):
         fail("validator config does not target canonical public Taira")
     network = config.get("network")
     torii = config.get("torii")
     nexus = config.get("nexus")
     settlement = config.get("settlement")
     genesis = config.get("genesis")
-    if not all(isinstance(value, dict) for value in (network, torii, nexus, settlement, genesis)):
-        fail("validator config lacks required network/Torii/Nexus/offline/genesis tables")
+    if not all(
+        isinstance(value, dict)
+        for value in (network, torii, nexus, settlement, genesis)
+    ):
+        fail(
+            "validator config lacks required network/Torii/Nexus/offline/genesis tables"
+        )
     assert isinstance(network, dict) and isinstance(torii, dict)
-    assert isinstance(nexus, dict) and isinstance(settlement, dict) and isinstance(genesis, dict)
+    assert (
+        isinstance(nexus, dict)
+        and isinstance(settlement, dict)
+        and isinstance(genesis, dict)
+    )
     if address_port(network.get("address"), "network.address") != p2p_port:
         fail(f"validator config P2P port is not exact {p2p_port}")
     if address_port(torii.get("address"), "torii.address") != torii_port:
@@ -592,10 +962,13 @@ def validate_config_projection(
         or commands.get("enabled") is not True
     ):
         fail("validator config does not make offline cash mandatory")
-    if offline.get("kagemusha_release_policy_path") != str(
-        release_root / RELEASE_POLICY_FILE_NAME
-    ) or offline.get("kagemusha_artifact_dir") != str(
-        release_root / RELEASE_CATALOG_DIRECTORY_NAME
+    if (
+        offline.get("kagemusha_release_policy_path")
+        != str(release_root / RELEASE_POLICY_FILE_NAME)
+        or offline.get("kagemusha_artifact_dir")
+        != str(release_root / RELEASE_CATALOG_DIRECTORY_NAME)
+        or offline.get("kagemusha_catalog_qualification_seal_path")
+        != str(qualification_seal_path(release_root.name))
     ):
         fail("validator config does not bind the authenticated Kagemusha catalog")
     if genesis.get("file") != str(bundle / "genesis.signed.nrt"):
@@ -704,12 +1077,14 @@ def validate_bundle(
         runtime_user = pwd.getpwuid(owner_uid).pw_name
         runtime_group = grp.getgrgid(owner_gid).gr_name
     except KeyError as error:
-        raise DeploymentError("reset bundle owner has no local user/group identity") from error
+        raise DeploymentError(
+            "reset bundle owner has no local user/group identity"
+        ) from error
     require_exact_names(bundle, TOP_LEVEL_NAMES, "reset bundle")
     bundle_bytes = inspect_private_bundle_tree(bundle, owner_uid, owner_gid)
 
     manifest_path = bundle / "reset-manifest.json"
-    manifest_raw, _ = read_regular(manifest_path, MAX_MANIFEST_BYTES)
+    manifest_raw, manifest_info = read_regular(manifest_path, MAX_MANIFEST_BYTES)
     manifest = parse_json_bytes(manifest_raw, "reset manifest")
     manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
     if (
@@ -730,9 +1105,24 @@ def validate_bundle(
         fail("reset manifest source commit does not match --expected-source-commit")
     if manifest.get("irohad_sha256") != expected_binary_sha256:
         fail("reset manifest binary does not match --expected-binary-sha256")
-    require_manifest_hash(manifest, "signed_genesis_sha256", bundle / "genesis.signed.nrt", 64 * 1024 * 1024)
-    require_manifest_hash(manifest, "unsigned_genesis_sha256", bundle / "genesis.json", 64 * 1024 * 1024)
-    require_manifest_hash(manifest, "base_config_sha256", bundle / "base-config.toml", MAX_CONFIG_BYTES)
+    _, signed_genesis_info = require_manifest_hash(
+        manifest,
+        "signed_genesis_sha256",
+        bundle / "genesis.signed.nrt",
+        64 * 1024 * 1024,
+    )
+    require_manifest_hash(
+        manifest,
+        "unsigned_genesis_sha256",
+        bundle / "genesis.json",
+        64 * 1024 * 1024,
+    )
+    require_manifest_hash(
+        manifest,
+        "base_config_sha256",
+        bundle / "base-config.toml",
+        MAX_CONFIG_BYTES,
+    )
     operator_raw, _ = read_regular(bundle / "operator-identity.json", 64 * 1024)
     operator_sha = hashlib.sha256(operator_raw).hexdigest()
     if operator_sha != manifest.get("operator_identity_sha256"):
@@ -747,9 +1137,10 @@ def validate_bundle(
         expected_attestation_sha256=expected_kagemusha_release_attestation_sha256,
     )
     validate_operator_release_identity(operator_raw, release)
-    if release.source_root.stat().st_dev != existing_ancestor(
-        release.installed_root
-    ).stat().st_dev:
+    if (
+        release.source_root.stat().st_dev
+        != existing_ancestor(release.installed_root).stat().st_dev
+    ):
         fail(
             "Kagemusha release source and root-owned release store are on "
             "different filesystems; one-copy atomic deployment is impossible"
@@ -757,7 +1148,9 @@ def validate_bundle(
 
     rendered = bundle / "rendered"
     require_exact_names(rendered, {"genesis.json", *SLUGS}, "rendered validator root")
-    rendered_genesis_sha, _ = sha256_regular(rendered / "genesis.json", 64 * 1024 * 1024)
+    rendered_genesis_sha, _ = sha256_regular(
+        rendered / "genesis.json", 64 * 1024 * 1024
+    )
     if rendered_genesis_sha != manifest.get("unsigned_genesis_sha256"):
         fail("rendered genesis differs from the reset manifest")
     config_hashes = manifest.get("configs")
@@ -769,20 +1162,30 @@ def validate_bundle(
     }:
         fail("reset manifest does not seal four empty storage trees")
     peers: list[PeerPlan] = []
+    peer_columns = (SLUGS, LABELS, TORII_PORTS, P2P_PORTS)
+    if any(len(column) != PEER_COUNT for column in peer_columns):
+        fail("internal Taira peer projection is not exactly four entries")
     for index, (slug, label, torii_port, p2p_port) in enumerate(
-        zip(SLUGS, LABELS, TORII_PORTS, P2P_PORTS, strict=True), start=1
+        zip(*peer_columns), start=1
     ):
         workdir = rendered / slug
         require_exact_names(workdir, VALIDATOR_NAMES, f"{slug} runtime root")
-        workdir_info = require_private_entry(workdir, owner_uid, owner_gid, directory=True)
+        workdir_info = require_private_entry(
+            workdir, owner_uid, owner_gid, directory=True
+        )
         storage = workdir / "storage"
-        storage_info = require_private_entry(storage, owner_uid, owner_gid, directory=True)
+        storage_info = require_private_entry(
+            storage, owner_uid, owner_gid, directory=True
+        )
         if any(storage.iterdir()):
             fail(f"fresh-reset storage is not empty: {slug}")
         config_path = workdir / "config.toml"
-        config_sha, _ = sha256_regular(config_path, MAX_CONFIG_BYTES)
+        config_sha, config_info = sha256_regular(config_path, MAX_CONFIG_BYTES)
         expected_config_sha = config_hashes.get(slug)
-        if not isinstance(expected_config_sha, str) or config_sha != expected_config_sha:
+        if (
+            not isinstance(expected_config_sha, str)
+            or config_sha != expected_config_sha
+        ):
             fail(f"validator config does not match the reset manifest: {slug}")
         config = parse_toml(config_path, owner_uid, owner_gid)
         validate_config_projection(
@@ -803,6 +1206,9 @@ def validate_bundle(
                 storage=storage,
                 config=config_path,
                 config_sha256=config_sha,
+                config_identity=metadata_identity(config_info),
+                workdir_identity=metadata_identity(workdir_info),
+                storage_identity=metadata_identity(storage_info),
                 workdir_device=workdir_info.st_dev,
                 workdir_inode=workdir_info.st_ino,
                 storage_device=storage_info.st_dev,
@@ -832,6 +1238,8 @@ def validate_bundle(
         runtime_group=runtime_group,
         manifest=manifest,
         manifest_sha256=manifest_sha256,
+        manifest_identity=metadata_identity(manifest_info),
+        signed_genesis_identity=metadata_identity(signed_genesis_info),
         release=release,
         peers=tuple(peers),
         bundle_bytes=bundle_bytes,
@@ -848,15 +1256,22 @@ def require_root_controlled_file(path: Path, *, executable: bool) -> os.stat_res
     components = [*reversed(path.parents), path]
     for index, component in enumerate(components):
         info = component.lstat()
-        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or info.st_uid != 0
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
             fail(f"root-controlled path has an unsafe component: {component}")
         if index + 1 == len(components):
             if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                fail(f"root-controlled source is not a single-link regular file: {path}")
+                fail(
+                    f"root-controlled source is not a single-link regular file: {path}"
+                )
             if executable and not info.st_mode & 0o111:
                 fail(f"root-controlled source is not executable: {path}")
         elif not stat.S_ISDIR(info.st_mode):
             fail(f"root-controlled ancestor is not a directory: {component}")
+        require_acl_free_path(component, "root-controlled path component")
     return path.lstat()
 
 
@@ -967,6 +1382,7 @@ class OldManagedIdentity:
     child_argv: tuple[str, ...]
     pid_file: Path
     pid_file_gid: int
+    child_was_present: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -999,7 +1415,7 @@ class SystemOps:
         except subprocess.TimeoutExpired as error:
             raise DeploymentError("bounded system command timed out") from error
 
-    def launchd_print(self, label: str) -> str | None:
+    def launchd_print(self, label: str) -> Optional[str]:
         """Return launchd's system-domain record, or ``None`` when absent."""
 
         result = self.run(["/bin/launchctl", "print", f"system/{label}"])
@@ -1017,13 +1433,26 @@ class SystemOps:
 
         result = self.run(["/bin/launchctl", "bootstrap", "system", str(plist)])
         if result.returncode != 0:
-            fail(f"launchd bootstrap failed for {plist.name} (status {result.returncode})")
+            fail(
+                f"launchd bootstrap failed for {plist.name} (status {result.returncode})"
+            )
 
     def inspect_process(self, pid: int) -> ProcessInfo:
         """Read parent, uid, and complete argv for one macOS process."""
 
         result = self.run(
-            ["/bin/ps", "-ww", "-p", str(pid), "-o", "ppid=", "-o", "uid=", "-o", "command="]
+            [
+                "/bin/ps",
+                "-ww",
+                "-p",
+                str(pid),
+                "-o",
+                "ppid=",
+                "-o",
+                "uid=",
+                "-o",
+                "command=",
+            ]
         )
         if result.returncode != 0 or not result.stdout.strip():
             fail(f"managed process is not running: pid {pid}")
@@ -1032,9 +1461,36 @@ class SystemOps:
             fail(f"could not parse managed process identity: pid {pid}")
         try:
             argv = tuple(shlex.split(fields[2]))
-            return ProcessInfo(pid=pid, ppid=int(fields[0]), uid=int(fields[1]), argv=argv)
+            return ProcessInfo(
+                pid=pid, ppid=int(fields[0]), uid=int(fields[1]), argv=argv
+            )
         except (ValueError, TypeError) as error:
-            raise DeploymentError(f"could not parse managed process identity: pid {pid}") from error
+            raise DeploymentError(
+                f"could not parse managed process identity: pid {pid}"
+            ) from error
+
+    def child_pids(self, parent_pid: int) -> tuple[int, ...]:
+        """Return the stable PID inventory currently parented by one process."""
+
+        result = self.run(["/bin/ps", "-axo", "pid=", "-o", "ppid="])
+        if result.returncode != 0:
+            fail(f"could not inspect children of managed process: pid {parent_pid}")
+        children: list[int] = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) != 2:
+                fail("could not parse the managed process child inventory")
+            try:
+                pid, ppid = (int(field) for field in fields)
+            except ValueError as error:
+                raise DeploymentError(
+                    "could not parse the managed process child inventory"
+                ) from error
+            if pid < 1 or ppid < 0:
+                fail("managed process child inventory contains an invalid PID")
+            if ppid == parent_pid:
+                children.append(pid)
+        return tuple(sorted(children))
 
     def terminate(self, pid: int) -> None:
         """Terminate exactly one already-authenticated managed child."""
@@ -1048,7 +1504,7 @@ class SystemOps:
         return result.returncode == 0 and bool(result.stdout.strip())
 
 
-def launchd_pid(record: str | None, label: str) -> int:
+def launchd_pid(record: Optional[str], label: str) -> int:
     """Extract one positive supervisor PID from launchd's printed record."""
 
     if record is None:
@@ -1077,6 +1533,8 @@ def inspect_old_managed_identity(
     label: str,
     supervisor_pid: int,
     ops: SystemOps,
+    *,
+    allow_absent_child: bool = False,
 ) -> OldManagedIdentity:
     """Authenticate one old launchd supervisor and its exact managed child."""
 
@@ -1094,7 +1552,9 @@ def inspect_old_managed_identity(
         uid = pwd.getpwnam(runtime_user).pw_uid
         gid = grp.getgrnam(runtime_group).gr_gid
     except KeyError as error:
-        raise DeploymentError(f"old LaunchDaemon runtime identity is unknown: {label}") from error
+        raise DeploymentError(
+            f"old LaunchDaemon runtime identity is unknown: {label}"
+        ) from error
     supervisor_argv = tuple(arguments)
     supervisor = ops.inspect_process(supervisor_pid)
     if (
@@ -1106,13 +1566,23 @@ def inspect_old_managed_identity(
     pid_file = Path(required_option(supervisor_argv, "--pid-file", label))
     binary = required_option(supervisor_argv, "--binary", label)
     config = required_option(supervisor_argv, "--config", label)
-    if not pid_file.is_absolute() or not Path(binary).is_absolute() or not Path(config).is_absolute():
+    if (
+        not pid_file.is_absolute()
+        or not Path(binary).is_absolute()
+        or not Path(config).is_absolute()
+    ):
         fail(f"old LaunchDaemon contains a non-absolute managed path: {label}")
-    child_pid = parse_pid_file(pid_file, uid, gid)
-    child = ops.inspect_process(child_pid)
     child_argv = (binary, "--sora", "--config", config)
-    if child.ppid != supervisor_pid or child.uid != uid or child.argv != child_argv:
-        fail(f"old LaunchDaemon child identity differs from its supervisor: {label}")
+    child_was_present = verify_old_managed_child(
+        label,
+        supervisor_pid,
+        uid,
+        gid,
+        pid_file,
+        child_argv,
+        ops,
+        allow_absent=allow_absent_child,
+    )
     return OldManagedIdentity(
         supervisor_uid=uid,
         supervisor_argv=supervisor_argv,
@@ -1120,7 +1590,62 @@ def inspect_old_managed_identity(
         child_argv=child_argv,
         pid_file=pid_file,
         pid_file_gid=gid,
+        child_was_present=child_was_present,
     )
+
+
+def verify_old_managed_child(
+    label: str,
+    supervisor_pid: int,
+    uid: int,
+    gid: int,
+    pid_file: Path,
+    child_argv: tuple[str, ...],
+    ops: SystemOps,
+    *,
+    allow_absent: bool,
+) -> bool:
+    """Authenticate one old child or an explicitly allowed childless supervisor."""
+
+    try:
+        pid_file.lstat()
+    except FileNotFoundError:
+        if not allow_absent:
+            fail(f"old LaunchDaemon managed-child PID file is absent: {label}")
+        for _sample in range(2):
+            try:
+                pid_file.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                fail(
+                    "old LaunchDaemon managed-child PID file appeared during "
+                    f"capture: {label}"
+                )
+            if ops.child_pids(supervisor_pid):
+                fail(
+                    "old LaunchDaemon PID file is absent while its supervisor "
+                    f"still owns a child: {label}"
+                )
+            try:
+                pid_file.lstat()
+            except FileNotFoundError:
+                continue
+            fail(
+                "old LaunchDaemon managed-child PID file appeared during "
+                f"capture: {label}"
+            )
+        return False
+
+    child_pid = parse_pid_file(pid_file, uid, gid)
+    child = ops.inspect_process(child_pid)
+    if child.ppid != supervisor_pid or child.uid != uid or child.argv != child_argv:
+        fail(f"old LaunchDaemon child identity differs from its supervisor: {label}")
+    if ops.child_pids(supervisor_pid) != (child_pid,):
+        fail(
+            f"old LaunchDaemon supervisor does not own exactly its managed child: {label}"
+        )
+    return True
 
 
 def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
@@ -1136,19 +1661,21 @@ def verify_restored_snapshot(snapshot: PlistSnapshot, ops: SystemOps) -> None:
         or supervisor.argv != expected.supervisor_argv
     ):
         fail(f"restored LaunchDaemon supervisor identity is wrong: {label}")
-    child_pid = parse_pid_file(
-        expected.pid_file, expected.child_uid, expected.pid_file_gid
+    verify_old_managed_child(
+        label,
+        supervisor_pid,
+        expected.child_uid,
+        expected.pid_file_gid,
+        expected.pid_file,
+        expected.child_argv,
+        ops,
+        allow_absent=not expected.child_was_present,
     )
-    child = ops.inspect_process(child_pid)
-    if (
-        child.ppid != supervisor_pid
-        or child.uid != expected.child_uid
-        or child.argv != expected.child_argv
-    ):
-        fail(f"restored LaunchDaemon child identity is wrong: {label}")
 
 
-def capture_old_cohort(ops: SystemOps) -> tuple[PlistSnapshot, ...]:
+def capture_old_cohort(
+    ops: SystemOps, *, allow_absent_child: bool = False
+) -> tuple[PlistSnapshot, ...]:
     """Read the exact four old plists and require all four jobs loaded."""
 
     snapshots: list[PlistSnapshot] = []
@@ -1160,11 +1687,19 @@ def capture_old_cohort(ops: SystemOps) -> tuple[PlistSnapshot, ...]:
         try:
             payload = plistlib.loads(body)
         except Exception as error:
-            raise DeploymentError(f"old LaunchDaemon plist is invalid: {path}") from error
+            raise DeploymentError(
+                f"old LaunchDaemon plist is invalid: {path}"
+            ) from error
         if not isinstance(payload, dict) or payload.get("Label") != label:
             fail(f"old LaunchDaemon plist label mismatch: {path}")
         supervisor_pid = launchd_pid(ops.launchd_print(label), label)
-        managed = inspect_old_managed_identity(payload, label, supervisor_pid, ops)
+        managed = inspect_old_managed_identity(
+            payload,
+            label,
+            supervisor_pid,
+            ops,
+            allow_absent_child=allow_absent_child,
+        )
         snapshots.append(
             PlistSnapshot(
                 path=path,
@@ -1226,10 +1761,12 @@ def ensure_root_directory(path: Path, mode: int) -> None:
             or stat.S_IMODE(info.st_mode) & 0o022
         ):
             fail(f"unsafe root installation ancestor: {component}")
+        require_acl_free_path(component, "root installation ancestor")
     for component in reversed(pending):
         os.mkdir(component, mode)
         os.chown(component, 0, 0)
         os.chmod(component, mode)
+        require_acl_free_path(component, "new root installation directory")
         fsync_directory(component.parent)
     info = path.lstat()
     if (
@@ -1240,6 +1777,7 @@ def ensure_root_directory(path: Path, mode: int) -> None:
         or stat.S_IMODE(info.st_mode) & 0o022
     ):
         fail(f"unsafe root installation directory: {path}")
+    require_acl_free_path(path, "root installation directory")
 
 
 def ensure_runtime_directory(path: Path, uid: int, gid: int) -> None:
@@ -1303,14 +1841,22 @@ def exclusive_deployment_lock() -> Any:
             os.close(descriptor)
 
 
-def install_immutable(source: Path, destination: Path, expected_sha256: str) -> os.stat_result:
+def install_immutable(
+    source: Path, destination: Path, expected_sha256: str
+) -> os.stat_result:
     """Install authenticated bytes as root:wheel 0555 without overwriting."""
 
     if destination.exists() or destination.is_symlink():
         require_root_controlled_file(destination, executable=True)
         actual, info = sha256_regular(destination, MAX_BINARY_BYTES)
-        if actual != expected_sha256 or stat.S_IMODE(info.st_mode) != 0o555 or info.st_gid != 0:
-            fail(f"existing immutable installation has the wrong identity: {destination}")
+        if (
+            actual != expected_sha256
+            or stat.S_IMODE(info.st_mode) != 0o555
+            or info.st_gid != 0
+        ):
+            fail(
+                f"existing immutable installation has the wrong identity: {destination}"
+            )
         return info
     parent = destination.parent
     if not parent.exists():
@@ -1342,6 +1888,9 @@ def install_immutable(source: Path, destination: Path, expected_sha256: str) -> 
         os.fchown(output_fd, 0, 0)
         os.fchmod(output_fd, 0o555)
         os.fsync(output_fd)
+        clear_owned_temporary_acl(
+            temporary, output_fd, "immutable installation staging file"
+        )
         os.close(source_fd)
         source_fd = -1
         os.close(output_fd)
@@ -1357,34 +1906,54 @@ def install_immutable(source: Path, destination: Path, expected_sha256: str) -> 
     actual, info = sha256_regular(destination, MAX_BINARY_BYTES)
     if actual != expected_sha256:
         fail(f"immutable installation changed after publication: {destination}")
-    return info
+    published = require_root_controlled_file(destination, executable=True)
+    if metadata_identity(published) != metadata_identity(info):
+        fail(
+            f"immutable installation identity changed after publication: {destination}"
+        )
+    return published
 
 
-def atomic_replace_owned(path: Path, body: bytes, *, mode: int, uid: int, gid: int) -> None:
+def atomic_replace_owned(
+    path: Path, body: bytes, *, mode: int, uid: int, gid: int
+) -> None:
     """Atomically replace a root-controlled plist with authenticated bytes."""
 
     if path.is_symlink():
         fail(f"refusing to replace symlink: {path}")
     temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-        mode,
-    )
+    descriptor = -1
+    temporary_created = False
     try:
-        offset = 0
-        while offset < len(body):
-            offset += os.write(descriptor, body[offset:])
-        os.fchown(descriptor, uid, gid)
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+        )
+        temporary_created = True
+        try:
+            offset = 0
+            while offset < len(body):
+                offset += os.write(descriptor, body[offset:])
+            os.fchown(descriptor, uid, gid)
+            os.fchmod(descriptor, mode)
+            os.fsync(descriptor)
+            clear_owned_temporary_acl(
+                temporary,
+                descriptor,
+                "root-controlled publication staging file",
+            )
+        finally:
+            os.close(descriptor)
+            descriptor = -1
         os.replace(temporary, path)
         fsync_directory(path.parent)
+        require_root_controlled_file(path, executable=False)
     finally:
-        temporary.unlink(missing_ok=True)
+        if descriptor >= 0:
+            os.close(descriptor)
+        if temporary_created:
+            temporary.unlink(missing_ok=True)
 
 
 def render_plist(
@@ -1396,10 +1965,18 @@ def render_plist(
     binary_info: os.stat_result,
     installed_supervisor: Path,
     runtime_root: Path,
+    restart_generation: str,
 ) -> bytes:
     """Render one fresh known-argument LaunchDaemon with all five stat fields."""
 
     pid_file = runtime_root / "pids" / f"validator-{peer.number}.pid"
+    terminal_binding = supervisor_terminal_binding(
+        sources.binary_sha256,
+        binary_info,
+        peer.config_sha256,
+        restart_generation,
+    )
+    terminal_file = terminal_unhealthy_path(runtime_root, peer, terminal_binding)
     log_file = runtime_root / "logs" / f"validator-{peer.number}-supervisor.log"
     arguments = [
         str(sources.python),
@@ -1438,6 +2015,10 @@ def render_plist(
         str(peer.storage_inode),
         "--pid-file",
         str(pid_file),
+        "--terminal-unhealthy-file",
+        str(terminal_file),
+        "--restart-generation",
+        restart_generation,
         "--initial-backoff-seconds",
         "1.0",
         "--maximum-backoff-seconds",
@@ -1471,17 +2052,57 @@ def render_plist(
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML, sort_keys=True)
 
 
-def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
-    """Recheck mutable config/storage identities immediately before cutover."""
+def require_mutable_bundle_identities(bundle: BundlePlan, *, phase: str) -> None:
+    """Recheck every mutable manifest, genesis, config, and runtime identity."""
 
-    manifest_raw, _ = read_regular(bundle.root / "reset-manifest.json", MAX_MANIFEST_BYTES)
+    manifest_raw, manifest_info = read_regular(
+        bundle.root / "reset-manifest.json", MAX_MANIFEST_BYTES
+    )
     if hashlib.sha256(manifest_raw).hexdigest() != bundle.manifest_sha256:
-        fail("reset manifest changed after preflight")
-    signed_sha, _ = sha256_regular(
+        fail(f"reset manifest changed {phase}")
+    if metadata_identity(manifest_info) != bundle.manifest_identity:
+        fail(f"reset manifest identity changed {phase}")
+    signed_sha, signed_info = sha256_regular(
         bundle.root / "genesis.signed.nrt", 64 * 1024 * 1024
     )
     if signed_sha != bundle.manifest.get("signed_genesis_sha256"):
-        fail("signed genesis changed after preflight")
+        fail(f"signed genesis changed {phase}")
+    if metadata_identity(signed_info) != bundle.signed_genesis_identity:
+        fail(f"signed genesis identity changed {phase}")
+    for peer in bundle.peers:
+        require_exact_names(peer.workdir, VALIDATOR_NAMES, f"{peer.slug} runtime root")
+        workdir_info = require_private_entry(
+            peer.workdir, bundle.owner_uid, bundle.owner_gid, directory=True
+        )
+        storage_info = require_private_entry(
+            peer.storage, bundle.owner_uid, bundle.owner_gid, directory=True
+        )
+        config_sha, config_info = sha256_regular(peer.config, MAX_CONFIG_BYTES)
+        if config_sha != peer.config_sha256:
+            fail(f"validator config changed {phase}: {peer.slug}")
+        if metadata_identity(config_info) != peer.config_identity:
+            fail(f"validator config identity changed {phase}: {peer.slug}")
+        if any(peer.storage.iterdir()):
+            fail(f"fresh-reset storage changed {phase}: {peer.slug}")
+        workdir_after = require_private_entry(
+            peer.workdir, bundle.owner_uid, bundle.owner_gid, directory=True
+        )
+        storage_after = require_private_entry(
+            peer.storage, bundle.owner_uid, bundle.owner_gid, directory=True
+        )
+        if (
+            metadata_identity(workdir_info) != peer.workdir_identity
+            or metadata_identity(workdir_after) != peer.workdir_identity
+            or metadata_identity(storage_info) != peer.storage_identity
+            or metadata_identity(storage_after) != peer.storage_identity
+        ):
+            fail(f"fresh-reset runtime path changed {phase}: {peer.slug}")
+
+
+def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
+    """Recheck mutable inputs and the private release before it is moved."""
+
+    require_mutable_bundle_identities(bundle, phase="after preflight")
     current_paths = sorted(
         bundle.release.source_root.rglob("*"),
         key=lambda item: item.relative_to(bundle.release.source_root).as_posix(),
@@ -1499,26 +2120,68 @@ def require_bundle_runtime_unchanged(bundle: BundlePlan) -> None:
             else bundle.release.source_root / seal.relative_path
         )
         if metadata_identity(path.lstat()) != seal.identity:
-            fail(f"Kagemusha release entry changed after preflight: {seal.relative_path}")
-    for peer in bundle.peers:
-        workdir_info = require_private_entry(
-            peer.workdir, bundle.owner_uid, bundle.owner_gid, directory=True
+            fail(
+                f"Kagemusha release entry changed after preflight: {seal.relative_path}"
+            )
+
+
+def require_hardened_release_identity(bundle: BundlePlan) -> None:
+    """Bind the moved release's immutable identity and exact hardened metadata."""
+
+    root = bundle.release.installed_root
+    current_paths = sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    )
+    expected_paths = [seal.relative_path for seal in bundle.release.tree_seals[1:]]
+    if [path.relative_to(root).as_posix() for path in current_paths] != expected_paths:
+        fail("root-owned Kagemusha release inventory changed")
+    for seal in bundle.release.tree_seals:
+        path = root if seal.relative_path == "." else root / seal.relative_path
+        info = path.lstat()
+        expected = seal.identity
+        expected_type = stat.S_IFMT(expected[2])
+        if expected_type == stat.S_IFDIR:
+            expected_mode = 0o550
+        elif expected_type == stat.S_IFREG:
+            expected_mode = 0o440
+        else:
+            fail(
+                f"Kagemusha release preflight sealed an unsafe type: {seal.relative_path}"
+            )
+        immutable_identity = (
+            info.st_dev,
+            info.st_ino,
+            stat.S_IFMT(info.st_mode),
+            info.st_nlink,
+            info.st_size,
+            info.st_mtime_ns,
         )
-        storage_info = require_private_entry(
-            peer.storage, bundle.owner_uid, bundle.owner_gid, directory=True
+        expected_identity = (
+            expected[0],
+            expected[1],
+            expected_type,
+            expected[5],
+            expected[6],
+            expected[7],
         )
+        if immutable_identity != expected_identity:
+            fail(f"root-owned Kagemusha release identity changed: {seal.relative_path}")
         if (
-            workdir_info.st_dev != peer.workdir_device
-            or workdir_info.st_ino != peer.workdir_inode
-            or storage_info.st_dev != peer.storage_device
-            or storage_info.st_ino != peer.storage_inode
+            info.st_uid != 0
+            or info.st_gid != bundle.owner_gid
+            or stat.S_IMODE(info.st_mode) != expected_mode
         ):
-            fail(f"fresh-reset runtime path changed after preflight: {peer.slug}")
-        config_sha, _ = sha256_regular(peer.config, MAX_CONFIG_BYTES)
-        if config_sha != peer.config_sha256:
-            fail(f"validator config changed after preflight: {peer.slug}")
-        if any(peer.storage.iterdir()):
-            fail(f"fresh-reset storage changed after preflight: {peer.slug}")
+            fail(
+                "root-owned Kagemusha release ownership or mode changed: "
+                f"{seal.relative_path}"
+            )
+
+
+def require_post_qualification_cutover_identity(bundle: BundlePlan) -> None:
+    """Recheck all reset inputs and the hardened release immediately pre-bootout."""
+
+    require_mutable_bundle_identities(bundle, phase="during qualification")
+    require_hardened_release_identity(bundle)
 
 
 def rewrite_release_tree_ownership(
@@ -1543,13 +2206,13 @@ def rewrite_release_tree_ownership(
         elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
             files.append(path)
         else:
-            fail(f"release tree contains an unsafe entry during ownership rewrite: {path}")
+            fail(
+                f"release tree contains an unsafe entry during ownership rewrite: {path}"
+            )
     for path in files:
         descriptor = os.open(
             path,
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
         )
         try:
             os.fchown(descriptor, uid, gid)
@@ -1560,9 +2223,7 @@ def rewrite_release_tree_ownership(
     for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
         descriptor = os.open(
             path,
-            os.O_RDONLY
-            | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
         try:
             os.fchown(descriptor, uid, gid)
@@ -1609,6 +2270,114 @@ def require_release_tree_content_seals(
             )
 
 
+def require_restored_release_source_identity(bundle: BundlePlan) -> None:
+    """Require the failed move source to be fully private and inode-identical."""
+
+    root = bundle.release.source_root
+    current_paths = sorted(
+        root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()
+    )
+    expected_paths = [seal.relative_path for seal in bundle.release.tree_seals[1:]]
+    if [path.relative_to(root).as_posix() for path in current_paths] != expected_paths:
+        fail("restored Kagemusha release inventory differs from preflight")
+    for seal in bundle.release.tree_seals:
+        path = root if seal.relative_path == "." else root / seal.relative_path
+        info = path.lstat()
+        expected = seal.identity
+        expected_type = stat.S_IFMT(expected[2])
+        if expected_type == stat.S_IFDIR:
+            expected_mode = 0o700
+        elif expected_type == stat.S_IFREG:
+            expected_mode = 0o600
+        else:
+            fail(
+                "Kagemusha release preflight sealed an unsafe source type: "
+                f"{seal.relative_path}"
+            )
+        immutable_identity = (
+            info.st_dev,
+            info.st_ino,
+            stat.S_IFMT(info.st_mode),
+            info.st_nlink,
+            info.st_size,
+            info.st_mtime_ns,
+        )
+        expected_identity = (
+            expected[0],
+            expected[1],
+            expected_type,
+            expected[5],
+            expected[6],
+            expected[7],
+        )
+        if immutable_identity != expected_identity:
+            fail(
+                "restored Kagemusha release source changed identity: "
+                f"{seal.relative_path}"
+            )
+        if (
+            info.st_uid != bundle.owner_uid
+            or info.st_gid != bundle.owner_gid
+            or stat.S_IMODE(info.st_mode) != expected_mode
+        ):
+            fail(
+                "restored Kagemusha release source is not owner-private: "
+                f"{seal.relative_path}"
+            )
+
+
+def restore_failed_release_move(bundle: BundlePlan) -> None:
+    """Best-effort restore and exact verification after hardening/move failure."""
+
+    source = bundle.release.source_root
+    destination = bundle.release.installed_root
+    errors: list[str] = []
+    source_present = source.exists() or source.is_symlink()
+    destination_present = destination.exists() or destination.is_symlink()
+    if destination_present and not source_present:
+        try:
+            if destination.is_symlink() or not destination.is_dir():
+                fail("failed release move destination is not the sealed directory")
+            os.rename(destination, source)
+        except BaseException:
+            errors.append("rename")
+        else:
+            try:
+                fsync_directory(destination.parent)
+                fsync_directory(source.parent)
+            except BaseException:
+                errors.append("directory-fsync")
+    elif source_present and not destination_present:
+        pass
+    else:
+        errors.append("path-state")
+
+    source_present = source.exists() or source.is_symlink()
+    destination_present = destination.exists() or destination.is_symlink()
+    if source_present and not destination_present and not source.is_symlink():
+        try:
+            rewrite_release_tree_ownership(
+                source,
+                uid=bundle.owner_uid,
+                gid=bundle.owner_gid,
+                file_mode=0o600,
+                directory_mode=0o700,
+            )
+        except BaseException:
+            errors.append("ownership")
+        try:
+            require_restored_release_source_identity(bundle)
+        except BaseException:
+            errors.append("identity")
+    elif "path-state" not in errors:
+        errors.append("path-state")
+    if errors:
+        fail(
+            "Kagemusha release hardening rollback is incomplete "
+            f"({', '.join(errors)})"
+        )
+
+
 def move_release_to_root_store(bundle: BundlePlan) -> Path:
     """Move and harden the sole release copy in its content-addressed root store."""
 
@@ -1620,7 +2389,6 @@ def move_release_to_root_store(bundle: BundlePlan) -> Path:
         fail(f"content-addressed release destination already exists: {destination}")
     if source.stat().st_dev != release_store.stat().st_dev:
         fail("Kagemusha release move crossed filesystems")
-    moved = False
     try:
         rewrite_release_tree_ownership(
             source,
@@ -1631,7 +2399,6 @@ def move_release_to_root_store(bundle: BundlePlan) -> Path:
         )
         require_release_tree_content_seals(source, bundle.release.tree_seals)
         os.rename(source, destination)
-        moved = True
         destination_info = destination.lstat()
         expected_root = bundle.release.tree_seals[0].identity
         if (
@@ -1639,21 +2406,22 @@ def move_release_to_root_store(bundle: BundlePlan) -> Path:
             or destination_info.st_ino != expected_root[1]
         ):
             fail("Kagemusha release root changed during its atomic move")
+        require_hardened_release_identity(bundle)
         fsync_directory(source.parent)
         fsync_directory(release_store)
-    except BaseException:
-        if moved and destination.exists() and not source.exists():
-            os.rename(destination, source)
-            fsync_directory(destination.parent)
-            fsync_directory(source.parent)
-        if source.exists() and not source.is_symlink():
-            rewrite_release_tree_ownership(
-                source,
-                uid=bundle.owner_uid,
-                gid=bundle.owner_gid,
-                file_mode=0o600,
-                directory_mode=0o700,
+    except BaseException as move_error:
+        try:
+            restore_failed_release_move(bundle)
+        except BaseException as restore_error:
+            combined = DeploymentError(
+                "Kagemusha release move failed and its exact hardening rollback "
+                "is incomplete"
             )
+            if hasattr(combined, "add_note"):
+                combined.add_note(
+                    f"move failure: {type(move_error).__name__}: {move_error}"
+                )
+            raise combined from restore_error
         raise
     return destination
 
@@ -1677,6 +2445,165 @@ def restore_release_to_bundle(bundle: BundlePlan) -> None:
         file_mode=0o600,
         directory_mode=0o700,
     )
+
+
+def prepare_qualification_seal_path(bundle: BundlePlan) -> Path:
+    """Create the exact protected seal parent and require the seal absent."""
+
+    path = qualification_seal_path(bundle.release.tree_sha256)
+    ensure_root_directory(path.parent, 0o755)
+    parent_info = path.parent.lstat()
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != 0
+        or parent_info.st_gid != 0
+        or stat.S_IMODE(parent_info.st_mode) != 0o755
+    ):
+        fail("Kagemusha qualification seal directory is not root:wheel 0755")
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return path
+    fail(f"refusing to replace a preexisting Kagemusha qualification seal: {path}")
+
+
+def authenticate_qualification_seal(path: Path) -> tuple[int, ...]:
+    """Require one stable, bounded, immutable root-owned qualification seal."""
+
+    descriptor, before = open_regular(path, MAX_QUALIFICATION_SEAL_BYTES)
+    try:
+        if (
+            before.st_size == 0
+            or before.st_uid != 0
+            or before.st_gid != 0
+            or stat.S_IMODE(before.st_mode) != 0o444
+        ):
+            fail("Kagemusha qualification seal is not root:wheel 0444")
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if metadata_identity(before) != metadata_identity(after):
+        fail("Kagemusha qualification seal changed while authenticated")
+    fsync_directory(path.parent)
+    return metadata_identity(after)
+
+
+def write_catalog_qualification_seal(
+    installed_binary: Path,
+    bundle: BundlePlan,
+    seal_path: Path,
+    *,
+    runner: Callable[..., Any] = subprocess.run,
+) -> tuple[int, ...]:
+    """Run the exact candidate's one-time full catalog qualification gate."""
+
+    if os.geteuid() != 0:
+        fail("Kagemusha catalog qualification requires root")
+    expected_path = qualification_seal_path(bundle.release.tree_sha256)
+    if seal_path != expected_path:
+        fail("Kagemusha qualification seal path is not release-bound")
+    if len(bundle.peers) != PEER_COUNT:
+        fail("catalog qualification requires exactly four peer configs")
+    try:
+        seal_path.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        fail("Kagemusha qualification seal appeared before candidate execution")
+    validator_one = bundle.peers[0]
+    try:
+        result = runner(
+            [
+                str(installed_binary),
+                "--sora",
+                "--config",
+                str(validator_one.config),
+                "--check-config",
+                "--write-kagemusha-catalog-qualification-seal",
+                str(seal_path),
+            ],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=CATALOG_QUALIFICATION_TIMEOUT_SECONDS,
+            env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+        )
+    except subprocess.TimeoutExpired as error:
+        raise DeploymentError(
+            "installed binary catalog qualification timed out"
+        ) from error
+    except OSError as error:
+        raise DeploymentError(
+            "installed binary catalog qualification could not execute"
+        ) from error
+    if result.returncode != 0:
+        fail(
+            "installed binary rejected validator config/genesis/catalog "
+            f"during qualification (status={result.returncode})"
+        )
+    return authenticate_qualification_seal(seal_path)
+
+
+def remove_created_qualification_seal(
+    path: Path, expected_identity: tuple[int, ...]
+) -> None:
+    """Remove only the exact qualification seal created by this rollout."""
+
+    try:
+        current = path.lstat()
+    except FileNotFoundError as error:
+        raise DeploymentError(
+            "created Kagemusha qualification seal disappeared before rollback"
+        ) from error
+    if metadata_identity(current) != expected_identity:
+        fail("created Kagemusha qualification seal changed before rollback")
+    path.unlink()
+    fsync_directory(path.parent)
+    if path.exists() or path.is_symlink():
+        fail("created Kagemusha qualification seal survived rollback")
+
+
+def validate_installed_peer_configs(
+    installed_binary: Path,
+    bundle: BundlePlan,
+    *,
+    runner: Callable[..., Any] = subprocess.run,
+) -> None:
+    """Have the exact installed binary validate every config and its inputs."""
+
+    if len(bundle.peers) != PEER_COUNT:
+        fail("binary config validation requires exactly four peer configs")
+    for peer in bundle.peers:
+        try:
+            result = runner(
+                [
+                    str(installed_binary),
+                    "--sora",
+                    "--config",
+                    str(peer.config),
+                    "--check-config",
+                ],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=CONFIG_CHECK_TIMEOUT_SECONDS,
+                env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+            )
+        except subprocess.TimeoutExpired as error:
+            raise DeploymentError(
+                f"installed binary config check timed out: {peer.slug}"
+            ) from error
+        except OSError as error:
+            raise DeploymentError(
+                f"installed binary config check could not execute: {peer.slug}"
+            ) from error
+        if result.returncode != 0:
+            fail(
+                "installed binary rejected validator config/genesis/catalog "
+                f"(peer={peer.slug}, status={result.returncode})"
+            )
 
 
 def http_json(url: str, timeout: float = 2.0) -> dict[str, Any]:
@@ -1748,9 +2675,7 @@ def nested(payload: dict[str, Any], *keys: str) -> object:
     return current
 
 
-def tagged_unit(
-    value: object, key: str, label: str, allowed: set[str]
-) -> str:
+def tagged_unit(value: object, key: str, label: str, allowed: set[str]) -> str:
     """Decode one canonical tagged-unit status value."""
 
     if (
@@ -1808,6 +2733,166 @@ class FleetSample:
 
 HttpGetter = Callable[[str, float], dict[str, Any]]
 HealthGetter = Callable[[str, float], None]
+TerminalChecker = Callable[[], None]
+
+
+def no_terminal_check() -> None:
+    """Default no-op for focused read-path tests without a runtime layout."""
+
+
+def supervisor_terminal_binding(
+    binary_sha256: str,
+    binary_info: os.stat_result,
+    config_sha256: str,
+    restart_generation: str,
+) -> str:
+    """Reproduce the supervisor's redaction-safe runtime binding."""
+
+    payload = {
+        "binary_sha256": binary_sha256,
+        "binary_stat_seal": [
+            binary_info.st_dev,
+            binary_info.st_ino,
+            binary_info.st_size,
+            binary_info.st_mtime_ns,
+            binary_info.st_ctime_ns,
+        ],
+        "config_sha256": config_sha256,
+        "restart_generation": restart_generation,
+        "schema": TERMINAL_UNHEALTHY_SCHEMA,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+
+
+def terminal_unhealthy_path(runtime_root: Path, peer: PeerPlan, binding: str) -> Path:
+    """Return the identity-scoped private marker for one peer supervisor."""
+
+    return (
+        runtime_root
+        / "terminal"
+        / f"validator-{peer.number}-{binding}-terminal-unhealthy.json"
+    )
+
+
+def require_terminal_marker(
+    path: Path,
+    peer: PeerPlan,
+    owner_uid: int,
+    owner_gid: int,
+    expected_binding: str,
+) -> None:
+    """Authenticate one marker and raise a redaction-safe terminal error."""
+
+    try:
+        before = require_acl_free_path(path, "terminal-unhealthy marker")
+    except FileNotFoundError:
+        return
+    except (DeploymentError, OSError) as error:
+        raise DeploymentError(
+            f"{peer.label} terminal-unhealthy marker is unsafe"
+        ) from error
+    if (
+        stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_uid != owner_uid
+        or before.st_gid != owner_gid
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or not 0 < before.st_size <= MAX_TERMINAL_UNHEALTHY_BYTES
+    ):
+        fail(f"{peer.label} terminal-unhealthy marker is unsafe")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as error:
+        raise DeploymentError(
+            f"{peer.label} terminal-unhealthy marker is unsafe"
+        ) from error
+    try:
+        body = bytearray()
+        while len(body) <= MAX_TERMINAL_UNHEALTHY_BYTES:
+            chunk = os.read(
+                descriptor,
+                min(
+                    256,
+                    MAX_TERMINAL_UNHEALTHY_BYTES + 1 - len(body),
+                ),
+            )
+            if not chunk:
+                break
+            body.extend(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        metadata_identity(before) != metadata_identity(after)
+        or len(body) > MAX_TERMINAL_UNHEALTHY_BYTES
+    ):
+        fail(f"{peer.label} terminal-unhealthy marker is unsafe")
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DeploymentError(
+            f"{peer.label} terminal-unhealthy marker is unsafe"
+        ) from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload)
+        != {
+            "binding_sha256",
+            "fatal_fingerprint_sha256",
+            "hit_count",
+            "schema",
+        }
+        or payload.get("schema") != TERMINAL_UNHEALTHY_SCHEMA
+        or payload.get("hit_count") != 3
+        or not isinstance(payload.get("binding_sha256"), str)
+        or SHA256_RE.fullmatch(payload["binding_sha256"]) is None
+        or not isinstance(payload.get("fatal_fingerprint_sha256"), str)
+        or SHA256_RE.fullmatch(payload["fatal_fingerprint_sha256"]) is None
+        or payload.get("binding_sha256") != expected_binding
+        or (
+            json.dumps(
+                payload,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("ascii")
+        != body
+    ):
+        fail(f"{peer.label} terminal-unhealthy marker is unsafe")
+    fail(f"{peer.label} entered terminal-unhealthy state")
+
+
+def require_no_terminal_unhealthy(
+    bundle: BundlePlan,
+    runtime_root: Path,
+    bindings: dict[str, str],
+) -> None:
+    """Fail fast when any supervisor has durably stopped respawning."""
+
+    for peer in bundle.peers:
+        binding = bindings.get(peer.label)
+        if binding is None or SHA256_RE.fullmatch(binding) is None:
+            fail("terminal-unhealthy binding map is incomplete")
+        require_terminal_marker(
+            terminal_unhealthy_path(runtime_root, peer, binding),
+            peer,
+            bundle.owner_uid,
+            bundle.owner_gid,
+            binding,
+        )
 
 
 def validate_peer_health(
@@ -1834,12 +2919,17 @@ def validate_peer_health(
         fail(f"{peer.label} /readyz is not mandatory-offline ready")
 
     status = getter(f"{root}/status", 2.0)
-    blocks = require_uint(status.get("blocks"), f"{peer.label} /status.blocks", positive=True)
+    blocks = require_uint(
+        status.get("blocks"), f"{peer.label} /status.blocks", positive=True
+    )
     if published_source_commit(status) != expected_source_commit:
         fail(f"{peer.label} publishes the wrong build source commit")
 
     sumeragi = getter(f"{root}/v1/sumeragi/status", 2.0)
-    if sumeragi.get("protocol_version") != 3 or sumeragi.get("restart_required") is not False:
+    if (
+        sumeragi.get("protocol_version") != 3
+        or sumeragi.get("restart_required") is not False
+    ):
         fail(f"{peer.label} is not running one restart-clean Sumeragi v2 reducer")
     reducer_height = require_uint(
         sumeragi.get("height"), f"{peer.label} reducer height", positive=True
@@ -1886,7 +2976,9 @@ def validate_peer_health(
     subject = sumeragi.get("last_committed_subject")
     if not isinstance(subject, dict):
         fail(f"{peer.label} omitted the durable committed subject")
-    block_hash = normalized_block_hash(subject.get("block_hash"), f"{peer.label} committed block")
+    block_hash = normalized_block_hash(
+        subject.get("block_hash"), f"{peer.label} committed block"
+    )
     qc_height = require_uint(
         nested(sumeragi, "last_commit_qc", "certificate", "round", "height"),
         f"{peer.label} CommitQC height",
@@ -1942,7 +3034,10 @@ def validate_peer_health(
     node_fingerprint = sumeragi.get("node_fingerprint")
     build_fingerprint = sumeragi.get("build_fingerprint")
     config_fingerprint = sumeragi.get("config_fingerprint")
-    if any(value in (None, "", {}) for value in (context, node_fingerprint, build_fingerprint, config_fingerprint)):
+    if any(
+        value in (None, "", {})
+        for value in (context, node_fingerprint, build_fingerprint, config_fingerprint)
+    ):
         fail(f"{peer.label} omitted a required reducer fingerprint")
 
     query = urllib.parse.urlencode({"asset_definition_id": OFFLINE_ASSET_ID})
@@ -1971,8 +3066,7 @@ def validate_peer_health(
         not isinstance(artifact, dict)
         or artifact.get("generation") != bundle.release.generation
         or artifact.get("manifest_sha256") != bundle.release.manifest_sha256
-        or artifact.get("release_policy_sha256")
-        != bundle.release.release_policy_sha256
+        or artifact.get("release_policy_sha256") != bundle.release.release_policy_sha256
         or artifact.get("release_attestation_sha256")
         != bundle.release.release_attestation_sha256
         or artifact.get("activation_height") != bundle.release.activation_height
@@ -2049,13 +3143,15 @@ def wait_for_fleet_sample(
     *,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
+    terminal_checker: TerminalChecker = no_terminal_check,
 ) -> FleetSample:
     """Retry startup/alignment failures until one coherent sample is available."""
 
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
     while time.monotonic() < deadline:
+        terminal_checker()
         try:
-            return capture_fleet(
+            sample = capture_fleet(
                 bundle,
                 expected_source_commit,
                 getter=getter,
@@ -2064,6 +3160,9 @@ def wait_for_fleet_sample(
         except (DeploymentError, OSError) as error:
             last_error = error
             time.sleep(1)
+            continue
+        terminal_checker()
+        return sample
     raise DeploymentError(f"four-validator readiness did not converge: {last_error}")
 
 
@@ -2075,11 +3174,13 @@ def wait_for_advancement(
     *,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
+    terminal_checker: TerminalChecker = no_terminal_check,
 ) -> FleetSample:
     """Require a later common height with a different common block hash."""
 
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
     while time.monotonic() < deadline:
+        terminal_checker()
         try:
             current = capture_fleet(
                 bundle,
@@ -2095,10 +3196,18 @@ def wait_for_advancement(
                 and current.offline_release == previous.offline_release
                 and current.nodes == previous.nodes
             ):
-                return current
-            last_error = DeploymentError("fleet has not advanced one stable common release")
+                advanced = True
+            else:
+                advanced = False
+                last_error = DeploymentError(
+                    "fleet has not advanced one stable common release"
+                )
         except (DeploymentError, OSError) as error:
             last_error = error
+            advanced = False
+        if advanced:
+            terminal_checker()
+            return current
         time.sleep(1)
     raise DeploymentError(f"four-validator consensus did not advance: {last_error}")
 
@@ -2126,7 +3235,9 @@ def expected_supervisor_argv(plist_body: bytes) -> tuple[str, ...]:
     except Exception as error:
         raise DeploymentError("generated LaunchDaemon plist is invalid") from error
     arguments = payload.get("ProgramArguments") if isinstance(payload, dict) else None
-    if not isinstance(arguments, list) or not all(isinstance(value, str) for value in arguments):
+    if not isinstance(arguments, list) or not all(
+        isinstance(value, str) for value in arguments
+    ):
         fail("generated LaunchDaemon plist lacks exact ProgramArguments")
     return tuple(arguments)
 
@@ -2151,7 +3262,11 @@ def verify_managed_peer(
     child_pid = parse_pid_file(pid_file, bundle.owner_uid, bundle.owner_gid)
     child = ops.inspect_process(child_pid)
     expected_child = (str(installed_binary), "--sora", "--config", str(peer.config))
-    if child.ppid != supervisor_pid or child.uid != bundle.owner_uid or child.argv != expected_child:
+    if (
+        child.ppid != supervisor_pid
+        or child.uid != bundle.owner_uid
+        or child.argv != expected_child
+    ):
         fail(f"{peer.label} PID file does not name its exact managed validator child")
     return supervisor_pid, child_pid
 
@@ -2167,9 +3282,11 @@ def restart_proof(
     *,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
+    terminal_checker: TerminalChecker = no_terminal_check,
 ) -> FleetSample:
     """Terminate one exact child and prove O(1)-sealed independent recovery."""
 
+    terminal_checker()
     peer = bundle.peers[0]
     supervisor_pid, child_pid = verify_managed_peer(
         peer,
@@ -2181,8 +3298,9 @@ def restart_proof(
     )
     ops.terminate(child_pid)
     deadline = time.monotonic() + RESTART_PROOF_TIMEOUT_SECONDS
-    new_child: int | None = None
+    new_child: Optional[int] = None
     while time.monotonic() < deadline:
+        terminal_checker()
         try:
             current_supervisor, candidate = verify_managed_peer(
                 peer,
@@ -2204,6 +3322,7 @@ def restart_proof(
         fail("managed validator child did not restart within 45 seconds")
     if ops.process_exists(child_pid):
         fail("old managed validator child remained alive after restart")
+    terminal_checker()
     return wait_for_advancement(
         bundle,
         expected_source_commit,
@@ -2211,6 +3330,7 @@ def restart_proof(
         deadline,
         getter=getter,
         health_getter=health_getter,
+        terminal_checker=terminal_checker,
     )
 
 
@@ -2267,6 +3387,9 @@ def install_runtime_layout(bundle: BundlePlan) -> Path:
     ensure_runtime_directory(runtime_root, bundle.owner_uid, bundle.owner_gid)
     ensure_runtime_directory(runtime_root / "pids", bundle.owner_uid, bundle.owner_gid)
     ensure_runtime_directory(runtime_root / "logs", bundle.owner_uid, bundle.owner_gid)
+    ensure_runtime_directory(
+        runtime_root / "terminal", bundle.owner_uid, bundle.owner_gid
+    )
     return runtime_root
 
 
@@ -2276,11 +3399,27 @@ def apply_reset(
     sources: SourcePlan,
     old_cohort: Sequence[PlistSnapshot],
     *,
-    ops: SystemOps | None = None,
+    ops: Optional[SystemOps] = None,
     getter: HttpGetter = http_json,
     health_getter: HealthGetter = http_ok,
+    config_checker: Callable[
+        [Path, BundlePlan], None
+    ] = validate_installed_peer_configs,
+    cutover_identity_checker: Callable[
+        [BundlePlan], None
+    ] = require_post_qualification_cutover_identity,
+    seal_preparer: Callable[[BundlePlan], Path] = prepare_qualification_seal_path,
+    seal_writer: Callable[
+        [Path, BundlePlan, Path], tuple[int, ...]
+    ] = write_catalog_qualification_seal,
+    seal_authenticator: Callable[
+        [Path], tuple[int, ...]
+    ] = authenticate_qualification_seal,
+    seal_remover: Callable[
+        [Path, tuple[int, ...]], None
+    ] = remove_created_qualification_seal,
 ) -> dict[str, Any]:
-    """Install and validate one fresh reset, rolling all four jobs back on failure."""
+    """Validate and install one fresh reset, rolling back every moved component."""
 
     if os.geteuid() != 0:
         fail("--apply requires root")
@@ -2297,7 +3436,9 @@ def apply_reset(
     supervisor_dir = supervisor_store / sources.supervisor_sha256
     installed_binary = binary_dir / "irohad"
     installed_supervisor = supervisor_dir / "taira_peer_supervisor.py"
-    if binary_dir.exists() and not (installed_binary.exists() or installed_binary.is_symlink()):
+    if binary_dir.exists() and not (
+        installed_binary.exists() or installed_binary.is_symlink()
+    ):
         fail("content-addressed binary directory is incomplete")
     if supervisor_dir.exists() and not (
         installed_supervisor.exists() or installed_supervisor.is_symlink()
@@ -2347,6 +3488,16 @@ def apply_reset(
             binary_info=binary_info,
             installed_supervisor=installed_supervisor,
             runtime_root=runtime_root,
+            restart_generation=args.restart_generation,
+        )
+        for peer in bundle.peers
+    }
+    terminal_bindings = {
+        peer.label: supervisor_terminal_binding(
+            sources.binary_sha256,
+            binary_info,
+            peer.config_sha256,
+            args.restart_generation,
         )
         for peer in bundle.peers
     }
@@ -2357,10 +3508,11 @@ def apply_reset(
 
     cohort_mutated = False
     release_moved = False
+    seal_creation_attempted = False
+    created_seal_identity: Optional[tuple[int, ...]] = None
+    seal_path = qualification_seal_path(bundle.release.tree_sha256)
     guarded_signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
-    previous_handlers = {
-        signum: signal.getsignal(signum) for signum in guarded_signals
-    }
+    previous_handlers = {signum: signal.getsignal(signum) for signum in guarded_signals}
 
     def request_rollback(signum: int, _frame: object) -> NoReturn:
         raise DeploymentError(
@@ -2374,18 +3526,31 @@ def apply_reset(
         require_bundle_runtime_unchanged(bundle)
         move_release_to_root_store(bundle)
         release_moved = True
+        # The exact candidate performs the expensive catalog qualification
+        # once; all four ordinary checks below must consume its immutable seal.
+        seal_path = seal_preparer(bundle)
+        seal_creation_attempted = True
+        created_seal_identity = seal_writer(
+            installed_binary,
+            bundle,
+            seal_path,
+        )
+        config_checker(installed_binary, bundle)
+        if seal_authenticator(seal_path) != created_seal_identity:
+            fail("Kagemusha qualification seal changed during config checks")
         for snapshot in old_cohort:
-            current_body, current_info = read_regular(
-                snapshot.path, MAX_MANIFEST_BYTES
-            )
+            current_body, current_info = read_regular(snapshot.path, MAX_MANIFEST_BYTES)
             if (
                 current_body != snapshot.body
                 or stat.S_IMODE(current_info.st_mode) != snapshot.mode
                 or current_info.st_uid != snapshot.uid
                 or current_info.st_gid != snapshot.gid
             ):
-                fail(f"old LaunchDaemon changed after dry-run capture: {snapshot.path.name}")
+                fail(
+                    f"old LaunchDaemon changed after dry-run capture: {snapshot.path.name}"
+                )
             verify_restored_snapshot(snapshot, ops)
+        cutover_identity_checker(bundle)
         cohort_mutated = True
         # Stop the entire old cohort before publishing or starting any new job.
         for snapshot in old_cohort:
@@ -2406,6 +3571,9 @@ def apply_reset(
         for peer in bundle.peers:
             ops.bootstrap(LAUNCH_DAEMONS / f"{peer.label}.plist")
 
+        terminal_checker = lambda: require_no_terminal_unhealthy(
+            bundle, runtime_root, terminal_bindings
+        )
         health_deadline = time.monotonic() + args.health_timeout_seconds
         baseline = wait_for_fleet_sample(
             bundle,
@@ -2413,6 +3581,7 @@ def apply_reset(
             health_deadline,
             getter=getter,
             health_getter=health_getter,
+            terminal_checker=terminal_checker,
         )
         advanced = wait_for_advancement(
             bundle,
@@ -2421,7 +3590,9 @@ def apply_reset(
             health_deadline,
             getter=getter,
             health_getter=health_getter,
+            terminal_checker=terminal_checker,
         )
+        terminal_checker()
         for peer in bundle.peers:
             verify_managed_peer(
                 peer,
@@ -2431,6 +3602,7 @@ def apply_reset(
                 installed_binary,
                 ops,
             )
+        terminal_checker()
         restarted = restart_proof(
             bundle,
             args.expected_source_commit,
@@ -2441,6 +3613,7 @@ def apply_reset(
             ops,
             getter=getter,
             health_getter=health_getter,
+            terminal_checker=terminal_checker,
         )
     except BaseException as rollout_error:
         # A second termination request must not interrupt the rollback itself.
@@ -2454,10 +3627,39 @@ def apply_reset(
             # Close the signal-delivery window between a successful rename and
             # storing the local ``release_moved`` flag.
             release_moved = True
-        rollback_error: BaseException | None = None
+        rollback_error: Optional[BaseException] = None
+        unattributed_seal = False
+        if seal_creation_attempted and created_seal_identity is None:
+            try:
+                seal_path.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                unattributed_seal = True
+                rollback_error = DeploymentError(
+                    "qualification-seal absence could not be proven after the "
+                    "writer failed; preserving the installed release because "
+                    "rollback is incomplete"
+                )
+                if hasattr(rollback_error, "add_note"):
+                    rollback_error.add_note(
+                        f"seal inspection failure: {type(error).__name__}: {error}"
+                    )
+            else:
+                unattributed_seal = True
+                rollback_error = DeploymentError(
+                    "qualification writer returned no seal identity after a seal "
+                    "appeared; preserving the unattributed seal and installed "
+                    "release because rollback is incomplete"
+                )
         if cohort_mutated:
             try:
                 rollback_cohort(old_cohort, ops)
+            except BaseException as error:
+                rollback_error = error
+        if rollback_error is None and created_seal_identity is not None:
+            try:
+                seal_remover(seal_path, created_seal_identity)
             except BaseException as error:
                 rollback_error = error
         if rollback_error is None and release_moved:
@@ -2466,9 +3668,17 @@ def apply_reset(
             except BaseException as error:
                 rollback_error = error
         if rollback_error is not None:
-            combined = DeploymentError(
-                "Taira reset failed and its exact cohort/release rollback did not complete"
-            )
+            if unattributed_seal:
+                combined = DeploymentError(
+                    "Taira reset failed; rollback is incomplete because an "
+                    "unattributed qualification seal must be preserved with its "
+                    "installed release"
+                )
+            else:
+                combined = DeploymentError(
+                    "Taira reset failed and its exact cohort/release/seal rollback "
+                    "did not complete"
+                )
             if hasattr(combined, "add_note"):
                 combined.add_note(
                     f"rollout failure: {type(rollout_error).__name__}: {rollout_error}"
@@ -2481,6 +3691,11 @@ def apply_reset(
 
     return {
         "applied": True,
+        "absent_old_children": sorted(
+            snapshot.path.stem
+            for snapshot in old_cohort
+            if not snapshot.managed.child_was_present
+        ),
         "binary": str(installed_binary),
         "binary_sha256": sources.binary_sha256,
         "bundle": str(bundle.root),
@@ -2488,8 +3703,10 @@ def apply_reset(
         "end_height": restarted.height,
         "mandatory_offline": True,
         "peer_count": PEER_COUNT,
+        "qualification_seal": str(seal_path),
         "release": str(bundle.release.installed_root),
         "release_tree_sha256": bundle.release.tree_sha256,
+        "restart_generation": args.restart_generation,
         "restart_proof": "passed",
         "source_commit": args.expected_source_commit,
         "start_height": baseline.height,
@@ -2507,6 +3724,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--expected-binary-sha256", required=True)
     parser.add_argument("--supervisor", type=Path, required=True)
     parser.add_argument("--expected-supervisor-sha256", required=True)
+    parser.add_argument(
+        "--restart-generation",
+        required=True,
+        help=(
+            "fresh lowercase SHA-256 generation token; changing it explicitly "
+            "clears a prior identity-matched terminal-unhealthy latch"
+        ),
+    )
     parser.add_argument(
         "--supervisor-python",
         type=Path,
@@ -2533,6 +3758,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAXIMUM_FSYNC_LATENCY_MS,
     )
+    parser.add_argument(
+        "--allow-absent-old-child",
+        action="store_true",
+        help=(
+            "explicitly authorize capture of an already-degraded old job only "
+            "when its exact loaded supervisor has no PID file and no child "
+            "process; stale or mismatched children remain fatal"
+        ),
+    )
     parser.add_argument("--apply", action="store_true")
     return parser
 
@@ -2545,6 +3779,9 @@ def validate_arguments(args: argparse.Namespace) -> None:
     )
     args.expected_supervisor_sha256 = require_sha256(
         args.expected_supervisor_sha256, "expected supervisor SHA-256"
+    )
+    args.restart_generation = require_sha256(
+        args.restart_generation, "restart generation"
     )
     args.expected_kagemusha_manifest_sha256 = require_sha256(
         args.expected_kagemusha_manifest_sha256,
@@ -2562,16 +3799,14 @@ def validate_arguments(args: argparse.Namespace) -> None:
     if args.health_timeout_seconds <= 0:
         fail("--health-timeout-seconds must be positive")
     if args.minimum_free_bytes < DEFAULT_MINIMUM_FREE_BYTES:
-        fail(
-            f"--minimum-free-bytes may not be below {DEFAULT_MINIMUM_FREE_BYTES}"
-        )
+        fail(f"--minimum-free-bytes may not be below {DEFAULT_MINIMUM_FREE_BYTES}")
     if not 1 <= args.maximum_fsync_latency_ms <= DEFAULT_MAXIMUM_FSYNC_LATENCY_MS:
-        fail(
-            "--maximum-fsync-latency-ms must be positive and may not exceed 250"
-        )
+        fail("--maximum-fsync-latency-ms must be positive and may not exceed 250")
 
 
-def execute(args: argparse.Namespace, *, ops: SystemOps | None = None) -> dict[str, Any]:
+def execute(
+    args: argparse.Namespace, *, ops: Optional[SystemOps] = None
+) -> dict[str, Any]:
     """Run the read-only preflight and optional guarded apply transaction."""
 
     validate_arguments(args)
@@ -2594,9 +3829,17 @@ def execute(args: argparse.Namespace, *, ops: SystemOps | None = None) -> dict[s
     sources = validate_sources(args, bundle)
     system_ops = ops or SystemOps()
     if not args.apply:
-        old_cohort = capture_old_cohort(system_ops)
+        old_cohort = capture_old_cohort(
+            system_ops,
+            allow_absent_child=args.allow_absent_old_child,
+        )
         return {
             "applied": False,
+            "absent_old_children": sorted(
+                snapshot.path.stem
+                for snapshot in old_cohort
+                if not snapshot.managed.child_was_present
+            ),
             "binary_sha256": sources.binary_sha256,
             "bundle": str(bundle.root),
             "bundle_bytes": bundle.bundle_bytes,
@@ -2605,21 +3848,26 @@ def execute(args: argparse.Namespace, *, ops: SystemOps | None = None) -> dict[s
             "mandatory_offline": True,
             "mode": "read-only-dry-run",
             "peer_count": PEER_COUNT,
-            "release_attestation_sha256": (
-                bundle.release.release_attestation_sha256
+            "qualification_seal": str(
+                qualification_seal_path(bundle.release.tree_sha256)
             ),
+            "release_attestation_sha256": (bundle.release.release_attestation_sha256),
             "release_manifest_sha256": bundle.release.manifest_sha256,
             "release_policy_sha256": bundle.release.release_policy_sha256,
             "release_tree_sha256": bundle.release.tree_sha256,
+            "restart_generation": args.restart_generation,
             "source_commit": args.expected_source_commit,
             "supervisor_sha256": sources.supervisor_sha256,
         }
     with exclusive_deployment_lock():
-        old_cohort = capture_old_cohort(system_ops)
+        old_cohort = capture_old_cohort(
+            system_ops,
+            allow_absent_child=args.allow_absent_old_child,
+        )
         return apply_reset(args, bundle, sources, old_cohort, ops=system_ops)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Optional[list[str]] = None) -> int:
     """Run the controller and emit only one redaction-safe JSON summary."""
 
     args = build_parser().parse_args(argv)

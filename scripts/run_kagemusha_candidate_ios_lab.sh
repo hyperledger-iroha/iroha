@@ -150,23 +150,141 @@ if [[ "$("$XCODEBUILD_BINARY" -version | /usr/bin/head -1)" != "Xcode 26.6" ]]; 
 fi
 
 NATIVE_MANIFEST="$NATIVE_BUILD_ROOT/NoritoBridgeCandidateLab.artifacts.json"
-XCFRAMEWORK="$NATIVE_BUILD_ROOT/NoritoBridgeCandidateLab.xcframework"
-NATIVE_LIBRARY="$XCFRAMEWORK/ios-arm64/libNoritoBridgeCandidateLab.a"
+SOURCE_XCFRAMEWORK="$NATIVE_BUILD_ROOT/NoritoBridgeCandidateLab.xcframework"
+SOURCE_NATIVE_LIBRARY="$SOURCE_XCFRAMEWORK/ios-arm64/libNoritoBridgeCandidateLab.a"
 for input in \
   "$CANDIDATE_RECORD" "$CANDIDATE_MANIFEST" "$ROSTER" "$REVIEWED_SOURCE_CLOSURE" \
-  "$NATIVE_MANIFEST" "$NATIVE_LIBRARY" "$XCFRAMEWORK/Info.plist"
+  "$NATIVE_MANIFEST" "$SOURCE_NATIVE_LIBRARY" "$SOURCE_XCFRAMEWORK/Info.plist" \
+  "$SOURCE_XCFRAMEWORK/.kagemusha-candidate-evidence-lab-do-not-ship-v2" \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge.h" \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge_base.h" \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/Headers/module.modulemap"
 do
   if [[ ! -f "$input" || -L "$input" ]]; then
     echo "[kagemusha-ios-lab] ERROR: required input is not a non-symlink regular file" >&2
     exit 66
   fi
 done
-for input in "$ARTIFACT_ROOT" "$SCENARIO_ROOT" "$XCFRAMEWORK"; do
+for input in "$ARTIFACT_ROOT" "$SCENARIO_ROOT" "$SOURCE_XCFRAMEWORK"; do
   if [[ ! -d "$input" || -L "$input" ]]; then
     echo "[kagemusha-ios-lab] ERROR: required input is not a real directory" >&2
     exit 66
   fi
 done
+
+verify_native_framework() {
+  local framework="$1"
+  "$PYTHON3_BINARY" -I - "$NATIVE_MANIFEST" "$framework" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+
+manifest_path = Path(sys.argv[1])
+framework = Path(sys.argv[2])
+expected = (
+    "Info.plist",
+    ".kagemusha-candidate-evidence-lab-do-not-ship-v2",
+    "ios-arm64/libNoritoBridgeCandidateLab.a",
+    "ios-arm64/Headers/connect_norito_bridge.h",
+    "ios-arm64/Headers/connect_norito_bridge_base.h",
+    "ios-arm64/Headers/module.modulemap",
+)
+
+def pairs(values):
+    result = {}
+    for key, value in values:
+        if key in result:
+            raise SystemExit(f"native manifest contains duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+def exact_regular(path, maximum):
+    value = path.lstat()
+    if (
+        not stat.S_ISREG(value.st_mode)
+        or value.st_nlink != 1
+        or value.st_uid != os.geteuid()
+        or stat.S_IMODE(value.st_mode) & 0o077
+        or value.st_size <= 0
+        or value.st_size > maximum
+    ):
+        raise SystemExit(f"native input is not an owner-private bounded file: {path.name}")
+    return value
+
+def digest(path, maximum):
+    exact_regular(path, maximum)
+    value = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            value.update(chunk)
+    return value.hexdigest()
+
+framework_value = framework.lstat()
+if (
+    not stat.S_ISDIR(framework_value.st_mode)
+    or framework_value.st_uid != os.geteuid()
+    or stat.S_IMODE(framework_value.st_mode) & 0o077
+):
+    raise SystemExit("native framework root is not owner-private")
+exact_regular(manifest_path, 16 * 1024 * 1024)
+manifest_bytes = manifest_path.read_bytes()
+manifest = json.loads(
+    manifest_bytes.decode("ascii"),
+    object_pairs_hook=pairs,
+    parse_constant=lambda value: (_ for _ in ()).throw(
+        ValueError(f"non-finite native manifest value: {value}")
+    ),
+)
+canonical = (
+    json.dumps(
+        manifest,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("ascii")
+    + b"\n"
+)
+if manifest_bytes != canonical:
+    raise SystemExit("native build manifest is not canonical JSON")
+files = manifest.get("files")
+expected_manifest_paths = {
+    f"NoritoBridgeCandidateLab.xcframework/{relative}" for relative in expected
+}
+if not isinstance(files, dict) or set(files) != expected_manifest_paths:
+    raise SystemExit("native build manifest files map is not exact")
+
+actual_files = set()
+actual_directories = set()
+for path in framework.rglob("*"):
+    relative = path.relative_to(framework).as_posix()
+    value = path.lstat()
+    if stat.S_ISLNK(value.st_mode):
+        raise SystemExit(f"native framework contains a symlink: {relative}")
+    if stat.S_ISDIR(value.st_mode):
+        if value.st_uid != os.geteuid() or stat.S_IMODE(value.st_mode) & 0o077:
+            raise SystemExit(f"native framework directory is not owner-private: {relative}")
+        actual_directories.add(relative)
+    elif stat.S_ISREG(value.st_mode):
+        actual_files.add(relative)
+    else:
+        raise SystemExit(f"native framework contains a special file: {relative}")
+if actual_files != set(expected):
+    raise SystemExit("native framework inventory is not exact")
+if actual_directories != {"ios-arm64", "ios-arm64/Headers"}:
+    raise SystemExit("native framework directory inventory is not exact")
+for relative in expected:
+    maximum = 5 * 1024 * 1024 * 1024 if relative.endswith(".a") else 16 * 1024 * 1024
+    manifest_relative = f"NoritoBridgeCandidateLab.xcframework/{relative}"
+    if files.get(manifest_relative) != digest(framework / relative, maximum):
+        raise SystemExit(f"native framework digest mismatch: {relative}")
+PY
+}
+
+verify_native_framework "$SOURCE_XCFRAMEWORK"
 
 TRANSIENT="$(mktemp -d "${TMPDIR:-/tmp}/kagemusha-ios-device-lab.XXXXXX")"
 chmod 0700 "$TRANSIENT"
@@ -273,8 +391,33 @@ find "$TRANSIENT" -name devices.json -type f -delete
 
 mkdir -- "$EVIDENCE_ROOT"
 mkdir -p \
-  "$RAW_INPUT/artifacts" "$RAW_INPUT/scenario" "$RAW_BUILD" "$RAW_RUN" "$RAW_OUTPUT"
+  "$RAW_INPUT/artifacts" "$RAW_INPUT/scenario" \
+  "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers" \
+  "$RAW_RUN" "$RAW_OUTPUT"
 find "$EVIDENCE_ROOT" -type d -exec chmod 0700 {} +
+
+XCFRAMEWORK="$TRANSIENT/NoritoBridgeCandidateLab.xcframework"
+mkdir -p -- "$XCFRAMEWORK/ios-arm64/Headers"
+chmod 0700 "$XCFRAMEWORK" "$XCFRAMEWORK/ios-arm64" "$XCFRAMEWORK/ios-arm64/Headers"
+cp -- "$SOURCE_XCFRAMEWORK/Info.plist" "$XCFRAMEWORK/Info.plist"
+cp -- \
+  "$SOURCE_XCFRAMEWORK/.kagemusha-candidate-evidence-lab-do-not-ship-v2" \
+  "$XCFRAMEWORK/.kagemusha-candidate-evidence-lab-do-not-ship-v2"
+cp -- \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/libNoritoBridgeCandidateLab.a" \
+  "$XCFRAMEWORK/ios-arm64/libNoritoBridgeCandidateLab.a"
+cp -- \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge.h" \
+  "$XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge.h"
+cp -- \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge_base.h" \
+  "$XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge_base.h"
+cp -- \
+  "$SOURCE_XCFRAMEWORK/ios-arm64/Headers/module.modulemap" \
+  "$XCFRAMEWORK/ios-arm64/Headers/module.modulemap"
+find "$XCFRAMEWORK" -type f -exec chmod 0400 {} +
+NATIVE_LIBRARY="$XCFRAMEWORK/ios-arm64/libNoritoBridgeCandidateLab.a"
+verify_native_framework "$XCFRAMEWORK"
 
 "$PYTHON3_BINARY" -I - \
   "$CANDIDATE_RECORD" "$CANDIDATE_MANIFEST" "$ROSTER" "$ARTIFACT_ROOT" \
@@ -343,7 +486,7 @@ scenario_files = (
     "duplicate-input-verified-at-ms.txt",
 )
 
-def exact_regular(path: Path, maximum=4 * 1024 * 1024 * 1024):
+def exact_regular(path: Path, maximum=5 * 1024 * 1024 * 1024):
     metadata = path.lstat()
     if (
         not stat.S_ISREG(metadata.st_mode)
@@ -450,6 +593,21 @@ cp -- "$ROSTER" "$RAW_INPUT/topup-finality-roster-v4.norito"
 cp -- "$REVIEWED_SOURCE_CLOSURE" "$RAW_INPUT/reviewed-source-closure-v1.json"
 cp -- "$NATIVE_MANIFEST" "$RAW_INPUT/native-build-manifest.json"
 cp -- "$NATIVE_LIBRARY" "$RAW_BUILD/libNoritoBridgeCandidateLab.a"
+cp -- \
+  "$XCFRAMEWORK/Info.plist" \
+  "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/Info.plist"
+cp -- \
+  "$XCFRAMEWORK/.kagemusha-candidate-evidence-lab-do-not-ship-v2" \
+  "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/.kagemusha-candidate-evidence-lab-do-not-ship-v2"
+cp -- \
+  "$XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge.h" \
+  "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers/connect_norito_bridge.h"
+cp -- \
+  "$XCFRAMEWORK/ios-arm64/Headers/connect_norito_bridge_base.h" \
+  "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers/connect_norito_bridge_base.h"
+cp -- \
+  "$XCFRAMEWORK/ios-arm64/Headers/module.modulemap" \
+  "$RAW_BUILD/NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers/module.modulemap"
 for name in \
   step-eq.params-ipa.krv4 \
   step-eq.proving-key.krv4 \
@@ -503,6 +661,7 @@ find "$RAW_ROOT" -type f -exec chmod 0600 {} +
 
 PROJECT_ROOT="$TRANSIENT/project"
 DERIVED_DATA="$TRANSIENT/DerivedData"
+mkdir -- "$PROJECT_ROOT"
 KAGEMUSHA_CANDIDATE_XCFRAMEWORK_PATH="$XCFRAMEWORK" \
   "$XCODEGEN_BINARY" generate \
     --quiet \
@@ -523,6 +682,7 @@ BUILD_RESULT="$TRANSIENT/build.xcresult"
   CODE_SIGN_STYLE=Automatic \
   ONLY_ACTIVE_ARCH=YES \
   build-for-testing
+verify_native_framework "$XCFRAMEWORK"
 
 APP="$DERIVED_DATA/Build/Products/Debug-iphoneos/KagemushaCandidateEvidenceLabHost.app"
 XCTESTRUN="$(

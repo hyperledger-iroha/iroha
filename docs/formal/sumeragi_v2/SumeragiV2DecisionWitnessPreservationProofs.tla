@@ -903,6 +903,41 @@ BY LocalAdmissionPreservesScheduledCandidateSet, IsaT(120)
        LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
        AsyncRecoveryVars, vars
 
+THEOREM SerializedLocalPredecessorPreservesDecisionExactSourceRetention ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DecisionExactSourceRetentionInvariant
+    /\ SerializedLocalPrecedesServeIngressStep(node)
+    => DecisionExactSourceRetentionInvariant'
+BY SelectedLocalAdmissionAdvancePreservesScheduledCandidateSet,
+   IsaT(120)
+   DEF DecisionExactSourceRetentionInvariant,
+       DecisionExactSourceOwner, HistoricalRecoveryTarget,
+       AsyncDecisionRecoveryStageExact,
+       DecisionRecoveryStageExact,
+       DecisionFetchBodyOwnedExact,
+       DecisionCertifiedRequestActiveExact,
+       DecisionCertifiedResponseLineageExact,
+       DecisionCertifiedFetchOwnedExact,
+       DecisionStoreBodyOwned, DecisionValidateBodyOwned,
+       DecisionApplyOwned, DecisionPipelineKindOwned,
+       DecisionPipelineCandidate, DecisionValidationHeld, DecisionBody,
+       DecisionRecoveryAuthority,
+       DurableDecisionRecoveryAuthority,
+       DurableDecisionRecoveryExecutorCurrent,
+       CertifiedResponseAuthenticatedOccurrence,
+       CertifiedResponseCapabilityAuthorized,
+       MatchingSentCertifiedRequests,
+       FrozenCertifiedResponseBinding,
+       FrozenCertifiedRequestRegistration,
+       AsyncCertifiedResponseAuthProjection,
+       ScheduledCandidateSet, CandidateScheduled,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AdmitProducerCompletion, AdmitCausalHead,
+       AsyncRecoveryVars, vars
+
 (***************************************************************************
 Authenticated ingress has one owner-moving case.  Admitting a valid
 CertifiedResponse retires matching logical registrations and installs the
@@ -1069,9 +1104,10 @@ THEOREM RunNodeWorkPreservesDecisionExactSourceRetention ==
     /\ RunNodeWork(node)
     => DecisionExactSourceRetentionInvariant'
 BY LocalAdmissionPreservesDecisionExactSourceRetention,
+   SerializedLocalPredecessorPreservesDecisionExactSourceRetention,
    IngressDrainPreservesDecisionExactSourceRetention,
    SerializedRuntimePreservesDecisionExactSourceRetention, Isa
-   DEF RunNodeWork
+   DEF RunNodeWork, SerializedLocalPrecedesServeIngressStep
 
 THEOREM AsyncRunnerPreservesDecisionExactSourceRetention ==
   /\ AsyncStrongTypeInvariant

@@ -1,5 +1,7 @@
 import com.android.build.api.artifact.SingleArtifact
 import groovy.json.JsonSlurper
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.File
 import java.io.FileInputStream
@@ -453,7 +455,12 @@ val stagedTestApkName =
 // Maven repository.
 layout.buildDirectory.set(evidenceRoot.resolve("gradle/kagemusha-candidate-evidence-lab"))
 
-val prepareCandidateLabAssets by tasks.registering(Sync::class) {
+abstract class CandidateLabSync : Sync() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
+}
+
+val prepareCandidateLabAssets = tasks.register<CandidateLabSync>("prepareCandidateLabAssets") {
     from(candidateStageManifest) {
         into("stage")
     }
@@ -469,15 +476,17 @@ val prepareCandidateLabAssets by tasks.registering(Sync::class) {
         into("scenario")
         include(scenarioFiles)
     }
-    into(generatedAssets)
+    outputDirectory.set(generatedAssets)
+    into(outputDirectory)
     includeEmptyDirs = false
 }
 
-val prepareCandidateLabNative by tasks.registering(Sync::class) {
+val prepareCandidateLabNative = tasks.register<CandidateLabSync>("prepareCandidateLabNative") {
     from(nativeLibrary) {
         rename { "libconnect_norito_bridge_candidate_lab.so" }
     }
-    into(generatedJni.map { it.dir("arm64-v8a") })
+    outputDirectory.set(generatedJni)
+    into(outputDirectory.dir("arm64-v8a"))
     doFirst {
         if (!nativeLibrary.containsAscii(candidateLabMarker) ||
             !nativeLibrary.containsAscii(
@@ -530,13 +539,6 @@ android {
         buildConfig = true
     }
 
-    sourceSets {
-        getByName("main") {
-            assets.srcDir(generatedAssets)
-            jniLibs.srcDir(generatedJni)
-        }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
@@ -560,6 +562,18 @@ androidComponents {
         variant.enable = false
     }
     onVariants(selector().withBuildType("debug")) { variant ->
+        requireNotNull(variant.sources.assets) {
+            "AGP did not expose assets sources for ${variant.name}"
+        }.addGeneratedSourceDirectory(
+            prepareCandidateLabAssets,
+            CandidateLabSync::outputDirectory,
+        )
+        requireNotNull(variant.sources.jniLibs) {
+            "AGP did not expose jniLibs sources for ${variant.name}"
+        }.addGeneratedSourceDirectory(
+            prepareCandidateLabNative,
+            CandidateLabSync::outputDirectory,
+        )
         tasks.register<Copy>("stageCandidateLabApk") {
             from(variant.artifacts.get(SingleArtifact.APK))
             include("*.apk")
@@ -605,6 +619,7 @@ tasks.configureEach {
 }
 
 dependencies {
+    androidTestImplementation(project(":core-jvm"))
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

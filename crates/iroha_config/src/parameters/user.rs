@@ -7954,6 +7954,8 @@ pub struct Offline {
     pub kagemusha_release_policy_path: Option<PathBuf>,
     /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
     pub kagemusha_artifact_dir: Option<PathBuf>,
+    /// Absolute root-trusted path to a canonical Kagemusha catalog qualification seal.
+    pub kagemusha_catalog_qualification_seal_path: Option<PathBuf>,
     /// Estimated decoded Kagemusha verifier budget, capped at the 256 MiB default.
     #[config(default = "defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES")]
     pub kagemusha_max_decoded_bytes: u64,
@@ -7968,6 +7970,8 @@ impl Default for Offline {
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
+            kagemusha_catalog_qualification_seal_path:
+                defaults::settlement::offline::kagemusha_catalog_qualification_seal_path(),
             kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
     }
@@ -8193,12 +8197,14 @@ impl Offline {
             escrow_accounts,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
+            kagemusha_catalog_qualification_seal_path,
             mut kagemusha_max_decoded_bytes,
         } = self;
         if !enabled
             && (!escrow_accounts.is_empty()
                 || kagemusha_release_policy_path.is_some()
-                || kagemusha_artifact_dir.is_some())
+                || kagemusha_artifact_dir.is_some()
+                || kagemusha_catalog_qualification_seal_path.is_some())
         {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
                 "settlement.offline.enabled=false requires empty escrow and release configuration",
@@ -8216,10 +8222,22 @@ impl Offline {
                 ),
             );
         }
+        if kagemusha_catalog_qualification_seal_path.is_some()
+            && (kagemusha_release_policy_path.is_none() || kagemusha_artifact_dir.is_none())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig).attach(
+                    "settlement.offline.kagemusha_catalog_qualification_seal_path requires both Kagemusha release paths",
+                ),
+            );
+        }
         if kagemusha_release_policy_path
             .as_ref()
             .is_some_and(|path| path.as_os_str().is_empty())
             || kagemusha_artifact_dir
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+            || kagemusha_catalog_qualification_seal_path
                 .as_ref()
                 .is_some_and(|path| path.as_os_str().is_empty())
         {
@@ -8227,6 +8245,14 @@ impl Offline {
                 Report::new(ParseError::InvalidSettlementConfig)
                     .attach("settlement.offline Kagemusha release paths must not be empty"),
             );
+        }
+        if kagemusha_catalog_qualification_seal_path
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute())
+        {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.kagemusha_catalog_qualification_seal_path must be absolute",
+            ));
         }
         if kagemusha_max_decoded_bytes == 0 {
             emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -8281,6 +8307,7 @@ impl Offline {
             escrow_accounts: escrow_bindings,
             kagemusha_release_policy_path,
             kagemusha_artifact_dir,
+            kagemusha_catalog_qualification_seal_path,
             kagemusha_max_decoded_bytes,
         }
     }
@@ -29102,6 +29129,7 @@ mod settlement_offline_tests {
         assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
+        assert!(actual.kagemusha_catalog_qualification_seal_path.is_none());
         assert_eq!(
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
@@ -29123,6 +29151,7 @@ mod settlement_offline_tests {
         assert!(actual.escrow_accounts.is_empty());
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
+        assert!(actual.kagemusha_catalog_qualification_seal_path.is_none());
     }
 
     #[test]
@@ -29132,6 +29161,21 @@ mod settlement_offline_tests {
             enabled: false,
             kagemusha_release_policy_path: Some("release-policy.norito".into()),
             kagemusha_artifact_dir: Some("artifacts".into()),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn offline_parse_rejects_disabled_profile_with_dormant_qualification_seal() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            enabled: false,
+            kagemusha_catalog_qualification_seal_path: Some(
+                "/var/lib/iroha/kagemusha/catalog-seal.norito".into(),
+            ),
             ..Offline::default()
         }
         .parse(&mut emitter);
@@ -29174,10 +29218,12 @@ mod settlement_offline_tests {
     fn offline_parse_preserves_paired_release_paths() {
         let policy = PathBuf::from("policy.norito");
         let artifacts = PathBuf::from("artifacts");
+        let seal = PathBuf::from("/var/lib/iroha/kagemusha/catalog-seal.norito");
         let mut emitter = Emitter::new();
         let actual = Offline {
             kagemusha_release_policy_path: Some(policy.clone()),
             kagemusha_artifact_dir: Some(artifacts.clone()),
+            kagemusha_catalog_qualification_seal_path: Some(seal.clone()),
             ..Offline::default()
         }
         .parse(&mut emitter);
@@ -29185,6 +29231,35 @@ mod settlement_offline_tests {
         assert!(emitter.into_result().is_ok());
         assert_eq!(actual.kagemusha_release_policy_path, Some(policy));
         assert_eq!(actual.kagemusha_artifact_dir, Some(artifacts));
+        assert_eq!(actual.kagemusha_catalog_qualification_seal_path, Some(seal));
+    }
+
+    #[test]
+    fn offline_parse_rejects_qualification_seal_without_release_paths() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            kagemusha_catalog_qualification_seal_path: Some(
+                "/var/lib/iroha/kagemusha/catalog-seal.norito".into(),
+            ),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn offline_parse_rejects_relative_qualification_seal_path() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            kagemusha_release_policy_path: Some("policy.norito".into()),
+            kagemusha_artifact_dir: Some("artifacts".into()),
+            kagemusha_catalog_qualification_seal_path: Some("catalog-seal.norito".into()),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
     }
 
     #[test]
@@ -29193,6 +29268,20 @@ mod settlement_offline_tests {
         let _ = Offline {
             kagemusha_release_policy_path: Some(PathBuf::new()),
             kagemusha_artifact_dir: Some(PathBuf::from("artifacts")),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn offline_parse_rejects_empty_qualification_seal_path() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            kagemusha_release_policy_path: Some(PathBuf::from("policy.norito")),
+            kagemusha_artifact_dir: Some(PathBuf::from("artifacts")),
+            kagemusha_catalog_qualification_seal_path: Some(PathBuf::new()),
             ..Offline::default()
         }
         .parse(&mut emitter);

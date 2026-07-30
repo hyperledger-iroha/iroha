@@ -18,7 +18,13 @@ from scripts import prepare_taira_offline_reset_bundle as offline_reset
 
 
 PRIVATE_KEY = "802620" + "A5" * 32
-PUBLIC_KEY = "ed0120" + "5A" * 32
+PREVIOUS_PRIVATE_KEY = "802620" + "B4" * 32
+PUBLIC_KEY = (
+    "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+)
+COMMAND_AUTHORITY = (
+    "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+)
 NORITO_FLAGS = offline_reset.NORITO_COMPACT_LEN
 # Captured from the release-mode Rust Norito encoder used by the Taira Kagami
 # build on 2026-07-28.  This is deliberately not produced by the Python helpers
@@ -42,7 +48,7 @@ class TairaOfflineEntrypointTests(unittest.TestCase):
     def test_release_artifact_corridor_matches_compact_v5_runtime(self) -> None:
         self.assertEqual(
             offline_reset.KAGEMUSHA_ARTIFACT_MAX_BYTES,
-            4 * 1024 * 1024 * 1024,
+            5 * 1024 * 1024 * 1024,
         )
 
     def test_help_runs_in_isolated_mode_outside_repository(self) -> None:
@@ -78,6 +84,8 @@ class TairaOfflineEntrypointTests(unittest.TestCase):
             "/private/genesis.key",
             "--genesis-public-key",
             PUBLIC_KEY,
+            "--command-authority",
+            COMMAND_AUTHORITY,
             "--kagami",
             "/private/kagami",
             "--irohad",
@@ -218,6 +226,80 @@ file = "/private/old/genesis.signed.nrt"
 class TairaOfflineConfigTests(unittest.TestCase):
     """Exercise exact runtime configuration projection."""
 
+    def test_rotation_rejects_the_archived_key_in_any_runtime_projection(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            _private_directory(source)
+            _private_file(
+                source / "validator-secrets.toml",
+                (
+                    "[shared]\n"
+                    f'kagemusha_commands_private_key = "{PREVIOUS_PRIVATE_KEY}"\n'
+                ).encode(),
+            )
+            previous_sha256 = (
+                offline_reset.source_command_private_key_sha256(source)
+            )
+            self.assertEqual(
+                previous_sha256,
+                hashlib.sha256(PREVIOUS_PRIVATE_KEY.encode()).digest(),
+            )
+
+            bundle = root / "bundle"
+            _private_directory(bundle)
+            _private_file(
+                bundle / "base-config.toml",
+                (
+                    "[torii.kagemusha_commands]\n"
+                    f'private_key = "{PRIVATE_KEY}"\n'
+                ).encode(),
+            )
+            _private_file(
+                bundle / "validator-secrets.toml",
+                (
+                    "[shared]\n"
+                    f'kagemusha_commands_private_key = "{PRIVATE_KEY}"\n'
+                ).encode(),
+            )
+            rendered = bundle / "rendered"
+            _private_directory(rendered)
+            for slug in offline_reset.VALIDATOR_SLUGS:
+                validator = rendered / slug
+                _private_directory(validator)
+                _private_file(
+                    validator / "config.toml",
+                    (
+                        "[torii.kagemusha_commands]\n"
+                        f'private_key = "{PRIVATE_KEY}"\n'
+                    ).encode(),
+                )
+
+            offline_reset.require_rotated_command_key_projection(
+                bundle,
+                command_private_key=PRIVATE_KEY,
+                previous_private_key_sha256=previous_sha256,
+            )
+            _private_file(
+                rendered
+                / offline_reset.VALIDATOR_SLUGS[-1]
+                / "config.toml",
+                (
+                    "[torii.kagemusha_commands]\n"
+                    f'private_key = "{PREVIOUS_PRIVATE_KEY}"\n'
+                ).encode(),
+            )
+            with self.assertRaisesRegex(
+                RuntimeError, "stale or inconsistent"
+            ):
+                offline_reset.require_rotated_command_key_projection(
+                    bundle,
+                    command_private_key=PRIVATE_KEY,
+                    previous_private_key_sha256=previous_sha256,
+                )
+
     def test_rewrites_archived_config_into_self_contained_mandatory_offline(self) -> None:
         bundle = Path("/private/taira/bundle-v21-canonical-offline")
         rendered = offline_reset.runtime_config_text(
@@ -266,6 +348,13 @@ class TairaOfflineConfigTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
+            offline["kagemusha_catalog_qualification_seal_path"],
+            str(
+                offline_reset.TAIRA_QUALIFICATION_SEAL_ROOT
+                / f"kagemusha-v4-{'ab' * 32}.norito"
+            ),
+        )
+        self.assertEqual(
             config["genesis"]["file"], str(bundle / "genesis.signed.nrt")
         )
         self.assertEqual(config["genesis"]["public_key"], PUBLIC_KEY)
@@ -277,6 +366,19 @@ class TairaOfflineConfigTests(unittest.TestCase):
             config["nexus"]["storage"]["disk_budget_weights"],
             offline_reset.PUBLIC_TAIRA_STORAGE_BUDGET_WEIGHTS,
         )
+        offline_reset.validate_runtime_config(
+            config,
+            bundle,
+            "ab" * 32,
+            PUBLIC_KEY,
+        )
+        with self.assertRaisesRegex(RuntimeError, "fresh public key"):
+            offline_reset.validate_runtime_config(
+                config,
+                bundle,
+                "ab" * 32,
+                "ed0120" + "6B" * 32,
+            )
         staged = tomllib.loads(
             offline_reset.staged_check_config_text(
                 rendered, bundle, "ab" * 32
@@ -291,6 +393,10 @@ class TairaOfflineConfigTests(unittest.TestCase):
             staged_offline["kagemusha_artifact_dir"],
             str(bundle / "kagemusha/catalog"),
         )
+        self.assertNotIn(
+            "kagemusha_catalog_qualification_seal_path",
+            staged_offline,
+        )
         self.assertEqual(
             config["settlement"]["offline"]["kagemusha_artifact_dir"],
             str(
@@ -299,6 +405,37 @@ class TairaOfflineConfigTests(unittest.TestCase):
                 / "catalog"
             ),
         )
+
+    def test_runtime_validation_rejects_a_stale_qualification_seal_hash(
+        self,
+    ) -> None:
+        bundle = Path("/private/taira/bundle-v21-canonical-offline")
+        config = tomllib.loads(
+            offline_reset.runtime_config_text(
+                _archived_config(),
+                bundle=bundle,
+                release_tree_sha256="ab" * 32,
+                genesis_public_key=PUBLIC_KEY,
+                command_private_key=PRIVATE_KEY,
+            )
+        )
+        config["settlement"]["offline"][
+            "kagemusha_catalog_qualification_seal_path"
+        ] = str(
+            offline_reset.TAIRA_QUALIFICATION_SEAL_ROOT
+            / f"kagemusha-v4-{'cd' * 32}.norito"
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "mandatory offline settlement projection",
+        ):
+            offline_reset.validate_runtime_config(
+                config,
+                bundle,
+                "ab" * 32,
+                PUBLIC_KEY,
+            )
 
     def test_replaces_existing_storage_budget_without_losing_other_settings(
         self,
@@ -375,6 +512,24 @@ private_key = "802620BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
 
 class TairaOfflineGenesisTests(unittest.TestCase):
     """Exercise canonical chain and slow-genesis timing admission."""
+
+    def test_command_authority_is_bound_to_the_fresh_genesis_key(self) -> None:
+        self.assertEqual(
+            offline_reset.command_authority_for_genesis_public_key(PUBLIC_KEY),
+            COMMAND_AUTHORITY,
+        )
+        self.assertEqual(
+            offline_reset.require_command_authority(
+                COMMAND_AUTHORITY,
+                genesis_public_key=PUBLIC_KEY,
+            ),
+            COMMAND_AUTHORITY,
+        )
+        with self.assertRaisesRegex(RuntimeError, "fresh genesis public key"):
+            offline_reset.require_command_authority(
+                COMMAND_AUTHORITY + "1",
+                genesis_public_key=PUBLIC_KEY,
+            )
 
     def test_norito_crc64_xz_matches_standard_check_value(self) -> None:
         self.assertEqual(
@@ -483,6 +638,18 @@ class TairaOfflineGenesisTests(unittest.TestCase):
                                         + "#testu-non-escrow"
                                     ),
                                     "object": "1000000000.00",
+                                }
+                            }
+                        },
+                        {
+                            "Mint": {
+                                "Asset": {
+                                    "destination": (
+                                        offline_reset.PUBLIC_TAIRA_FEE_ASSET_ID
+                                        + "#"
+                                        + COMMAND_AUTHORITY
+                                    ),
+                                    "object": "1000000",
                                 }
                             }
                         },
@@ -683,7 +850,11 @@ class TairaOfflineGenesisTests(unittest.TestCase):
                 path,
                 json.dumps(self._genesis(4_000), ensure_ascii=False).encode(),
             )
-            summary = offline_reset.genesis_summary(path)
+            summary = offline_reset.genesis_summary(
+                path,
+                command_authority=COMMAND_AUTHORITY,
+                genesis_public_key=PUBLIC_KEY,
+            )
         self.assertEqual(summary["block_cadence_ms"], 4_000)
 
     def test_rejects_old_one_second_genesis(self) -> None:
@@ -694,7 +865,11 @@ class TairaOfflineGenesisTests(unittest.TestCase):
                 json.dumps(self._genesis(1_000), ensure_ascii=False).encode(),
             )
             with self.assertRaisesRegex(RuntimeError, "block_cadence_ms=4000"):
-                offline_reset.genesis_summary(path)
+                offline_reset.genesis_summary(
+                    path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
+                )
 
     def test_rejects_legacy_sbd_projection(self) -> None:
         genesis = self._genesis(4_000)
@@ -711,7 +886,11 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             path = Path(temporary) / "genesis.json"
             _private_file(path, json.dumps(genesis, ensure_ascii=False).encode())
             with self.assertRaisesRegex(RuntimeError, "Digital Shekel"):
-                offline_reset.genesis_summary(path)
+                offline_reset.genesis_summary(
+                    path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
+                )
 
     def test_rejects_duplicate_or_wrong_ds_alias_binding(self) -> None:
         genesis = self._genesis(4_000)
@@ -729,7 +908,11 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             path = Path(temporary) / "genesis.json"
             _private_file(path, json.dumps(genesis, ensure_ascii=False).encode())
             with self.assertRaisesRegex(RuntimeError, "exactly one ds#boi.is"):
-                offline_reset.genesis_summary(path)
+                offline_reset.genesis_summary(
+                    path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
+                )
 
     def test_rejects_explicit_implicit_genesis_signer_registration(self) -> None:
         genesis = self._genesis(4_000)
@@ -737,7 +920,7 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             {
                 "Register": {
                     "Account": {
-                        "id": offline_reset.PUBLIC_TAIRA_COMMAND_AUTHORITY,
+                        "id": COMMAND_AUTHORITY,
                         "metadata": {},
                     }
                 }
@@ -747,7 +930,32 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             path = Path(temporary) / "genesis.json"
             _private_file(path, json.dumps(genesis, ensure_ascii=False).encode())
             with self.assertRaisesRegex(RuntimeError, "must not explicitly register"):
-                offline_reset.genesis_summary(path)
+                offline_reset.genesis_summary(
+                    path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
+                )
+
+    def test_rejects_unfunded_pinned_command_authority(self) -> None:
+        genesis = self._genesis(4_000)
+        genesis["transactions"][0]["instructions"][2]["Mint"]["Asset"][
+            "destination"
+        ] = (
+            offline_reset.PUBLIC_TAIRA_FEE_ASSET_ID
+            + "#"
+            + offline_reset.PUBLIC_TAIRA_OFFLINE_ESCROW_ACCOUNT
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "genesis.json"
+            _private_file(path, json.dumps(genesis, ensure_ascii=False).encode())
+            with self.assertRaisesRegex(
+                RuntimeError, "explicitly pinned command authority"
+            ):
+                offline_reset.genesis_summary(
+                    path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
+                )
 
     def test_rejects_missing_online_backing_liquidity(self) -> None:
         genesis = self._genesis(4_000)
@@ -758,7 +966,11 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             path = Path(temporary) / "genesis.json"
             _private_file(path, json.dumps(genesis, ensure_ascii=False).encode())
             with self.assertRaisesRegex(RuntimeError, "non-zero non-escrow"):
-                offline_reset.genesis_summary(path)
+                offline_reset.genesis_summary(
+                    path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
+                )
 
     def test_cross_binds_catalog_operator_identity_and_genesis_activation(
         self,
@@ -777,6 +989,8 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             )
             summary = offline_reset.genesis_summary(
                 path,
+                command_authority=COMMAND_AUTHORITY,
+                genesis_public_key=PUBLIC_KEY,
                 release=release,
                 operator_identity=validated_identity,
             )
@@ -813,6 +1027,8 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "recursive eq verifier"):
                 offline_reset.genesis_summary(
                     path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
                     release=release,
                     operator_identity=reviewed_identity,
                 )
@@ -835,6 +1051,8 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "release record"):
                 offline_reset.genesis_summary(
                     path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
                     release=release,
                     operator_identity=identity,
                 )
@@ -856,6 +1074,8 @@ class TairaOfflineGenesisTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "release record"):
                 offline_reset.genesis_summary(
                     path,
+                    command_authority=COMMAND_AUTHORITY,
+                    genesis_public_key=PUBLIC_KEY,
                     release=different_catalog,
                     operator_identity=identity,
                 )
@@ -933,6 +1153,8 @@ class TairaOfflineCatalogTests(unittest.TestCase):
             str(temporary_path / "genesis.key"),
             "--genesis-public-key",
             PUBLIC_KEY,
+            "--command-authority",
+            COMMAND_AUTHORITY,
             "--kagami",
             str(temporary_path / "kagami"),
             "--irohad",
@@ -956,6 +1178,36 @@ class TairaOfflineCatalogTests(unittest.TestCase):
             _private_directory(output)
 
         return materialize
+
+    def test_prepare_rejects_reused_command_key_before_materialization(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary_path = Path(temporary).resolve()
+            arguments = self._prepare_arguments(
+                temporary_path,
+                temporary_path / "release",
+                temporary_path / "output",
+                move=False,
+            )
+            reused_sha256 = hashlib.sha256(PRIVATE_KEY.encode()).digest()
+            with (
+                mock.patch.object(
+                    offline_reset,
+                    "require_private_key",
+                    return_value=PRIVATE_KEY,
+                ),
+                mock.patch.object(
+                    offline_reset,
+                    "source_command_private_key_sha256",
+                    return_value=reused_sha256,
+                ),
+                mock.patch.object(offline_reset, "run_checked") as materialize,
+                self.assertRaisesRegex(RuntimeError, "rotate the archived"),
+            ):
+                offline_reset.prepare(arguments)
+
+            materialize.assert_not_called()
 
     def test_moves_release_once_and_fsyncs_both_parents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -998,6 +1250,13 @@ class TairaOfflineCatalogTests(unittest.TestCase):
                     offline_reset,
                     "require_private_key",
                     return_value=PRIVATE_KEY,
+                ),
+                mock.patch.object(
+                    offline_reset,
+                    "source_command_private_key_sha256",
+                    return_value=hashlib.sha256(
+                        PREVIOUS_PRIVATE_KEY.encode()
+                    ).digest(),
                 ),
                 mock.patch.object(
                     offline_reset,
@@ -1125,6 +1384,13 @@ class TairaOfflineCatalogTests(unittest.TestCase):
                 ),
                 mock.patch.object(
                     offline_reset,
+                    "source_command_private_key_sha256",
+                    return_value=hashlib.sha256(
+                        PREVIOUS_PRIVATE_KEY.encode()
+                    ).digest(),
+                ),
+                mock.patch.object(
+                    offline_reset,
                     "require_private_file",
                     return_value=b"operator identity",
                 ),
@@ -1171,6 +1437,13 @@ class TairaOfflineCatalogTests(unittest.TestCase):
                     offline_reset,
                     "require_private_key",
                     return_value=PRIVATE_KEY,
+                ),
+                mock.patch.object(
+                    offline_reset,
+                    "source_command_private_key_sha256",
+                    return_value=hashlib.sha256(
+                        PREVIOUS_PRIVATE_KEY.encode()
+                    ).digest(),
                 ),
                 mock.patch.object(
                     offline_reset,
@@ -1228,6 +1501,13 @@ class TairaOfflineCatalogTests(unittest.TestCase):
                     offline_reset,
                     "require_private_key",
                     return_value=PRIVATE_KEY,
+                ),
+                mock.patch.object(
+                    offline_reset,
+                    "source_command_private_key_sha256",
+                    return_value=hashlib.sha256(
+                        PREVIOUS_PRIVATE_KEY.encode()
+                    ).digest(),
                 ),
                 mock.patch.object(
                     offline_reset,

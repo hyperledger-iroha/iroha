@@ -124,6 +124,8 @@ escrow_required = true
 escrow_accounts = { "REPLACE_WITH_REGISTERED_SCALE_2_DS_ASSET_DEFINITION_ID" = "REPLACE_WITH_TAIRA_OFFLINE_ESCROW_ACCOUNT" }
 kagemusha_release_policy_path = "/etc/iroha/taira-validator/kagemusha/release-policy.norito"
 kagemusha_artifact_dir = "/var/lib/iroha/taira-validator/kagemusha/v4"
+# Reset packaging injects the release-specific absolute seal path:
+# /Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito
 kagemusha_max_decoded_bytes = 268435456
 
 [torii.account_onboarding]

@@ -394,15 +394,15 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
 /// constrained instead of reserving speculative future phases.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
-pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 360;
+pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 443;
 /// Reviewed first-release advice-column profile for compact degree-16 generation.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [360];
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [443];
 /// Reviewed first-release lookup-column profile for compact degree-16 generation.
 ///
 /// `BaseCircuitBuilder` reports the two unused challenge phases explicitly as
 /// zero-width suffixes even though the authenticated advice profile has only
 /// the populated phase-zero entry.
-pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [37, 0, 0];
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 3] = [47, 0, 0];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:step-circuit-params:compact-v5";
@@ -435,7 +435,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 256 
 /// The first-release circuit includes five authenticated Table16 SHA lanes.
 /// Its processed key is intentionally file-backed and is bounded independently
 /// from the much smaller decoded verifier-resident budget.
-pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 4 * 1024 * 1024 * 1024;
+pub const KAGEMUSHA_COMPACT_PROVING_KEY_MAX_BYTES_V5: u64 = 5 * 1024 * 1024 * 1024;
 /// Maximum serialized `ParamsIPA` payload admitted by the compact V5 profile.
 pub const KAGEMUSHA_COMPACT_PARAMS_IPA_MAX_BYTES_V5: u64 = 8 * 1024 * 1024;
 /// Exact cryptographic profile embedded inside the ABI-21/V4 lifecycle.
@@ -480,7 +480,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4: u16 = 4;
 /// Defensive upper bound for the canonical Norito header preceding a V4 payload.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4: u32 = 64 * 1024;
 /// Maximum size of any one V4 content-addressed artifact file.
-pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 4 * 1024 * 1024 * 1024;
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 5 * 1024 * 1024 * 1024;
 /// Canonical Eq `ParamsIPA` package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4: &str =
     "step-eq.params-ipa.krv4";
@@ -9032,7 +9032,7 @@ mod device_authority_p256_tests {
     }
 
     #[test]
-    fn redeem_result_rejects_structurally_decodable_alternate_layout_archive() {
+    fn redeem_result_rejects_alternate_layout_and_compressed_expansion_archives() {
         let receiver_request =
             recipient_payment_request(&signing_key(15), 1_800_000_000_000, 1_800_000_030_000);
         let bundle = recipient_payment_bundle(&receiver_request);
@@ -9116,6 +9116,60 @@ mod device_authority_p256_tests {
                 field: "redeem_result.v4.request_archive",
             })
         ));
+
+        const NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
+        const NORITO_UNCOMPRESSED_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
+        let mut compressed_expansion_archive = canonical_request_archive;
+        compressed_expansion_archive[NORITO_COMPRESSION_OFFSET] = norito::Compression::Zstd as u8;
+        compressed_expansion_archive[NORITO_UNCOMPRESSED_LENGTH_OFFSET
+            ..NORITO_UNCOMPRESSED_LENGTH_OFFSET + std::mem::size_of::<u64>()]
+            .copy_from_slice(
+                &u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4)
+                    .expect("redeem ceiling fits u64")
+                    .to_le_bytes(),
+            );
+        let compressed_expansion_result = KagemushaRecursiveSpendRedeemResultV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            redeem_request_archive: compressed_expansion_archive,
+            offline_change_bundle: None,
+            offline_change_membership_witness: None,
+            offline_change_topup_provenance: None,
+            operation_id: request.operation_id,
+        };
+        assert!(matches!(
+            compressed_expansion_result.validate_public_binding(),
+            Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_result.v4.request_archive",
+            })
+        ));
+    }
+
+    #[test]
+    fn redeem_result_decode_limits_cover_the_exact_archive_ceiling() {
+        let limits = kagemusha_recursive_spend_redeem_decode_limits_v4(
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
+        );
+        assert_eq!(
+            limits.max_sequence_elements(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        );
+        assert_eq!(
+            limits.max_field_bytes(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        );
+        assert_eq!(
+            limits.max_total_elements(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4 * 2
+        );
+        assert_eq!(
+            limits.max_total_allocated_bytes(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+                * KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_ALLOCATION_MULTIPLIER_V4
+        );
+        assert_eq!(
+            limits.max_nesting_depth(),
+            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4
+        );
     }
 
     #[test]
@@ -10308,6 +10362,22 @@ pub const KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4: &str =
 pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4: usize = 64 * 1024 * 1024;
 /// Maximum canonical ABI-21 redemption request archive size.
 pub const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4: usize = 48 * 1024 * 1024;
+const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_ALLOCATION_MULTIPLIER_V4: usize = 4;
+const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4: usize = 64;
+
+fn kagemusha_recursive_spend_redeem_decode_limits_v4(encoded_len: usize) -> norito::DecodeLimits {
+    // The request is already bounded by the exact canonical archive ceiling.
+    // Scale every decode dimension from those supplied bytes instead of using
+    // the generic canonical decoder's 32-fold allocation allowance.
+    norito::DecodeLimits::new(
+        encoded_len,
+        encoded_len,
+        encoded_len.saturating_mul(2),
+        encoded_len
+            .saturating_mul(KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_ALLOCATION_MULTIPLIER_V4),
+        KAGEMUSHA_RECURSIVE_SPEND_REDEEM_DECODE_MAX_NESTING_DEPTH_V4,
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct KagemushaRecursiveSpendBundleDigestPreimageV4 {
@@ -11934,12 +12004,13 @@ impl KagemushaRecursiveSpendRedeemResultV4 {
                 field: "redeem_result.v4",
             });
         }
-        let request: KagemushaRecursiveSpendRedeemRequestV4 =
-            norito::decode_canonical(&self.redeem_request_archive).map_err(|_| {
-                KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "redeem_result.v4.request_archive",
-                }
-            })?;
+        let request: KagemushaRecursiveSpendRedeemRequestV4 = norito::decode_canonical_with_limits(
+            &self.redeem_request_archive,
+            kagemusha_recursive_spend_redeem_decode_limits_v4(self.redeem_request_archive.len()),
+        )
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "redeem_result.v4.request_archive",
+        })?;
         request.validate_public_binding()?;
         if request.operation_id != self.operation_id {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {

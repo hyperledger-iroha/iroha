@@ -53,6 +53,7 @@ SCENARIO_ROSTER_NAME = "init-top-up-finality-roster-artifact-v2.norito"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 PORTABLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PUBLIC_TAIRA_CHAIN_DISCRIMINANT = 369
 
 ARTIFACTS = (
     ("step_eq_params_ipa", "step-eq.params-ipa.krv4"),
@@ -126,7 +127,7 @@ POSITIVE_DECIMAL_SEEDS = frozenset(
 )
 MAX_CANDIDATE_METADATA_BYTES = 1024 * 1024
 MAX_ROSTER_BYTES = 2 * 1024 * 1024
-MAX_ARTIFACT_BYTES = 4 * 1024 * 1024 * 1024
+MAX_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024
 MAX_SCENARIO_BYTES = 16 * 1024 * 1024
 
 
@@ -740,6 +741,8 @@ def run_authoritative_validators(
                 os.fspath(candidate_dir / ROSTER_NAME),
                 "--scenario-dir",
                 os.fspath(scenario_dir),
+                "--account-chain-discriminant",
+                str(PUBLIC_TAIRA_CHAIN_DISCRIMINANT),
             ),
             cwd=REPOSITORY_ROOT,
             env=environment,

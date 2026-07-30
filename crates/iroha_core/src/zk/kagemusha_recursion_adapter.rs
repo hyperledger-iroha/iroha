@@ -10,7 +10,7 @@
 //! release manifest at V4. It fixes both parities at degree 16, exposes one
 //! 64-element commitment column, keeps the exact 138-`u32`
 //! predecessor/result state boundary private, and caps each processed proving
-//! key at 4 GiB. Production retains authenticated proving keys as file-backed
+//! key at 5 GiB. Production retains authenticated proving keys as file-backed
 //! spools and verifier keys as bounded raw bytes. It parses Eq and Ep one at a
 //! time, then materializes terminal verifier domains only after both proving
 //! keys and populated circuits have been released.
@@ -121,12 +121,12 @@ fn validate_kagemusha_circuit_params_v4(
 // candidate generation. Keeping the generation boundary explicit prevents a
 // stale or column-heavy profile from reaching `ParamsIPA::new` or Halo2
 // configure/keygen even if it was decoded from a historical carrier.
-const KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4: &[u32] = &[360];
-const KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4: &[u32] = &[37, 0, 0];
+const KAGEMUSHA_GENERATION_ADVICE_COLUMNS_V4: &[u32] = &[443];
+const KAGEMUSHA_GENERATION_LOOKUP_COLUMNS_V4: &[u32] = &[47, 0, 0];
 const KAGEMUSHA_GENERATION_FIXED_COLUMNS_V4: u32 = 1;
 const KAGEMUSHA_GENERATION_INSTANCE_COLUMNS_V4: u32 = 1;
-const KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4: u64 = 8 * 1024 * 1024 * 1024;
-const KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5: u64 = 8 * 1024 * 1024 * 1024;
+const KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4: u64 = 12 * 1024 * 1024 * 1024;
+const KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5: u64 = 12 * 1024 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_FIXED_HEADROOM_BYTES_V4: u64 = 56 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_QUOTIENT_HEADROOM_BYTES_V5: u64 = 72 * 1024 * 1024;
 const KAGEMUSHA_GENERATION_FIELD_BYTES_V4: u64 = 32;
@@ -4008,9 +4008,9 @@ mod source_parser_preflight_tests {
         let expected = [0x51; 32];
         let preflight = KagemushaPkWirePreflightV4 {
             vk: KagemushaVkWirePreflightV4 {
-                serialized_len: 29_386,
-                fixed_columns: 302,
-                permutation_columns: 616,
+                serialized_len: 35_018,
+                fixed_columns: 560,
+                permutation_columns: 534,
             },
             embedded_verifying_key_sha256: expected,
         };
@@ -9837,7 +9837,6 @@ fn constrain_kagemusha_compact_eq_header_v5(
     range: &halo2_base::gates::RangeChip<Fp>,
     compact: &[halo2_base::AssignedValue<Fp>],
     semantic: &[halo2_base::AssignedValue<Fp>],
-    proof_step_count: u32,
 ) -> Result<(), String> {
     use halo2_base::gates::{GateInstructions as _, RangeInstructions as _};
 
@@ -9853,11 +9852,6 @@ fn constrain_kagemusha_compact_eq_header_v5(
     ctx.constrain_equal(
         &compact[KAGEMUSHA_COMPACT_PARENT_COUNT_OFFSET_V5],
         &semantic[KAGEMUSHA_PASTA_PARENT_COUNT_OFFSET_V4],
-    );
-    range.gate().assert_is_const(
-        ctx,
-        &compact[KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5],
-        &Fp::from(u64::from(proof_step_count)),
     );
     constrain_exact_u32_digest_chunks_v5(
         ctx,
@@ -9965,8 +9959,10 @@ fn constrain_kagemusha_compact_eq_header_v5(
         one,
     )?;
 
-    // The step count is also part of the exact operation relation; bind the
-    // compact header directly to that constrained native field.
+    // The step count is runtime witness data. Never assert it as a constant:
+    // doing so would place the keygen step into fixed columns and make every
+    // later recursive step incompatible with the authenticated StepEq key.
+    // Bind the compact header only to the constrained native operation field.
     let operation_step =
         KAGEMUSHA_PASTA_STEP_OPERATION_OFFSET_V4 + super::kagemusha_v2::I_PROOF_STEP_COUNT * 8;
     let operation_step_value =
@@ -10839,13 +10835,7 @@ fn build_kagemusha_step_eq_circuit_v5(
         &semantic,
         semantic_len,
     )?;
-    constrain_kagemusha_compact_eq_header_v5(
-        step_eq.main(0),
-        &range,
-        &public,
-        &semantic,
-        witness.proof_step_count,
-    )?;
+    constrain_kagemusha_compact_eq_header_v5(step_eq.main(0), &range, &public, &semantic)?;
     constrain_kagemusha_eq_secure_relations_v4(
         step_eq.main(0),
         &range,
@@ -13528,6 +13518,41 @@ mod tests {
     }
 
     #[test]
+    fn v5_compact_step_count_is_witness_bound_not_fixed() {
+        let source = include_str!("kagemusha_recursion_adapter.rs");
+        let header = source
+            .split_once("fn constrain_kagemusha_compact_eq_header_v5(")
+            .expect("StepEq compact-header relation")
+            .1
+            .split_once("fn constrain_kagemusha_output_frontier_v4")
+            .expect("end StepEq compact-header relation")
+            .0;
+        let signature = header
+            .split_once(") -> Result<(), String>")
+            .expect("StepEq compact-header signature")
+            .0;
+
+        assert!(
+            !signature.contains("proof_step_count"),
+            "runtime step data must not enter the circuit through a Rust constant"
+        );
+        assert_eq!(
+            header
+                .matches("KAGEMUSHA_COMPACT_PROOF_STEP_COUNT_OFFSET_V5")
+                .count(),
+            2,
+            "the compact step cell must appear only in the operation copy constraint and range check"
+        );
+        assert!(header.contains("let operation_step ="));
+        assert!(header.contains("ctx.constrain_equal("));
+        assert!(header.contains("range.range_check("));
+        assert!(
+            !header.contains("Fp::from(u64::from(proof_step_count))"),
+            "keygen step one must never be assigned into fixed columns"
+        );
+    }
+
+    #[test]
     fn v5_runtime_prover_retains_raw_vks_and_stages_pk_then_terminal_vks() {
         let source = include_str!("kagemusha_recursion_adapter.rs");
         let prover_fields = source
@@ -13782,12 +13807,21 @@ mod tests {
         );
 
         let reviewed = first_release_generation_params_v4();
+        let configured =
+            configured_kagemusha_eq_vk_wire_shape_v4(&reviewed).expect("reviewed configured shape");
+        assert_eq!(configured.advice_columns, 583);
+        assert_eq!(configured.base_fixed_columns, 7);
+        assert_eq!(configured.selectors, 553);
+        assert_eq!(configured.permutation_columns, 534);
+        assert_eq!(configured.instance_columns, 1);
         let reviewed_shape = kagemusha_processed_key_shape_v4::<EqAffine>(&reviewed, "reviewed")
             .expect("reviewed key shape");
         assert_eq!(reviewed_shape.domain_rows, 1 << 16);
+        assert_eq!(reviewed_shape.fixed_polynomials, 560);
+        assert_eq!(reviewed_shape.permutation_polynomials, 534);
         assert_eq!(
             reviewed_shape.fixed_polynomials + reviewed_shape.permutation_polynomials,
-            918
+            1_094
         );
         assert_eq!(reviewed_shape.point_bytes, 32);
         assert_eq!(reviewed_shape.scalar_bytes, mem::size_of::<Fp>());
@@ -13795,7 +13829,7 @@ mod tests {
             reviewed_shape
                 .proving_key_bytes("Eq")
                 .expect("exact compact V5 PK length"),
-            3_856_699_286
+            4_594_903_830
         );
         assert!(
             reviewed_shape
@@ -14086,20 +14120,20 @@ mod tests {
         );
         assert_eq!(
             shape.verifier_key_bytes("Eq").expect("reviewed VK length"),
-            29_386
+            35_018
         );
         assert_eq!(
             shape.proving_key_bytes("Eq").expect("reviewed PK length"),
-            3_856_699_286
+            4_594_903_830
         );
         let preflight = preflight_kagemusha_generation_v4(&reviewed, &reviewed)
             .expect("compact k16 profile passes before ParamsIPA allocation");
         assert_eq!(preflight.layout.instance_column_limbs, 64);
-        assert_eq!(preflight.estimated_peak_bytes, 8_271_167_488);
+        assert_eq!(preflight.estimated_peak_bytes, 9_747_562_496);
         assert!(preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_MAX_ESTIMATED_BYTES_V4);
         assert!(
             preflight.estimated_peak_bytes <= KAGEMUSHA_GENERATION_REVIEWED_MAX_ESTIMATED_BYTES_V5,
-            "the reviewed staged lifecycle must remain within 8 GiB"
+            "the reviewed staged lifecycle must remain within 12 GiB"
         );
 
         let mut stale = reviewed;

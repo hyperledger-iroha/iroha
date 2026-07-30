@@ -1185,7 +1185,6 @@ macro_rules! production_historical_body_pipeline_trace_body {
                 $projection.authenticated_request_hash
             )
             && $projection.fetch_tag.height == $projection.context_height
-            && $projection.fetch_tag.generation > 0u64
             && canonical_identity_equal_body!($projection.round_context_id, $projection.context_id)
             && $projection.round_height == $projection.context_height
             && canonical_identity_is_typed_body!(
@@ -1288,12 +1287,19 @@ macro_rules! exact_body_owner_binding_body {
     }};
 }
 
+macro_rules! tag_projection_strictly_advances_body {
+    ($later:expr, $previous:expr) => {{
+        $later.height == $previous.height
+            && ($later.view > $previous.view
+                || ($later.view == $previous.view
+                    && $later.generation > $previous.generation))
+    }};
+}
+
 macro_rules! exact_body_owner_rebind_body {
     ($current:expr, $previous:expr, $rebound_tag:expr, $owner_type:ident) => {{
         if !exact_body_owner_equal_body!($current, $previous)
-            || $previous.tag.height != $rebound_tag.height
-            || $previous.tag.view > $rebound_tag.view
-            || $previous.tag.generation >= $rebound_tag.generation
+            || !tag_projection_strictly_advances_body!($rebound_tag, $previous.tag)
         {
             None
         } else {
@@ -1642,11 +1648,14 @@ macro_rules! pending_round_can_acknowledge_body {
             $pending.height == $owner_before.height
                 && $pending.height == $owner_after.height
                 && $pending.view < u64::MAX
-                && ($owner_before.view <= $pending.view
-                    || $pending.view + 1u64 == $owner_before.view)
                 && $owner_after.view == $pending.view + 1u64
-                && $owner_before.generation < u64::MAX
-                && $owner_after.generation == $owner_before.generation + 1u64
+                && (if $pending.view + 1u64 == $owner_before.view {
+                    $owner_before.generation < u64::MAX
+                        && $owner_after.generation == $owner_before.generation + 1u64
+                } else {
+                    $pending.view >= $owner_before.view
+                        && $owner_after.generation == 0u64
+                })
         } else {
             tag_projection_equal_body!($owner_before, $owner_after)
                 && pending_round_can_begin_body!($pending, $owner_after)
@@ -2095,12 +2104,10 @@ macro_rules! production_durable_intent_trace_body {
                     && (if $projection.boundary_claimed.record_kind
                         == refinement_tag_value!(WAL_RECORD_INSTALL_TIMEOUT)
                     {
-                        $projection.owner_tag_after.height == $projection.owner_tag_before.height
-                            && $projection.owner_tag_after.view
-                                == $projection.pending_before.view + 1u64
-                            && $projection.owner_tag_before.generation < u64::MAX
-                            && $projection.owner_tag_after.generation
-                                == $projection.owner_tag_before.generation + 1u64
+                        tag_projection_strictly_advances_body!(
+                            $projection.owner_tag_after,
+                            $projection.owner_tag_before
+                        )
                     } else {
                         tag_projection_equal_body!(
                             $projection.owner_tag_before,
@@ -3294,9 +3301,10 @@ where
 /// Rebind one exact body-pipeline consumer to a strictly newer incarnation.
 ///
 /// The height, round/subject key, and manifest identity remain immutable;
-/// the view cannot regress and the generation must strictly advance. This is
-/// only a safety transition. It does not claim the asynchronous rebind will be
-/// scheduled.
+/// `(view, generation)` must advance lexicographically: a later view may reset
+/// generation to zero, while a same-view lock upgrade must strictly increment
+/// it. This is only a safety transition. It does not claim the asynchronous
+/// rebind will be scheduled.
 #[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
 pub fn plan_exact_body_owner_rebind<K, M>(
     current: ExactBodyOwnerProjection<K, M>,
@@ -5259,8 +5267,17 @@ macro_rules! enter_view_projection_gate_body {
                 // checks only the resulting monotonic view, never a second
                 // transcription of the admission predicate.
                 && $projection.before_tag.view <= $projection.after_tag.view
-                && $projection.before_tag.generation < u64::MAX
-                && $projection.after_tag.generation == $projection.before_tag.generation + 1u64
+                && tag_projection_strictly_advances_body!(
+                    $projection.after_tag,
+                    $projection.before_tag
+                )
+                && (if $projection.after_tag.view == $projection.before_tag.view {
+                    $projection.before_tag.generation < u64::MAX
+                        && $projection.after_tag.generation
+                            == $projection.before_tag.generation + 1u64
+                } else {
+                    $projection.after_tag.generation == 0u64
+                })
                 && prepare_identity_in_context_body!(
                     local,
                     $projection.context_id,
@@ -5764,7 +5781,7 @@ macro_rules! transition_branch_constraints_body {
                             && $enter_count == 0u64
                     }
                     2 => {
-                        !$facts.generation_unchanged
+                        (!$facts.install_view_unchanged || !$facts.generation_unchanged)
                             && $enter_count == 1u64
                             && $apply_count == 0u64
                             && !$facts.volatile_after.candidate_present
@@ -8169,7 +8186,7 @@ mod tests {
         let successor = TagProjection {
             height: begin.owner_tag_before.height,
             view: begin.pending_after.view + 1,
-            generation: begin.owner_tag_before.generation + 1,
+            generation: 0,
         };
         let mut acknowledge_boundary = begin.boundary_claimed;
         acknowledge_boundary.kind = BOUNDARY_ACKNOWLEDGE_WAL;
@@ -9551,10 +9568,10 @@ mod tests {
             TagProjection {
                 height: 9,
                 view: 5,
-                generation: 8,
+                generation: 0,
             },
         )
-        .expect("strict later-view rebind is accepted");
+        .expect("later-view generation reset is accepted");
         assert_eq!(rebound.key, previous.key);
         assert_eq!(rebound.manifest_hash, previous.manifest_hash);
 
@@ -9575,7 +9592,7 @@ mod tests {
             TagProjection {
                 height: 10,
                 view: 5,
-                generation: 8,
+                generation: 0,
             },
             TagProjection {
                 height: 9,
@@ -9584,7 +9601,7 @@ mod tests {
             },
             TagProjection {
                 height: 9,
-                view: 5,
+                view: 4,
                 generation: 7,
             },
         ] {
@@ -9597,7 +9614,7 @@ mod tests {
                 TagProjection {
                     height: 9,
                     view: 5,
-                    generation: 8,
+                    generation: 0,
                 },
             )
             .is_none(),
@@ -9610,7 +9627,7 @@ mod tests {
                 TagProjection {
                     height: 9,
                     view: 5,
-                    generation: 8,
+                    generation: 0,
                 },
             )
             .is_none(),
@@ -9623,7 +9640,7 @@ mod tests {
                 TagProjection {
                     height: 9,
                     view: 5,
-                    generation: 8,
+                    generation: 0,
                 },
             )
             .is_none(),

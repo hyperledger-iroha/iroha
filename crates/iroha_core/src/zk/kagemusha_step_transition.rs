@@ -1842,10 +1842,11 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
 /// 38 (`transfer_root`). Top-up anchors and extended branch claims are
 /// constrained as canonical set unions with exact zero padding.
 ///
-/// This function does not prove confidential openings or Merkle paths. StepEq
-/// must additionally copy-bind the returned cells to the assigned secure
-/// relation from `confidential_v2`; StepEp constrains this field-neutral
-/// application relation and the same exact public limbs.
+/// This function does not prove confidential openings or Merkle paths. StepEq,
+/// the pair's semantic authority, additionally copy-binds the returned cells to
+/// the assigned secure relation from `confidential_v2`. StepEp is the
+/// lineage-and-reciprocal wrapper: it shares StepEq's compact public header but
+/// intentionally does not duplicate this application relation.
 pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,

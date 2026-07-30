@@ -54,6 +54,15 @@ operation id. An identical retry returns the same operation; reuse with any
 different request conflicts. A client retains its local pending operation until
 Torii reports final chain finality.
 
+Canonical request and native-bridge decoding rejects compression and alternate
+Norito layouts from the fixed header before reconstruction. Each route applies
+its exact framed-body ceiling, and both the public redeem extractor and the
+nested redeem-result archive use a fourfold decoded-allocation budget plus a
+64-level nesting limit derived from the supplied canonical bytes. A compressed
+length field, forged collection count, or structurally decodable
+non-canonical representation therefore fails before it can inherit Norito's
+broader generic decode allowance.
+
 Readiness and operation responses support Torii's typed response negotiation.
 Readiness is authoritative only when its block context, live asset scale,
 active transfer verifier, top-up-shield verifier, recursive StepEq and
@@ -81,10 +90,12 @@ device authority, and submits it to Torii. Core atomically:
 
 1. validates authorization, operation replay state, chain, scale, and policy;
 2. recomputes the authoritative root and leaf index;
-3. verifies the top-up-shield public inputs and proof;
-4. debits the exact public amount into escrow;
-5. appends the initial note commitment; and
-6. persists the finalized top-up anchor and operation receipt.
+3. rejects the new note commitment and spend nullifier if either overlaps an
+   existing commitment or spent-nullifier namespace;
+4. verifies the top-up-shield public inputs and proof;
+5. debits the exact public amount into escrow;
+6. appends the initial note commitment; and
+7. persists the finalized top-up anchor and operation receipt.
 
 After finality the wallet creates the initial recursive bundle
 with the ABI-21 SDK's `initSpendV4`. The note is not available for offline use until both the chain
@@ -177,15 +188,15 @@ mode or non-zero aggregate unsatisfiable. The five authenticated Table16 SHA
 lanes use 65,527 table rows so the complete k16 circuit stays inside its 65,527
 usable-row budget.
 
-The authenticated complete-circuit envelope is degree 16 with `[360]` advice
-columns, `[37, 0, 0]` lookup-advice columns, one parameter fixed column, and
+The authenticated complete-circuit envelope is degree 16 with `[443]` advice
+columns, `[47, 0, 0]` lookup-advice columns, one parameter fixed column, and
 one instance column. The trailing zero lookup phases are the exact
 `BaseCircuitBuilder` shape; they do not allocate speculative advice phases.
 Processed-key serialization disables selector compression; the configured
-circuit therefore authenticates 918 fixed-plus-permutation polynomials per
-parity. The exact unframed lengths are 4,194,372 bytes for `ParamsIPA`, 29,386
-bytes for the processed verifier key, and 3,856,699,286 bytes for the processed
-proving key. The proving key remains below the non-raiseable 4 GiB artifact
+circuit therefore authenticates 560 fixed and 534 permutation polynomials per
+parity. The exact unframed lengths are 4,194,372 bytes for `ParamsIPA`, 35,018
+bytes for the processed verifier key, and 4,594,903,830 bytes for the processed
+proving key. The proving key remains below the fixed 5 GiB artifact
 corridor.
 
 Proving-key assembly reuses the supplied verifier-key domain and stages compact
@@ -205,9 +216,10 @@ Rayon pool; large MSMs alone use the admitted fixed two-worker window.
 Accumulator order is unchanged.
 
 The checked static admission estimate for this complete shape is
-8,271,167,488 bytes (7.703125 GiB), not a physical-memory prediction. The
-userspace supervisor enforces the lower of 16 GiB or half of installed physical
-memory and cannot be raised by an operator option. The guarded output parent
+9,747,562,496 bytes (9.078125 GiB), not a physical-memory prediction. The
+exact-profile preflight retains a 12 GiB reviewed ceiling, while the userspace
+supervisor enforces the lower of 16 GiB or half of installed physical memory
+and cannot be raised by an operator option. The guarded output parent
 must also retain at least 16 GiB of free disk before generation so both raw
 proving-key spools and the framed copy cannot exhaust the filesystem.
 Production candidate and
@@ -255,24 +267,72 @@ active.
 Operators must configure both paths together under `settlement.offline`:
 `kagemusha_release_policy_path` names the canonical Norito trust policy, and
 `kagemusha_artifact_dir` names the directory whose children are manifest
-digests. `kagemusha_max_decoded_bytes` caps the conservative decoded verifier
-working-set estimate. It defaults to, and cannot be raised above, 256 MiB per
-node; lower deployment limits are accepted. Leaving either path unset,
+digests. The optional absolute
+`kagemusha_catalog_qualification_seal_path` names an immutable, root-trusted
+qualification seal for that exact catalog and validator executable.
+`kagemusha_max_decoded_bytes` caps the conservative decoded verifier working-set
+estimate. It defaults to, and cannot be raised above, 256 MiB per node; lower
+deployment limits are accepted. Leaving either release path unset,
 disabling escrow, omitting every escrow asset, omitting the funded permitted
 command issuer, or supplying malformed/corrupt material is a startup error
 after Kura replay and before Kura writing, networking, consensus, or Torii.
 
-Startup authenticates every candidate subdirectory, validates framed and
-payload sizes and SHA-256 values, parses the six validator-side artifacts
-(ParamsIPA, verifying key, and bootstrap witness for Eq and Ep), and builds an
-immutable catalog keyed by manifest digest. Loading fails before large artifact
-allocation when the decoded estimate exceeds the configured budget. After
-parsing, raw ParamsIPA and bootstrap payloads are released; the catalog retains
-the parsed verifier and only the serialized verifying keys needed to build
-governed activation records. Consensus never reads the filesystem. Wallets and
-provers install all eight artifacts, including both
-proving keys. Generated `dist/kagemusha/v4/*`, raw parameters, keys, device
-logs, and signing inputs remain untracked runtime material.
+Without a configured qualification seal, startup performs the complete
+authentication pass: it authenticates every candidate subdirectory, validates
+framed and payload sizes and SHA-256 values, parses the six validator-side
+artifacts (ParamsIPA, verifying key, and bootstrap witness for Eq and Ep), and
+builds an immutable catalog keyed by manifest digest. Loading fails before
+large artifact allocation when the decoded estimate exceeds the configured
+budget. With a configured seal, startup instead uses the sealed cold path and
+fails closed if the seal is missing, mutable, malformed, or no longer matches
+the source directories or running executable. For each Eq/Ep profile the seal
+binds the manifest's value-free compiled-protocol structure digest separately
+from the qualified full protocol identity derived from the final verifying key;
+the two values must be non-zero and distinct. The sealed path never silently
+falls back to the expensive qualification pass.
+
+Create a seal only with the no-bind validation command:
+
+```text
+sudo irohad --check-config \
+  --config /absolute/path/config.toml \
+  --genesis-manifest-json /absolute/path/genesis.json \
+  --write-kagemusha-catalog-qualification-seal /absolute/root-owned/seals/catalog.norito
+```
+
+The command requires a locally available valid genesis, performs complete
+catalog authentication, reuses that authenticated catalog for disposable
+genesis execution, and publishes only after both succeed. The CLI path must
+exactly match `kagemusha_catalog_qualification_seal_path`. Its pre-existing
+parent chain must be root-owned and not group- or world-writable; the final
+destination must be absent. On macOS, every trusted parent and source path must
+also have no extended ACL: POSIX owner/mode bits alone do not exclude an ACL
+write grant. Publication strips any inherited ACL from the pinned staging inode,
+verifies the staged and final names remain bound to that ACL-free inode, writes
+a root-owned mode `0444` file by an exclusive same-directory rename, and syncs
+both the file and directory.
+Seals are never replaced: use a new release-specific filename and update the
+configuration for every qualified release.
+
+Keep the seal directory separate from the release-policy parent, artifact tree,
+and executable path. Publishing a directory entry changes that directory's
+identity, so placing the seal in a qualified source path would invalidate the
+snapshot it is meant to attest. Taira reset packaging injects a path of the
+form
+`/Library/SORA/Taira/seals/kagemusha-v4-<release-tree-sha256>.norito`; the
+digest is deliberately not hard-coded in the checked-in configuration.
+Qualification also requires the configured policy, complete artifact tree, and
+running executable path chains to be root-owned and not group- or
+world-writable. They may be read by the non-root validator after qualification,
+but the validator identity must not be able to replace the sealed source
+inodes.
+
+After parsing, raw ParamsIPA and bootstrap payloads are released; the catalog
+retains the parsed verifier and only the serialized verifying keys needed to
+build governed activation records. Consensus never reads the filesystem.
+Wallets and provers install all eight artifacts, including both proving keys.
+Generated `dist/kagemusha/v4/*`, raw parameters, keys, device logs, and signing
+inputs remain untracked runtime material.
 
 A validator must be provisioned and restarted with a candidate before
 `ActivateKagemushaRecursiveReleaseV4` is submitted. Activation authenticates
@@ -331,6 +391,14 @@ reviewed closure invalidates that evidence and requires regeneration. A
 candidate built from a dirty tree is admissible only when the dirty state and
 the complete reviewed closure are explicit and hash-bound throughout the
 candidate, native build, device transcript, and signed evidence.
+
+The Taira artifact exporter also runs a candidate-bound release-key regression
+before publishing a catalog. One parsed installed prover creates an
+initialization pair at proof step 1 and a single-parent recipient append at
+proof step 2 with the same final PK/VK material; after the proving keys are
+released, one installed verifier terminally verifies both bundles and their
+exact `(proof_step_count, peer_hop_count)` values `(1, 0)` and `(2, 1)`.
+Catalog export fails closed if that dynamic step transition cannot be proved.
 
 Physical-device evidence is collected before finalization with the separate,
 off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only

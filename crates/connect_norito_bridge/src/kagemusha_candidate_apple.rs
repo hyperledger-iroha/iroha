@@ -52,7 +52,7 @@ const APPLE_CHECKPOINT_VERSION: u16 = 1;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_CANDIDATE_BYTES: u64 = 1024 * 1024;
 const MAX_CHECKPOINT_BYTES: usize = 96 * 1024 * 1024;
-const DEFAULT_I105_CHAIN_DISCRIMINANT: u16 = 753;
+const TAIRA_I105_CHAIN_DISCRIMINANT: u16 = 369;
 const ARTIFACT_STREAM_BYTES: usize = 1024 * 1024;
 const APPLE_RESOURCE_CEILING_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 const EXPECTED_DUPLICATE_REJECTION_CODE: c_int = -311;
@@ -434,8 +434,13 @@ fn candidate_context(
     [u8; 32],
     Vec<u8>,
 )> {
-    validate_kagemusha_candidate_scenario_directory_v1(candidate_path, roster_path, scenario_path)
-        .map_err(|_| BridgeError::KagemushaProve)?;
+    validate_kagemusha_candidate_scenario_directory_v1(
+        candidate_path,
+        roster_path,
+        scenario_path,
+        TAIRA_I105_CHAIN_DISCRIMINANT,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)?;
     let candidate_bytes = read_private_regular(candidate_path, MAX_CANDIDATE_BYTES)
         .map_err(|_| BridgeError::KagemushaProve)?;
     let candidate: iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4 =
@@ -596,6 +601,15 @@ fn proof_phase(
         .change_topup_provenance
         .clone()
         .ok_or(BridgeError::KagemushaProve)?;
+    if init.bundle.statement.proof_step_count != 1
+        || init.bundle.statement.peer_hop_count != 0
+        || split_one.recipient_bundle.statement.proof_step_count != 2
+        || split_one.recipient_bundle.statement.peer_hop_count != 1
+        || change_one.statement.proof_step_count != 2
+        || change_one.statement.peer_hop_count != 1
+    {
+        return fail();
+    }
 
     let request_two: iroha_data_model::offline::KagemushaRecipientPaymentRequestV2 = decode(
         scenario_bytes(&files, "append-hop-02-recipient-request-v2.norito")
@@ -643,6 +657,13 @@ fn proof_phase(
         .change_bundle
         .as_ref()
         .ok_or(BridgeError::KagemushaProve)?;
+    if split_two.recipient_bundle.statement.proof_step_count != 3
+        || split_two.recipient_bundle.statement.peer_hop_count != 2
+        || final_change.statement.proof_step_count != 3
+        || final_change.statement.peer_hop_count != 2
+    {
+        return fail();
+    }
     let total = split_one
         .recipient_bundle
         .statement
@@ -1055,6 +1076,8 @@ fn restart_phase(
         || !verify_two.witnessless_redemption_supported
         || verify_one.summary.hop_count != 1
         || verify_two.summary.hop_count != 2
+        || verify_one.summary.proof_step_count != 2
+        || verify_two.summary.proof_step_count != 3
     {
         return fail();
     }
@@ -1142,7 +1165,7 @@ fn restart_phase(
         std::str::from_utf8(recipient_text)
             .map_err(|_| BridgeError::KagemushaProve)?
             .to_owned(),
-        DEFAULT_I105_CHAIN_DISCRIMINANT,
+        TAIRA_I105_CHAIN_DISCRIMINANT,
     )?;
     let unshield = scenario_digest32(&files, "unshield-verifier-commitment-v2.bin")
         .map_err(|_| BridgeError::KagemushaProve)?;

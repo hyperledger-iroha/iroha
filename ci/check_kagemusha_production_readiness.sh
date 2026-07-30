@@ -32,6 +32,7 @@ mode = sys.argv[2]
 self_test = sys.argv[3] == "true"
 
 MODEL = "crates/iroha_data_model/src/offline/mod.rs"
+PRIVACY = "crates/iroha_data_model/src/privacy.rs"
 BRIDGE = "crates/connect_norito_bridge/src/lib.rs"
 HEADER = "crates/connect_norito_bridge/include/connect_norito_bridge.h"
 CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_registry_v4.rs"
@@ -76,8 +77,8 @@ MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024
 MAX_BENCHMARK_EVIDENCE_BYTES = 16 * 1024 * 1024
 MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024
 MAX_PROMOTION_RECORD_BYTES = 1024 * 1024
-MAX_DECLARED_ARTIFACT_FILE_BYTES = 4 * 1024 * 1024 * 1024
-MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 8 * 1024 * 1024 * 1024
+MAX_DECLARED_ARTIFACT_FILE_BYTES = 5 * 1024 * 1024 * 1024
+MAX_DECLARED_ARTIFACT_AGGREGATE_BYTES = 10 * 1024 * 1024 * 1024
 READ_CHUNK_BYTES = 1024 * 1024
 ROUTE_LITERALS = (
     "/v1/offline/readiness",
@@ -347,6 +348,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         path: overrides.get(path, read(path, errors))
         for path in (
             MODEL,
+            PRIVACY,
             BRIDGE,
             HEADER,
             CATALOG,
@@ -418,10 +420,16 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         )
 
     require(
+        texts[PRIVACY],
+        PRIVACY,
+        errors,
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
+    )
+    require(
         texts[BRIDGE],
         BRIDGE,
         errors,
-        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21",
+        "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
         "promotion_record_norito_ptr",
@@ -510,12 +518,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             r"const\s+KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4:\s*usize\s*=\s*"
             r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4\.len\(\)\s*;\s*"
             r"[\s\S]*?"
-            r"let\s+(?P<descriptors>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*manifest\s*"
+            r"if\s+manifest\s*"
             r"\.profiles\s*\.iter\(\)\s*"
-            r"\.flat_map\(\|profile\|\s*profile\.artifacts\.iter\(\)\)\s*"
-            r"\.collect::<Vec<_>>\(\)\s*;\s*"
-            r"if\s+(?P=descriptors)\.len\(\)\s*!=\s*"
-            r"KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4\s*\{"
+            r"\.map\(\|profile\|\s*profile\.artifacts\.len\(\)\)\s*"
+            r"\.sum::<usize>\(\)\s*"
+            r"!=\s*KAGEMUSHA_CATALOG_ARTIFACT_COUNT_V4\s*\{"
         ),
         "exact-eight manifest inventory check",
     )
@@ -1024,6 +1031,7 @@ if mode == "promotion":
 if self_test:
     baseline = {
         MODEL: read(MODEL, []),
+        PRIVACY: read(PRIVACY, []),
         CATALOG: read(CATALOG, []),
         CORE: read(CORE, []),
         WORKFLOW: read(WORKFLOW, []),
@@ -1034,6 +1042,13 @@ if self_test:
     )
     if not static_errors({MODEL: mutated}):
         errors.append("self-test failed to reject ABI-19 substitution")
+    shared_bridge_abi_drift = baseline[PRIVACY].replace(
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 21;",
+        "pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 20;",
+        1,
+    )
+    if not static_errors({PRIVACY: shared_bridge_abi_drift}):
+        errors.append("self-test failed to reject shared bridge ABI-20 substitution")
     flipped_availability = baseline[MODEL].replace(
         'cfg!(feature = "kagemusha-production-enabled")',
         "true",

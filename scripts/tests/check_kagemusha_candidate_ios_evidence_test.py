@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from typing import Any, Callable
 
 
@@ -110,6 +113,9 @@ class Fixture:
         self.signed_dir.mkdir(mode=0o700)
         for relative in evidence_lib.EXPECTED_RAW_ARTIFACT_PATHS:
             write_private(self.raw / relative, f"fixture:{relative}\n".encode("ascii"))
+        for path in self.raw.rglob("*"):
+            if path.is_dir():
+                path.chmod(0o700)
         self._populate_structured_artifacts()
 
     def _populate_structured_artifacts(self) -> None:
@@ -142,10 +148,13 @@ class Fixture:
                 "combined_source_fingerprint_sha256": combined.hexdigest(),
             },
         )
-        library_digest = digest(self.raw / "build/libNoritoBridgeCandidateLab.a")
         native_files = {
-            key: nonzero_digest(key) for key in evidence_lib.NATIVE_BUILD_FILE_FIELDS
+            manifest_relative: digest(self.raw / raw_relative)
+            for manifest_relative, raw_relative in (
+                evidence_lib.NATIVE_BUILD_RAW_BINDINGS.items()
+            )
         }
+        library_digest = digest(self.raw / "build/libNoritoBridgeCandidateLab.a")
         native_library_key = (
             "NoritoBridgeCandidateLab.xcframework/ios-arm64/"
             "libNoritoBridgeCandidateLab.a"
@@ -380,8 +389,9 @@ class Fixture:
             "phase": "restart",
             "process_id": transcript["restart_process_id"],
             "launch_nonce_sha256": transcript["restart_launch_nonce_sha256"],
+            "recorded_at_utc": "2026-07-30T00:00:01Z",
             "monotonic_nanos": 2_000_000,
-            "network_samples": network_samples(2_000),
+            "network_samples": network_samples(1_500_000),
             "native_transcript_size_bytes": transcript_path.stat().st_size,
             "native_transcript_sha256": digest(transcript_path),
             "proof_launch_receipt_sha256": digest(proof_path),
@@ -509,6 +519,26 @@ class Fixture:
             self.private_key, payload
         ).hex()
         evidence_lib.write_private_json(self.evidence, value)
+
+    def rebind_restart_receipt(self) -> None:
+        receipt = self.raw / "output/restart-launch-receipt-v1.json"
+        result = self.raw / "run/restart-test-result-v1.json"
+        value = json.loads(result.read_text(encoding="utf-8"))
+        value["launch_receipt_sha256"] = digest(receipt)
+        write_json(result, value)
+
+    def rebind_transcript(self) -> None:
+        transcript = self.raw / "output/native-transcript-v1.json"
+        restart = self.raw / "output/restart-launch-receipt-v1.json"
+        restart_value = json.loads(restart.read_text(encoding="utf-8"))
+        restart_value["native_transcript_size_bytes"] = transcript.stat().st_size
+        restart_value["native_transcript_sha256"] = digest(transcript)
+        write_json(restart, restart_value)
+        result = self.raw / "run/restart-test-result-v1.json"
+        result_value = json.loads(result.read_text(encoding="utf-8"))
+        result_value["native_transcript_sha256"] = digest(transcript)
+        result_value["launch_receipt_sha256"] = digest(restart)
+        write_json(result, result_value)
 
     def mutate_signed_envelope(
         self, mutator: Callable[[dict[str, Any]], None], *, resign: bool
@@ -711,6 +741,21 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             )
             self.assert_error_contains(fixture, "artifact digest mismatch")
 
+    def test_manifest_bound_xcframework_support_file_is_rejected_when_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.sign()
+            relative = (
+                "build/NoritoBridgeCandidateLab.xcframework/"
+                "ios-arm64/Headers/module.modulemap"
+            )
+            write_private(fixture.raw / relative, b"tampered module map\n")
+            fixture.resign_without_semantic_preflight()
+            self.assert_error_contains(
+                fixture,
+                "native build manifest file digest mismatch",
+            )
+
     def test_simulator_receipt_is_rejected_with_valid_signature(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.fixture(temporary)
@@ -846,6 +891,243 @@ class IosCandidateEvidenceTest(unittest.TestCase):
                     "output/native-transcript-v1.json",
                     mutator,
                 )
+                fixture.resign_without_semantic_preflight()
+                self.assert_error_contains(fixture, expected)
+
+    def test_rfc8032_vector_and_fake_path_cannot_replace_crypto(self) -> None:
+        seed = bytes.fromhex(
+            "9d61b19deffd5a60ba844af492ec2cc"
+            "44449c5697b326919703bac031cae7f60"
+        )
+        public = bytes.fromhex(
+            "d75a980182b10ab7d54bfed3c964073a"
+            "0ee172f3daa62325af021a68f707511a"
+        )
+        expected_signature = bytes.fromhex(
+            "e5564300c360ac729086e2cc806e828a"
+            "84877f1eb8e5d974d873e06522490155"
+            "5fb8821590a33bacc61e39701cf9b46b"
+            "d25bf5f0595bbe24655141438e7a100b"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            private = root / "rfc8032-private.pem"
+            public_path = root / "rfc8032-public.pem"
+            private_der = evidence_lib.ED25519_PKCS8_SEED_PREFIX + seed
+            public_der = evidence_lib.ED25519_SPKI_PREFIX + public
+            write_private(
+                private,
+                b"-----BEGIN PRIVATE KEY-----\n"
+                + base64.b64encode(private_der)
+                + b"\n-----END PRIVATE KEY-----\n",
+            )
+            write_private(
+                public_path,
+                b"-----BEGIN PUBLIC KEY-----\n"
+                + base64.b64encode(public_der)
+                + b"\n-----END PUBLIC KEY-----\n",
+            )
+            signature = evidence_lib.sign_ed25519(private, b"")
+            self.assertEqual(signature, expected_signature)
+            evidence_lib.verify_ed25519(public_path, b"", signature)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fake_root = Path(temporary) / "fake-bin"
+            fake_root.mkdir(mode=0o700)
+            fake_openssl = fake_root / "openssl"
+            write_private(fake_openssl, b"#!/bin/sh\nexit 0\n")
+            fake_openssl.chmod(0o700)
+            with mock.patch.dict(os.environ, {"PATH": str(fake_root)}):
+                fixture.sign()
+                self.assertEqual(fixture.errors(), [])
+
+    def test_scan_to_semantic_swap_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.sign()
+            transcript_path = fixture.raw / "output/native-transcript-v1.json"
+            valid_transcript = transcript_path.read_bytes()
+            fixture.mutate_json(
+                "output/native-transcript-v1.json",
+                lambda value: value.__setitem__("source_repo_dirty", False),
+            )
+            fixture.rebind_transcript()
+            fixture.resign_without_semantic_preflight()
+            original_snapshot = evidence_lib.snapshot_raw_artifacts
+            swapped = False
+
+            def snapshot_then_swap(root: Path) -> evidence_lib.RawArtifactSnapshot:
+                nonlocal swapped
+                snapshot = original_snapshot(root)
+                if not swapped:
+                    swapped = True
+                    write_private(transcript_path, valid_transcript)
+                return snapshot
+
+            with mock.patch.object(
+                evidence_lib,
+                "snapshot_raw_artifacts",
+                side_effect=snapshot_then_swap,
+            ):
+                errors = fixture.errors()
+            self.assertTrue(
+                any("source_repo_dirty must be true" in error for error in errors),
+                errors,
+            )
+            self.assertTrue(
+                any("changed after its validated immutable snapshot" in error for error in errors),
+                errors,
+            )
+
+    def test_key_path_swap_after_snapshot_is_rejected(self) -> None:
+        for phase in ("sign", "verify"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                key_root = root / "keys"
+                key_root.mkdir(mode=0o700)
+                private = key_root / "private.pem"
+                public = key_root / "public.pem"
+                write_private(private, self.private_key.read_bytes())
+                write_private(public, self.public_key.read_bytes())
+                fixture_root = root / "fixture"
+                fixture_root.mkdir(mode=0o700)
+                fixture = Fixture(fixture_root, private, public)
+                if phase == "verify":
+                    fixture.sign()
+                original_snapshot = evidence_lib._snapshot_key_file
+                swapped = False
+
+                def snapshot_then_swap(
+                    path: Path,
+                    label: str,
+                    *,
+                    private: bool,
+                ) -> evidence_lib.FileSnapshot:
+                    nonlocal swapped
+                    snapshot = original_snapshot(path, label, private=private)
+                    target_phase = (
+                        phase == "sign" and private
+                        or phase == "verify" and not private
+                    )
+                    if target_phase and not swapped:
+                        swapped = True
+                        replacement = bytearray(snapshot.payload)
+                        replacement[-10] ^= 1
+                        write_private(path, bytes(replacement))
+                    return snapshot
+
+                with mock.patch.object(
+                    evidence_lib,
+                    "_snapshot_key_file",
+                    side_effect=snapshot_then_swap,
+                ):
+                    if phase == "sign":
+                        with self.assertRaisesRegex(
+                            evidence_lib.EvidenceError,
+                            "changed after its immutable snapshot",
+                        ):
+                            evidence_lib.build_signed_evidence(
+                                fixture.raw,
+                                private,
+                                public,
+                                fixture.key_id,
+                            )
+                    else:
+                        self.assert_error_contains(
+                            fixture,
+                            "changed after its immutable snapshot",
+                        )
+
+    def test_noncanonical_signed_and_raw_json_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.sign()
+            signed = json.loads(fixture.evidence.read_text(encoding="utf-8"))
+            write_private(
+                fixture.evidence,
+                (json.dumps(signed, indent=2) + "\n").encode("utf-8"),
+            )
+            self.assert_error_contains(fixture, "bytes are not canonical JSON")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(temporary)
+            fixture.sign()
+            transcript = fixture.raw / "output/native-transcript-v1.json"
+            value = json.loads(transcript.read_text(encoding="utf-8"))
+            write_private(
+                transcript,
+                (json.dumps(value, indent=2) + "\n").encode("utf-8"),
+            )
+            fixture.rebind_transcript()
+            fixture.resign_without_semantic_preflight()
+            self.assert_error_contains(
+                fixture,
+                "native transcript bytes are not canonical JSON",
+            )
+
+    def test_network_sample_duplicates_extras_and_order_are_rejected(self) -> None:
+        def duplicate(value: dict[str, Any]) -> None:
+            value["network_samples"][0]["label"] = "before"
+
+        def extra(value: dict[str, Any]) -> None:
+            value["network_samples"].append(dict(value["network_samples"][-1]))
+
+        def reorder(value: dict[str, Any]) -> None:
+            value["network_samples"][1], value["network_samples"][2] = (
+                value["network_samples"][2],
+                value["network_samples"][1],
+            )
+
+        for label, mutator in (
+            ("duplicate", duplicate),
+            ("extra", extra),
+            ("reorder", reorder),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                fixture = self.fixture(temporary)
+                fixture.sign()
+                fixture.mutate_json(
+                    "output/restart-launch-receipt-v1.json",
+                    mutator,
+                )
+                fixture.rebind_restart_receipt()
+                fixture.resign_without_semantic_preflight()
+                self.assert_error_contains(fixture, "network_samples")
+
+    def test_launch_timestamp_reversal_and_malformed_utc_are_rejected(self) -> None:
+        cases: tuple[
+            tuple[str, Callable[[dict[str, Any]], None], str], ...
+        ] = (
+            (
+                "monotonic-reversal",
+                lambda value: value.__setitem__("monotonic_nanos", 1),
+                "proof launch monotonic_nanos must be strictly before restart",
+            ),
+            (
+                "utc-reversal",
+                lambda value: value.__setitem__(
+                    "recorded_at_utc", "2026-07-29T23:59:59Z"
+                ),
+                "recorded_at_utc must be strictly before restart",
+            ),
+            (
+                "utc-malformed",
+                lambda value: value.__setitem__(
+                    "recorded_at_utc", "2026-07-30 00:00:01Z"
+                ),
+                "canonical UTC ISO-8601",
+            ),
+        )
+        for label, mutator, expected in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                fixture = self.fixture(temporary)
+                fixture.sign()
+                fixture.mutate_json(
+                    "output/restart-launch-receipt-v1.json",
+                    mutator,
+                )
+                fixture.rebind_restart_receipt()
                 fixture.resign_without_semantic_preflight()
                 self.assert_error_contains(fixture, expected)
 

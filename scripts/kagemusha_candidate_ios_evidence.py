@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
-import subprocess
 import tempfile
 from typing import Any, Optional
 
@@ -28,10 +28,11 @@ REVIEWED_SOURCE_CLOSURE_SCHEMA = "iroha.reviewed-source-closure.v1"
 DEVICE_POLICY = "taira-testnet-physical-ios-xcode-paired-v1"
 RESOURCE_CEILING_BYTES = 6_442_450_944
 BRIDGE_ABI_VERSION = 21
-MAX_RAW_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
+MAX_RAW_ARTIFACT_BYTES = 5 * 1024 * 1024 * 1024
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_KEY_BYTES = 64 * 1024
 ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+ED25519_PKCS8_SEED_PREFIX = bytes.fromhex("302e020100300506032b657004220420")
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 SOURCE_DIFF_DOMAIN = b"iroha-source-diff-v1\0"
 TRACKED_DIFF_DOMAIN = b"tracked-binary-diff-sha256\0"
@@ -108,6 +109,20 @@ SCENARIO_FILES = (
     "duplicate-input-verified-at-ms.txt",
 )
 
+NATIVE_SUPPORT_RAW_ARTIFACT_PATHS = frozenset(
+    {
+        "build/NoritoBridgeCandidateLab.xcframework/Info.plist",
+        "build/NoritoBridgeCandidateLab.xcframework/"
+        ".kagemusha-candidate-evidence-lab-do-not-ship-v2",
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+        "Headers/connect_norito_bridge.h",
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+        "Headers/connect_norito_bridge_base.h",
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+        "Headers/module.modulemap",
+    }
+)
+
 EXPECTED_RAW_ARTIFACT_PATHS = frozenset(
     {
         "input/session-v1.json",
@@ -128,6 +143,7 @@ EXPECTED_RAW_ARTIFACT_PATHS = frozenset(
     }
     | {f"input/artifacts/{name}" for _, name in NATIVE_ARTIFACTS}
     | {f"input/scenario/{name}" for name in SCENARIO_FILES}
+    | NATIVE_SUPPORT_RAW_ARTIFACT_PATHS
 )
 EXPECTED_RAW_DIRECTORIES = frozenset(
     {
@@ -135,8 +151,24 @@ EXPECTED_RAW_DIRECTORIES = frozenset(
         "input/artifacts",
         "input/scenario",
         "build",
+        "build/NoritoBridgeCandidateLab.xcframework",
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64",
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers",
         "run",
         "output",
+    }
+)
+RAW_JSON_ARTIFACT_PATHS = frozenset(
+    {
+        "input/session-v1.json",
+        "input/reviewed-source-closure-v1.json",
+        "input/native-build-manifest.json",
+        "build/code-sign-measurements-v1.json",
+        "run/proof-test-result-v1.json",
+        "run/restart-test-result-v1.json",
+        "output/proof-launch-receipt-v1.json",
+        "output/native-transcript-v1.json",
+        "output/restart-launch-receipt-v1.json",
     }
 )
 
@@ -243,6 +275,7 @@ NETWORK_SAMPLE_FIELDS = frozenset(
     }
 )
 REQUIRED_NETWORK_LABELS = (
+    "callback",
     "before",
     "through_before_native",
     "through_after_native",
@@ -416,6 +449,32 @@ NATIVE_BUILD_FILE_FIELDS = frozenset(
         "NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers/module.modulemap",
     }
 )
+NATIVE_BUILD_RAW_BINDINGS = {
+    "NoritoBridgeCandidateLab.xcframework/Info.plist": (
+        "build/NoritoBridgeCandidateLab.xcframework/Info.plist"
+    ),
+    "NoritoBridgeCandidateLab.xcframework/"
+    ".kagemusha-candidate-evidence-lab-do-not-ship-v2": (
+        "build/NoritoBridgeCandidateLab.xcframework/"
+        ".kagemusha-candidate-evidence-lab-do-not-ship-v2"
+    ),
+    "NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+    "libNoritoBridgeCandidateLab.a": "build/libNoritoBridgeCandidateLab.a",
+    "NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+    "Headers/connect_norito_bridge.h": (
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+        "Headers/connect_norito_bridge.h"
+    ),
+    "NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+    "Headers/connect_norito_bridge_base.h": (
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+        "Headers/connect_norito_bridge_base.h"
+    ),
+    "NoritoBridgeCandidateLab.xcframework/ios-arm64/Headers/module.modulemap": (
+        "build/NoritoBridgeCandidateLab.xcframework/ios-arm64/"
+        "Headers/module.modulemap"
+    ),
+}
 CODE_SIGN_MEASUREMENTS_FIELDS = frozenset(
     {
         "schema",
@@ -500,6 +559,29 @@ class EvidenceError(ValueError):
     """Raised when evidence construction cannot proceed safely."""
 
 
+@dataclass(frozen=True)
+class FileSnapshot:
+    """One safely opened file's immutable validation input."""
+
+    path: Path
+    identity: tuple[int, ...]
+    payload: bytes
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True)
+class RawArtifactSnapshot:
+    """Exact raw-tree content and identities used by one validation decision."""
+
+    root: Path
+    directory_identities: dict[str, tuple[int, ...]]
+    file_identities: dict[str, tuple[int, ...]]
+    digests: dict[str, str]
+    sizes: dict[str, int]
+    json_payloads: dict[str, bytes]
+
+
 def canonical_signature_payload(evidence: dict[str, Any]) -> bytes:
     """Return the signature payload, excluding exactly the two signature fields."""
 
@@ -571,13 +653,14 @@ def _private_file_metadata(path: Path, label: str, maximum: int) -> os.stat_resu
     return before
 
 
-def read_private_file(
+def _snapshot_private_file(
     path: Path,
     label: str,
     *,
-    maximum: int = MAX_RAW_ARTIFACT_BYTES,
-) -> bytes:
-    """Read an owner-private, singly linked regular file without following aliases."""
+    maximum: int,
+    retain_payload: bool,
+) -> FileSnapshot:
+    """Open once with ``O_NOFOLLOW`` and bind bytes to stable file metadata."""
 
     before = _private_file_metadata(path, label, maximum)
     flags = os.O_RDONLY
@@ -593,6 +676,7 @@ def read_private_file(
         opened = os.fstat(descriptor)
         if _metadata_identity(opened) != _metadata_identity(before):
             raise EvidenceError(f"{label} changed while opening")
+        digest = hashlib.sha256()
         chunks: list[bytes] = []
         size = 0
         while True:
@@ -602,62 +686,77 @@ def read_private_file(
             size += len(chunk)
             if size > maximum:
                 raise EvidenceError(f"{label} grew beyond its bound")
-            chunks.append(chunk)
+            digest.update(chunk)
+            if retain_payload:
+                chunks.append(chunk)
         after_open = os.fstat(descriptor)
         try:
             after_path = path.lstat()
         except OSError as error:
             raise EvidenceError(f"{label} disappeared while reading") from error
+        identity = _metadata_identity(before)
         if (
-            _metadata_identity(after_open) != _metadata_identity(before)
-            or _metadata_identity(after_path) != _metadata_identity(before)
+            _metadata_identity(after_open) != identity
+            or _metadata_identity(after_path) != identity
             or size != before.st_size
         ):
             raise EvidenceError(f"{label} changed while reading")
-        return b"".join(chunks)
+        return FileSnapshot(
+            path=path,
+            identity=identity,
+            payload=b"".join(chunks) if retain_payload else b"",
+            sha256=digest.hexdigest(),
+            size=size,
+        )
     finally:
         os.close(descriptor)
+
+
+def read_private_file(
+    path: Path,
+    label: str,
+    *,
+    maximum: int = MAX_RAW_ARTIFACT_BYTES,
+) -> bytes:
+    """Read an owner-private, singly linked regular file without following aliases."""
+
+    return _snapshot_private_file(
+        path,
+        label,
+        maximum=maximum,
+        retain_payload=True,
+    ).payload
+
+
+def _require_private_file_snapshot_unchanged(
+    snapshot: FileSnapshot,
+    label: str,
+    *,
+    maximum: int,
+) -> None:
+    current = _snapshot_private_file(
+        snapshot.path,
+        label,
+        maximum=maximum,
+        retain_payload=True,
+    )
+    if (
+        current.identity != snapshot.identity
+        or current.payload != snapshot.payload
+        or current.sha256 != snapshot.sha256
+        or current.size != snapshot.size
+    ):
+        raise EvidenceError(f"{label} changed after its immutable snapshot")
 
 
 def _hash_private_file(path: Path, label: str) -> tuple[str, int]:
-    before = _private_file_metadata(path, label, MAX_RAW_ARTIFACT_BYTES)
-    flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags)
-    except OSError as error:
-        raise EvidenceError(f"{label} could not be opened safely") from error
-    try:
-        opened = os.fstat(descriptor)
-        if _metadata_identity(opened) != _metadata_identity(before):
-            raise EvidenceError(f"{label} changed while opening")
-        digest = hashlib.sha256()
-        size = 0
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > MAX_RAW_ARTIFACT_BYTES:
-                raise EvidenceError(f"{label} grew beyond its bound")
-            digest.update(chunk)
-        after_open = os.fstat(descriptor)
-        try:
-            after_path = path.lstat()
-        except OSError as error:
-            raise EvidenceError(f"{label} disappeared while hashing") from error
-        if (
-            _metadata_identity(after_open) != _metadata_identity(before)
-            or _metadata_identity(after_path) != _metadata_identity(before)
-            or size != before.st_size
-        ):
-            raise EvidenceError(f"{label} changed while hashing")
-        return digest.hexdigest(), size
-    finally:
-        os.close(descriptor)
+    snapshot = _snapshot_private_file(
+        path,
+        label,
+        maximum=MAX_RAW_ARTIFACT_BYTES,
+        retain_payload=False,
+    )
+    return snapshot.sha256, snapshot.size
 
 
 def _validate_private_directory(path: Path, label: str) -> os.stat_result:
@@ -678,15 +777,18 @@ def _validate_private_directory(path: Path, label: str) -> os.stat_result:
     return value
 
 
-def scan_raw_artifacts(artifact_root: Path) -> tuple[dict[str, str], dict[str, int]]:
-    """Return the exact raw artifact digest map after strict tree validation."""
+def snapshot_raw_artifacts(artifact_root: Path) -> RawArtifactSnapshot:
+    """Capture one exact raw tree for hashing and semantic validation."""
 
     root = artifact_root.absolute()
     root_before = _validate_private_directory(root, "artifact root")
     actual_directories: set[str] = set()
     actual_files: set[str] = set()
+    directory_identities = {"": _metadata_identity(root_before)}
+    file_identities: dict[str, tuple[int, ...]] = {}
     digests: dict[str, str] = {}
     sizes: dict[str, int] = {}
+    json_payloads: dict[str, bytes] = {}
 
     for current_text, directory_names, file_names in os.walk(
         root, topdown=True, followlinks=False
@@ -695,17 +797,35 @@ def scan_raw_artifacts(artifact_root: Path) -> tuple[dict[str, str], dict[str, i
         for name in sorted(directory_names):
             child = current / name
             relative = child.relative_to(root).as_posix()
-            _validate_private_directory(child, f"raw artifact directory {relative}")
+            metadata = _validate_private_directory(
+                child, f"raw artifact directory {relative}"
+            )
             actual_directories.add(relative)
+            directory_identities[relative] = _metadata_identity(metadata)
         for name in sorted(file_names):
             child = current / name
             relative = child.relative_to(root).as_posix()
             if relative.startswith("/") or ".." in Path(relative).parts or "\\" in relative:
                 raise EvidenceError("raw artifact path is not canonical")
-            digest, size = _hash_private_file(child, f"raw artifact {relative}")
+            retain_payload = relative in RAW_JSON_ARTIFACT_PATHS
+            if retain_payload:
+                maximum = MAX_JSON_BYTES
+            elif relative in NATIVE_SUPPORT_RAW_ARTIFACT_PATHS:
+                maximum = 16 * 1024 * 1024
+            else:
+                maximum = MAX_RAW_ARTIFACT_BYTES
+            snapshot = _snapshot_private_file(
+                child,
+                f"raw artifact {relative}",
+                maximum=maximum,
+                retain_payload=retain_payload,
+            )
             actual_files.add(relative)
-            digests[relative] = digest
-            sizes[relative] = size
+            file_identities[relative] = snapshot.identity
+            digests[relative] = snapshot.sha256
+            sizes[relative] = snapshot.size
+            if retain_payload:
+                json_payloads[relative] = snapshot.payload
 
     missing_directories = sorted(EXPECTED_RAW_DIRECTORIES - actual_directories)
     extra_directories = sorted(actual_directories - EXPECTED_RAW_DIRECTORIES)
@@ -729,7 +849,37 @@ def scan_raw_artifacts(artifact_root: Path) -> tuple[dict[str, str], dict[str, i
         raise EvidenceError("artifact root disappeared while scanning") from error
     if _metadata_identity(root_after) != _metadata_identity(root_before):
         raise EvidenceError("artifact root changed while scanning")
-    return dict(sorted(digests.items())), dict(sorted(sizes.items()))
+    return RawArtifactSnapshot(
+        root=root,
+        directory_identities=dict(sorted(directory_identities.items())),
+        file_identities=dict(sorted(file_identities.items())),
+        digests=dict(sorted(digests.items())),
+        sizes=dict(sorted(sizes.items())),
+        json_payloads=dict(sorted(json_payloads.items())),
+    )
+
+
+def _require_raw_snapshot_unchanged(snapshot: RawArtifactSnapshot) -> None:
+    """Perform the final identity and content rescan for one decision."""
+
+    current = snapshot_raw_artifacts(snapshot.root)
+    if (
+        current.directory_identities != snapshot.directory_identities
+        or current.file_identities != snapshot.file_identities
+        or current.digests != snapshot.digests
+        or current.sizes != snapshot.sizes
+        or current.json_payloads != snapshot.json_payloads
+    ):
+        raise EvidenceError(
+            "raw artifact tree changed after its validated immutable snapshot"
+        )
+
+
+def scan_raw_artifacts(artifact_root: Path) -> tuple[dict[str, str], dict[str, int]]:
+    """Return the exact raw artifact digest map after strict tree validation."""
+
+    snapshot = snapshot_raw_artifacts(artifact_root)
+    return snapshot.digests, snapshot.sizes
 
 
 def _reject_constant(value: str) -> None:
@@ -756,6 +906,8 @@ def parse_strict_json(payload: bytes, label: str) -> dict[str, Any]:
         raise EvidenceError(f"{label} is not strict JSON: {error}") from error
     if not isinstance(value, dict):
         raise EvidenceError(f"{label} must be a JSON object")
+    if payload != canonical_json_bytes(value):
+        raise EvidenceError(f"{label} bytes are not canonical JSON")
     return value
 
 
@@ -764,6 +916,18 @@ def load_private_json(path: Path, label: str) -> dict[str, Any]:
         read_private_file(path, label, maximum=MAX_JSON_BYTES),
         label,
     )
+
+
+def _parse_snapshot_json(
+    snapshot: RawArtifactSnapshot,
+    relative: str,
+    label: str,
+) -> dict[str, Any]:
+    try:
+        payload = snapshot.json_payloads[relative]
+    except KeyError as error:
+        raise EvidenceError(f"{label} is missing from the raw snapshot") from error
+    return parse_strict_json(payload, label)
 
 
 def _exact_fields(
@@ -968,10 +1132,12 @@ def _validate_code_identity(
 
 def _validate_network_samples(
     samples: Any, label: str, errors: list[str]
-) -> None:
-    if not isinstance(samples, list) or len(samples) < 5:
-        errors.append(f"{label} must contain at least five samples")
-        return
+) -> Optional[tuple[int, int]]:
+    if not isinstance(samples, list) or len(samples) != len(REQUIRED_NETWORK_LABELS):
+        errors.append(
+            f"{label} must contain exactly {list(REQUIRED_NETWORK_LABELS)!r}"
+        )
+        return None
     labels: list[str] = []
     monotonic_values: list[int] = []
     for index, sample in enumerate(samples):
@@ -999,16 +1165,52 @@ def _validate_network_samples(
         ):
             if not isinstance(item.get(key), bool):
                 errors.append(f"{sample_label} {key} must be boolean")
-    positions: list[int] = []
-    for required in REQUIRED_NETWORK_LABELS:
-        try:
-            positions.append(labels.index(required))
-        except ValueError:
-            errors.append(f"{label} must include {required}")
-    if len(positions) == len(REQUIRED_NETWORK_LABELS) and positions != sorted(positions):
-        errors.append(f"{label} before/through/after labels must be in causal order")
-    if monotonic_values != sorted(monotonic_values):
-        errors.append(f"{label} monotonic_nanos values must not decrease")
+    if labels != list(REQUIRED_NETWORK_LABELS):
+        errors.append(
+            f"{label} labels must be unique and exactly ordered as "
+            f"{list(REQUIRED_NETWORK_LABELS)!r}"
+        )
+    if len(monotonic_values) != len(REQUIRED_NETWORK_LABELS) or any(
+        left >= right
+        for left, right in zip(monotonic_values, monotonic_values[1:])
+    ):
+        errors.append(f"{label} monotonic_nanos values must strictly increase")
+        return None
+    return monotonic_values[0], monotonic_values[-1]
+
+
+def _parse_recorded_at_utc(
+    value: Any,
+    label: str,
+    errors: list[str],
+) -> Optional[datetime]:
+    if not isinstance(value, str) or re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{3})?Z",
+        value,
+    ) is None:
+        errors.append(
+            f"{label} must be canonical UTC ISO-8601 with optional milliseconds"
+        )
+        return None
+    format_string = (
+        "%Y-%m-%dT%H:%M:%S.%fZ" if "." in value else "%Y-%m-%dT%H:%M:%SZ"
+    )
+    try:
+        parsed = datetime.strptime(value, format_string).replace(tzinfo=timezone.utc)
+    except ValueError:
+        errors.append(f"{label} must be a real UTC calendar timestamp")
+        return None
+    if (
+        "." in value
+        and parsed.strftime("%Y-%m-%dT%H:%M:%S.%fZ")[:-4] + "Z" != value
+    ):
+        errors.append(f"{label} milliseconds are not canonical")
+        return None
+    if "." not in value and parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        errors.append(f"{label} is not canonical")
+        return None
+    return parsed
 
 
 def _validate_launch_receipt(
@@ -1034,8 +1236,14 @@ def _validate_launch_receipt(
         errors.append(f"{label} phase must be {phase}")
     _require_int(receipt, "process_id", label, errors, minimum=1)
     _require_digest(receipt, "launch_nonce_sha256", label, errors)
-    _require_string(receipt, "recorded_at_utc", label, errors)
-    _require_int(receipt, "monotonic_nanos", label, errors, minimum=1)
+    _parse_recorded_at_utc(
+        receipt.get("recorded_at_utc"),
+        f"{label} recorded_at_utc",
+        errors,
+    )
+    receipt_monotonic = _require_int(
+        receipt, "monotonic_nanos", label, errors, minimum=1
+    )
     _require_int(
         receipt,
         "resource_ceiling_bytes",
@@ -1092,9 +1300,17 @@ def _validate_launch_receipt(
         errors.append(f"{label} checkpoint_size_bytes mismatch")
     _validate_device(receipt.get("device"), session, f"{label} device", errors)
     _validate_code_identity(receipt.get("code_identity"), f"{label} code_identity", errors)
-    _validate_network_samples(
+    sample_window = _validate_network_samples(
         receipt.get("network_samples"), f"{label} network_samples", errors
     )
+    if (
+        sample_window is not None
+        and receipt_monotonic is not None
+        and sample_window[1] >= receipt_monotonic
+    ):
+        errors.append(
+            f"{label} monotonic_nanos must follow every network-path sample"
+        )
 
     if phase == "restart":
         if receipt.get("native_transcript_sha256") != digests.get(
@@ -1422,12 +1638,12 @@ def _validate_native_build_manifest(
                 or candidate == "0" * 64
             ):
                 errors.append(f"native build manifest files[{key}] must be SHA-256")
-        library_key = (
-            "NoritoBridgeCandidateLab.xcframework/ios-arm64/"
-            "libNoritoBridgeCandidateLab.a"
-        )
-        if files.get(library_key) != digests.get("build/libNoritoBridgeCandidateLab.a"):
-            errors.append("native build manifest library digest mismatch")
+        for manifest_relative, raw_relative in NATIVE_BUILD_RAW_BINDINGS.items():
+            if files.get(manifest_relative) != digests.get(raw_relative):
+                errors.append(
+                    "native build manifest file digest mismatch for "
+                    f"{manifest_relative}"
+                )
 
 
 def _validate_reviewed_source_closure(
@@ -1778,42 +1994,58 @@ def _validate_test_result(
 
 
 def validate_raw_evidence(
-    artifact_root: Path,
-    digests: dict[str, str],
-    sizes: dict[str, int],
+    snapshot: RawArtifactSnapshot,
 ) -> list[str]:
     """Validate the cross-launch raw evidence bundle."""
 
     errors: list[str] = []
-    root = artifact_root.absolute()
+    digests = snapshot.digests
+    sizes = snapshot.sizes
     try:
-        session = load_private_json(root / "input/session-v1.json", "session")
-        proof = load_private_json(
-            root / "output/proof-launch-receipt-v1.json", "proof launch receipt"
+        session = _parse_snapshot_json(
+            snapshot,
+            "input/session-v1.json",
+            "session",
         )
-        restart = load_private_json(
-            root / "output/restart-launch-receipt-v1.json",
+        proof = _parse_snapshot_json(
+            snapshot,
+            "output/proof-launch-receipt-v1.json",
+            "proof launch receipt",
+        )
+        restart = _parse_snapshot_json(
+            snapshot,
+            "output/restart-launch-receipt-v1.json",
             "restart launch receipt",
         )
-        transcript = load_private_json(
-            root / "output/native-transcript-v1.json", "native transcript"
+        transcript = _parse_snapshot_json(
+            snapshot,
+            "output/native-transcript-v1.json",
+            "native transcript",
         )
-        native_build = load_private_json(
-            root / "input/native-build-manifest.json", "native build manifest"
+        native_build = _parse_snapshot_json(
+            snapshot,
+            "input/native-build-manifest.json",
+            "native build manifest",
         )
-        reviewed_source_closure = load_private_json(
-            root / "input/reviewed-source-closure-v1.json",
+        reviewed_source_closure = _parse_snapshot_json(
+            snapshot,
+            "input/reviewed-source-closure-v1.json",
             "reviewed source closure",
         )
-        code_sign = load_private_json(
-            root / "build/code-sign-measurements-v1.json",
+        code_sign = _parse_snapshot_json(
+            snapshot,
+            "build/code-sign-measurements-v1.json",
             "code-sign measurements",
         )
-        proof_test_result = load_private_json(
-            root / "run/proof-test-result-v1.json", "proof test result"
+        proof_test_result = _parse_snapshot_json(
+            snapshot,
+            "run/proof-test-result-v1.json",
+            "proof test result",
         )
-        restart_test_result = load_private_json(
-            root / "run/restart-test-result-v1.json", "restart test result"
+        restart_test_result = _parse_snapshot_json(
+            snapshot,
+            "run/restart-test-result-v1.json",
+            "restart test result",
         )
     except EvidenceError as error:
         return [str(error)]
@@ -1858,19 +2090,55 @@ def validate_raw_evidence(
         )
     if proof.get("code_identity") != restart.get("code_identity"):
         errors.append("proof and restart code identity must match")
+    proof_monotonic = proof.get("monotonic_nanos")
+    restart_monotonic = restart.get("monotonic_nanos")
+    if (
+        not _is_int(proof_monotonic)
+        or not _is_int(restart_monotonic)
+        or proof_monotonic >= restart_monotonic
+    ):
+        errors.append(
+            "proof launch monotonic_nanos must be strictly before restart launch"
+        )
+    restart_samples = restart.get("network_samples")
+    if (
+        _is_int(proof_monotonic)
+        and isinstance(restart_samples, list)
+        and restart_samples
+        and isinstance(restart_samples[0], dict)
+    ):
+        restart_first_sample = restart_samples[0].get("monotonic_nanos")
+        if (
+            not _is_int(restart_first_sample)
+            or proof_monotonic >= restart_first_sample
+        ):
+            errors.append(
+                "proof receipt must precede the restart network-path window"
+            )
+    proof_recorded = _parse_recorded_at_utc(
+        proof.get("recorded_at_utc"),
+        "proof launch recorded_at_utc",
+        errors,
+    )
+    restart_recorded = _parse_recorded_at_utc(
+        restart.get("recorded_at_utc"),
+        "restart launch recorded_at_utc",
+        errors,
+    )
+    if (
+        proof_recorded is not None
+        and restart_recorded is not None
+        and proof_recorded >= restart_recorded
+    ):
+        errors.append(
+            "proof launch recorded_at_utc must be strictly before restart launch"
+        )
     if sizes.get("output/install-identity-v1.bin") != 32:
         errors.append("install identity must be exactly 32 bytes")
     return errors
 
 
-def _openssl_binary() -> str:
-    candidate = shutil.which("openssl")
-    if candidate is None:
-        raise EvidenceError("openssl is required")
-    return candidate
-
-
-def _tool_file_metadata(path: Path, label: str, *, private: bool) -> None:
+def _key_file_metadata(path: Path, label: str, *, private: bool) -> os.stat_result:
     try:
         value = path.lstat()
     except FileNotFoundError as error:
@@ -1883,48 +2151,333 @@ def _tool_file_metadata(path: Path, label: str, *, private: bool) -> None:
         raise EvidenceError(f"{label} must be a regular file")
     if value.st_nlink != 1:
         raise EvidenceError(f"{label} must have exactly one hard link")
-    if private and value.st_uid != os.geteuid():
-        raise EvidenceError(f"{label} must be owned by the current user")
+    if value.st_uid not in {0, os.geteuid()}:
+        raise EvidenceError(f"{label} must be owned by root or the current user")
     if value.st_size <= 0 or value.st_size > MAX_KEY_BYTES:
         raise EvidenceError(f"{label} size is outside its bound")
-    if private and stat.S_IMODE(value.st_mode) & 0o077:
+    mode = stat.S_IMODE(value.st_mode)
+    if private and (value.st_uid != os.geteuid() or mode & 0o077):
         raise EvidenceError(f"{label} must be owner-private")
+    if not private and (
+        (value.st_uid == os.geteuid() and mode & 0o077)
+        or (value.st_uid == 0 and mode & 0o022)
+    ):
+        raise EvidenceError(f"{label} permissions are not trusted")
+    parent = path.parent
+    try:
+        parent_value = parent.lstat()
+    except OSError as error:
+        raise EvidenceError(f"{label} parent metadata could not be read") from error
+    if (
+        stat.S_ISLNK(parent_value.st_mode)
+        or not stat.S_ISDIR(parent_value.st_mode)
+        or parent_value.st_uid not in {0, os.geteuid()}
+    ):
+        raise EvidenceError(f"{label} parent must be a trusted real directory")
+    parent_mode = stat.S_IMODE(parent_value.st_mode)
+    if (
+        parent_value.st_uid == os.geteuid()
+        and parent_mode & 0o077
+        or parent_value.st_uid == 0
+        and parent_mode & 0o022
+    ):
+        raise EvidenceError(f"{label} parent permissions are not trusted")
+    return value
 
 
-def _openssl_env(openssl: str) -> dict[str, str]:
-    return {
-        "LANG": "C",
-        "LC_ALL": "C",
-        "PATH": str(Path(openssl).parent),
-    }
+def _snapshot_key_file(path: Path, label: str, *, private: bool) -> FileSnapshot:
+    """Capture one key without ever passing the caller's pathname to crypto."""
+
+    absolute = path.absolute()
+    before = _key_file_metadata(absolute, label, private=private)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(absolute, flags)
+    except OSError as error:
+        raise EvidenceError(f"{label} could not be opened safely") from error
+    try:
+        opened = os.fstat(descriptor)
+        identity = _metadata_identity(before)
+        if _metadata_identity(opened) != identity:
+            raise EvidenceError(f"{label} changed while opening")
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = os.read(descriptor, min(16 * 1024, MAX_KEY_BYTES + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_KEY_BYTES:
+                raise EvidenceError(f"{label} grew beyond its bound")
+            chunks.append(chunk)
+        after_open = os.fstat(descriptor)
+        try:
+            after_path = absolute.lstat()
+        except OSError as error:
+            raise EvidenceError(f"{label} disappeared while reading") from error
+        if (
+            _metadata_identity(after_open) != identity
+            or _metadata_identity(after_path) != identity
+            or size != before.st_size
+        ):
+            raise EvidenceError(f"{label} changed while reading")
+        payload = b"".join(chunks)
+        return FileSnapshot(
+            path=absolute,
+            identity=identity,
+            payload=payload,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=size,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _require_key_snapshot_unchanged(
+    snapshot: FileSnapshot,
+    label: str,
+    *,
+    private: bool,
+) -> None:
+    current = _snapshot_key_file(snapshot.path, label, private=private)
+    if (
+        current.identity != snapshot.identity
+        or current.payload != snapshot.payload
+        or current.sha256 != snapshot.sha256
+        or current.size != snapshot.size
+    ):
+        raise EvidenceError(f"{label} changed after its immutable snapshot")
+
+
+def _decode_canonical_pem(
+    payload: bytes,
+    label: str,
+    header: bytes,
+    footer: bytes,
+) -> bytes:
+    lines = payload.splitlines(keepends=True)
+    if (
+        len(lines) != 3
+        or lines[0] != header + b"\n"
+        or lines[2] != footer + b"\n"
+        or not lines[1].endswith(b"\n")
+    ):
+        raise EvidenceError(f"{label} must use canonical single-line PEM")
+    try:
+        der = base64.b64decode(lines[1][:-1], validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise EvidenceError(f"{label} PEM body is not canonical Base64") from error
+    canonical = header + b"\n" + base64.b64encode(der) + b"\n" + footer + b"\n"
+    if payload != canonical:
+        raise EvidenceError(f"{label} PEM bytes are not canonical")
+    return der
+
+
+def _public_key_der_from_payload(payload: bytes) -> bytes:
+    der = _decode_canonical_pem(
+        payload,
+        "public key",
+        b"-----BEGIN PUBLIC KEY-----",
+        b"-----END PUBLIC KEY-----",
+    )
+    if len(der) != 44 or not der.startswith(ED25519_SPKI_PREFIX):
+        raise EvidenceError("public key must be Ed25519")
+    return der
+
+
+def _private_seed_from_payload(payload: bytes) -> bytes:
+    der = _decode_canonical_pem(
+        payload,
+        "private key",
+        b"-----BEGIN PRIVATE KEY-----",
+        b"-----END PRIVATE KEY-----",
+    )
+    if len(der) != 48 or not der.startswith(ED25519_PKCS8_SEED_PREFIX):
+        raise EvidenceError("private key must be canonical Ed25519 PKCS#8")
+    return der[len(ED25519_PKCS8_SEED_PREFIX) :]
+
+
+_ED25519_P = 2**255 - 19
+_ED25519_L = 2**252 + 27742317777372353535851937790883648493
+_ED25519_D = (-121665 * pow(121666, _ED25519_P - 2, _ED25519_P)) % _ED25519_P
+_ED25519_I = pow(2, (_ED25519_P - 1) // 4, _ED25519_P)
+_ED25519_IDENTITY = (0, 1, 1, 0)
+
+
+def _ed25519_point_add(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    x1, y1, z1, t1 = left
+    x2, y2, z2, t2 = right
+    a = (y1 - x1) * (y2 - x2) % _ED25519_P
+    b = (y1 + x1) * (y2 + x2) % _ED25519_P
+    c = 2 * _ED25519_D * t1 * t2 % _ED25519_P
+    d = 2 * z1 * z2 % _ED25519_P
+    e = b - a
+    f = d - c
+    g = d + c
+    h = b + a
+    return (
+        e * f % _ED25519_P,
+        g * h % _ED25519_P,
+        f * g % _ED25519_P,
+        e * h % _ED25519_P,
+    )
+
+
+def _ed25519_scalar_multiply(
+    point: tuple[int, int, int, int],
+    scalar: int,
+) -> tuple[int, int, int, int]:
+    result = _ED25519_IDENTITY
+    addend = point
+    while scalar:
+        if scalar & 1:
+            result = _ed25519_point_add(result, addend)
+        addend = _ed25519_point_add(addend, addend)
+        scalar >>= 1
+    return result
+
+
+def _ed25519_points_equal(
+    left: tuple[int, int, int, int],
+    right: tuple[int, int, int, int],
+) -> bool:
+    return (
+        (left[0] * right[2] - right[0] * left[2]) % _ED25519_P == 0
+        and (left[1] * right[2] - right[1] * left[2]) % _ED25519_P == 0
+    )
+
+
+def _ed25519_recover_x(y: int, sign: int) -> int:
+    numerator = (y * y - 1) % _ED25519_P
+    denominator = (_ED25519_D * y * y + 1) % _ED25519_P
+    x_squared = numerator * pow(denominator, _ED25519_P - 2, _ED25519_P)
+    x = pow(x_squared, (_ED25519_P + 3) // 8, _ED25519_P)
+    if (x * x - x_squared) % _ED25519_P != 0:
+        x = x * _ED25519_I % _ED25519_P
+    if (x * x - x_squared) % _ED25519_P != 0:
+        raise EvidenceError("Ed25519 point is not on the curve")
+    if x == 0 and sign:
+        raise EvidenceError("Ed25519 point encoding has a forbidden sign bit")
+    if x & 1 != sign:
+        x = _ED25519_P - x
+    return x
+
+
+_ED25519_BASE_Y = 4 * pow(5, _ED25519_P - 2, _ED25519_P) % _ED25519_P
+_ED25519_BASE_X = _ed25519_recover_x(_ED25519_BASE_Y, 0)
+_ED25519_BASE = (
+    _ED25519_BASE_X,
+    _ED25519_BASE_Y,
+    1,
+    _ED25519_BASE_X * _ED25519_BASE_Y % _ED25519_P,
+)
+
+
+def _ed25519_encode_point(point: tuple[int, int, int, int]) -> bytes:
+    inverse = pow(point[2], _ED25519_P - 2, _ED25519_P)
+    x = point[0] * inverse % _ED25519_P
+    y = point[1] * inverse % _ED25519_P
+    return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+
+def _ed25519_decode_point(encoded: bytes, label: str) -> tuple[int, int, int, int]:
+    if len(encoded) != 32:
+        raise EvidenceError(f"{label} must be exactly 32 bytes")
+    encoded_integer = int.from_bytes(encoded, "little")
+    sign = encoded_integer >> 255
+    y = encoded_integer & ((1 << 255) - 1)
+    if y >= _ED25519_P:
+        raise EvidenceError(f"{label} is not a canonical Ed25519 point")
+    x = _ed25519_recover_x(y, sign)
+    point = (x, y, 1, x * y % _ED25519_P)
+    if _ed25519_encode_point(point) != encoded:
+        raise EvidenceError(f"{label} is not a canonical Ed25519 point")
+    if _ed25519_points_equal(
+        _ed25519_scalar_multiply(point, 8),
+        _ED25519_IDENTITY,
+    ) or not _ed25519_points_equal(
+        _ed25519_scalar_multiply(point, _ED25519_L),
+        _ED25519_IDENTITY,
+    ):
+        raise EvidenceError(f"{label} is not in the prime-order Ed25519 subgroup")
+    return point
+
+
+def _ed25519_public_from_seed(seed: bytes) -> bytes:
+    if len(seed) != 32:
+        raise EvidenceError("Ed25519 seed must be exactly 32 bytes")
+    expanded = hashlib.sha512(seed).digest()
+    scalar = int.from_bytes(expanded[:32], "little")
+    scalar &= (1 << 254) - 8
+    scalar |= 1 << 254
+    return _ed25519_encode_point(_ed25519_scalar_multiply(_ED25519_BASE, scalar))
+
+
+def _sign_ed25519_seed(seed: bytes, payload: bytes) -> bytes:
+    expanded = hashlib.sha512(seed).digest()
+    scalar = int.from_bytes(expanded[:32], "little")
+    scalar &= (1 << 254) - 8
+    scalar |= 1 << 254
+    public_key = _ed25519_encode_point(
+        _ed25519_scalar_multiply(_ED25519_BASE, scalar)
+    )
+    nonce = int.from_bytes(
+        hashlib.sha512(expanded[32:] + payload).digest(),
+        "little",
+    ) % _ED25519_L
+    encoded_r = _ed25519_encode_point(
+        _ed25519_scalar_multiply(_ED25519_BASE, nonce)
+    )
+    challenge = int.from_bytes(
+        hashlib.sha512(encoded_r + public_key + payload).digest(),
+        "little",
+    ) % _ED25519_L
+    encoded_s = ((nonce + challenge * scalar) % _ED25519_L).to_bytes(
+        32, "little"
+    )
+    return encoded_r + encoded_s
+
+
+def _verify_ed25519_bytes(
+    public_key: bytes,
+    payload: bytes,
+    signature: bytes,
+) -> None:
+    if len(signature) != 64:
+        raise EvidenceError("Ed25519 signature must be exactly 64 bytes")
+    public_point = _ed25519_decode_point(public_key, "Ed25519 public key")
+    encoded_r = signature[:32]
+    try:
+        r_point = _ed25519_decode_point(encoded_r, "Ed25519 signature R")
+    except EvidenceError as error:
+        raise EvidenceError("signed evidence signature verification failed") from error
+    scalar_s = int.from_bytes(signature[32:], "little")
+    if scalar_s >= _ED25519_L:
+        raise EvidenceError("signed evidence signature verification failed")
+    challenge = int.from_bytes(
+        hashlib.sha512(encoded_r + public_key + payload).digest(),
+        "little",
+    ) % _ED25519_L
+    left = _ed25519_scalar_multiply(_ED25519_BASE, scalar_s)
+    right = _ed25519_point_add(
+        r_point,
+        _ed25519_scalar_multiply(public_point, challenge),
+    )
+    if not _ed25519_points_equal(left, right):
+        raise EvidenceError("signed evidence signature verification failed")
 
 
 def public_key_der(public_key_path: Path) -> bytes:
-    _tool_file_metadata(public_key_path, "public key", private=False)
-    openssl = _openssl_binary()
-    try:
-        completed = subprocess.run(
-            [
-                openssl,
-                "pkey",
-                "-pubin",
-                "-in",
-                os.fspath(public_key_path),
-                "-outform",
-                "DER",
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=_openssl_env(openssl),
-        )
-    except OSError as error:
-        raise EvidenceError("openssl public-key command could not run") from error
-    if completed.returncode != 0:
-        raise EvidenceError("public key must be a valid OpenSSL public PEM")
-    der = completed.stdout
-    if len(der) != 44 or not der.startswith(ED25519_SPKI_PREFIX):
-        raise EvidenceError("public key must be Ed25519")
+    snapshot = _snapshot_key_file(public_key_path, "public key", private=False)
+    der = _public_key_der_from_payload(snapshot.payload)
+    _require_key_snapshot_unchanged(snapshot, "public key", private=False)
     return der
 
 
@@ -1933,84 +2486,20 @@ def signer_public_key_sha256(public_key_path: Path) -> str:
 
 
 def sign_ed25519(private_key_path: Path, payload: bytes) -> bytes:
-    _tool_file_metadata(private_key_path, "private key", private=True)
-    openssl = _openssl_binary()
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="iroha-kagemusha-ios-sign-"
-        ) as temporary:
-            temporary_path = Path(temporary)
-            payload_path = temporary_path / "payload.bin"
-            signature_path = temporary_path / "signature.bin"
-            payload_path.write_bytes(payload)
-            payload_path.chmod(0o600)
-            completed = subprocess.run(
-                [
-                    openssl,
-                    "pkeyutl",
-                    "-sign",
-                    "-inkey",
-                    os.fspath(private_key_path),
-                    "-rawin",
-                    "-in",
-                    os.fspath(payload_path),
-                    "-out",
-                    os.fspath(signature_path),
-                ],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=_openssl_env(openssl),
-            )
-            if completed.returncode != 0:
-                raise EvidenceError("private key must be a valid OpenSSL Ed25519 key")
-            signature = signature_path.read_bytes()
-    except OSError as error:
-        raise EvidenceError("Ed25519 signing failed") from error
-    if len(signature) != 64:
-        raise EvidenceError("Ed25519 signature must be exactly 64 bytes")
+    snapshot = _snapshot_key_file(private_key_path, "private key", private=True)
+    signature = _sign_ed25519_seed(
+        _private_seed_from_payload(snapshot.payload),
+        payload,
+    )
+    _require_key_snapshot_unchanged(snapshot, "private key", private=True)
     return signature
 
 
 def verify_ed25519(public_key_path: Path, payload: bytes, signature: bytes) -> None:
-    public_key_der(public_key_path)
-    if len(signature) != 64:
-        raise EvidenceError("Ed25519 signature must be exactly 64 bytes")
-    openssl = _openssl_binary()
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="iroha-kagemusha-ios-verify-"
-        ) as temporary:
-            temporary_path = Path(temporary)
-            payload_path = temporary_path / "payload.bin"
-            signature_path = temporary_path / "signature.bin"
-            payload_path.write_bytes(payload)
-            signature_path.write_bytes(signature)
-            payload_path.chmod(0o600)
-            signature_path.chmod(0o600)
-            completed = subprocess.run(
-                [
-                    openssl,
-                    "pkeyutl",
-                    "-verify",
-                    "-pubin",
-                    "-inkey",
-                    os.fspath(public_key_path),
-                    "-rawin",
-                    "-in",
-                    os.fspath(payload_path),
-                    "-sigfile",
-                    os.fspath(signature_path),
-                ],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=_openssl_env(openssl),
-            )
-    except OSError as error:
-        raise EvidenceError("Ed25519 verification failed") from error
-    if completed.returncode != 0:
-        raise EvidenceError("signed evidence signature verification failed")
+    snapshot = _snapshot_key_file(public_key_path, "public key", private=False)
+    der = _public_key_der_from_payload(snapshot.payload)
+    _verify_ed25519_bytes(der[len(ED25519_SPKI_PREFIX) :], payload, signature)
+    _require_key_snapshot_unchanged(snapshot, "public key", private=False)
 
 
 def _validate_key_id(key_id: str, label: str = "signer key id") -> None:
@@ -2029,8 +2518,25 @@ def build_signed_evidence(
     """Validate the raw bundle, then assemble and sign its exact digest map."""
 
     _validate_key_id(signer_key_id)
-    digests, sizes = scan_raw_artifacts(artifact_root)
-    raw_errors = validate_raw_evidence(artifact_root, digests, sizes)
+    private_key = _snapshot_key_file(
+        private_key_path,
+        "private key",
+        private=True,
+    )
+    public_key = _snapshot_key_file(
+        public_key_path,
+        "public key",
+        private=False,
+    )
+    private_seed = _private_seed_from_payload(private_key.payload)
+    public_der = _public_key_der_from_payload(public_key.payload)
+    public_bytes = public_der[len(ED25519_SPKI_PREFIX) :]
+    if _ed25519_public_from_seed(private_seed) != public_bytes:
+        raise EvidenceError("private and public Ed25519 keys do not match")
+    raw_snapshot = snapshot_raw_artifacts(artifact_root)
+    digests = raw_snapshot.digests
+    sizes = raw_snapshot.sizes
+    raw_errors = validate_raw_evidence(raw_snapshot)
     if raw_errors:
         raise EvidenceError("; ".join(raw_errors))
     evidence: dict[str, Any] = {
@@ -2044,14 +2550,17 @@ def build_signed_evidence(
             for relative, digest in digests.items()
         },
         "signer_key_id": signer_key_id,
-        "signer_public_key_sha256": signer_public_key_sha256(public_key_path),
+        "signer_public_key_sha256": hashlib.sha256(public_der).hexdigest(),
         "signature_algorithm": "ed25519",
     }
     payload = canonical_signature_payload(evidence)
-    signature = sign_ed25519(private_key_path, payload)
-    verify_ed25519(public_key_path, payload, signature)
+    signature = _sign_ed25519_seed(private_seed, payload)
+    _verify_ed25519_bytes(public_bytes, payload, signature)
     evidence["signature_payload_sha256"] = hashlib.sha256(payload).hexdigest()
     evidence["signature"] = signature.hex()
+    _require_raw_snapshot_unchanged(raw_snapshot)
+    _require_key_snapshot_unchanged(private_key, "private key", private=True)
+    _require_key_snapshot_unchanged(public_key, "public key", private=False)
     return evidence
 
 
@@ -2064,6 +2573,8 @@ def validate_signed_evidence(
     """Validate signature, exact raw inventory, and physical-iOS semantics."""
 
     errors: list[str] = []
+    evidence_snapshot: Optional[FileSnapshot] = None
+    trusted_key_snapshot: Optional[FileSnapshot] = None
     try:
         _validate_key_id(trusted_key_id, "trusted key id")
         try:
@@ -2079,7 +2590,24 @@ def validate_signed_evidence(
             pass
         else:
             errors.append("signed evidence file must stay outside artifact root")
-        evidence = load_private_json(evidence_absolute, "signed evidence")
+        evidence_snapshot = _snapshot_private_file(
+            evidence_absolute,
+            "signed evidence",
+            maximum=MAX_JSON_BYTES,
+            retain_payload=True,
+        )
+        evidence = parse_strict_json(
+            evidence_snapshot.payload,
+            "signed evidence",
+        )
+        trusted_key_snapshot = _snapshot_key_file(
+            trusted_public_key_path,
+            "public key",
+            private=False,
+        )
+        trusted_public_der = _public_key_der_from_payload(
+            trusted_key_snapshot.payload
+        )
     except EvidenceError as error:
         return errors + [str(error)]
 
@@ -2094,11 +2622,7 @@ def validate_signed_evidence(
         errors.append("signed evidence signer_key_id must match trusted CLI key id")
     if evidence.get("signature_algorithm") != "ed25519":
         errors.append("signed evidence signature_algorithm must be ed25519")
-    try:
-        trusted_digest = signer_public_key_sha256(trusted_public_key_path)
-    except EvidenceError as error:
-        errors.append(str(error))
-        trusted_digest = None
+    trusted_digest = hashlib.sha256(trusted_public_der).hexdigest()
     observed_public_digest = _require_digest(
         evidence, "signer_public_key_sha256", "signed evidence", errors
     )
@@ -2134,8 +2658,11 @@ def validate_signed_evidence(
     else:
         errors.append("signed evidence signature must be 64 lowercase hex bytes")
 
+    raw_snapshot: Optional[RawArtifactSnapshot] = None
     try:
-        digests, sizes = scan_raw_artifacts(root_absolute)
+        raw_snapshot = snapshot_raw_artifacts(root_absolute)
+        digests = raw_snapshot.digests
+        sizes = raw_snapshot.sizes
     except EvidenceError as error:
         errors.append(str(error))
         digests, sizes = {}, {}
@@ -2189,11 +2716,38 @@ def validate_signed_evidence(
         if digests and artifact_digests != expected_artifact_digests:
             errors.append("signed evidence artifact_digests must equal the exact raw tree")
 
-    if digests:
-        errors.extend(validate_raw_evidence(root_absolute, digests, sizes))
+    if raw_snapshot is not None:
+        errors.extend(validate_raw_evidence(raw_snapshot))
     if signature is not None and trusted_digest is not None:
         try:
-            verify_ed25519(trusted_public_key_path, payload, signature)
+            _verify_ed25519_bytes(
+                trusted_public_der[len(ED25519_SPKI_PREFIX) :],
+                payload,
+                signature,
+            )
+        except EvidenceError as error:
+            errors.append(str(error))
+    if raw_snapshot is not None:
+        try:
+            _require_raw_snapshot_unchanged(raw_snapshot)
+        except EvidenceError as error:
+            errors.append(str(error))
+    if trusted_key_snapshot is not None:
+        try:
+            _require_key_snapshot_unchanged(
+                trusted_key_snapshot,
+                "public key",
+                private=False,
+            )
+        except EvidenceError as error:
+            errors.append(str(error))
+    if evidence_snapshot is not None:
+        try:
+            _require_private_file_snapshot_unchanged(
+                evidence_snapshot,
+                "signed evidence",
+                maximum=MAX_JSON_BYTES,
+            )
         except EvidenceError as error:
             errors.append(str(error))
     return errors

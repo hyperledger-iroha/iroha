@@ -17,7 +17,6 @@ import java.nio.ByteOrder
 import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
-import org.hyperledger.iroha.sdk.address.AccountAddress
 
 internal object CandidateLabHarness {
     private const val CHECKPOINT_SCHEMA =
@@ -32,7 +31,7 @@ internal object CandidateLabHarness {
     private const val MAX_REQUEST_BYTES = 64 * 1024 * 1024
     private const val MAX_RESULT_BYTES = 64 * 1024 * 1024
     private const val STREAM_CHUNK_BYTES = 1024 * 1024
-    private const val MAX_ARTIFACT_BYTES = 4L * 1024 * 1024 * 1024
+    private const val MAX_ARTIFACT_BYTES = 5L * 1024 * 1024 * 1024
     private const val ARTIFACT_SPOOL_RESERVE_BYTES = 1024L * 1024 * 1024
     private const val EXTERNAL_ARTIFACT_ROOT = "kagemusha-candidate-artifacts-v1"
     private const val EXTERNAL_ARTIFACT_BINDING = "artifact-set-binding-v1.txt"
@@ -40,6 +39,7 @@ internal object CandidateLabHarness {
         "iroha.kagemusha.android_candidate_artifact_set.v1"
     private const val ACCEPTED_IDENTITY_FIELD_COUNT = 49
     private const val MAXIMUM_PROOF_HOPS = 8
+    private const val TAIRA_I105_CHAIN_DISCRIMINANT = 369
     private val STRONGBOX_CHALLENGE_DOMAIN =
         "IROHA_KAGEMUSHA_STRONGBOX_CHALLENGE_V1\u0000".toByteArray(Charsets.US_ASCII)
     private val STRONGBOX_CHALLENGE_FIELDS = listOf(
@@ -381,15 +381,21 @@ internal object CandidateLabHarness {
                 hopTwo.recipient.amount,
                 hopTwoChange.amount,
             )
-            check(init.branch.hopCount == 0) { "init result must start at hop zero" }
-            check(hopOne.recipient.hopCount >= 1) { "first append did not advance the hop count" }
-            check(hopTwo.recipient.hopCount >= 2) { "second append is not a multi-hop result" }
-            check(hopOne.recipient.proofStepCount > init.branch.proofStepCount) {
-                "first append did not extend the recursive proof"
+            check(init.branch.hopCount == 0 && init.branch.proofStepCount == 1) {
+                "init result must bind exact hop zero and proof step one"
             }
-            check(hopTwo.recipient.proofStepCount > hopOneChange.proofStepCount) {
-                "second append did not extend the recursive proof"
-            }
+            check(
+                hopOne.recipient.hopCount == 1 &&
+                    hopOne.recipient.proofStepCount == 2 &&
+                    hopOneChange.hopCount == 1 &&
+                    hopOneChange.proofStepCount == 2,
+            ) { "first append must bind exact hop one and proof step two on both branches" }
+            check(
+                hopTwo.recipient.hopCount == 2 &&
+                    hopTwo.recipient.proofStepCount == 3 &&
+                    hopTwoChange.hopCount == 2 &&
+                    hopTwoChange.proofStepCount == 3,
+            ) { "second append must bind exact hop two and proof step three on both branches" }
 
             val checkpointDir = checkpointDirectory(context)
             val initFile = checkpointDir.resolve("init-result-v4.norito")
@@ -692,7 +698,7 @@ internal object CandidateLabHarness {
                 hopOneBlockHeight,
                 checkpoint.getLong("hop_01_verified_at_ms"),
             )
-            requireVerified(verifyFirst, restoredHopOne.recipient.amount, 1)
+            requireVerified(verifyFirst, restoredHopOne.recipient.amount, 1, 2)
             val verifyMultiHop = verifyBranch(
                 events,
                 "verify_multi_hop_recipient_proof",
@@ -701,7 +707,7 @@ internal object CandidateLabHarness {
                 hopTwoBlockHeight,
                 checkpoint.getLong("hop_02_verified_at_ms"),
             )
-            requireVerified(verifyMultiHop, restoredHopTwo.recipient.amount, 2)
+            requireVerified(verifyMultiHop, restoredHopTwo.recipient.amount, 2, 3)
 
             val transferVerifierCommitment = readDigestAsset(
                 context,
@@ -1601,7 +1607,8 @@ internal object CandidateLabHarness {
     private fun requireVerified(
         projection: VerifyProjection,
         expectedAmount: Amount,
-        minimumHops: Int,
+        expectedHops: Int,
+        expectedProofSteps: Int,
     ) {
         check(
             projection.valid &&
@@ -1609,13 +1616,12 @@ internal object CandidateLabHarness {
                 projection.lineageRedeemable &&
                 projection.witnesslessRedemptionSupported,
         ) { "native candidate verifier rejected an expected spendable branch" }
-        check(projection.hopCount >= minimumHops) {
-            "native candidate verifier reported too few proof hops"
+        check(
+            projection.hopCount == expectedHops &&
+                projection.proofStepCount == expectedProofSteps,
+        ) {
+            "native candidate verifier reported the wrong exact hop/proof-step pair"
         }
-        check(projection.hopCount <= MAXIMUM_PROOF_HOPS) {
-            "native candidate verifier exceeded the lifecycle hop bound"
-        }
-        check(projection.proofStepCount > 0)
         check(projection.amount == expectedAmount) {
             "verified amount does not match its independently spendable branch"
         }
@@ -1641,7 +1647,7 @@ internal object CandidateLabHarness {
                 opening,
                 branch.membershipWitness,
                 recipient,
-                AccountAddress.DEFAULT_I105_DISCRIMINANT,
+                u32be(TAIRA_I105_CHAIN_DISCRIMINANT),
                 atomicUnits,
                 verifierCommitment,
                 operationId,
@@ -1653,6 +1659,7 @@ internal object CandidateLabHarness {
                 opening,
                 branch.membershipWitness,
                 recipient,
+                TAIRA_I105_CHAIN_DISCRIMINANT,
                 atomicUnits,
                 branch.amount.scale,
                 byteArrayOf(),

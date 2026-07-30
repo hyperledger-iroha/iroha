@@ -3464,7 +3464,6 @@ mod tests {
             disputed_at_ms: None,
             closed_at_ms: None,
             resolution: None,
-            conditions: Vec::new(),
         }
     }
 

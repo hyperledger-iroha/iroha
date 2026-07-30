@@ -268,10 +268,12 @@ cutover work.
   command through `scripts/run_kagemusha_v4_generation.py` and retain the
   generation JSONL/summary beside the published candidate and sealed-build
   report. Keep the non-raiseable 16 GiB guard, file-backed proving-key
-  serialization, and checked 8,271,167,488-byte static admission estimate
-  unchanged. The reviewed k16 `[360]` advice / `[37, 0, 0]` lookup-advice shape has
+  serialization, and the 12 GiB reviewed exact-profile preflight around the
+  checked 9,747,562,496-byte static admission estimate. The corrected k16
+  `[443]` advice / `[47, 0, 0]` lookup-advice shape has
   exact per-parity ParamsIPA/VK/PK lengths of
-  4,194,372 / 29,386 / 3,856,699,286 bytes. A
+  4,194,372 / 35,018 / 4,594,903,830 bytes and remains inside the fixed 5 GiB
+  per-artifact corridor. A
   non-shipping memory-benchmark report is diagnostic calibration, not candidate
   or release evidence. Do not restore high-degree generation or a release-sized
   proving-key `Vec`.
@@ -432,7 +434,7 @@ The historical ABI-19/V3 path had a 1,600-byte per-step limit. Its degree-18 pro
 7,328-byte augmented proofs even before full confidential/output-membership
 composition; it is not the current artifact/readiness contract. V4's
 authenticated profiles pin measured per-parity proof bounds and its manifest
-pins the pair bound. The reviewed `[360]` advice / `[37, 0, 0]` lookup profile retains
+pins the pair bound. The reviewed `[443]` advice / `[47, 0, 0]` lookup profile retains
 defensive ceilings of 128 KiB per step and 256 KiB per canonical pair. Those
 ceilings are not availability signals; promotion must pin the candidate's
 measured exact values and pass independent review and device evidence.
@@ -1101,7 +1103,7 @@ retired direct fixed-window `lineage-key-artifacts` experiment failed before
 Halo2 keygen when its old column-heavy verifier slice could not fit the bounded
 domain. Its conclusion that degree 16 was unacceptable applied only to that
 pre-compact shape. The current nested compact V5 profile instead fixes degree
-16 with `[360]` advice and `[37, 0, 0]` lookup-advice columns and remains fail-closed
+16 with `[443]` advice and `[47, 0, 0]` lookup-advice columns and remains fail-closed
 behind the generation and physical-evidence gates listed above; the retired
 shape is not a fallback.
 

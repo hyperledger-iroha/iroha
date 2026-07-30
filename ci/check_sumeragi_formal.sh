@@ -41,6 +41,7 @@ fi
 bash scripts/formal/run_sumeragi_v2_service_rank_mutation.sh
 bash scripts/formal/run_sumeragi_v2_productive_mutation.sh
 bash scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh
+bash scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh
 bash scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh
 bash scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh
 bash scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh
@@ -58,6 +59,8 @@ bash scripts/formal/run_sumeragi_v2_certified_response_registration_mutation.sh
 bash scripts/formal/run_sumeragi_v2_effect_capacity_ownership_mutation.sh
 bash scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh
 bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh
+bash scripts/formal/run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh
+bash scripts/formal/run_sumeragi_v2_indexed_service_activation_mutations.sh
 bash scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh
 bash scripts/formal/run_sumeragi_v2_indexed_height_mutation.sh
 bash scripts/formal/run_sumeragi_v2_item_carrier_typing_mutation.sh
