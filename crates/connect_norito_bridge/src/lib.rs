@@ -23409,7 +23409,7 @@ mod kagemusha_bridge_tests {
             "Kotlin V4 redeem JNI call",
         );
         assert!(
-            kotlin_builder.contains("topUpProvenanceArchive.fill(0)"),
+            kotlin_builder.contains("SecretArchiveWiper.wipe(topUpProvenanceArchive)"),
             "Kotlin must erase the transient provenance archive"
         );
         let kotlin_declaration = kotlin
@@ -23446,7 +23446,7 @@ mod kagemusha_bridge_tests {
             "Java V4 redeem JNI call",
         );
         assert!(
-            java_builder.contains("Arrays.fill(topUpProvenanceArchive, (byte) 0)"),
+            java_builder.contains("SecretArchiveWiper.wipe(topUpProvenanceArchive)"),
             "Java must erase the transient provenance archive"
         );
         let java_declaration = java

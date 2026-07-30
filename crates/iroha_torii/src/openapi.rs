@@ -39806,9 +39806,12 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
+        let diagnostics_enabled =
+            catalog_openapi_route_enabled(CatalogHttpMethod::Get, "/v1/sumeragi/diagnostics");
         assert_eq!(
             diagnostics_schema_ref,
-            Some("#/components/schemas/SumeragiDiagnosticsResponse")
+            diagnostics_enabled.then_some("#/components/schemas/SumeragiDiagnosticsResponse"),
+            "operator diagnostics presence and schema must follow the enabled catalog OpenAPI projection"
         );
         let diagnostics_schema = schemas
             .get("SumeragiDiagnosticsResponse")
