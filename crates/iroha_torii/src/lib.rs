@@ -64766,17 +64766,28 @@ pub(crate) mod tests_runtime_handlers {
             .expect("unique app state")
             .high_load_tx_threshold = usize::MAX;
         install_single_slot_transaction_queue(&mut app);
-        let keypair =
-            checked_transaction_batch_test_keypair(0xaf, iroha_crypto::Algorithm::Ed25519);
-        let transaction = signed_transaction_for_test_with_keypair(
-            (*app.chain_id).clone(),
-            &keypair,
-            "batch-queue-before-decode",
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xaf,
+            Algorithm::Ed25519,
+            "derive full transaction queue fixture key",
         );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "batch-queue-before-decode".to_string(),
+        )])
+        .sign(keypair.private_key());
         let accepted = super::handler_post_transactions_batch(
             State(app.clone()),
             HeaderMap::new(),
-            transaction_batch_body_for_test(vec![versioned_signed_transaction(&transaction)]),
+            transaction_batch_body_for_test(vec![
+                iroha_version::codec::EncodeVersioned::encode_versioned(&transaction),
+            ]),
         )
         .await
         .expect("fixture transaction should fill the queue");
