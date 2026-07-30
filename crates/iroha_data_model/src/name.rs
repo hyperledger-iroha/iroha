@@ -9,6 +9,7 @@ use std::{
     vec::Vec,
 };
 
+use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed, provider::Baked};
 use idna::{
     AsciiDenyList,
     uts46::{DnsLength, Hyphens, Uts46},
@@ -16,10 +17,11 @@ use idna::{
 use iroha_data_model_derive::model;
 use iroha_primitives::conststr::ConstString;
 use norito::core::{DecodeFromSlice, Error as NoritoError};
+use sha2::{Digest as _, Sha256};
 
 const ERR_DOMAIN_NORMALISATION: &str = "domain name failed UTS-46 STD3 normalization requirements";
-
-use icu_normalizer::{ComposingNormalizer, ComposingNormalizerBorrowed};
+const ERR_NFC_PROFILE: &str =
+    "compiled NFC normalization data does not match the consensus profile";
 
 pub use self::model::*;
 use crate::error::ParseError;
@@ -31,10 +33,82 @@ use crate::error::ParseError;
 /// bounds the canonical Norito representation independently of platform.
 pub const MAX_NAME_BYTES: usize = 255;
 
-type NormalizerCell = OnceLock<ComposingNormalizerBorrowed<'static>>;
+const EXPECTED_NFC_DATA_SHA256: [u8; 32] = [
+    0xbe, 0x71, 0xcd, 0xd0, 0x40, 0x2b, 0x3d, 0xf5, 0x8c, 0x10, 0xe7, 0xbd, 0x33, 0x3d, 0xb0, 0x59,
+    0x95, 0x13, 0x5c, 0xf3, 0x70, 0x4f, 0xa3, 0x7b, 0x1e, 0xb9, 0x2f, 0xa0, 0x4a, 0x18, 0x7d, 0x2e,
+];
 
-/// Lazily initialized NFC normalizer shared across [`Name`] parsing.
+type NormalizerCell = OnceLock<Result<ComposingNormalizerBorrowed<'static>, ()>>;
+
+/// Lazily initialized, profile-checked NFC normalizer shared across [`Name`] parsing.
 static NFC_NORMALIZER: NormalizerCell = NormalizerCell::new();
+
+fn hash_nfc_data_field(hasher: &mut Sha256, label: &[u8], bytes: &[u8]) {
+    hasher.update(
+        u64::try_from(label.len())
+            .expect("field label length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(label);
+    hasher.update(
+        u64::try_from(bytes.len())
+            .expect("field length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(bytes);
+}
+
+/// Fingerprint every baked table used by ICU4X NFC normalization.
+fn nfc_data_sha256() -> [u8; 32] {
+    let mut hasher = Sha256::new();
+
+    let nfd = Baked::SINGLETON_NORMALIZER_NFD_DATA_V1;
+    hasher.update(b"nfd-ranges-v1");
+    for range in nfd.trie.iter_ranges() {
+        hasher.update(range.range.start().to_le_bytes());
+        hasher.update(range.range.end().to_le_bytes());
+        hasher.update(range.value.to_le_bytes());
+    }
+    hasher.update(nfd.passthrough_cap.to_le_bytes());
+
+    let tables = Baked::SINGLETON_NORMALIZER_NFD_TABLES_V1;
+    hash_nfc_data_field(
+        &mut hasher,
+        b"nfd-scalars16-v1",
+        tables.scalars16.as_bytes(),
+    );
+    hash_nfc_data_field(
+        &mut hasher,
+        b"nfd-scalars24-v1",
+        tables.scalars24.as_bytes(),
+    );
+
+    let nfc = Baked::SINGLETON_NORMALIZER_NFC_V1;
+    hash_nfc_data_field(
+        &mut hasher,
+        b"nfc-compositions-v1",
+        nfc.canonical_compositions.data.as_bytes(),
+    );
+
+    hasher.finalize().into()
+}
+
+fn checked_nfc_normalizer(
+    expected_data_sha256: &[u8; 32],
+) -> Result<ComposingNormalizerBorrowed<'static>, ()> {
+    if nfc_data_sha256() == *expected_data_sha256 {
+        Ok(ComposingNormalizer::new_nfc())
+    } else {
+        Err(())
+    }
+}
+
+fn nfc_normalizer() -> Result<&'static ComposingNormalizerBorrowed<'static>, ParseError> {
+    NFC_NORMALIZER
+        .get_or_init(|| checked_nfc_normalizer(&EXPECTED_NFC_DATA_SHA256))
+        .as_ref()
+        .map_err(|()| ParseError::new(ERR_NFC_PROFILE))
+}
 
 #[model]
 mod model {
@@ -100,23 +174,21 @@ impl Name {
     /// Applies ICU-backed NFC composition so canonically equivalent sequences share the same
     /// representation (for example, `e\u{0301}` becomes `é`) on every platform.
     ///
-    /// The manifest pins both `icu_normalizer` and its baked data package to the same exact
-    /// release because this output is consensus-visible. Any intentional data upgrade must also
-    /// update the normalization regression corpus below.
-    fn normalize(candidate: &str) -> Cow<'_, str> {
+    /// The manifest pins the normalization algorithm exactly and the baked tables are checked
+    /// against a reviewed semantic fingerprint because this output is consensus-visible. Any
+    /// intentional data upgrade must also update the fingerprint and regression corpus below.
+    fn normalize(candidate: &str) -> Result<Cow<'_, str>, ParseError> {
         // Use ICU compiled data to apply NFC normalization deterministically
         // across platforms. This preserves compatibility forms but composes
         // canonically equivalent sequences (e.g., "e\u{0301}" -> "é"). The
         // normalizer construction is relatively expensive, so cache a single
         // instance and reuse it for every invocation.
-        NFC_NORMALIZER
-            .get_or_init(ComposingNormalizer::new_nfc)
-            .normalize(candidate)
+        Ok(nfc_normalizer()?.normalize(candidate))
     }
 
     fn parse(candidate: &str) -> Result<Self, ParseError> {
         Self::validate_str(candidate)?;
-        let normalized = Self::normalize(candidate);
+        let normalized = Self::normalize(candidate)?;
         Self::validate_str(normalized.as_ref())?;
         Ok(Self(ConstString::from(normalized.as_ref())))
     }
@@ -234,7 +306,7 @@ impl<'a> DecodeFromSlice<'a> for Name {
 /// the allowed character set for domain identifiers.
 pub fn canonicalize_domain_label(raw: &str) -> Result<String, ParseError> {
     Name::validate_str(raw)?;
-    let normalized = Name::normalize(raw);
+    let normalized = Name::normalize(raw)?;
     reject_disallowed_unicode(normalized.as_ref())?;
     let ascii = Uts46::new()
         .to_ascii(
@@ -533,11 +605,23 @@ mod tests {
     }
 
     #[test]
+    fn nfc_data_matches_consensus_profile() {
+        assert_eq!(nfc_data_sha256(), EXPECTED_NFC_DATA_SHA256);
+    }
+
+    #[test]
+    fn nfc_normalizer_rejects_unreviewed_data_profile() {
+        let mut unreviewed_profile = EXPECTED_NFC_DATA_SHA256;
+        unreviewed_profile[0] ^= 0x01;
+        assert!(checked_nfc_normalizer(&unreviewed_profile).is_err());
+    }
+
+    #[test]
     fn nfc_normalization_matches_pinned_regression_corpus() {
         // This corpus exercises canonical decomposition, composition, combining
         // mark ordering, Hangul composition, and canonical singleton mappings.
         // Changes are protocol changes and must be reviewed with the exact ICU
-        // algorithm/data pins in Cargo.toml.
+        // algorithm pin and baked-data fingerprint.
         let cases = [
             ("e\u{0301}", "\u{00E9}"),
             ("\u{212B}", "\u{00C5}"),

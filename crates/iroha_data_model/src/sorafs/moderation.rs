@@ -84,6 +84,8 @@ const MODERATION_PROVENANCE_ENTRY_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs:moderation:provenance-entry:v1";
 const MODERATION_SCREENING_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.local-runner.policy-digest.v1";
+const MODERATION_BALLOT_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"iroha.sorafs.moderation.ballot.commitment.v1";
 /// Schema version for [`SoraFsModerationBallotContextV1`].
 pub const SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraFsModerationBallotCommitV1`].
@@ -2949,6 +2951,7 @@ impl SoraFsModerationBallotRevealV1 {
     #[must_use]
     pub fn compute_commitment(&self) -> [u8; 32] {
         let mut hasher = Blake2b256::new();
+        hasher.update(MODERATION_BALLOT_COMMITMENT_DOMAIN_V1);
         self.context.update_hash(&mut hasher);
         update_hash_string(&mut hasher, &self.round_id);
         update_hash_string(&mut hasher, &self.juror_id);
@@ -4283,6 +4286,21 @@ mod tests {
         commit
             .verify_reveal(&reveal)
             .expect("SoraFS moderation reveal matches commitment");
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_commitment_is_domain_separated() {
+        let reveal = sample_ballot_reveal(SoraFsModerationVoteChoice::Overturn);
+        let mut legacy = Blake2b256::new();
+        reveal.context.update_hash(&mut legacy);
+        update_hash_string(&mut legacy, &reveal.round_id);
+        update_hash_string(&mut legacy, &reveal.juror_id);
+        legacy.update([reveal.choice.discriminant()]);
+        legacy.update((reveal.nonce.len() as u64).to_le_bytes());
+        legacy.update(&reveal.nonce);
+        let legacy: [u8; 32] = legacy.finalize().into();
+
+        assert_ne!(reveal.compute_commitment(), legacy);
     }
 
     #[test]

@@ -478,6 +478,11 @@ Notes
 - Build-time: enable `iroha_p2p/quic` to include QUIC support.
 - Runtime: set `[network].quic_enabled = true` to turn on the QUIC listener and allow outbound try‑QUIC dials. When a QUIC attempt fails, the dialer falls back to TCP automatically.
 - Current status: inbound QUIC listener is implemented and spawns peers for accepted bidirectional streams. Outbound dialing can attempt QUIC to hostnames (with TCP fallback).
+- Authentication: nodes use self-signed transport certificates. Rustls verifies
+  the TLS `CertificateVerify` proof, then the Iroha identity handshake signs the
+  certificate fingerprint together with the active SoraNet/Noise session
+  binding. A certificate issued by an untrusted root is therefore acceptable,
+  but replaying another node's certificate without its private key is not.
 - Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
   - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
   - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
@@ -485,7 +490,7 @@ Notes
 ### TLS-over-TCP (camouflage)
 
 - Build-time: enable `iroha_p2p/p2p_tls` to include TLS support.
-- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the signed handshake (address + optional `chain_id`).
+- Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by a handshake signature over the address, session binding, certificate fingerprint, and optional `chain_id`; rustls separately verifies possession of the certificate key.
 - Runtime: `tls_fallback_to_plain` (bool; default `false`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=true` to opt into plaintext fallback for outbound dials.
 - Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
 - Inbound: optionally enable a TLS listener via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address. Plain TCP on `[network].address` remains enabled unless `[network].tls_inbound_only=true`.
@@ -495,7 +500,7 @@ Notes
 ### Noise XX handshake (feature-gated)
 
 - Build-time: enable `iroha_p2p/noise_handshake` to derive the session key from a Noise XX exchange.
-- Behavior: peers still perform the SoraNet handshake (PoW + capability negotiation). After that, they run a Noise XX handshake over the same framing and derive a 32-byte session key from the handshake hash for message encryption.
+- Behavior: peers still perform the SoraNet handshake (PoW + capability negotiation). After that, they run a Noise XX handshake over the same framing and derive a 32-byte session key from the handshake hash for message encryption. The signed identity payload uses the Noise-derived binding when this feature is active, so terminating two different Noise sessions cannot preserve the peer signature.
 
 ### WebSocket Fallback (p2p_ws)
 

@@ -52,7 +52,10 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
     permit through physical completion even if the originating HTTP request is cancelled.
   - `replay_cache_capacity` (default: `4096`) bounds cached sequence fingerprints inside each
     `(lane, epoch)` window. `replay_cache_max_lane_epochs` (default: `1024`) is the independent
-    global bound on distinct windows across memory, durable cursor recovery, and telemetry labels.
+    global bound on distinct windows across memory and durable cursor recovery. DA receipt
+    Prometheus series use bounded outcome labels and lane-only dimensions; the current epoch is a
+    gauge value rather than an epoch label, and retired-lane series are pruned with lane lifecycle
+    state.
     Admission fails closed when that global capacity is full; startup also fails closed if a
     checkpoint or journal exceeds it.
   - `replay_cache_store_dir` (default: `./storage/da_replay`) contains a bounded append journal and

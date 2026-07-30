@@ -26,6 +26,7 @@ use iroha_config::{
 use iroha_data_model::{
     block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
+    nexus::MAX_ACTIVE_EXECUTION_LANES,
     offline::OfflineStatus,
     prelude::Quantity,
     soranet::privacy_metrics::{
@@ -2570,6 +2571,104 @@ mod tests {
         assert_eq!(metrics.txs_rejected_recent_5m(2_500), 5);
         assert_eq!(metrics.txs_rejected_recent_5m(302_000), 3);
         assert_eq!(metrics.txs_rejected_recent_5m(303_000), 0);
+    }
+
+    #[test]
+    fn da_receipt_metrics_retain_only_the_latest_epoch_per_lane() {
+        let metrics = Metrics::default();
+        metrics.record_da_receipt_outcome(7, 3, 5, "attacker-controlled", false);
+        metrics.set_da_receipt_cursor(7, 3, 5);
+        metrics.set_da_receipt_cursor(7, 3, 4);
+        metrics.set_da_receipt_cursor(7, 2, u64::MAX);
+        metrics.set_da_receipt_cursor(7, 4, 1);
+
+        let status = metrics.da_receipt_cursor_status();
+        assert_eq!(status.len(), 1);
+        assert_eq!(status[0].lane_id, 7);
+        assert_eq!(status[0].epoch, 4);
+        assert_eq!(status[0].highest_sequence, 1);
+        assert_eq!(
+            metrics
+                .torii_da_receipts_total
+                .with_label_values(&["unknown", "7"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_da_receipt_epoch
+                .with_label_values(&["7"])
+                .get(),
+            4
+        );
+        assert_eq!(
+            metrics
+                .torii_da_receipt_highest_sequence
+                .with_label_values(&["7"])
+                .get(),
+            1
+        );
+        assert!(
+            metrics
+                .torii_da_receipts_total
+                .collect()
+                .iter()
+                .flat_map(prometheus::proto::MetricFamily::get_metric)
+                .flat_map(prometheus::proto::Metric::get_label)
+                .all(|label| label.name() != "epoch"),
+            "epoch must be a gauge value, never a Prometheus label"
+        );
+    }
+
+    #[test]
+    fn da_receipt_metric_lanes_are_capped_prunable_and_poison_tolerant() {
+        let metrics = Metrics::default();
+        for lane_id in 0..u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("bound fits u32") {
+            metrics.set_da_receipt_cursor(lane_id, 1, 1);
+        }
+        metrics.set_da_receipt_cursor(u32::MAX, 1, 1);
+        assert_eq!(
+            metrics.da_receipt_cursor_status().len(),
+            MAX_ACTIVE_EXECUTION_LANES
+        );
+        assert!(
+            metrics
+                .da_receipt_cursor_status()
+                .iter()
+                .all(|cursor| cursor.lane_id != u32::MAX)
+        );
+
+        metrics.prune_da_receipt_lanes([7]);
+        assert!(
+            metrics
+                .da_receipt_cursor_status()
+                .iter()
+                .all(|cursor| cursor.lane_id != 7)
+        );
+        let dump = metrics.try_to_string().expect("metrics should encode");
+        assert!(
+            !dump.lines().any(|line| {
+                line.starts_with("torii_da_receipt") && line.contains("lane=\"7\"")
+            }),
+            "retired-lane receipt series must be removed"
+        );
+
+        let lanes = Arc::clone(&metrics.da_receipt_metric_lanes);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = lanes.write().expect("lock should initially be healthy");
+            panic!("poison DA receipt metric state");
+        }));
+        assert!(poisoned.is_err());
+        metrics.set_da_receipt_cursor(7, 2, 3);
+        assert!(
+            metrics
+                .da_receipt_cursor_status()
+                .iter()
+                .any(|cursor| cursor.lane_id == 7
+                    && cursor.epoch == 2
+                    && cursor.highest_sequence == 3),
+            "metrics must recover the poisoned cache instead of panicking"
+        );
     }
 
     #[test]
@@ -5336,11 +5435,77 @@ pub struct DaReceiptCursorStatus {
     pub highest_sequence: u64,
 }
 
-/// Internal key for `(lane, epoch)` receipt cursors.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct DaReceiptCursorKey {
-    lane_id: u32,
+/// Bounded per-lane state for DA receipt metrics.
+#[derive(Clone, Copy, Debug, Default)]
+struct DaReceiptMetricLane {
+    cursor: Option<DaReceiptMetricCursor>,
+}
+
+/// Latest DA receipt cursor retained for one lane.
+#[derive(Clone, Copy, Debug)]
+struct DaReceiptMetricCursor {
     epoch: u64,
+    highest_sequence: u64,
+}
+
+const DA_RECEIPT_OUTCOME_LABELS: [&str; 9] = [
+    "stored",
+    "duplicate",
+    "duplicate_fingerprint_conflict",
+    "receipt_conflict",
+    "manifest_conflict",
+    "stale_sequence",
+    "sequence_gap",
+    "error",
+    "unknown",
+];
+
+fn bounded_da_receipt_outcome(outcome: &str) -> &'static str {
+    match outcome {
+        "stored" => "stored",
+        "duplicate" => "duplicate",
+        "duplicate_fingerprint_conflict" => "duplicate_fingerprint_conflict",
+        "receipt_conflict" => "receipt_conflict",
+        "manifest_conflict" => "manifest_conflict",
+        "stale_sequence" => "stale_sequence",
+        "sequence_gap" => "sequence_gap",
+        "error" => "error",
+        _ => "unknown",
+    }
+}
+
+fn da_receipt_metric_lane(
+    lanes: &mut BTreeMap<u32, DaReceiptMetricLane>,
+    lane_id: u32,
+) -> Option<&mut DaReceiptMetricLane> {
+    let has_capacity = lanes.len() < MAX_ACTIVE_EXECUTION_LANES;
+    match lanes.entry(lane_id) {
+        std::collections::btree_map::Entry::Occupied(entry) => Some(entry.into_mut()),
+        std::collections::btree_map::Entry::Vacant(entry) if has_capacity => {
+            Some(entry.insert(DaReceiptMetricLane::default()))
+        }
+        std::collections::btree_map::Entry::Vacant(_) => None,
+    }
+}
+
+fn update_da_receipt_metric_cursor(
+    lane: &mut DaReceiptMetricLane,
+    epoch: u64,
+    sequence: u64,
+) -> DaReceiptMetricCursor {
+    let cursor = lane.cursor.get_or_insert(DaReceiptMetricCursor {
+        epoch,
+        highest_sequence: sequence,
+    });
+    if epoch > cursor.epoch {
+        *cursor = DaReceiptMetricCursor {
+            epoch,
+            highest_sequence: sequence,
+        };
+    } else if epoch == cursor.epoch {
+        cursor.highest_sequence = cursor.highest_sequence.max(sequence);
+    }
+    *cursor
 }
 
 /// Stack sizing snapshot for scheduler/prover pools and guest VMs.
@@ -5556,7 +5721,7 @@ pub struct Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub taikai_ingest: Vec<TaikaiIngestStatus>,
-    /// DA receipt cursors grouped by (lane, epoch).
+    /// Latest DA receipt cursor retained for each lane.
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub da_receipt_cursors: Vec<DaReceiptCursorStatus>,
@@ -6860,8 +7025,8 @@ pub struct Metrics {
     taikai_ingest_snapshots: Arc<RwLock<BTreeMap<(String, String), TaikaiIngestSnapshotInternal>>>,
     /// Insertion order for Taikai ingest snapshots (bounded).
     taikai_ingest_snapshot_order: Arc<RwLock<VecDeque<(String, String)>>>,
-    /// Cached DA receipt cursors keyed by (lane, epoch) for status snapshots.
-    da_receipt_cursors: Arc<RwLock<BTreeMap<DaReceiptCursorKey, u64>>>,
+    /// Bounded DA receipt metric state keyed only by lane.
+    da_receipt_metric_lanes: Arc<RwLock<BTreeMap<u32, DaReceiptMetricLane>>>,
     /// Recent rejected-transaction batches retained for `/status` freshness reporting.
     recent_rejection_events: Mutex<VecDeque<(u64, u64)>>,
     /// Millisecond UNIX timestamp when the latest rejected transaction batch was observed.
@@ -8126,9 +8291,11 @@ pub struct Metrics {
     pub torii_da_pdp_bonus_micro_total: CounterVec,
     /// Aggregate PoTR bonus payouts (micro XOR) derived from DA rent quotes.
     pub torii_da_potr_bonus_micro_total: CounterVec,
-    /// DA receipt ingest outcomes grouped by lane/epoch.
+    /// DA receipt ingest outcomes grouped by bounded outcome/lane labels.
     pub torii_da_receipts_total: IntCounterVec,
-    /// Highest DA receipt sequence observed per (lane, epoch).
+    /// Current DA receipt epoch per lane.
+    pub torii_da_receipt_epoch: GenericGaugeVec<AtomicU64>,
+    /// Highest DA receipt sequence observed in the current epoch per lane.
     pub torii_da_receipt_highest_sequence: GenericGaugeVec<AtomicU64>,
     /// DA chunking + erasure coding duration (seconds).
     pub torii_da_chunking_seconds: Histogram,
@@ -9559,7 +9726,7 @@ impl Default for Metrics {
         )));
         let taikai_alias_rotation_snapshots: TaikaiAliasRotationSnapshots =
             Arc::new(RwLock::new(BTreeMap::new()));
-        let da_receipt_cursors: Arc<RwLock<BTreeMap<DaReceiptCursorKey, u64>>> =
+        let da_receipt_metric_lanes: Arc<RwLock<BTreeMap<u32, DaReceiptMetricLane>>> =
             Arc::new(RwLock::new(BTreeMap::new()));
         let recent_rejection_events =
             Mutex::new(VecDeque::with_capacity(REJECTION_RECENT_EVENT_CAP));
@@ -14080,17 +14247,25 @@ impl Default for Metrics {
         let torii_da_receipts_total = IntCounterVec::new(
             Opts::new(
                 "torii_da_receipts_total",
-                "DA receipt ingest outcomes grouped by lane and epoch",
+                "DA receipt ingest outcomes grouped by bounded outcome and lane labels",
             ),
-            &["outcome", "lane", "epoch"],
+            &["outcome", "lane"],
+        )
+        .expect("Infallible");
+        let torii_da_receipt_epoch = GenericGaugeVec::new(
+            Opts::new(
+                "torii_da_receipt_epoch",
+                "Current DA receipt epoch observed per lane",
+            ),
+            &["lane"],
         )
         .expect("Infallible");
         let torii_da_receipt_highest_sequence = GenericGaugeVec::new(
             Opts::new(
                 "torii_da_receipt_highest_sequence",
-                "Highest DA receipt sequence observed per lane and epoch",
+                "Highest DA receipt sequence observed in the current epoch per lane",
             ),
-            &["lane", "epoch"],
+            &["lane"],
         )
         .expect("Infallible");
         let torii_da_chunking_seconds = Histogram::with_opts(
@@ -14440,6 +14615,7 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_da_pdp_bonus_micro_total);
         register_guarded(&registry, &torii_da_potr_bonus_micro_total);
         register_guarded(&registry, &torii_da_receipts_total);
+        register_guarded(&registry, &torii_da_receipt_epoch);
         register_guarded(&registry, &torii_da_receipt_highest_sequence);
         register_guarded(&registry, &torii_da_chunking_seconds);
         register_guarded(&registry, &torii_da_spool_batches_total);
@@ -15691,7 +15867,7 @@ impl Default for Metrics {
             governance_manifest_recent,
             taikai_ingest_snapshots,
             taikai_ingest_snapshot_order,
-            da_receipt_cursors,
+            da_receipt_metric_lanes,
             recent_rejection_events,
             last_rejection_at_ms,
             taikai_alias_rotation_snapshots,
@@ -16328,6 +16504,7 @@ impl Default for Metrics {
             torii_da_pdp_bonus_micro_total,
             torii_da_potr_bonus_micro_total,
             torii_da_receipts_total,
+            torii_da_receipt_epoch,
             torii_da_receipt_highest_sequence,
             torii_da_chunking_seconds,
             torii_da_spool_batches_total,
@@ -16756,12 +16933,25 @@ impl Metrics {
         cursor_advanced: bool,
     ) {
         let lane_label = lane_id.to_string();
-        let epoch_label = epoch.to_string();
+        let outcome = bounded_da_receipt_outcome(outcome);
+        let mut lanes = self
+            .da_receipt_metric_lanes
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(lane) = da_receipt_metric_lane(&mut lanes, lane_id) else {
+            return;
+        };
         self.torii_da_receipts_total
-            .with_label_values(&[outcome, &lane_label, &epoch_label])
+            .with_label_values(&[outcome, &lane_label])
             .inc();
         if cursor_advanced {
-            self.set_da_receipt_cursor(lane_id, epoch, sequence);
+            let cursor = update_da_receipt_metric_cursor(lane, epoch, sequence);
+            self.torii_da_receipt_epoch
+                .with_label_values(&[&lane_label])
+                .set(cursor.epoch);
+            self.torii_da_receipt_highest_sequence
+                .with_label_values(&[&lane_label])
+                .set(cursor.highest_sequence);
         }
     }
 
@@ -16799,38 +16989,63 @@ impl Metrics {
         self.torii_da_spool_queue_depth.set(depth);
     }
 
-    /// Update the highest-seen DA receipt sequence for a lane/epoch.
+    /// Update the latest DA receipt cursor retained for a lane.
     pub fn set_da_receipt_cursor(&self, lane_id: u32, epoch: u64, sequence: u64) {
         let lane_label = lane_id.to_string();
-        let epoch_label = epoch.to_string();
-        self.torii_da_receipt_highest_sequence
-            .with_label_values(&[&lane_label, &epoch_label])
-            .set(sequence);
-
-        let key = DaReceiptCursorKey { lane_id, epoch };
-        let mut guard = self
-            .da_receipt_cursors
+        let mut lanes = self
+            .da_receipt_metric_lanes
             .write()
-            .expect("DA receipt cursor cache poisoned");
-        guard
-            .entry(key)
-            .and_modify(|current| *current = (*current).max(sequence))
-            .or_insert(sequence);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(lane) = da_receipt_metric_lane(&mut lanes, lane_id) else {
+            return;
+        };
+        let cursor = update_da_receipt_metric_cursor(lane, epoch, sequence);
+        self.torii_da_receipt_epoch
+            .with_label_values(&[&lane_label])
+            .set(cursor.epoch);
+        self.torii_da_receipt_highest_sequence
+            .with_label_values(&[&lane_label])
+            .set(cursor.highest_sequence);
     }
 
-    /// Snapshot DA receipt cursors for status responses.
+    /// Remove all DA receipt metric state for retired lanes.
+    pub fn prune_da_receipt_lanes(&self, lane_ids: impl IntoIterator<Item = u32>) {
+        let mut lanes = self
+            .da_receipt_metric_lanes
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for lane_id in lane_ids {
+            if lanes.remove(&lane_id).is_none() {
+                continue;
+            }
+            let lane_label = lane_id.to_string();
+            let _ = self
+                .torii_da_receipt_epoch
+                .remove_label_values(&[&lane_label]);
+            let _ = self
+                .torii_da_receipt_highest_sequence
+                .remove_label_values(&[&lane_label]);
+            for outcome in DA_RECEIPT_OUTCOME_LABELS {
+                let _ = self
+                    .torii_da_receipts_total
+                    .remove_label_values(&[outcome, &lane_label]);
+            }
+        }
+    }
+
+    /// Snapshot the latest DA receipt cursor retained for each lane.
     pub fn da_receipt_cursor_status(&self) -> Vec<DaReceiptCursorStatus> {
-        self.da_receipt_cursors
+        self.da_receipt_metric_lanes
             .read()
-            .expect("DA receipt cursor cache poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
-            .map(
-                |(DaReceiptCursorKey { lane_id, epoch }, highest_sequence)| DaReceiptCursorStatus {
-                    lane_id: *lane_id,
-                    epoch: *epoch,
-                    highest_sequence: *highest_sequence,
-                },
-            )
+            .filter_map(|(&lane_id, lane)| {
+                lane.cursor.map(|cursor| DaReceiptCursorStatus {
+                    lane_id,
+                    epoch: cursor.epoch,
+                    highest_sequence: cursor.highest_sequence,
+                })
+            })
             .collect()
     }
 

@@ -45,8 +45,8 @@ use iroha_data_model::{
         PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementDigestV1,
         PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
         PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
-        PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
-        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
+        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
+        PrivacyVegaMdlDigestAlgorithmV1,
         PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1, PrivacyVerifierDigestV1,
         PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
         PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1,
@@ -3925,7 +3925,7 @@ fn orchard_release_transaction_payload_v1(
     .with_metadata(Metadata::default());
     builder.set_creation_time(Duration::from_millis(1_800_000_000_321));
     builder.set_ttl(Duration::from_secs(60));
-    builder.set_nonce(NonZeroU32::new(9));
+    builder.set_nonce(NonZeroU32::new(9).expect("fixture nonce is non-zero"));
     builder
         .into_payload()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)

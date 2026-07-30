@@ -829,21 +829,16 @@ fn decode_query_from_registries(
     builtin: &QueryRegistry,
     installed: Option<&QueryRegistry>,
 ) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
-    builtin.decode(name, bytes).or_else(|| {
-        installed.and_then(|registry| registry.decode(name, bytes))
-    })
+    builtin
+        .decode(name, bytes)
+        .or_else(|| installed.and_then(|registry| registry.decode(name, bytes)))
 }
 
 fn decode_registered_query(
     name: &str,
     bytes: &[u8],
 ) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
-    decode_query_from_registries(
-        name,
-        bytes,
-        builtin_query_registry(),
-        QUERY_REGISTRY.get(),
-    )
+    decode_query_from_registries(name, bytes, builtin_query_registry(), QUERY_REGISTRY.get())
 }
 
 fn builtin_query_registry() -> &'static QueryRegistry {
@@ -4166,8 +4161,7 @@ mod json_roundtrip_tests {
         type DomainQuery = ErasedIterQuery<Domain>;
 
         let builtin = QueryRegistry::new().register_with_id::<DomainQuery>(WIRE_ID);
-        let installed =
-            QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
+        let installed = QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
         let query = DomainQuery::new(
             CompoundPredicate::PASS,
             SelectorTuple::default(),
@@ -4181,14 +4175,10 @@ mod json_roundtrip_tests {
             WIRE_ID
         );
         for lookup_key in [type_name, WIRE_ID, CUSTOM_WIRE_ID] {
-            let decoded = decode_query_from_registries(
-                lookup_key,
-                &payload,
-                &builtin,
-                Some(&installed),
-            )
-                .expect("query lookup key is registered")
-                .expect("query payload decodes");
+            let decoded =
+                decode_query_from_registries(lookup_key, &payload, &builtin, Some(&installed))
+                    .expect("query lookup key is registered")
+                    .expect("query payload decodes");
             assert_eq!(decoded.as_ref().type_name_key(), type_name);
             assert_eq!(decoded.as_ref().encode_bytes(), payload);
         }

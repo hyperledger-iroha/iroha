@@ -13,6 +13,6 @@ pub mod quic;
 
 #[cfg(feature = "quic")]
 pub use quic::{
-    CapabilityNegotiation, ControlStreamDirection, EndpointRole, StreamingClient,
-    StreamingConnection, StreamingServer,
+    CapabilityNegotiation, CertificateFingerprint, ControlStreamDirection, EndpointRole,
+    StreamingClient, StreamingConnection, StreamingServer,
 };

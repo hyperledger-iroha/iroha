@@ -4,16 +4,116 @@
 //! transports (e.g., QUIC) and handshakes (e.g., Noise/TLS) behind
 //! feature flags without affecting the default TCP path.
 
+#[cfg(any(feature = "p2p_tls", feature = "quic"))]
+use rustls::{
+    DigitallySignedStruct, Error as RustlsError, SignatureScheme,
+    client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+    pki_types::{CertificateDer, ServerName, UnixTime},
+};
+
+#[cfg(any(feature = "p2p_tls", feature = "quic"))]
+static SELF_SIGNED_SIGNATURE_ALGORITHMS: std::sync::LazyLock<
+    rustls::crypto::WebPkiSupportedAlgorithms,
+> = std::sync::LazyLock::new(|| {
+    rustls::crypto::ring::default_provider().signature_verification_algorithms
+});
+
+/// Certificate verifier for self-signed transport certificates.
+///
+/// An unpinned verifier deliberately leaves naming and trust-root validation to the
+/// application identity layer, but still verifies TLS `CertificateVerify`. That proof
+/// of possession is required before a certificate fingerprint can serve as a channel
+/// binding: accepting a signature produced by an unrelated key would let an attacker
+/// replay another node's certificate bytes. A pinned verifier additionally authenticates
+/// the exact leaf fingerprint at the transport layer.
+#[cfg(any(feature = "p2p_tls", feature = "quic"))]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CertificateKeyProofVerifier {
+    expected_fingerprint: Option<[u8; iroha_crypto::Hash::LENGTH]>,
+}
+
+#[cfg(any(feature = "p2p_tls", feature = "quic"))]
+impl CertificateKeyProofVerifier {
+    /// Verify certificate-key possession while deferring identity to the signed P2P handshake.
+    pub(crate) const fn unpinned() -> Self {
+        Self {
+            expected_fingerprint: None,
+        }
+    }
+
+    /// Verify certificate-key possession and require one exact certificate fingerprint.
+    pub(crate) const fn pinned(expected_fingerprint: [u8; iroha_crypto::Hash::LENGTH]) -> Self {
+        Self {
+            expected_fingerprint: Some(expected_fingerprint),
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_tls", feature = "quic"))]
+impl ServerCertVerifier for CertificateKeyProofVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        if let Some(expected) = self.expected_fingerprint {
+            let actual = certificate_fingerprint(end_entity.as_ref());
+            if actual != expected {
+                return Err(RustlsError::General(
+                    "transport certificate fingerprint mismatch".to_owned(),
+                ));
+            }
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &SELF_SIGNED_SIGNATURE_ALGORITHMS,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &SELF_SIGNED_SIGNATURE_ALGORITHMS,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        SELF_SIGNED_SIGNATURE_ALGORITHMS.supported_schemes()
+    }
+}
+
 #[cfg(feature = "quic")]
 pub mod quic {
     #![allow(clippy::missing_errors_doc)]
     //! QUIC transport integration (feature-gated, optional).
     //!
     //! This module provides a QUIC dialer that can be reused across many
-    //! outbound dials. Certificate verification remains permissive because
-    //! peer authentication is enforced by the signed handshake, which is
-    //! bound to the presented server certificate fingerprint for the active
-    //! session. ALPN is fixed.
+    //! outbound dials. Self-signed certificates are accepted because peer
+    //! identity is enforced by the signed application handshake, but TLS still
+    //! verifies that the server owns the certificate key. The signed handshake
+    //! binds the presented certificate fingerprint to the active session. ALPN
+    //! is fixed.
 
     use std::{io, sync::Arc, time::Duration};
 
@@ -21,11 +121,7 @@ pub mod quic {
         ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
         VarInt, crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
     };
-    use rustls::{
-        DigitallySignedStruct, Error as RustlsError, SignatureScheme,
-        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, ServerName, UnixTime},
-    };
+    use rustls::client::danger::ServerCertVerifier;
 
     /// ALPN negotiated for Iroha P2P QUIC connections.
     pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
@@ -321,50 +417,6 @@ pub mod quic {
         Ok(geometry)
     }
 
-    #[derive(Debug)]
-    struct NoCertificateVerification;
-
-    impl ServerCertVerifier for NoCertificateVerification {
-        fn verify_server_cert(
-            &self,
-            _end_entity: &CertificateDer<'_>,
-            _intermediates: &[CertificateDer<'_>],
-            _server_name: &ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: UnixTime,
-        ) -> Result<ServerCertVerified, RustlsError> {
-            Ok(ServerCertVerified::assertion())
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, RustlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, RustlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-            vec![
-                SignatureScheme::ECDSA_NISTP256_SHA256,
-                SignatureScheme::ECDSA_NISTP384_SHA384,
-                SignatureScheme::ED25519,
-                SignatureScheme::RSA_PSS_SHA256,
-                SignatureScheme::RSA_PKCS1_SHA256,
-            ]
-        }
-    }
-
     /// QUIC transport tuning for outbound dials.
     #[derive(Clone, Copy, Debug)]
     pub struct DialerConfig {
@@ -405,7 +457,8 @@ pub mod quic {
         pub fn bind(bind_addr: std::net::SocketAddr, cfg: DialerConfig) -> io::Result<Self> {
             let mut endpoint = Endpoint::client(bind_addr)?;
 
-            let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+            let verifier: Arc<dyn ServerCertVerifier> =
+                Arc::new(super::CertificateKeyProofVerifier::unpinned());
             let mut tls = rustls::ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(verifier)
@@ -776,72 +829,24 @@ pub fn quic_peer_certificate_fingerprint(
 pub mod tls {
     //! TLS-over-TCP transport (feature-gated, optional).
     //!
-    //! Wraps a TCP stream with TLS 1.3 using rustls. Certificate verification is
-    //! intentionally permissive for P2P, but peer authentication is enforced at
-    //! the application layer by the signed handshake bound to the presented
-    //! server certificate fingerprint.
+    //! Wraps a TCP stream with TLS 1.3 using rustls. Self-signed certificates
+    //! are accepted after TLS proves possession of their private key; peer
+    //! identity is then enforced by the application handshake signature bound
+    //! to the presented certificate fingerprint.
 
     use std::sync::Arc;
 
-    use rustls::{
-        ClientConfig, DigitallySignedStruct, Error as RustlsError, SignatureScheme,
-        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-        pki_types::{CertificateDer, ServerName, UnixTime},
-    };
+    use rustls::{ClientConfig, client::danger::ServerCertVerifier, pki_types::ServerName};
     use tokio::io::{AsyncRead, AsyncWrite};
     use tokio_rustls::{TlsConnector, client::TlsStream};
-
-    #[derive(Debug)]
-    struct NoCertificateVerification;
-
-    impl ServerCertVerifier for NoCertificateVerification {
-        fn verify_server_cert(
-            &self,
-            _end_entity: &CertificateDer<'_>,
-            _intermediates: &[CertificateDer<'_>],
-            _server_name: &ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: UnixTime,
-        ) -> Result<ServerCertVerified, RustlsError> {
-            Ok(ServerCertVerified::assertion())
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, RustlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, RustlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-            vec![
-                SignatureScheme::ECDSA_NISTP256_SHA256,
-                SignatureScheme::ECDSA_NISTP384_SHA384,
-                SignatureScheme::ED25519,
-                SignatureScheme::RSA_PSS_SHA256,
-                SignatureScheme::RSA_PKCS1_SHA256,
-            ]
-        }
-    }
 
     /// Upgrade an already-connected TCP stream to TLS 1.3.
     pub async fn connect_tls<S>(host: &str, tcp: S) -> tokio::io::Result<TlsStream<S>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        // Build a permissive client config
-        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+        let verifier: Arc<dyn ServerCertVerifier> =
+            Arc::new(super::CertificateKeyProofVerifier::unpinned());
         let config = ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
@@ -863,58 +868,6 @@ pub mod tls {
         Ok(tls)
     }
 
-    #[derive(Clone, Debug)]
-    struct PinnedCertificateVerification {
-        expected_der: Arc<[u8]>,
-    }
-
-    impl ServerCertVerifier for PinnedCertificateVerification {
-        fn verify_server_cert(
-            &self,
-            end_entity: &CertificateDer<'_>,
-            _intermediates: &[CertificateDer<'_>],
-            _server_name: &ServerName<'_>,
-            _ocsp_response: &[u8],
-            _now: UnixTime,
-        ) -> Result<ServerCertVerified, RustlsError> {
-            if end_entity.as_ref() == self.expected_der.as_ref() {
-                Ok(ServerCertVerified::assertion())
-            } else {
-                Err(RustlsError::General(
-                    "pinned proxy certificate mismatch".to_string(),
-                ))
-            }
-        }
-
-        fn verify_tls12_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, RustlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn verify_tls13_signature(
-            &self,
-            _message: &[u8],
-            _cert: &CertificateDer<'_>,
-            _dss: &DigitallySignedStruct,
-        ) -> Result<HandshakeSignatureValid, RustlsError> {
-            Ok(HandshakeSignatureValid::assertion())
-        }
-
-        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-            vec![
-                SignatureScheme::ECDSA_NISTP256_SHA256,
-                SignatureScheme::ECDSA_NISTP384_SHA384,
-                SignatureScheme::ED25519,
-                SignatureScheme::RSA_PSS_SHA256,
-                SignatureScheme::RSA_PKCS1_SHA256,
-            ]
-        }
-    }
-
     /// Upgrade an already-connected TCP stream to TLS with end-entity certificate pinning.
     ///
     /// This is intended for `https://` proxy connections where operator-supplied pins can prevent
@@ -927,9 +880,10 @@ pub mod tls {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(PinnedCertificateVerification {
-            expected_der: expected_cert_der,
-        });
+        let expected_fingerprint = super::certificate_fingerprint(expected_cert_der.as_ref());
+        let verifier: Arc<dyn ServerCertVerifier> = Arc::new(
+            super::CertificateKeyProofVerifier::pinned(expected_fingerprint),
+        );
         let config = ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
@@ -2664,6 +2618,69 @@ mod tests {
 
     #[cfg(feature = "p2p_tls")]
     #[tokio::test(flavor = "current_thread")]
+    async fn self_signed_tls_rejects_certificate_signed_by_another_key() {
+        use std::sync::Arc;
+
+        use rustls::{
+            server::{ClientHello, ResolvesServerCert},
+            sign::CertifiedKey,
+        };
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio_rustls::TlsAcceptor;
+
+        #[derive(Debug)]
+        struct FixedCertificate(Arc<CertifiedKey>);
+
+        impl ResolvesServerCert for FixedCertificate {
+            fn resolve(&self, _client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+                Some(Arc::clone(&self.0))
+            }
+        }
+
+        let rcgen::CertifiedKey { cert, .. } =
+            rcgen::generate_simple_self_signed(["iroha-tls".to_owned()])
+                .expect("generate advertised certificate");
+        let rcgen::CertifiedKey {
+            signing_key: unrelated_key,
+            ..
+        } = rcgen::generate_simple_self_signed(["attacker.local".to_owned()])
+            .expect("generate unrelated key");
+        let unrelated_key = rustls::pki_types::PrivateKeyDer::from(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(unrelated_key.serialize_der()),
+        );
+        let unrelated_key = rustls::crypto::ring::sign::any_supported_type(&unrelated_key)
+            .expect("parse unrelated signing key");
+        let advertised_cert = rustls::pki_types::CertificateDer::from(cert.der().as_ref().to_vec());
+        let certified_key = CertifiedKey::new(vec![advertised_cert], unrelated_key);
+        let server_cfg = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(FixedCertificate(Arc::new(certified_key))));
+        let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("bind: {error:?}"),
+        };
+        let addr = listener.local_addr().expect("local addr");
+
+        let server = async move {
+            let (tcp, _) = listener.accept().await.expect("accept");
+            acceptor.accept(tcp).await
+        };
+        let client = async move {
+            let tcp = TcpStream::connect(addr).await.expect("connect");
+            crate::transport::tls::connect_tls("iroha-tls", tcp).await
+        };
+        let (client_result, _server_result) = tokio::join!(client, server);
+        assert!(
+            client_result.is_err(),
+            "TLS CertificateVerify must reject a replayed certificate without its private key"
+        );
+    }
+
+    #[cfg(feature = "p2p_tls")]
+    #[tokio::test(flavor = "current_thread")]
     async fn https_proxy_tls_pinning_accepts_only_matching_cert() {
         use std::sync::Arc;
 
@@ -2698,12 +2715,12 @@ mod tests {
             }
         });
 
-        // Insecure P2P TLS accepts the self-signed certificate.
+        // P2P TLS accepts the self-signed certificate after verifying key possession.
         let tcp = TcpStream::connect(addr).await.expect("connect");
-        let insecure = crate::transport::tls::connect_tls("proxy.local", tcp).await;
+        let self_signed = crate::transport::tls::connect_tls("proxy.local", tcp).await;
         assert!(
-            insecure.is_ok(),
-            "insecure TLS should accept self-signed cert"
+            self_signed.is_ok(),
+            "P2P TLS should accept a self-signed cert with a valid CertificateVerify"
         );
 
         // Pinning should accept the exact end-entity certificate.
