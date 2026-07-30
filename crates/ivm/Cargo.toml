@@ -36,8 +36,8 @@ likely_stable = "0.1.3"
 parking_lot = "0.12.5"
 indexmap = "2.12.0"
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance", "bls"] }
-iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
-norito = {path = "../norito"}
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["node-crypto", "rayon", "sm"] }
+norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 iroha_primitives = { path = "../iroha_primitives" }
 iroha_telemetry = { path = "../iroha_telemetry", features = ["metric-instrumentation"] }
@@ -92,7 +92,10 @@ hex-literal = "1.1.0"
 # selected at runtime based on hardware capabilities.
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
-default = ["halo2"]
+default = ["runtime"]
+# Portable VM runtime. Syscalls, opcodes, pointer ABI, and CPU fallbacks are
+# unconditional; only external acceleration backends remain separate.
+runtime = ["halo2"]
 bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []

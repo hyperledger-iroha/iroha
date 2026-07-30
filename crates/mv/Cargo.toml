@@ -37,7 +37,8 @@ features = [
 
 [dependencies.norito]
 workspace = true
-features = ["json"]
+default-features = false
+features = ["base-codec"]
 
 [features]
 default = []

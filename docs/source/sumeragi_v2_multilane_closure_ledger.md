@@ -83,27 +83,32 @@ invariants together.
 
 ## In-flight first-release formal boundary
 
-**Implementation:** In flight; V3 payload/execution-input symbols are not yet
-total-source-projected into a formal semantics.
+**Implementation:** Current first-release layouts are source-bound to the
+abstract kernel; a total transition projection is not implemented.
 **Closure:** Open.
-**Evidence:** Open.
+**Evidence:** Current-layout structural binding plus bounded TLC/Apalache
+evidence; total refinement theorem open.
 
 `SumeragiV2InFlightFirstRelease.tla` is a finite three-validator safety model
-for `LaneExecutablePayloadV3` carrying an exact
+for the accepted schema V2 carried by the production
+`LaneExecutablePayloadV1` container and its exact
 `QueuePlanAdmissionBindingV2` preimage. Its fixed and mutation configurations
-cover producer-selected versus replicated-carrier ownership, QueuePlan V5
-`PutBatch` then V9 reservation fsync then Kura Active then execution-input
-durability then READY, missing/late bodies, producer death after fanout,
-crash-prefix durable recovery, exact Commit/Release scope, duplicate carrier
-application, conflicting/ABA bindings, and the 4096 entry limit.
+cover producer-selected versus replicated-carrier ownership, QueuePlan journal
+V4 `PutBatch` then reservation journal V5 fsync then Kura Active then
+execution-input durability then READY, missing/late bodies, producer death
+after fanout, crash-prefix durable recovery, exact Commit/Release scope,
+duplicate carrier application, conflicting/ABA bindings, and the 4096 entry
+limit.
 
 This row is deliberately **not** a production-refinement claim. TLC exhausts
 the stated finite model and Apalache typechecks/bounds its abstract actions;
 neither checker proves that Rust filesystem/restart traces refine those
 actions. The open theorem is a total Rust pre/post-state forward simulation
-and reverse terminal-owner projection over QueuePlan V5, reservation V9,
-Kura, recovery, Commit, and Release. Token-order/source-presence checks are
-insufficient and must not promote this row or a release status. See
+and reverse terminal-owner projection over QueuePlan journal V4, reservation
+journal V5, Kura, recovery, Commit, and Release. Schema 3 of
+`multilane_source_bindings.json` deliberately classifies this as
+`layout_only_no_transition_refinement`: its exact version/field/order bindings
+detect drift but are insufficient to promote this row or a release status. See
 `docs/formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md`.
 
 ## Native AMX application closure
@@ -311,9 +316,12 @@ persistence and idempotent startup/replay repair in durability order. Pruned
 bodies remain verifiable through QC-authenticated manifest evidence; weaker
 hash-only evidence remains fail-closed. The Kura namespace contains one
 immutable versioned manifest file and one immutable versioned receipt file per
-participant height, followed by a descriptor-bound, replaceable exact-latest
-pointer. Publication uses create-new temporaries, no-clobber promotion, file
-and directory durability sync, and exact readback.
+participant height, followed by a version-2 route/incarnation- and
+application-identity-bound replaceable exact-latest pointer. The pointer binds
+the executed-wire, finality-artifact, and manifest-artifact hashes and startup
+accepts it only when the exact retained receipt or QC-authenticated manifest
+backs every field. Publication uses create-new temporaries, no-clobber
+promotion, file and directory durability sync, and exact readback.
 
 **Closure condition.** Persist finality plus the immutable per-height manifest
 first, then the matching immutable per-height receipt and exact-latest pointer,
@@ -356,10 +364,14 @@ application.
 **Evidence:** Open.
 
 **Production map.** Kura persists immutable versioned manifest and receipt
-files keyed by participant height. A separate route/incarnation-bound,
-descriptor-bound latest pointer is replaceable derived state used for bounded
-exact lookup and explicitly reconstructed through
+files keyed by participant height. A separate version-2 route/incarnation-,
+descriptor-, application-, executed-wire-, finality-, and manifest-bound latest
+pointer is replaceable derived state used for bounded exact lookup and
+explicitly reconstructed through
 `Kura::rebuild_native_amx_participant_receipt_latest_indexes_on_startup`.
+Startup rejects legacy V1 filenames and any current pointer not backed by its
+exact retained receipt or QC-authenticated manifest, including binding drift
+while the receipt is missing.
 `Kura::ensure_first_release_lane_retirement_admissible_locked` in
 `crates/iroha_core/src/kura/lane_geometry.rs` recognizes, accounts, validates,
 archives, and purges the per-height manifests and receipts plus the exact-latest
@@ -1092,8 +1104,8 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 277 exact, non-ignored multilane focus
-tests: 101 core multilane tests, 119 core queue-journal tests, seven
+The release runner now inventories 280 exact, non-ignored multilane focus
+tests: 104 core multilane tests, 119 core queue-journal tests, seven
 configuration tests, eight in `iroha_data_model`, 39 in Torii, one in
 Torii-shared, and two in the integration support library. That source
 inventory is not a passing test transcript; the full focused rerun and
@@ -1117,6 +1129,11 @@ and `G-SDK`. CI must reject missing, duplicate, or reassigned mappings and
 source hash drift, then archive model, configuration, tool-version, result,
 and source hashes. Existing generic Sumeragi models are not substitutes for
 these multilane models.
+
+The separate in-flight carrier contract is layout-only: its nine exact TLC
+mutation witnesses and fifth positive Apalache row are mandatory release
+evidence after the four refinement rows, but they do not promote the missing
+total Rust transition projection to a theorem.
 
 A 2026-07-24 source-bound checkpoint for source manifest
 `af1361d00f08bbf340c57e6b4992c0a8166a7e9e67f9f4c5771827ce5c69e7a6`

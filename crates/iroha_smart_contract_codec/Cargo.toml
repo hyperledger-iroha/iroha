@@ -10,4 +10,4 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-norito.workspace = true
+norito = { workspace = true, default-features = false, features = ["base-codec"] }

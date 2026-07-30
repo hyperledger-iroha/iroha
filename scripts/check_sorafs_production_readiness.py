@@ -229,6 +229,89 @@ FOUNDATIONAL_PREREQUISITE_SCHEMA = (
 FOUNDATIONAL_PREREQUISITE_SIGNATURE_DOMAIN = (
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\x00"
 )
+RESILIENCE_QUALIFICATION_RECEIPT_SCHEMA = (
+    "sorafs.l1.resilience_qualification.v1"
+)
+RESILIENCE_QUALIFICATION_SUMMARY_SCHEMA = (
+    "sorafs.l1.resilience_qualification.summary.v1"
+)
+RESILIENCE_QUALIFICATION_SIGNATURE_DOMAIN = (
+    b"iroha:sorafs:l1-resilience-qualification:v1\x00"
+)
+RESILIENCE_QUALIFICATION_REQUIREMENTS = (
+    "network_partition_recovery",
+    "consensus_view_change",
+    "validator_restart",
+    "torii_restart",
+    "provider_restart",
+    "simultaneous_peer_submission",
+    "signer_rotation",
+    "root_rotation",
+    "catalog_rotation",
+    "gateway_failover",
+    "governance_dag_failover",
+    "stale_fork_rejection",
+    "crash_recovery",
+    "identical_post_recovery_peer_state",
+    "repair_outcome",
+    "settlement_outcome",
+    "backup_restore",
+    "release_rollback",
+    "package_yank",
+)
+RESILIENCE_QUALIFICATION_SUMMARY_FIELDS = frozenset(
+    {
+        "schema",
+        "status",
+        "qualification_scope",
+        "live_evidence_recognized",
+        "externally_authenticated",
+        "promotion_eligible",
+        "readiness_lane_count_delta",
+        "receipt_sha256",
+        "canonical_receipt_sha256",
+        "receipt_generated_at_unix",
+        "receipt_authentication",
+        "deployment",
+        "topology_qualification",
+        "required_requirements",
+        "recognized_requirement_count",
+        "artifact_bindings",
+        "earliest_capture_unix",
+        "latest_capture_unix",
+        "errors",
+    }
+)
+RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS = frozenset(
+    {"requirement", "artifact_path", "artifact_sha256", "captured_at_unix"}
+)
+RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS = frozenset(
+    {
+        "kind",
+        "algorithm",
+        "public_key_fingerprint_sha256",
+        "signature_hex",
+    }
+)
+RESILIENCE_QUALIFICATION_BINDING_SCHEMA = (
+    "sorafs.production_readiness.resilience_qualification_binding.v1"
+)
+RESILIENCE_QUALIFICATION_BINDING_FIELDS = frozenset(
+    {
+        "schema",
+        "summary_sha256",
+        "receipt_sha256",
+        "canonical_receipt_sha256",
+        "receipt_generated_at_unix",
+        "signer_public_key_fingerprint_sha256",
+    }
+)
+AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA = (
+    "sorafs.production_readiness.aggregate_resilience_qualification.v1"
+)
+AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS = frozenset(
+    {"schema", "present", "valid", "binding", "errors"}
+)
 FOUNDATIONAL_PREREQUISITE_IDS = (
     "SFM-1",
     "SF-1",
@@ -250,6 +333,7 @@ FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
         "release_sequence",
         "previous_envelope_sha256",
         "topology_qualification",
+        "resilience_qualification",
         "prerequisites",
         "lane_summaries",
         "signature",
@@ -286,6 +370,7 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "previous_envelope_sha256",
         "signer_public_key_fingerprint_sha256",
         "topology_qualification",
+        "resilience_qualification",
         "evidence_anchor_sha256",
         "lane_summary_sha256",
         "path",
@@ -1135,6 +1220,7 @@ AGGREGATE_SUMMARY_FIELDS = frozenset(
         "recognized_summary_count",
         "deployment",
         "topology_qualification",
+        "resilience_qualification",
         "foundational_prerequisites",
         "required",
         "errors",
@@ -1284,6 +1370,8 @@ class ValidationOptions:
     foundational_release_sequence: int | None = None
     foundational_previous_envelope_sha256: str | None = None
     topology_qualification: Mapping[str, str] | None = None
+    resilience_qualification: Mapping[str, Any] | None = None
+    resilience_qualification_errors: tuple[str, ...] = ()
 
 
 def canonical_string(value: Any) -> str | None:
@@ -1949,6 +2037,442 @@ def canonical_lower_hex(value: Any, expected_hex_length: int) -> str | None:
     return None
 
 
+def _nonzero_sha256(
+    value: Any,
+    *,
+    path: str,
+    errors: list[str],
+) -> str | None:
+    """Return one canonical non-zero SHA-256 digest."""
+
+    digest = canonical_lower_hex(value, 64)
+    if digest is None:
+        errors.append(f"{path} must be canonical lowercase SHA-256")
+        return None
+    if not any(bytes.fromhex(digest)):
+        errors.append(f"{path} must not be zero")
+        return None
+    return digest
+
+
+def _resilience_timestamp(
+    value: Any,
+    *,
+    path: str,
+    now_unix: int,
+    max_age_secs: int,
+    errors: list[str],
+) -> int | None:
+    """Validate one fresh positive resilience evidence timestamp."""
+
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value <= 0
+        or value > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+    ):
+        errors.append(f"{path} must be an integer in 1..2^63-1")
+        return None
+    if value > now_unix:
+        errors.append(f"{path} must not be future")
+    elif now_unix - value > max_age_secs:
+        errors.append(f"{path} exceeds max summary artifact age")
+    return value
+
+
+def validate_resilience_qualification_binding_object(
+    value: Any,
+    errors: list[str],
+    *,
+    path: str,
+    expected: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Validate the signed envelope's payload-free resilience anchor."""
+
+    binding = validate_foundational_exact_fields(
+        value,
+        RESILIENCE_QUALIFICATION_BINDING_FIELDS,
+        path,
+        errors,
+    )
+    if binding is None:
+        return None
+    if binding.get("schema") != RESILIENCE_QUALIFICATION_BINDING_SCHEMA:
+        errors.append(f"{path}.schema must match the resilience binding contract")
+    for field in (
+        "summary_sha256",
+        "receipt_sha256",
+        "canonical_receipt_sha256",
+        "signer_public_key_fingerprint_sha256",
+    ):
+        _nonzero_sha256(
+            binding.get(field),
+            path=f"{path}.{field}",
+            errors=errors,
+        )
+    generated_at_unix = binding.get("receipt_generated_at_unix")
+    if (
+        not isinstance(generated_at_unix, int)
+        or isinstance(generated_at_unix, bool)
+        or generated_at_unix <= 0
+        or generated_at_unix > MAX_FOUNDATIONAL_RELEASE_SEQUENCE
+    ):
+        errors.append(
+            f"{path}.receipt_generated_at_unix must be an integer in 1..2^63-1"
+        )
+    if expected is not None and dict(binding) != dict(expected):
+        errors.append(f"{path} must match the reviewed resilience qualification")
+    return dict(binding)
+
+
+def load_resilience_qualification_binding(
+    path: Path,
+    *,
+    expected_deployment_id: str | None,
+    expected_environment: str | None,
+    expected_topology_qualification: Mapping[str, str] | None,
+    now_unix: int,
+    max_age_secs: int,
+    trusted_public_key: bytes | None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Authenticate one evidence-qualified resilience summary and return its anchor."""
+
+    errors: list[str] = []
+    loaded = load_evidence_json_with_sha256_or_record_error(
+        path,
+        MAX_SUMMARY_BYTES,
+        errors,
+    )
+    if loaded is None:
+        return None, errors
+    summary, summary_sha256 = loaded
+    validate_foundational_exact_fields(
+        summary,
+        RESILIENCE_QUALIFICATION_SUMMARY_FIELDS,
+        "resilience qualification summary",
+        errors,
+    )
+    if summary.get("schema") != RESILIENCE_QUALIFICATION_SUMMARY_SCHEMA:
+        errors.append("resilience qualification summary schema must match the contract")
+    if summary.get("status") != "evidence-qualified":
+        errors.append("resilience qualification summary status must be `evidence-qualified`")
+    if summary.get("qualification_scope") != "holistic-deployment-resilience":
+        errors.append(
+            "resilience qualification summary scope must be holistic-deployment-resilience"
+        )
+    for field in (
+        "live_evidence_recognized",
+        "externally_authenticated",
+        "promotion_eligible",
+    ):
+        if summary.get(field) is not True:
+            errors.append(f"resilience qualification summary {field} must be true")
+    if summary.get("readiness_lane_count_delta") != 0:
+        errors.append(
+            "resilience qualification summary readiness_lane_count_delta must be zero"
+        )
+    if summary.get("errors") != []:
+        errors.append("resilience qualification summary errors must be empty")
+
+    receipt_sha256 = _nonzero_sha256(
+        summary.get("receipt_sha256"),
+        path="resilience qualification summary receipt_sha256",
+        errors=errors,
+    )
+    canonical_receipt_digest = _nonzero_sha256(
+        summary.get("canonical_receipt_sha256"),
+        path="resilience qualification summary canonical_receipt_sha256",
+        errors=errors,
+    )
+    generated_at_unix = _resilience_timestamp(
+        summary.get("receipt_generated_at_unix"),
+        path="resilience qualification summary receipt_generated_at_unix",
+        now_unix=now_unix,
+        max_age_secs=max_age_secs,
+        errors=errors,
+    )
+
+    deployment = validate_foundational_exact_fields(
+        summary.get("deployment"),
+        FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS,
+        "resilience qualification summary deployment",
+        errors,
+    )
+    deployment_id: str | None = None
+    environment: str | None = None
+    if deployment is not None:
+        deployment_errors: list[str] = []
+        candidate_deployment_id = require_production_deployment_id_value(
+            deployment.get("deployment_id"),
+            deployment_errors,
+            "resilience qualification summary deployment_id",
+        )
+        errors.extend(deployment_errors)
+        candidate_environment = canonical_string(deployment.get("environment"))
+        if candidate_environment is None:
+            errors.append(
+                "resilience qualification summary environment must be canonical"
+            )
+        elif not is_production_ready_environment(candidate_environment):
+            errors.append(
+                "resilience qualification summary environment must be production"
+            )
+        if candidate_deployment_id:
+            deployment_id = candidate_deployment_id
+        if candidate_environment is not None:
+            environment = candidate_environment
+        if (
+            expected_deployment_id is not None
+            and deployment_id != expected_deployment_id
+        ):
+            errors.append(
+                "resilience qualification summary deployment_id must match --deployment-id"
+            )
+        if expected_environment is not None and environment != expected_environment:
+            errors.append(
+                "resilience qualification summary environment must match --environment"
+            )
+
+    topology = summary.get("topology_qualification")
+    errors.extend(
+        validate_topology_binding_object(
+            topology,
+            expected=expected_topology_qualification,
+            path="resilience qualification summary topology_qualification",
+        )
+    )
+
+    required_requirements = summary.get("required_requirements")
+    if required_requirements != list(RESILIENCE_QUALIFICATION_REQUIREMENTS):
+        errors.append(
+            "resilience qualification summary requirements must match the exact "
+            "19-requirement contract in canonical order"
+        )
+    recognized_count = summary.get("recognized_requirement_count")
+    if recognized_count != len(RESILIENCE_QUALIFICATION_REQUIREMENTS):
+        errors.append(
+            "resilience qualification summary recognized_requirement_count must be 19"
+        )
+
+    artifacts_value = summary.get("artifact_bindings")
+    artifacts: list[dict[str, Any]] = []
+    captures: list[int] = []
+    artifact_paths: list[str] = []
+    artifact_digests: list[str] = []
+    observed_requirements: list[str] = []
+    if not isinstance(artifacts_value, list):
+        errors.append("resilience qualification summary artifact_bindings must be a list")
+    else:
+        for index, value in enumerate(artifacts_value):
+            row_path = f"resilience qualification summary artifact_bindings[{index}]"
+            row = validate_foundational_exact_fields(
+                value,
+                RESILIENCE_QUALIFICATION_ARTIFACT_BINDING_FIELDS,
+                row_path,
+                errors,
+            )
+            if row is None:
+                continue
+            requirement = canonical_string(row.get("requirement"))
+            if requirement is None:
+                errors.append(f"{row_path}.requirement must be canonical")
+            else:
+                observed_requirements.append(requirement)
+            artifact_path = canonical_string(row.get("artifact_path"))
+            if (
+                artifact_path is None
+                or not is_archive_portable_artifact_path(artifact_path)
+            ):
+                errors.append(f"{row_path}.artifact_path must be archive-relative and portable")
+            else:
+                artifact_paths.append(artifact_path)
+            artifact_digest = _nonzero_sha256(
+                row.get("artifact_sha256"),
+                path=f"{row_path}.artifact_sha256",
+                errors=errors,
+            )
+            if artifact_digest is not None:
+                artifact_digests.append(artifact_digest)
+            captured_at_unix = _resilience_timestamp(
+                row.get("captured_at_unix"),
+                path=f"{row_path}.captured_at_unix",
+                now_unix=now_unix,
+                max_age_secs=max_age_secs,
+                errors=errors,
+            )
+            if captured_at_unix is not None:
+                captures.append(captured_at_unix)
+                if (
+                    generated_at_unix is not None
+                    and captured_at_unix > generated_at_unix
+                ):
+                    errors.append(
+                        f"{row_path}.captured_at_unix must not exceed receipt time"
+                    )
+            artifacts.append(dict(row))
+    if observed_requirements != list(RESILIENCE_QUALIFICATION_REQUIREMENTS):
+        errors.append(
+            "resilience qualification summary artifact requirements must match "
+            "the exact canonical order"
+        )
+    if len(artifact_paths) != len(set(artifact_paths)):
+        errors.append(
+            "resilience qualification summary artifact paths must be unique"
+        )
+    if len(artifact_digests) != len(set(artifact_digests)):
+        errors.append(
+            "resilience qualification summary artifact digests must be unique"
+        )
+    earliest_capture = min(captures) if captures else None
+    latest_capture = max(captures) if captures else None
+    if summary.get("earliest_capture_unix") != earliest_capture:
+        errors.append(
+            "resilience qualification summary earliest_capture_unix must match artifacts"
+        )
+    if summary.get("latest_capture_unix") != latest_capture:
+        errors.append(
+            "resilience qualification summary latest_capture_unix must match artifacts"
+        )
+
+    authentication = validate_foundational_exact_fields(
+        summary.get("receipt_authentication"),
+        RESILIENCE_QUALIFICATION_AUTHENTICATION_FIELDS,
+        "resilience qualification summary receipt_authentication",
+        errors,
+    )
+    signer_fingerprint: str | None = None
+    signature_bytes: bytes | None = None
+    if authentication is not None:
+        if authentication.get("kind") != "external-ed25519":
+            errors.append(
+                "resilience qualification summary authentication kind must be "
+                "`external-ed25519`"
+            )
+        if authentication.get("algorithm") != "ed25519":
+            errors.append(
+                "resilience qualification summary authentication algorithm must be "
+                "`ed25519`"
+            )
+        signer_fingerprint = _nonzero_sha256(
+            authentication.get("public_key_fingerprint_sha256"),
+            path=(
+                "resilience qualification summary authentication "
+                "public_key_fingerprint_sha256"
+            ),
+            errors=errors,
+        )
+        signature_hex = canonical_lower_hex(authentication.get("signature_hex"), 128)
+        if signature_hex is None or not any(bytes.fromhex(signature_hex)):
+            errors.append(
+                "resilience qualification summary authentication signature must "
+                "be a non-zero canonical Ed25519 signature"
+            )
+        else:
+            signature_bytes = bytes.fromhex(signature_hex)
+
+    if (
+        not isinstance(trusted_public_key, bytes)
+        or len(trusted_public_key) != 32
+        or not any(trusted_public_key)
+    ):
+        errors.append(
+            "resilience qualification summary requires an operator-trusted "
+            "Ed25519 public key"
+        )
+        trusted_public_key = None
+    else:
+        expected_fingerprint = hashlib.sha256(trusted_public_key).hexdigest()
+        if (
+            signer_fingerprint is not None
+            and signer_fingerprint != expected_fingerprint
+        ):
+            errors.append(
+                "resilience qualification summary signer must match the "
+                "operator-trusted key"
+            )
+
+    reconstructed_receipt: dict[str, Any] | None = None
+    if (
+        deployment is not None
+        and isinstance(topology, Mapping)
+        and generated_at_unix is not None
+        and authentication is not None
+    ):
+        reconstructed_receipt = {
+            "schema": RESILIENCE_QUALIFICATION_RECEIPT_SCHEMA,
+            "deployment": dict(deployment),
+            "topology_qualification": dict(topology),
+            "generated_at_unix": generated_at_unix,
+            "artifacts": artifacts,
+            "authentication": dict(authentication),
+        }
+        reconstructed_digest = hashlib.sha256(
+            json.dumps(
+                reconstructed_receipt,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            canonical_receipt_digest is not None
+            and reconstructed_digest != canonical_receipt_digest
+        ):
+            errors.append(
+                "resilience qualification summary canonical receipt digest "
+                "does not match reconstructed receipt"
+            )
+
+    if (
+        reconstructed_receipt is not None
+        and trusted_public_key is not None
+        and signature_bytes is not None
+    ):
+        unsigned_receipt = dict(reconstructed_receipt)
+        unsigned_authentication = dict(authentication)
+        unsigned_authentication.pop("signature_hex", None)
+        unsigned_receipt["authentication"] = unsigned_authentication
+        signing_payload = RESILIENCE_QUALIFICATION_SIGNATURE_DOMAIN + json.dumps(
+            unsigned_receipt,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("ascii")
+        try:
+            signature_valid = verify_ed25519(
+                trusted_public_key,
+                signature_bytes,
+                signing_payload,
+            )
+        except (TypeError, ValueError):
+            signature_valid = False
+        if not signature_valid:
+            errors.append(
+                "resilience qualification summary receipt signature verification failed"
+            )
+
+    if (
+        receipt_sha256 is None
+        or canonical_receipt_digest is None
+        or generated_at_unix is None
+        or signer_fingerprint is None
+    ):
+        return None, errors
+    return (
+        {
+            "schema": RESILIENCE_QUALIFICATION_BINDING_SCHEMA,
+            "summary_sha256": summary_sha256,
+            "receipt_sha256": receipt_sha256,
+            "canonical_receipt_sha256": canonical_receipt_digest,
+            "receipt_generated_at_unix": generated_at_unix,
+            "signer_public_key_fingerprint_sha256": signer_fingerprint,
+        },
+        errors,
+    )
+
+
 def foundational_signing_payload(payload: dict[str, Any]) -> bytes:
     """Return the canonical, domain-separated prerequisite signature payload."""
 
@@ -2280,6 +2804,16 @@ def validate_foundational_prerequisite_summary(
             path="foundational prerequisite topology_qualification",
         )
     )
+    resilience_qualification = validate_resilience_qualification_binding_object(
+        payload.get("resilience_qualification"),
+        errors,
+        path="foundational prerequisite resilience_qualification",
+        expected=(
+            None
+            if options.resilience_qualification_errors
+            else options.resilience_qualification
+        ),
+    )
 
     signature = validate_foundational_exact_fields(
         payload.get("signature"),
@@ -2368,6 +2902,7 @@ def validate_foundational_prerequisite_summary(
         "previous_envelope_sha256": previous_envelope_sha256,
         "signer_public_key_fingerprint_sha256": signer_fingerprint,
         "topology_qualification": topology_qualification,
+        "resilience_qualification": resilience_qualification,
         "evidence_anchor_sha256": anchors,
         "lane_summary_sha256": lane_summary_rows,
         "errors": errors,
@@ -5631,6 +6166,13 @@ def validate_aggregate_foundational_prerequisite_output(
             path=f"{path} topology_qualification",
         )
     )
+    resilience_qualification = row.get("resilience_qualification")
+    if resilience_qualification is not None or valid is True:
+        validate_resilience_qualification_binding_object(
+            resilience_qualification,
+            errors,
+            path=f"{path} resilience_qualification",
+        )
 
     anchors = row.get("evidence_anchor_sha256")
     if not isinstance(anchors, list):
@@ -5672,6 +6214,51 @@ def validate_aggregate_foundational_prerequisite_output(
     )
     if valid is True and row.get("errors") != []:
         errors.append(f"{path} valid row errors must be empty")
+
+
+def validate_aggregate_resilience_qualification_output(
+    row: Any,
+    errors: list[str],
+) -> dict[str, Any] | None:
+    """Validate the aggregate's schema-closed resilience status row."""
+
+    path = "aggregate resilience qualification"
+    if not isinstance(row, dict):
+        errors.append(f"{path} must be an object")
+        return None
+    if set(row) != AGGREGATE_RESILIENCE_QUALIFICATION_FIELDS:
+        errors.append(f"{path} fields must match the schema-closed output contract")
+    if row.get("schema") != AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA:
+        errors.append(f"{path} schema must match the aggregate contract")
+    present = row.get("present")
+    valid = row.get("valid")
+    if not isinstance(present, bool):
+        errors.append(f"{path} present must be boolean")
+    if not isinstance(valid, bool):
+        errors.append(f"{path} valid must be boolean")
+    binding_value = row.get("binding")
+    binding = None
+    if binding_value is not None:
+        binding = validate_resilience_qualification_binding_object(
+            binding_value,
+            errors,
+            path=f"{path} binding",
+        )
+    elif present is True or valid is True:
+        errors.append(f"{path} present row binding must be an object")
+    if present is not True and valid is not False:
+        errors.append(f"{path} missing row valid must be false")
+    if valid is True and present is not True:
+        errors.append(f"{path} valid row must be present")
+    validate_aggregate_row_error_list(
+        row.get("errors"),
+        f"{path} errors",
+        errors,
+        require_non_empty=valid is not True,
+    )
+    if valid is True and row.get("errors") != []:
+        errors.append(f"{path} valid row errors must be empty")
+    return binding
 
 
 def validate_aggregate_summary_output(
@@ -5813,6 +6400,11 @@ def validate_aggregate_summary_output(
             path="aggregate summary topology_qualification",
         )
     )
+    resilience_row = summary.get("resilience_qualification")
+    resilience_qualification = validate_aggregate_resilience_qualification_output(
+        resilience_row,
+        errors,
+    )
     required = summary.get("required")
     if not isinstance(required, dict):
         errors.append("aggregate summary required must be an object")
@@ -5921,6 +6513,19 @@ def validate_aggregate_summary_output(
             errors.append(
                 "aggregate foundational prerequisite environment must match aggregate environment"
             )
+        foundational_resilience = foundational_prerequisites.get(
+            "resilience_qualification"
+        )
+        if (
+            isinstance(resilience_row, Mapping)
+            and resilience_row.get("valid") is True
+            and resilience_qualification is not None
+            and foundational_resilience != resilience_qualification
+        ):
+            errors.append(
+                "aggregate foundational prerequisite resilience_qualification "
+                "must match aggregate resilience_qualification"
+            )
     if summary.get("status") == "ready":
         if tuple(required_gates) != DEFAULT_REQUIRED_GATES:
             errors.append(
@@ -5961,6 +6566,15 @@ def validate_aggregate_summary_output(
         ):
             errors.append(
                 "aggregate summary ready foundational prerequisites must be present and valid"
+            )
+        if (
+            not isinstance(resilience_row, Mapping)
+            or resilience_row.get("present") is not True
+            or resilience_row.get("valid") is not True
+            or resilience_qualification is None
+        ):
+            errors.append(
+                "aggregate summary ready resilience qualification must be present and valid"
             )
     error_values = summary.get("errors")
     if not isinstance(error_values, list):
@@ -6317,6 +6931,27 @@ def build_summary(
     """Build the aggregate production-readiness summary."""
 
     errors: list[str] = []
+    resilience_errors = list(options.resilience_qualification_errors)
+    resilience_binding: dict[str, Any] | None = None
+    if options.resilience_qualification is None:
+        if not resilience_errors:
+            resilience_errors.append(
+                "missing required trusted resilience qualification summary"
+            )
+    else:
+        resilience_binding = validate_resilience_qualification_binding_object(
+            dict(options.resilience_qualification),
+            resilience_errors,
+            path="reviewed resilience qualification",
+        )
+    resilience_qualification = {
+        "schema": AGGREGATE_RESILIENCE_QUALIFICATION_SCHEMA,
+        "present": options.resilience_qualification is not None,
+        "valid": resilience_binding is not None and not resilience_errors,
+        "binding": resilience_binding,
+        "errors": resilience_errors,
+    }
+    errors.extend(resilience_errors)
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -6512,6 +7147,7 @@ def build_summary(
         "recognized_summary_count": recognized_summaries,
         "deployment": deployment,
         "topology_qualification": options.topology_qualification,
+        "resilience_qualification": resilience_qualification,
         "foundational_prerequisites": foundational_prerequisites,
         "required": required,
         "errors": errors,
@@ -6528,6 +7164,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Validate aggregate SoraFS production-readiness summaries.",
     )
     add_topology_qualification_argument(parser, required=False)
+    parser.add_argument(
+        "--resilience-qualification-summary",
+        type=Path,
+        help=(
+            "Required evidence-qualified holistic resilience/DR summary. This is "
+            "a signed deployment attachment, not an eighteenth readiness lane."
+        ),
+    )
+    parser.add_argument(
+        "--resilience-qualification-signer-public-key-hex",
+        help=(
+            "Required operator-trusted 32-byte Ed25519 public key used to "
+            "authenticate the resilience receipt. The key remains runtime-only."
+        ),
+    )
     parser.add_argument(
         "--evidence-dir",
         action="append",
@@ -6656,6 +7307,17 @@ def main(argv: list[str] | None = None) -> int:
         if foundational_key_errors:
             emit_checker_error_lines(foundational_key_errors)
             return 2
+    resilience_signer_public_key: bytes | None = None
+    if args.resilience_qualification_signer_public_key_hex is not None:
+        resilience_key_errors: list[str] = []
+        resilience_signer_public_key = parse_foundational_signer_public_key(
+            args.resilience_qualification_signer_public_key_hex,
+            resilience_key_errors,
+            path="--resilience-qualification-signer-public-key-hex",
+        )
+        if resilience_key_errors:
+            emit_checker_error_lines(resilience_key_errors)
+            return 2
     foundational_previous_envelope_sha256 = None
     if (
         args.foundational_release_sequence is not None
@@ -6698,7 +7360,25 @@ def main(argv: list[str] | None = None) -> int:
     ):
         emit_checker_error_lines(topology_errors)
         return 2
-
+    if args.resilience_qualification_summary is None:
+        emit_checker_error_lines(["--resilience-qualification-summary is required"])
+        return 2
+    if resilience_signer_public_key is None:
+        emit_checker_error_lines(
+            ["--resilience-qualification-signer-public-key-hex is required"]
+        )
+        return 2
+    resilience_qualification, resilience_errors = (
+        load_resilience_qualification_binding(
+            args.resilience_qualification_summary,
+            expected_deployment_id=args.deployment_id,
+            expected_environment=args.environment,
+            expected_topology_qualification=topology_qualification,
+            now_unix=args.now_unix,
+            max_age_secs=args.max_summary_artifact_age_secs,
+            trusted_public_key=resilience_signer_public_key,
+        )
+    )
     options = ValidationOptions(
         now_unix=args.now_unix,
         max_summary_artifact_age_secs=args.max_summary_artifact_age_secs,
@@ -6710,6 +7390,8 @@ def main(argv: list[str] | None = None) -> int:
             foundational_previous_envelope_sha256
         ),
         topology_qualification=topology_qualification,
+        resilience_qualification=resilience_qualification,
+        resilience_qualification_errors=tuple(resilience_errors),
     )
     summary, errors = build_summary(
         args.evidence_dir,

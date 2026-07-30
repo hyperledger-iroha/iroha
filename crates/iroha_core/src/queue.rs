@@ -12851,6 +12851,7 @@ impl Queue {
         state_view: &StateView<'_>,
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
+        routing_generation_unchanged: bool,
     ) {
         let routing_nexus =
             nexus_with_route_catalogs(state_view.nexus(), lane_catalog, dataspace_catalog);
@@ -12900,7 +12901,16 @@ impl Queue {
                         reason_label = err.as_label(),
                         "queued transaction failed immutable routing validation during Nexus reconfiguration"
                     );
-                    if matches!(err, RoutingResolveError::StaleRoutingPlan) {
+                    // A route becoming invalid within the same routing generation is internal
+                    // ownership corruption, not an administrative lifecycle transition. A
+                    // durable claim makes the same distinction across restart/config refresh:
+                    // drain must not retire its bound incarnation while accepted work remains.
+                    // Retain either case and fail-stop selection so reconfiguration cannot turn
+                    // an ambiguous identity fault into transaction loss.
+                    if matches!(err, RoutingResolveError::StaleRoutingPlan)
+                        || routing_generation_unchanged
+                        || self.durable_plan_claims.contains_key(&hash)
+                    {
                         corrupt_ownership.push((hash, err));
                     } else {
                         // Catalog/lane lifecycle changes are expected administrative events.
@@ -12973,9 +12983,16 @@ impl Queue {
         state: &State,
         lane_catalog: &LaneCatalog,
         dataspace_catalog: &DataSpaceCatalog,
+        routing_generation_unchanged: bool,
     ) {
         let state_view = state.view();
-        self.revalidate_pending_transactions(router, &state_view, lane_catalog, dataspace_catalog);
+        self.revalidate_pending_transactions(
+            router,
+            &state_view,
+            lane_catalog,
+            dataspace_catalog,
+            routing_generation_unchanged,
+        );
     }
 
     /// Expose a handle for observing queue load.
@@ -13133,6 +13150,7 @@ impl Queue {
         state_view: &StateView<'_>,
         lane_compliance: Option<Arc<LaneComplianceEngine>>,
     ) {
+        let routing_generation_unchanged = self.nexus_routing_matches(nexus);
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
         let (router, uses_config_router) =
@@ -13170,6 +13188,7 @@ impl Queue {
             state_view,
             &lane_catalog,
             &dataspace_catalog,
+            routing_generation_unchanged,
         );
     }
 
@@ -13181,6 +13200,7 @@ impl Queue {
         state: &State,
         lane_compliance: Option<Arc<LaneComplianceEngine>>,
     ) {
+        let routing_generation_unchanged = self.nexus_routing_matches(nexus);
         let lane_catalog = Arc::new(nexus.lane_catalog.clone());
         let dataspace_catalog = Arc::new(nexus.dataspace_catalog.clone());
         let (router, uses_config_router) =
@@ -13219,6 +13239,7 @@ impl Queue {
             state,
             &lane_catalog,
             &dataspace_catalog,
+            routing_generation_unchanged,
         );
     }
 
@@ -13270,6 +13291,7 @@ pub mod tests {
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
     };
     use iroha_data_model::{
+        account::{AccountDetails, AccountValue},
         block::SignedBlock,
         events::pipeline::PipelineEventBox,
         isi::runtime_upgrade::ProposeRuntimeUpgrade,
@@ -13359,6 +13381,67 @@ pub mod tests {
         topology.clear();
         topology.push(PeerId::new(validator_key.public_key().clone()));
         topology.commit();
+    }
+
+    fn install_manifest_lane_authority_for_queue_test(state: &mut State, queue: &Queue, seed: u8) {
+        let validator_key =
+            iroha_crypto::KeyPair::from_seed(vec![seed; 32], iroha_crypto::Algorithm::BlsNormal);
+        let validator_peer = PeerId::new(validator_key.public_key().clone());
+        let validator_account = AccountId::new(validator_key.public_key().clone());
+        let validator_pop = iroha_crypto::bls_normal_pop_prove(validator_key.private_key())
+            .expect("deterministic queue manifest validator PoP");
+
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                if !peers.iter().any(|peer| peer == &validator_peer) {
+                    peers.push(validator_peer.clone());
+                }
+                peers.apply();
+            }
+            world_block.commit();
+        }
+        state
+            .world
+            .register_validator_pop_for_testing(validator_key.public_key().clone(), validator_pop);
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(validator_peer);
+            topology.commit();
+        }
+
+        let nexus = state.nexus_snapshot();
+        let statuses = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| {
+                (
+                    lane.id,
+                    LaneManifestStatus {
+                        lane: lane.id,
+                        alias: lane.alias.clone(),
+                        dataspace: lane.dataspace_id,
+                        visibility: lane.visibility.clone(),
+                        storage: lane.storage.clone(),
+                        governance: None,
+                        manifest_path: Some(PathBuf::from(format!(
+                            "/test/queue-lane-{}.json",
+                            lane.id.as_u32()
+                        ))),
+                        governance_rules: Some(GovernanceRules {
+                            validators: vec![validator_account.clone()],
+                            ..GovernanceRules::default()
+                        }),
+                        privacy_commitments: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests_with_state(&manifests, state);
     }
 
     struct GloballyBoundGuardFixture {
@@ -14333,6 +14416,7 @@ pub mod tests {
             &state,
             &active_catalog,
             dataspace_catalog.as_ref(),
+            false,
         );
 
         assert_eq!(queue.active_len(), 0);
@@ -22453,6 +22537,13 @@ pub mod tests {
         World::with([domain], [account], [])
     }
 
+    fn register_test_authority(state: &mut State, authority: &AccountId) {
+        state.world.accounts.insert(
+            authority.clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+    }
+
     struct NexusRoutingFixture {
         state: State,
         authority_id: AccountId,
@@ -23442,6 +23533,7 @@ pub mod tests {
             state.as_ref(),
             &lane_catalog,
             &dataspace_catalog,
+            true,
         );
 
         let routing = queue
@@ -23480,6 +23572,7 @@ pub mod tests {
             &state,
             &nexus.lane_catalog,
             &nexus.dataspace_catalog,
+            true,
         );
 
         assert_eq!(queue.active_len(), 1);
@@ -23657,6 +23750,7 @@ pub mod tests {
         }
 
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&mut state, &authority_id);
         let tx = accepted_tx_with(
             authority_id,
             &authority_keypair,
@@ -23850,6 +23944,12 @@ pub mod tests {
             )
             .expect("current Native AMX plan should enqueue");
         let second = accepted_tx_by_someone(&time_source);
+        let second_authority = second
+            .external()
+            .expect("later FIFO transaction should be external")
+            .authority()
+            .clone();
+        register_test_authority(&mut fixture.state, &second_authority);
         let second_hash = second.hash();
         queue
             .push(second, fixture.state.view())
@@ -24555,6 +24655,12 @@ pub mod tests {
         let mut state = first_fixture.state;
         let first_tx = first_fixture.tx;
         let second_tx = second_fixture.tx;
+        let second_authority = second_tx
+            .external()
+            .expect("Native AMX fixture transaction should be external")
+            .authority()
+            .clone();
+        register_test_authority(&mut state, &second_authority);
         let first_plan = first_fixture.current_plan;
         let second_plan = second_fixture.current_plan;
         let coordinator = first_plan.coordinator_route();
@@ -30667,31 +30773,6 @@ pub mod tests {
         assert_eq!(queue.queued_len(), 1);
     }
 
-    #[derive(Clone)]
-    struct FixedReservationPlanRouter {
-        plan: RoutingPlan,
-    }
-
-    impl LaneRouter for FixedReservationPlanRouter {
-        fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
-            self.plan.coordinator_route()
-        }
-
-        fn try_route_plan(
-            &self,
-            _tx: &dyn TransactionRoutingView,
-        ) -> Result<RoutingPlan, RoutingResolveError> {
-            Ok(self.plan.clone())
-        }
-
-        fn try_route_plan_without_state(
-            &self,
-            _tx: &dyn TransactionRoutingView,
-        ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
-            Ok(Some(self.plan.clone()))
-        }
-    }
-
     #[test]
     fn native_amx_participant_lane_cannot_reserve_or_execute_full_transaction() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -30759,17 +30840,18 @@ pub mod tests {
         state
             .set_nexus_from_config(nexus)
             .expect("install two-lane reservation test Nexus");
-        install_single_validator_topology_for_queue_test(&state, 0xC1);
-        let plan = RoutingPlan::native_amx(
-            coordinator,
-            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
-        );
+        let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+            state.nexus_snapshot().routing_policy,
+            (*dataspace_catalog).clone(),
+            (*lane_catalog).clone(),
+        ));
         let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
-            Arc::new(FixedReservationPlanRouter { plan: plan.clone() }),
+            router,
             &routes,
         ));
+        install_manifest_lane_authority_for_queue_test(&mut state, queue.as_ref(), 0xC1);
         let dir = tempdir().expect("tempdir");
         install_test_reservation_journal(&queue, &dir);
         queue
@@ -30779,7 +30861,38 @@ pub mod tests {
                 true,
             )
             .expect("install Native AMX queue-plan journal");
-        let transaction = accepted_tx_by_someone(&time_source);
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let transaction = accepted_tx_with(
+            authority.clone(),
+            &authority_keypair,
+            &time_source,
+            vec![
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("nativeamxcoordinator", "universal")
+                        .expect("coordinator domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new("nativeamxparticipant", "test-dataspace-7")
+                        .expect("participant domain id"),
+                ))),
+            ],
+            Metadata::default(),
+        );
+        register_test_authority(&mut state, &authority);
+        let plan = queue
+            .route_plan_for_gossip_with_state(&transaction, &state)
+            .expect("derive exact current Native AMX reservation plan");
+        let RoutingPlan::NativeAmx(native_plan) = &plan else {
+            panic!("mixed-dataspace reservation transaction must use Native AMX");
+        };
+        assert_eq!(native_plan.coordinator.route, coordinator);
+        assert!(
+            native_plan
+                .participants
+                .iter()
+                .any(|leg| leg.route == participant),
+            "Native AMX reservation plan must retain the participant lane"
+        );
         let admission_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture Native AMX admission context");

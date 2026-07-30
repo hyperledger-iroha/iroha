@@ -15,8 +15,8 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 ] }
 
 [dependencies]
-iroha_data_model.workspace = true
-norito = {workspace = true}
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 [features]
 default = []

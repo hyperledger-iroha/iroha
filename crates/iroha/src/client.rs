@@ -42,7 +42,6 @@ use iroha_data_model::{
     da::{
         commitment::{DaCommitmentProof, DaProofPolicyBundle},
         ingest::{DaIngestReceipt, DaIngestRequest},
-        manifest::DaManifestV1,
         pin_intent::DaPinIntentWithLocation,
         types::{BlobDigest, ExtraMetadata},
     },

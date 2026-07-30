@@ -14,6 +14,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+BUNDLED_VERIFIER = SCRIPT_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py"
+
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_RELOAD_LATENCY_MS,
@@ -137,7 +139,11 @@ def evidence_paths_by_kind(args: argparse.Namespace) -> dict[str, list[Path]]:
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
-    errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    errors = validate_runner_preflight(
+        args,
+        summary_filename="rollout-summary.json",
+        bundled_verifier=BUNDLED_VERIFIER,
+    )
     seen_input_files: dict[Path, tuple[str, Path]] = {}
     paths_by_kind = evidence_paths_by_kind(args)
     for kind in args.required_kinds:
@@ -175,7 +181,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
 def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     summary_out = args.summary_out or args.out_dir / "rollout-summary.json"
-    verifier_command = [sys.executable, str(args.verifier)]
+    verifier_command = [sys.executable, str(BUNDLED_VERIFIER)]
     for paths in evidence_paths_by_kind(args).values():
         for path in paths:
             verifier_command.extend(["--evidence", str(path)])
@@ -303,7 +309,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--verifier",
         type=Path,
-        default=SCRIPT_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py",
+        default=BUNDLED_VERIFIER,
+        help="Bundled rollout evidence verifier path; substitutions are rejected.",
     )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--summary-out", type=Path)

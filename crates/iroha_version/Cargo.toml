@@ -20,7 +20,7 @@ derive = ["iroha_version_derive"]
 json = ["norito/json"]
 
 [dependencies]
-norito = {workspace = true}
+norito = {workspace = true, default-features = false }
 iroha_version_derive = { path = "../iroha_version_derive", default-features = false, optional = true }
 
 iroha_macro = { workspace = true }

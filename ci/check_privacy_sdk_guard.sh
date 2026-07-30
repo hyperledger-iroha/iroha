@@ -1238,7 +1238,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
     )
 
     js_source = read("javascript/iroha_js/src/privacyCapabilities.js", overrides)
-    js_dist = read("javascript/iroha_js/dist/privacyCapabilities.js", overrides)
     py_catalog = read(
         "python/iroha_python/src/iroha_python/privacy_catalog.py", overrides
     )
@@ -1343,11 +1342,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
         errors,
     )
     require(
-        js_protocol_ids(js_dist) == EXPECTED_IDS,
-        "JavaScript dist capability registry must contain the exact 12 IDs in order",
-        errors,
-    )
-    require(
         tuple(literal_assignment(py_catalog, "PRIVACY_PROTOCOL_IDS_V1"))
         == EXPECTED_IDS,
         "Python capability registry must contain the exact 12 IDs in order",
@@ -1381,27 +1375,10 @@ def check(overrides: dict[str, str] | None = None) -> None:
     ):
         require(marker in py_catalog, f"Python strict parser lost {marker}", errors)
 
-    require(
-        read("javascript/iroha_js/src/privacyCapabilities.js", overrides)
-        == read("javascript/iroha_js/dist/privacyCapabilities.js", overrides),
-        "JavaScript capability source and dist must be byte-identical",
-        errors,
-    )
-    for name in ("index.js", "crypto.js", "crypto.browser.js"):
-        require(
-            read(f"javascript/iroha_js/src/{name}", overrides)
-            == read(f"javascript/iroha_js/dist/{name}", overrides),
-            f"JavaScript {name} source and dist must be byte-identical",
-            errors,
-        )
-
     public_files = (
         "javascript/iroha_js/src/index.js",
         "javascript/iroha_js/src/crypto.js",
         "javascript/iroha_js/src/crypto.browser.js",
-        "javascript/iroha_js/dist/index.js",
-        "javascript/iroha_js/dist/crypto.js",
-        "javascript/iroha_js/dist/crypto.browser.js",
         "javascript/iroha_js/index.d.ts",
         "python/iroha_python/src/iroha_python/__init__.py",
         "python/iroha_python/src/iroha_python/crypto.py",
@@ -1570,7 +1547,6 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     for relative in (
         "javascript/iroha_js/src/privacyCapabilities.js",
-        "javascript/iroha_js/dist/privacyCapabilities.js",
         "python/iroha_python/src/iroha_python/privacy_catalog.py",
     ):
         source = read(relative, overrides)
@@ -1609,8 +1585,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         errors,
     )
     require(
-        not (root / "javascript/iroha_js/src/privacyAlgorithms.js").exists()
-        and not (root / "javascript/iroha_js/dist/privacyAlgorithms.js").exists(),
+        not (root / "javascript/iroha_js/src/privacyAlgorithms.js").exists(),
         "retired JavaScript editorial privacy catalog must remain deleted",
         errors,
     )

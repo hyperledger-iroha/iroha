@@ -17462,10 +17462,10 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 277
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 278
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 280
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 281
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "9ac5508323573c9dfc6e4e6f219befd13a62ef59e8c611e6374f5706145b61fd"
+    "b8f15e29a9d3176413c6696393f3b7209f1e88f08cfc74b182f93b6685283462"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -31364,9 +31364,10 @@ def _application_completion_source_fidelity_errors(
                 )
             repeated = [
                 dependency
-                for dependency, offsets in zip(
-                    dependencies, dependency_positions, strict=True
-                )
+                # `dependency_positions` is constructed directly from the
+                # fixed `dependencies` tuple above, so the lengths are equal.
+                # Plain zip keeps this release checker on its Python 3.9 floor.
+                for dependency, offsets in zip(dependencies, dependency_positions)
                 if len(offsets) != 1
             ]
             if repeated:
@@ -31540,9 +31541,10 @@ def _application_completion_source_fidelity_errors(
             )
         repeated = [
             dependency
-            for dependency, offsets in zip(
-                dependencies, dependency_positions, strict=True
-            )
+            # `dependency_positions` is constructed directly from the
+            # fixed `dependencies` tuple above, so the lengths are equal.
+            # Plain zip keeps this release checker on its Python 3.9 floor.
+            for dependency, offsets in zip(dependencies, dependency_positions)
             if len(offsets) != 1
         ]
         if repeated:

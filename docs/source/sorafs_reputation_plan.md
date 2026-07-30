@@ -485,16 +485,13 @@ publication authority.
     and exact finalized cursor—before opening the reputation checkpoint. This
     closes bootstrap response admission.
   - Open under `V1-BLOCK-REPUTATION-RUNTIME-01`:
-    deployment-owned implementations behind broker slot 32
-    (`ReputationJournalTransactionSubmitterV1`), slot 33
-    (`ReputationThresholdSignerClientV1`), and slot 34
-    (`ReputationGovernanceDagClientV1`); concrete stream-token callback-owner
-    wiring; genuine qualification of the configured PoR replay archive and HSM
-    signer; current DAG head/inclusion proof;
-    integrated Rust validation; and reviewed four-peer rotation, recovery,
-    retry, and failover evidence remain outstanding. No ledger page,
-    credential, signature, or acknowledgement may be synthesized as a
-    fallback.
+    `ReputationThresholdSignerClientV1` and
+    `ReputationGovernanceDagClientV1` adapters; concrete stream-token
+    callback-owner wiring; genuine qualification of the configured PoR replay
+    archive and HSM signer; current DAG head/inclusion proof; integrated Rust
+    validation; and reviewed four-peer rotation, recovery, retry, and failover
+    evidence remain outstanding. No ledger page, credential, signature, or
+    acknowledgement may be synthesized as a fallback.
 - REST endpoints:
   - Removed: the local-authoritative `POST /v1/sorafs/reputation/latest`
     descriptor, router mount, handler, and OpenAPI operation. Signed publication

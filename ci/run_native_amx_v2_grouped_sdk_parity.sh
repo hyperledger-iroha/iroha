@@ -20,7 +20,6 @@ readonly source_paths=(
   python/iroha_torii_client/native_amx.py
   javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js
   javascript/iroha_js/src/toriiClient.js
-  javascript/iroha_js/dist/toriiClient.js
   javascript/iroha_js/index.d.ts
   javascript/iroha_js/package.json
   javascript/iroha_js/package-lock.json

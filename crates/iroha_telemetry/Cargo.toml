@@ -26,14 +26,14 @@ otel-exporter = [
 ]
 
 [dependencies]
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_telemetry_derive = { path = "../iroha_telemetry_derive" }
 
 iroha_config = { workspace = true }
 iroha_logger = { workspace = true }
 iroha_futures = { workspace = true, features = ["telemetry"] }
 iroha_schema = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 
 async-trait = { workspace = true }
 chrono = "0.4.38"

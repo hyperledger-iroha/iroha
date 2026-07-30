@@ -4,12 +4,13 @@ EXTENDS Naturals, FiniteSets
 (***************************************************************************
 Finite safety kernel for the first-release, in-flight lane carrier path.
 
-`LaneExecutablePayloadV3` is represented by `payloadBinding`: each validator
-holds the *preimage* of the selected `QueuePlanAdmissionBindingV2`, not only a
-digest.  `QueuePlanV5` and reservation V9 are separate durable facts.  The
-only forward order is
+The accepted schema V2 carried by the Rust `LaneExecutablePayloadV1`
+container is represented by `payloadBinding`: each validator holds the
+*preimage* of the selected `QueuePlanAdmissionBindingV2`, not only a digest.
+QueuePlan journal V4 and reservation journal V5 are separate durable facts.
+The only forward order is
 
- QueuePlanV5 PutBatch -> V9 reservation fsync -> Kura Active ->
+ QueuePlan journal V4 PutBatch -> reservation journal V5 fsync -> Kura Active ->
  execution-input durability -> READY.
 
 The model has a producer and two independently crashing replicated carriers.
@@ -55,9 +56,9 @@ VARIABLES
   \* @type: Str -> Str;
   payloadBinding,
   \* @type: Bool;
-  queuePlanV5,
+  queuePlanV4,
   \* @type: Bool;
-  reservationV9,
+  reservationV5,
   \* @type: Set(Str);
   kuraActive,
   \* @type: Set(Str);
@@ -71,9 +72,9 @@ VARIABLES
   \* @type: Bool;
   producerAlive,
   \* @type: Bool;
-  everQueuePlanV5,
+  everQueuePlanV4,
   \* @type: Bool;
-  everReservationV9,
+  everReservationV5,
   \* @type: Set(Str);
   everInputDurable,
   \* @type: Str;
@@ -92,9 +93,9 @@ VARIABLES
   appliedBy
 
 vars ==
-  <<ownership, payloadBinding, queuePlanV5, reservationV9, kuraActive,
-    inputDurable, ready, bodies, crashed, producerAlive, everQueuePlanV5,
-    everReservationV9, everInputDurable, commitScope, releaseScope,
+  <<ownership, payloadBinding, queuePlanV4, reservationV5, kuraActive,
+    inputDurable, ready, bodies, crashed, producerAlive, everQueuePlanV4,
+    everReservationV5, everInputDurable, commitScope, releaseScope,
     commitOwner, releaseOwner, applicationCount, appliedBy, selectedCount>>
 
 Init ==
@@ -102,16 +103,16 @@ Init ==
   /\ ownership = [p \in Validators |->
        IF p = Producer THEN "ProducerSelected" ELSE "ReplicatedCarrier"]
   /\ payloadBinding = [p \in Validators |-> BindingA]
-  /\ queuePlanV5 = FALSE
-  /\ reservationV9 = FALSE
+  /\ queuePlanV4 = FALSE
+  /\ reservationV5 = FALSE
   /\ kuraActive = {}
   /\ inputDurable = {}
   /\ ready = {}
   /\ bodies = {Producer}
   /\ crashed = {}
   /\ producerAlive = TRUE
-  /\ everQueuePlanV5 = FALSE
-  /\ everReservationV9 = FALSE
+  /\ everQueuePlanV4 = FALSE
+  /\ everReservationV5 = FALSE
   /\ everInputDurable = {}
   /\ commitScope = "None"
   /\ releaseScope = "None"
@@ -121,48 +122,48 @@ Init ==
   /\ appliedBy = "None"
   /\ selectedCount = 1
 
-PutBatchV5 ==
-  /\ ~queuePlanV5
-  /\ queuePlanV5' = TRUE
-  /\ everQueuePlanV5' = TRUE
+PutBatchV4 ==
+  /\ ~queuePlanV4
+  /\ queuePlanV4' = TRUE
+  /\ everQueuePlanV4' = TRUE
   /\ selectedCount' = IF Mode = "OversizePutBatch" THEN 4097 ELSE selectedCount
-  /\ UNCHANGED <<ownership, payloadBinding, reservationV9, kuraActive,
+  /\ UNCHANGED <<ownership, payloadBinding, reservationV5, kuraActive,
                  inputDurable, ready, bodies, crashed, producerAlive,
-                 everReservationV9, everInputDurable, commitScope,
+                 everReservationV5, everInputDurable, commitScope,
                  releaseScope, commitOwner, releaseOwner, applicationCount,
                  appliedBy>>
 
-FsyncReservationV9 ==
-  /\ ~reservationV9
-  /\ (queuePlanV5 \/ Mode = "ReservationBeforePutBatch")
-  /\ reservationV9' = TRUE
-  /\ everReservationV9' = TRUE
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, kuraActive,
+FsyncReservationV5 ==
+  /\ ~reservationV5
+  /\ (queuePlanV4 \/ Mode = "ReservationBeforePutBatch")
+  /\ reservationV5' = TRUE
+  /\ everReservationV5' = TRUE
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, kuraActive,
                  inputDurable, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everInputDurable, commitScope,
+                 everQueuePlanV4, everInputDurable, commitScope,
                  releaseScope, commitOwner, releaseOwner, applicationCount,
                  appliedBy, selectedCount>>
 
 ActivateKura(p) ==
   /\ p \in Validators
   /\ p \notin crashed
-  /\ (reservationV9 \/ Mode = "KuraBeforeReservation")
+  /\ (reservationV5 \/ Mode = "KuraBeforeReservation")
   /\ kuraActive' = kuraActive \union {p}
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  inputDurable, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
 FanoutFromProducer(p) ==
   /\ p \in Validators \ {Producer}
   /\ producerAlive
-  /\ reservationV9
+  /\ reservationV5
   /\ p \notin crashed
   /\ bodies' = bodies \union {p}
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, ready, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
@@ -173,9 +174,9 @@ ServeLateBody(source, target) ==
   /\ source \in bodies
   /\ target \notin crashed
   /\ bodies' = bodies \union {target}
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, ready, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
@@ -185,9 +186,9 @@ PersistExecutionInput(p) ==
   /\ p \notin crashed
   /\ inputDurable' = inputDurable \union {p}
   /\ everInputDurable' = everInputDurable \union {p}
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, commitScope,
+                 everQueuePlanV4, everReservationV5, commitScope,
                  releaseScope, commitOwner, releaseOwner, applicationCount,
                  appliedBy, selectedCount>>
 
@@ -196,9 +197,9 @@ MarkReady(p) ==
   /\ p \notin crashed
   /\ (p \in inputDurable \/ Mode = "ReadyBeforeInput")
   /\ ready' = ready \union {p}
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
@@ -208,21 +209,21 @@ Crash(p) ==
   /\ crashed' = crashed \union {p}
   /\ ready' = ready \ {p}
   /\ producerAlive' = IF p = Producer THEN FALSE ELSE producerAlive
-  /\ IF Mode = "CrashDropsDurable" /\ p = Producer /\ queuePlanV5
-     THEN /\ queuePlanV5' = FALSE
-          /\ reservationV9' = FALSE
-     ELSE /\ UNCHANGED <<queuePlanV5, reservationV9>>
+  /\ IF Mode = "CrashDropsDurable" /\ p = Producer /\ queuePlanV4
+     THEN /\ queuePlanV4' = FALSE
+          /\ reservationV5' = FALSE
+     ELSE /\ UNCHANGED <<queuePlanV4, reservationV5>>
   /\ UNCHANGED <<ownership, payloadBinding, kuraActive, inputDurable, bodies,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
 Recover(p) ==
   /\ p \in crashed
   /\ crashed' = crashed \ {p}
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, ready, bodies, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
@@ -233,9 +234,9 @@ Commit(p) ==
   /\ payloadBinding[p] = BindingA
   /\ commitOwner' = p
   /\ commitScope' = IF Mode = "CommitScopeConflict" THEN BindingB ELSE BindingA
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  releaseScope, releaseOwner, applicationCount, appliedBy,
                  selectedCount>>
 
@@ -245,9 +246,9 @@ ApplyCarrier(p) ==
   /\ (applicationCount = 0 \/ Mode = "DuplicateApply")
   /\ applicationCount' = applicationCount + 1
   /\ appliedBy' = p
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  selectedCount>>
 
@@ -259,9 +260,9 @@ Release(p) ==
   /\ payloadBinding[p] = BindingA
   /\ releaseOwner' = p
   /\ releaseScope' = IF Mode = "ReleaseScopeConflict" THEN BindingB ELSE BindingA
-  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV5, reservationV9,
+  /\ UNCHANGED <<ownership, payloadBinding, queuePlanV4, reservationV5,
                  kuraActive, inputDurable, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, commitOwner, applicationCount, appliedBy,
                  selectedCount>>
 
@@ -269,15 +270,15 @@ ConflictingPayloadBindingMutation ==
   /\ Mode = "PayloadBindingConflict"
   /\ payloadBinding[ReplicaTwo] = BindingA
   /\ payloadBinding' = [payloadBinding EXCEPT ![ReplicaTwo] = BindingB]
-  /\ UNCHANGED <<ownership, queuePlanV5, reservationV9, kuraActive,
+  /\ UNCHANGED <<ownership, queuePlanV4, reservationV5, kuraActive,
                  inputDurable, ready, bodies, crashed, producerAlive,
-                 everQueuePlanV5, everReservationV9, everInputDurable,
+                 everQueuePlanV4, everReservationV5, everInputDurable,
                  commitScope, releaseScope, commitOwner, releaseOwner,
                  applicationCount, appliedBy, selectedCount>>
 
 Next ==
-  \/ PutBatchV5
-  \/ FsyncReservationV9
+  \/ PutBatchV4
+  \/ FsyncReservationV5
   \/ \E p \in Validators: ActivateKura(p)
   \/ \E p \in Validators \ {Producer}: FanoutFromProducer(p)
   \/ \E source \in Validators, target \in Validators: ServeLateBody(source, target)
@@ -308,21 +309,21 @@ FirstReleaseTypeInvariant ==
   /\ appliedBy \in OptionalValidator
   /\ selectedCount \in Nat
 
-MLPayloadV3CarriesExactAdmissionPreimage ==
+MLPayloadSchemaV2CarriesExactAdmissionPreimage ==
   \A p \in Validators: payloadBinding[p] = BindingA
 
 MLValidatorCarrierOwnership ==
   /\ ownership[Producer] = "ProducerSelected"
   /\ \A p \in Validators \ {Producer}: ownership[p] = "ReplicatedCarrier"
 
-MLPutBatchV5BeforeReservationV9 == reservationV9 => queuePlanV5
-MLReservationV9BeforeKuraActive == kuraActive # {} => reservationV9
+MLPutBatchV4BeforeReservationV5 == reservationV5 => queuePlanV4
+MLReservationV5BeforeKuraActive == kuraActive # {} => reservationV5
 MLKuraActiveBeforeExecutionInput == inputDurable \subseteq kuraActive
 MLExecutionInputBeforeReady == ready \subseteq inputDurable
 
 MLCrashPrefixLossFree ==
-  /\ everQueuePlanV5 => queuePlanV5
-  /\ everReservationV9 => reservationV9
+  /\ everQueuePlanV4 => queuePlanV4
+  /\ everReservationV5 => reservationV5
   /\ everInputDurable \subseteq inputDurable
 
 MLCommitAndReleaseRetainExactScope ==
@@ -337,20 +338,20 @@ MLExactlyOnceCarrierApplication ==
        /\ commitScope = BindingA
        /\ appliedBy \in inputDurable
 
-MLQueuePlanPutBatchBound4096 == selectedCount <= 4096
+MLQueuePlanV4PutBatchBound4096 == selectedCount <= 4096
 
 InFlightFirstReleaseSafetyInvariant ==
   /\ FirstReleaseTypeInvariant
-  /\ MLPayloadV3CarriesExactAdmissionPreimage
+  /\ MLPayloadSchemaV2CarriesExactAdmissionPreimage
   /\ MLValidatorCarrierOwnership
-  /\ MLPutBatchV5BeforeReservationV9
-  /\ MLReservationV9BeforeKuraActive
+  /\ MLPutBatchV4BeforeReservationV5
+  /\ MLReservationV5BeforeKuraActive
   /\ MLKuraActiveBeforeExecutionInput
   /\ MLExecutionInputBeforeReady
   /\ MLCrashPrefixLossFree
   /\ MLCommitAndReleaseRetainExactScope
   /\ MLExactlyOnceCarrierApplication
-  /\ MLQueuePlanPutBatchBound4096
+  /\ MLQueuePlanV4PutBatchBound4096
 
 InFlightFirstReleaseSpec == Init /\ [][Next]_vars
 

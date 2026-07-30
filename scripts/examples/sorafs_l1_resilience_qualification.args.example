@@ -1,0 +1,21 @@
+# Template only. Replace every path, deployment value, timestamp, artifact
+# digest, and topology binding with one real qualification capture. Without an
+# externally authenticated receipt this command can only emit a local,
+# configuration-qualified, non-promotable summary.
+
+--receipt
+artifacts/sorafs/production-readiness/l1-resilience/resilience-receipt.json
+--artifact-root
+artifacts/sorafs/production-readiness/l1-resilience
+--topology-qualification-summary
+artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--deployment-id
+sorafs-mainnet-2026-07
+--environment
+production
+--now-unix
+1800900000
+--max-evidence-age-secs
+86400
+--summary-out
+artifacts/sorafs/production-readiness/l1-resilience-qualification.json

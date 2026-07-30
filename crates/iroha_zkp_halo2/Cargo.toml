@@ -14,7 +14,7 @@ path = "src/lib.rs"
 [dependencies]
 tiny-keccak = { workspace = true }
 thiserror = { workspace = true, default-features = false }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_schema = { workspace = true, optional = true }
 halo2curves = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }

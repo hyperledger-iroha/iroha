@@ -1951,7 +1951,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "jar_sha256\t"
                 "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a",
                 f"source_manifest_sha256\t{sealed_manifest}",
-                "result_count\t4",
+                "result_count\t5",
                 "result\tautoscale-lifecycle\tSumeragiV2AutoscaleLifecycle\t"
                 "multilane_autoscale_lifecycle_fixed.cfg\t8\tNoError\t"
                 f"{'1' * 64}\t{'2' * 64}\t{'3' * 64}",
@@ -1967,6 +1967,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "SumeragiV2QueuePlanAdmissionRegistry\t"
                 "multilane_queue_plan_admission_registry_fixed.cfg\t8\tNoError\t"
                 f"{'a' * 64}\t{'b' * 64}\t{'c' * 64}",
+                "result\tinflight-first-release-layout\t"
+                "SumeragiV2InFlightFirstRelease\t"
+                "inflight_first_release_fixed.cfg\t10\tNoError\t"
+                f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
             )
         )
         + "\n",
@@ -3959,10 +3963,9 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
     completion = evidence["formal_completion"]
     assert isinstance(apalache, Path)
     assert isinstance(completion, Path)
+    canonical = apalache.read_text(encoding="utf-8")
     apalache.write_text(
-        apalache.read_text(encoding="utf-8").replace(
-            "result_count\t4", "result_count\t3", 1
-        ),
+        canonical.replace("result_count\t5", "result_count\t4", 1),
         encoding="utf-8",
     )
     fields = dict(
@@ -3977,6 +3980,21 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
 
     assert result.returncode == 1
     assert "Apalache evidence header is not the exact pinned profile" in result.stderr
+
+    apalache.write_text(
+        canonical.replace(
+            "result\tinflight-first-release-layout\t",
+            "result\tinflight-first-release-refinement\t",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    fields["multilane_apalache_evidence_sha256"] = sha256(apalache)
+    write_tsv(completion, fields)
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "is not exact source-bound NoError evidence" in result.stderr
 
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:

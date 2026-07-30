@@ -5741,7 +5741,7 @@ fn make_panel_notification_capacity(
     additional: usize,
     limit: usize,
 ) -> Result<(), ModerationOrchestratorError> {
-    // TODO: Permit bounded pruning only after an authenticated signed archive
+    // Bounded pruning remains disabled unless an authenticated signed archive
     // durably installs and reads back every terminal notification receipt.
     if state.panel_notifications.len().saturating_add(additional) > limit {
         return Err(ModerationOrchestratorError::ResourceExhausted {

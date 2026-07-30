@@ -18,9 +18,12 @@ categories = ["cryptography::cryptocurrencies"]
 docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kagami"]
 
 [workspace.dependencies]
-iroha_core = { path = "crates/iroha_core" }
+# Internal dependency features are selected by the consuming crate. Keeping the
+# workspace declarations feature-free prevents focused builds from inheriting a
+# node-sized graph (or test-only features) accidentally.
+iroha_core = { path = "crates/iroha_core", default-features = false }
 
-iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "zk-stark", "ipa-commitment"] }
+iroha_torii = { path = "crates/iroha_torii", default-features = false }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
 iroha = { path = "crates/iroha" }
@@ -36,12 +39,12 @@ iroha_derive_primitives = { path = "crates/iroha_derive_primitives" }
 iroha_schema_gen = { path = "crates/iroha_schema_gen" }
 iroha_schema = { path = "crates/iroha_schema", default-features = false }
 iroha_logger = { path = "crates/iroha_logger" }
-iroha_crypto = { path = "crates/iroha_crypto", default-features = false, features = ["std", "rand", "bls", "bls-multi-pairing"] }
+iroha_crypto = { path = "crates/iroha_crypto", default-features = false }
 iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
 iroha_genesis = { path = "crates/iroha_genesis" }
 iroha_sccp = { path = "crates/iroha_sccp" }
-norito = { path = "crates/norito", features = ["json", "json-std-io", "strict-safe", "gpu-compression"] }
+norito = { path = "crates/norito", default-features = false }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
 iroha_version = { path = "crates/iroha_version", default-features = false, features = ["json"] }
@@ -57,15 +60,14 @@ iroha_smart_contract_codec = { path = "crates/iroha_smart_contract_codec" }
 iroha_trigger = { path = "crates/iroha_trigger" }
 iroha_trigger_derive = { path = "crates/iroha_trigger_derive" }
 
-# Keep the workspace-inherited data-model surface lean. Crates that need
-# governance, HTTP, bridge, BLS, or transparent APIs must request them locally so
-# focused builds do not accidentally compile the broadest model shape.
-iroha_data_model = { path = "crates/iroha_data_model", default-features = false, features = ["json"] }
+# Crates that need JSON, governance, HTTP, bridge, BLS, or transparent APIs
+# request them locally so focused builds do not compile the broadest model.
+iroha_data_model = { path = "crates/iroha_data_model", default-features = false }
 iroha_executor_data_model = { path = "crates/iroha_executor_data_model" }
 
 iroha_test_network = { path = "crates/iroha_test_network" }
 iroha_test_samples = { path = "crates/iroha_test_samples" }
-ivm = { path = "crates/ivm" }
+ivm = { path = "crates/ivm", default-features = false }
 ivm_abi = { path = "crates/ivm_abi" }
 kotodama_lang = { path = "crates/kotodama_lang" }
 sorafs_car = { path = "crates/sorafs_car" }
@@ -176,8 +178,6 @@ halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
 wayland-scanner = { path = "vendor/wayland-scanner-0.31.10" }
 #streebog = { path = "vendor/streebog" }
-#opus = { path = "vendor/opus_stub" }
-#icrate = { path = "vendor/icrate" }
 
 # The pinned 0.5.3 release does not adapt Pasta fields to halo2-base's local
 # ScalarField trait. Keep this source-scoped so no crates.io package can be

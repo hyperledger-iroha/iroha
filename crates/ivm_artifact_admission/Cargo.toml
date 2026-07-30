@@ -16,7 +16,7 @@ iroha_crypto = { path = "../iroha_crypto", default-features = false, features = 
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
 ivm_abi = { path = "../ivm_abi" }
 kotodama_lang = { path = "../kotodama_lang" }
-norito = { path = "../norito" }
+norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `ivm_abi` reaches getrandom 0.2 through the data-model crypto surface. The

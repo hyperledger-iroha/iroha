@@ -22,8 +22,8 @@ iroha_executor_data_model.workspace = true
 iroha_smart_contract_utils.workspace = true
 iroha_smart_contract.workspace = true
 iroha_schema.workspace = true
-iroha_crypto.workspace = true
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_smart_contract_codec.workspace = true
-iroha_data_model = { workspace = true, features = ["governance", "transparent_api"] }
+iroha_data_model = { workspace = true, features = ["application-model", "transparent_api"], default-features = false }
 
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }

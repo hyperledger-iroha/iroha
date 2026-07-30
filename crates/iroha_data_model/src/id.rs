@@ -389,8 +389,10 @@ mod tests {
             "bidi\u{202e}".to_owned(),
             "x".repeat(MAX_CHAIN_ID_BYTES + 1),
         ] {
-            let forged = ChainId(invalid.clone().into());
-            let encoded = forged.encode();
+            // `ChainId` has the same transparent wire layout as `String`.
+            // Encode the invalid representation directly so the public
+            // constructor remains the only way to create a `ChainId`.
+            let encoded = invalid.encode();
             let mut cursor = encoded.as_slice();
             assert!(
                 ChainId::decode(&mut cursor).is_err(),
@@ -400,7 +402,9 @@ mod tests {
                 ChainId::decode_from_slice(&encoded).is_err(),
                 "slice decoder accepted invalid ChainId: {invalid:?}"
             );
-            let framed = norito::to_bytes(&forged).expect("encode forged ChainId fixture");
+            let (payload, flags) = norito::codec::encode_with_header_flags(&invalid);
+            let framed = norito::core::frame_bare_with_header_flags::<ChainId>(&payload, flags)
+                .expect("frame invalid transparent ChainId fixture");
             assert!(
                 norito::decode_from_bytes::<ChainId>(&framed).is_err(),
                 "framed decoder accepted invalid ChainId: {invalid:?}"

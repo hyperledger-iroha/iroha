@@ -30,10 +30,10 @@ trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_schema = { workspace = true }
 derive_more = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
 
 [[bench]]
 name = "expansion"

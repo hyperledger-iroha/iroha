@@ -21,8 +21,8 @@ egui_plot = { version = "0.34.0", optional = true }
 tokio = { workspace = true, features = ["signal"] }
 toml = { workspace = true }
 hex = { workspace = true }
-norito = { workspace = true }
-iroha_data_model = { path = "../../crates/iroha_data_model" }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
+iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_executor_data_model = { path = "../../crates/iroha_executor_data_model" }
 
 [dev-dependencies]

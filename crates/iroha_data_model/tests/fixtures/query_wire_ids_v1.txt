@@ -1,0 +1,17 @@
+ErasedIterQuery<CommittedTransaction>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::query::model::CommittedTransaction>
+ErasedIterQuery<crate::account::Account>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::account::model::Account>
+ErasedIterQuery<crate::asset::definition::AssetDefinition>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::definition::model::AssetDefinition>
+ErasedIterQuery<crate::asset::value::Asset>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::value::model::Asset>
+ErasedIterQuery<crate::block::BlockHeader>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::header::model::BlockHeader>
+ErasedIterQuery<crate::block::SignedBlock>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::model::SignedBlock>
+ErasedIterQuery<crate::domain::Domain>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>
+ErasedIterQuery<crate::nexus::FeeSponsorProgram>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgram>
+ErasedIterQuery<crate::nexus::FeeSponsorProgramId>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramId>
+ErasedIterQuery<crate::nft::Nft>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::nft::model::Nft>
+ErasedIterQuery<crate::peer::PeerId>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::peer::model::PeerId>
+ErasedIterQuery<crate::proof::ProofRecord>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::proof::ProofRecord>
+ErasedIterQuery<crate::repo::RepoAgreement>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::repo::RepoAgreement>
+ErasedIterQuery<crate::role::Role>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::model::Role>
+ErasedIterQuery<crate::role::RoleId>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::model::RoleId>
+ErasedIterQuery<crate::trigger::Trigger>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::model::model::Trigger>
+ErasedIterQuery<crate::trigger::TriggerId>	iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::model::model::TriggerId>

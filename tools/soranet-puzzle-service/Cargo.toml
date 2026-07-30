@@ -11,8 +11,8 @@ axum = { workspace = true, features = ["tokio", "http1"] }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 color-eyre = { workspace = true }
-iroha_crypto = { workspace = true }
-norito = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 rand = { workspace = true }
 soranet-relay = { path = "../soranet-relay" }
 soranet_pq = { workspace = true }

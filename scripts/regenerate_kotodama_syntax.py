@@ -34,10 +34,7 @@ GRAMMAR_DOC_PATH = Path("docs/source/kotodama_grammar.md")
 TEXTMATE_PATH = Path(
     "tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json"
 )
-JAVASCRIPT_PATHS = (
-    Path("javascript/iroha_js/src/numericV1.js"),
-    Path("javascript/iroha_js/dist/numericV1.js"),
-)
+JAVASCRIPT_PATHS = (Path("javascript/iroha_js/src/numericV1.js"),)
 TYPESCRIPT_PATH = Path("javascript/iroha_js/index.d.ts")
 PYTHON_PATH = Path("python/iroha_python/src/iroha_python/numeric_v1.py")
 KOTLIN_PATH = Path(
@@ -50,7 +47,6 @@ SWIFT_PATH = Path("IrohaSwift/Sources/IrohaSwift/NumericV1.swift")
 CSHARP_PATH = Path("csharp/src/Hyperledger.Iroha.Sdk/Numeric/NumericV1.cs")
 JAVASCRIPT_IDENTIFIER_PATHS = (
     Path("javascript/iroha_js/src/kotodamaIdentifiers.js"),
-    Path("javascript/iroha_js/dist/kotodamaIdentifiers.js"),
 )
 PYTHON_MANIFEST_PATH = Path("python/iroha_python/src/iroha_python/client.py")
 KOTLIN_MANIFEST_PATH = Path(

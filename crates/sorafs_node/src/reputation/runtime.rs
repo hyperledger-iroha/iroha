@@ -3119,14 +3119,14 @@ impl ReputationJournalProducerOutboxV1 {
         context: &StreamTokenValidationRequestContextV1,
         validation: StreamTokenCountedValidationV1,
     ) -> Result<ReputationJournalEnqueueOutcomeV1, ReputationRuntimeError> {
-        // TODO: this is a non-deployed local sequencing foundation. Before any
-        // Torii capture is wired, bind a qualified policy-pinned gateway
-        // adapter, fence the checkpoint with deployment-owned sealed CAS,
-        // replace full-checkpoint synchronous rewrites with an efficient
-        // ordered outbox, and make quota admission transactional and durable
-        // with the journal row.
-        // TODO: define chain-authoritative cross-gateway/global request-context
-        // deduplication before any dual-gateway deployment capture is enabled.
+        // This test-only local sequencing foundation is not deployed. Torii
+        // capture remains disabled until a qualified policy-pinned gateway
+        // adapter is bound, deployment-owned sealed CAS fences the checkpoint,
+        // an efficient ordered outbox replaces full-checkpoint synchronous
+        // rewrites, and quota admission is transactional and durable with the
+        // journal row. Dual-gateway deployment capture also remains disabled
+        // until request-context deduplication is chain-authoritative across
+        // gateways.
         if !validation.status.counts_for_provider() {
             return Err(ReputationRuntimeError::InvalidJournalEntry);
         }
@@ -3161,10 +3161,10 @@ impl ReputationJournalProducerOutboxV1 {
                 Err(ReputationRuntimeError::JournalSourceConflict)
             };
         }
-        // TODO: the replay suffix is deliberately bounded by the dedicated
-        // counted-token admission cap.
-        // Deployment-owned archival replay lookup is required before claiming
-        // indefinite idempotency after this local suffix compacts.
+        // The replay suffix is deliberately bounded by the dedicated
+        // counted-token admission cap. Deployment-owned archival replay lookup
+        // remains required before indefinite idempotency can be claimed after
+        // this local suffix compacts.
         let gateway_sequence = match state
             .checkpoint
             .stream_token_gateway_heads

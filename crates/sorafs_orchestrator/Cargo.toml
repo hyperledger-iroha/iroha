@@ -26,20 +26,20 @@ local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 
 [dependencies]
 sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
-norito = { path = "../norito", features = ["json", "derive"] }
+norito = { path = "../norito", features = ["node-codec"], default-features = false }
 prost = "0.14.3"
 thiserror = "2.0.17"
 rust_decimal = { workspace = true }
 iroha_telemetry = { path = "../iroha_telemetry" }
 iroha_logger = { path = "../iroha_logger" }
-iroha_data_model = { path = "../iroha_data_model" }
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["application-model"] }
 iroha_primitives = { path = "../iroha_primitives" }
-iroha_core = { path = "../iroha_core" }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["node"] }
 blake3 = "1.8.2"
 hex = { workspace = true }
 base64 = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
-ivm = { path = "../ivm" }
+ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
 tonic = { version = "0.14.6", features = ["transport"] }
@@ -54,7 +54,7 @@ url = { workspace = true }
 iroha_version = { path = "../iroha_version" }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", optional = true }
-iroha_crypto = { path = "../iroha_crypto", optional = true }
+iroha_crypto = { path = "../iroha_crypto", optional = true, default-features = false, features = ["application"] }
 iroha_config = { path = "../iroha_config", optional = true }
 toml = { workspace = true, optional = true }
 
@@ -66,7 +66,7 @@ blake3 = "1.8.2"
 assert_cmd = "2.1.1"
 httpmock = "0.8.2"
 sorafs_manifest = { path = "../sorafs_manifest" }
-iroha_crypto = { path = "../iroha_crypto" }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["application"] }
 soranet_pq = { path = "../soranet_pq" }
 
 [[bin]]

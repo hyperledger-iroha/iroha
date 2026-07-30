@@ -65,7 +65,6 @@ required_paths = (
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
     "javascript/iroha_js/src/toriiClient.js",
-    "javascript/iroha_js/dist/toriiClient.js",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/test/toriiClient.test.js",
     "javascript/iroha_js/test/sorafsPinRegisterSdkGuard.test.js",
@@ -605,10 +604,7 @@ def check_rust_wire_contract():
 
 
 def check_javascript_contract():
-    for path in (
-        "javascript/iroha_js/src/toriiClient.js",
-        "javascript/iroha_js/dist/toriiClient.js",
-    ):
+    for path in ("javascript/iroha_js/src/toriiClient.js",):
         source = read(path)
         match = re.search(
             r"async registerSorafsPinManifest\(signedTransaction, options = \{\}\).*?(?=\n  /\*\*)",
@@ -633,10 +629,7 @@ def check_javascript_contract():
             f"{path} retains the secret-bearing request builder",
         )
 
-    for path in (
-        "javascript/iroha_js/src/transaction.js",
-        "javascript/iroha_js/dist/transaction.js",
-    ):
+    for path in ("javascript/iroha_js/src/transaction.js",):
         require_contains(path, "buildRegisterPinManifestInstruction", "local typed instruction builder")
         require_contains(path, "buildRegisterPinManifestTransaction", "local quote-and-sign builder")
         require_contains(path, "instructions: [instruction]", "exactly-one instruction assembly")

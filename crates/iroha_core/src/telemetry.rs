@@ -77,7 +77,8 @@ pub use iroha_telemetry::metrics::{
     LaneSettlementBuffer, LaneSettlementSnapshot, LaneSwaplineSnapshot, Metrics,
     MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
     NexusDataspaceTeuStatus, NexusLaneRuntimeUpgradeHookStatus, NexusLaneTeuBuckets,
-    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, SorafsReserveFinalizedProjection, TxGossipCaps,
+    NexusLaneTeuStatus, SchedulerLayerWidthBuckets, SorafsGatewayRequestMetricLabels,
+    SorafsGatewayResponseMetricLabels, SorafsReserveFinalizedProjection, TxGossipCaps,
     TxGossipSnapshot, TxGossipStatus,
 };
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError, SoranetSecureAggregator};
@@ -6810,6 +6811,43 @@ impl Telemetry {
     /// No-op proof-health alert recorder when the `telemetry` feature is disabled.
     pub fn record_sorafs_proof_health_alert(&self, alert: &SorafsProofHealthAlert) {
         let _ = alert;
+    }
+
+    /// Increment canonical active-request accounting for a SoraFS gateway route.
+    pub fn start_sorafs_gateway_request(&self, labels: SorafsGatewayRequestMetricLabels<'_>) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.start_sorafs_gateway_request(labels);
+        }
+    }
+
+    /// Complete canonical request accounting and record the response/TTFB metrics.
+    pub fn finish_sorafs_gateway_request(
+        &self,
+        labels: SorafsGatewayResponseMetricLabels<'_>,
+        ttfb: Duration,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .finish_sorafs_gateway_request(labels, ttfb.as_secs_f64() * 1000.0);
+        }
+    }
+
+    /// Record one canonical SoraFS gateway proof-verification outcome.
+    pub fn record_sorafs_gateway_proof_verification(
+        &self,
+        profile_version: &str,
+        result: &str,
+        error_code: &str,
+        duration: Duration,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_sorafs_gateway_proof_verification(
+                profile_version,
+                result,
+                error_code,
+                duration.as_secs_f64() * 1000.0,
+            );
+        }
     }
 
     /// Record `SoraFS` chunk-range fetch telemetry exposed by Torii.

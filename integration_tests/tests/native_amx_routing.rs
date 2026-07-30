@@ -97,7 +97,7 @@ authenticated_remote_recovery=passed exact_once=passed";
 const NATIVE_AMX_MANIFEST_FILE_PREFIX: &str = "native_amx_manifest_v1_";
 const NATIVE_AMX_RECEIPT_FILE_PREFIX: &str = "native_amx_receipt_v1_";
 const NATIVE_AMX_EVIDENCE_FILE_SUFFIX: &str = ".norito";
-const NATIVE_AMX_LATEST_POINTER_FILE: &str = "native_amx_participant_receipts.latest_v1.norito";
+const NATIVE_AMX_LATEST_POINTER_FILE: &str = "native_amx_participant_receipts.latest_v2.norito";
 
 #[derive(Clone)]
 struct ConfigLayer(Table);

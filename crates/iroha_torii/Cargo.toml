@@ -21,18 +21,22 @@ categories.workspace = true
 workspace = true
 
 [features]
-default = [
+default = ["node-api"]
+# Shipping HTTP/WebSocket surface. The integration-test marker is deliberately
+# excluded; tests can request `ws_integration_tests` explicitly.
+node-api = [
     "app_api",
     "transparent_api",
-    "ws_integration_tests",
+    "app_api_wss",
     "connect",
     "push",
     "circuit-params",
-    "zk-halo2",
-    "zk-halo2-ipa",
-    "zk-stark",
-    "ipa-commitment"
+    "proofs-full",
+    "ipa-commitment",
 ]
+proofs-halo2 = ["zk-halo2", "zk-halo2-ipa"]
+proofs-stark = ["zk-stark"]
+proofs-full = ["proofs-halo2", "proofs-stark"]
 # Enables Telemetry (i.e. Status, Metrics, and API Version) endpoints
 telemetry = ["iroha_telemetry", "iroha_core/telemetry", "dep:prometheus"]
 # Enables profiling endpoint
@@ -81,15 +85,15 @@ path = "src/bin/attachment_sanitizer.rs"
 required-features = ["app_api"]
 
 [dependencies]
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 fastpq_prover = { workspace = true }
-iroha_core = { workspace = true, features = ["app_api", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
+iroha_core = { workspace = true, default-features = false, features = ["app_api", "runtime"] }
 iroha_config = { workspace = true }
 iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
-iroha_data_model = { workspace = true, features = ["http", "json", "bridge"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["http", "json", "bridge"] }
 iroha_executor_data_model = { workspace = true }
-iroha_crypto = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_sccp = { path = "../iroha_sccp" }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { workspace = true }
@@ -103,7 +107,7 @@ iroha_schema = { workspace = true, optional = true }
 iroha_schema_gen = { workspace = true, optional = true }
 iroha_telemetry = { workspace = true, optional = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", optional = true }
-ivm = { path = "../ivm" }
+ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-native-roots", "http2", "stream"] }
 url = { workspace = true }
@@ -165,10 +169,10 @@ build-support = { path = "../build-support", default-features = false }
 criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
-ivm = { path = "../ivm" }
+ivm = { path = "../ivm", default-features = false, features = ["runtime"] }
 iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
-iroha_core = { workspace = true, features = ["iroha-core-tests", "finality-test-fixtures"] }
+iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests", "finality-test-fixtures"] }
 iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 iroha_test_samples = { path = "../iroha_test_samples" }

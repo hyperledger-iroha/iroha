@@ -41,4 +41,4 @@ pqcrypto-mlkem = { version = "0.1.1", optional = true }
 [dev-dependencies]
 hex = { workspace = true }
 once_cell = { workspace = true }
-norito = { workspace = true }
+norito = { workspace = true, default-features = false, features = ["base-codec"] }

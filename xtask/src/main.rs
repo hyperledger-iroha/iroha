@@ -8503,14 +8503,14 @@ where
                 }
             }
             Ok(CommandKind::NoritoRpcFixtures {
-                options: NoritoRpcFixtureOptions {
+                options: NoritoRpcFixtureOptions::new(
                     fixtures_json,
                     exporter_manifest,
                     output_dir,
                     selection_manifest,
                     include_all,
                     check_encoded,
-                },
+                ),
             })
         }
         "norito-rpc-verify" => {

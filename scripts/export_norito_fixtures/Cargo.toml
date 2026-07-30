@@ -29,5 +29,3 @@ halo2-axiom = { path = "../../vendor/halo2-axiom" }
 halo2curves-axiom = { path = "../../vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "../../vendor/find_cuda_helper" }
 #streebog = { path = "../../vendor/streebog" }
-#opus = { path = "../../vendor/opus_stub" }
-#icrate = { path = "../../vendor/icrate" }

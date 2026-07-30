@@ -178,13 +178,11 @@ def test_js_instruction_type_map_matches_manifest_aliases(tmp_path: Path) -> Non
         ],
     )
     source = _write_js_type_map(tmp_path / "src.js")
-    dist = _write_js_type_map(tmp_path / "dist.js")
     errors: list[str] = []
 
     summary = MODULE._check_js_instruction_type_maps(  # type: ignore[attr-defined]
         manifest_path,
         source,
-        dist,
         errors,
     )
 

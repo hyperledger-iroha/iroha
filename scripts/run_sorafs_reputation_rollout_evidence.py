@@ -14,6 +14,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+BUNDLED_VERIFIER = SCRIPT_DIR / "check_sorafs_reputation_rollout_evidence.py"
+
 from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_INGEST_LAG_SECS,
     DEFAULT_MAX_SNAPSHOT_AGE_SECS,
@@ -270,7 +272,11 @@ def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
-    errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    errors = validate_runner_preflight(
+        args,
+        summary_filename="rollout-summary.json",
+        bundled_verifier=BUNDLED_VERIFIER,
+    )
     require_runner_passthrough_args(
         args,
         ("sorafs_cli_bin", "auth_account"),
@@ -700,7 +706,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
 
     verifier_command = [
         sys.executable,
-        str(args.verifier),
+        str(BUNDLED_VERIFIER),
         "--evidence",
         f"publish={args.publish_evidence}",
         "--evidence",
@@ -815,8 +821,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--verifier",
         type=Path,
-        default=SCRIPT_DIR / "check_sorafs_reputation_rollout_evidence.py",
-        help="Rollout evidence verifier script path.",
+        default=BUNDLED_VERIFIER,
+        help="Bundled rollout evidence verifier path; substitutions are rejected.",
     )
     parser.add_argument(
         "--canary-builder",

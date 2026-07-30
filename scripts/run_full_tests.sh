@@ -435,7 +435,7 @@ run_cargo() {
 }
 
 fast_workspace_packages() {
-    "${cargo_runner[@]}" metadata --no-deps --format-version 1 | python3 -c '
+    "${cargo_runner[@]}" metadata --locked --no-deps --format-version 1 | python3 -c '
 import json
 import sys
 
@@ -464,11 +464,11 @@ run_segmented_fast_tests() {
     echo "==> segmented fast suite: ${#packages[@]} package cargo test invocations"
     for package in "${packages[@]}"; do
         if [[ -n "${test_threads}" ]]; then
-            echo "==> cargo test -p ${package} -- --test-threads=${test_threads}"
-            run_cargo test -p "${package}" -- --test-threads="${test_threads}"
+            echo "==> cargo test --locked -p ${package} -- --test-threads=${test_threads}"
+            run_cargo test --locked -p "${package}" -- --test-threads="${test_threads}"
         else
-            echo "==> cargo test -p ${package}"
-            run_cargo test -p "${package}"
+            echo "==> cargo test --locked -p ${package}"
+            run_cargo test --locked -p "${package}"
         fi
     done
 }
@@ -525,8 +525,8 @@ if [[ -n "${IROHA_TEST_SERIALIZE_NETWORKS:-}" ]]; then
     echo "==> IROHA_TEST_SERIALIZE_NETWORKS=${IROHA_TEST_SERIALIZE_NETWORKS}"
 fi
 
-echo "==> cargo build --workspace"
-run_cargo build --workspace
+echo "==> cargo build --locked --workspace"
+run_cargo build --locked --workspace
 
 export_if_unset IROHA_TEST_SKIP_BUILD 1
 export_if_unset IROHA_TEST_TARGET_DIR "${target_root}"
@@ -550,11 +550,11 @@ if (( run_fast )); then
     if [[ "${segmented_fast}" == true ]]; then
         run_segmented_fast_tests
     elif [[ -n "${test_threads}" ]]; then
-        echo "==> cargo test --workspace --exclude integration_tests -- --test-threads=${test_threads}"
-        run_cargo test --workspace --exclude integration_tests -- --test-threads="${test_threads}"
+        echo "==> cargo test --locked --workspace --exclude integration_tests -- --test-threads=${test_threads}"
+        run_cargo test --locked --workspace --exclude integration_tests -- --test-threads="${test_threads}"
     else
-        echo "==> cargo test --workspace --exclude integration_tests"
-        run_cargo test --workspace --exclude integration_tests
+        echo "==> cargo test --locked --workspace --exclude integration_tests"
+        run_cargo test --locked --workspace --exclude integration_tests
     fi
 else
     echo "==> skipping fast test suite"
@@ -565,11 +565,11 @@ if [[ -n "${test_threads}" ]] && ! has_test_threads_arg "${integration_test_args
     integration_test_args+=("--test-threads=${test_threads}")
 fi
 
-echo "==> cargo test -p integration_tests ${integration_test_args[*]}"
+echo "==> cargo test --locked -p integration_tests ${integration_test_args[*]}"
 if ((${#integration_test_args[@]} > 0)); then
-    run_cargo test -p integration_tests -- "${integration_test_args[@]}"
+    run_cargo test --locked -p integration_tests -- "${integration_test_args[@]}"
 else
-    run_cargo test -p integration_tests
+    run_cargo test --locked -p integration_tests
 fi
 
 echo "==> test run completed"

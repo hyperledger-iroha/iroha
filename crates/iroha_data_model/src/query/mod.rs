@@ -297,7 +297,7 @@ pub mod json_wrappers {
     /// JSON wrapper for iterable query parameters (roundtrip-capable).
     ///
     /// Two encodings are supported:
-    /// - Non-`fast_dsl`: include `wire` (type key) and `payload_b64` for the erased query.
+    /// - Non-`fast_dsl`: include a stable `wire` identifier and `payload_b64` for the erased query.
     /// - `fast_dsl`: include `item_kind` and the fast-DSL payload parts as base64.
     ///
     /// Carries query parameters alongside the request.
@@ -310,7 +310,7 @@ pub mod json_wrappers {
         /// Parameters controlling pagination, sorting, and projections.
         pub params: parameters::QueryParams,
         #[norito(default)]
-        /// Optional identifier of the erased query type, provided for non-`fast_dsl` payloads.
+        /// Optional stable identifier of the erased query type for non-`fast_dsl` payloads.
         pub wire: Option<String>,
         #[norito(default)]
         /// Base64-encoded erased query payload when `wire` is present.
@@ -405,8 +405,7 @@ pub mod json_wrappers {
                     let wire = s.wire.ok_or("missing wire id")?;
                     let payload_b64 = s.payload_b64.ok_or("missing payload")?;
                     let bytes = base64_decode(&payload_b64).map_err(|()| "invalid payload_b64")?;
-                    let qb = super::query_registry()
-                        .decode(&wire, &bytes)
+                    let qb = super::decode_registered_query(&wire, &bytes)
                         .ok_or("unknown query wire id")?
                         .map_err(|_| "failed to decode query payload")?;
                     Ok(QueryRequest::Start(QueryWithParams {
@@ -454,7 +453,7 @@ pub mod json_wrappers {
                             })
                         },
                         |qb| {
-                            let wire = (**qb).type_name_key().to_string();
+                            let wire = super::query_wire_id((**qb).type_name_key()).to_string();
                             let payload = (**qb).encode_bytes();
                             QueryRequestJson::Start(QueryWithParamsJson {
                                 params: qwp.params.clone(),
@@ -624,10 +623,17 @@ pub trait Query: seal::Query + Send + Sync + 'static {
 /// Function signature used to construct a query from raw bytes.
 pub type QueryConstructor = fn(&[u8]) -> Result<QueryBox<QueryOutputBatchBox>, norito::Error>;
 
-/// Registry storing constructors for query types keyed by their type names.
+#[derive(Clone, Copy)]
+struct QueryRegistryEntry {
+    type_name: &'static str,
+    wire_id: &'static str,
+    ctor: QueryConstructor,
+}
+
+/// Registry storing query constructors under both Rust type names and stable wire identifiers.
 #[derive(Default)]
 pub struct QueryRegistry {
-    entries: Vec<(&'static str, QueryConstructor)>,
+    entries: Vec<QueryRegistryEntry>,
 }
 
 impl QueryRegistry {
@@ -638,7 +644,20 @@ impl QueryRegistry {
 
     /// Register a query type.
     #[must_use]
-    pub fn register<T>(mut self) -> Self
+    pub fn register<T>(self) -> Self
+    where
+        T: Query<Item = QueryOutputBatchBox> + Decode + Encode + 'static,
+    {
+        self.register_with_id::<T>(std::any::type_name::<T>())
+    }
+
+    /// Register a query type with an explicit, path-independent wire identifier.
+    ///
+    /// The concrete Rust [`std::any::type_name`] remains a valid lookup key for
+    /// in-process cloning, while `wire_id` is the canonical identifier emitted
+    /// by query serializers.
+    #[must_use]
+    pub fn register_with_id<T>(mut self, wire_id: &'static str) -> Self
     where
         T: Query<Item = QueryOutputBatchBox> + Decode + Encode + 'static,
     {
@@ -650,12 +669,32 @@ impl QueryRegistry {
             Ok(Box::new(query))
         }
 
-        let name = std::any::type_name::<T>();
-        self.entries.push((name, ctor::<T>));
+        let entry = QueryRegistryEntry {
+            type_name: std::any::type_name::<T>(),
+            wire_id,
+            ctor: ctor::<T>,
+        };
+        if let Some(previous) = self.entries.iter().find(|previous| {
+            previous.wire_id == entry.wire_id && previous.type_name != entry.type_name
+        }) {
+            panic!(
+                "query wire id collision: `{}` is registered for both `{}` and `{}`",
+                entry.wire_id, previous.type_name, entry.type_name
+            );
+        }
+        if let Some(previous) = self
+            .entries
+            .iter_mut()
+            .find(|previous| previous.type_name == entry.type_name)
+        {
+            *previous = entry;
+        } else {
+            self.entries.push(entry);
+        }
         self
     }
 
-    /// Decode a query using the constructor registered for the given type name.
+    /// Decode a query using a registered Rust type name or stable wire identifier.
     pub fn decode(
         &self,
         name: &str,
@@ -663,8 +702,17 @@ impl QueryRegistry {
     ) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
         self.entries
             .iter()
-            .find(|(n, _)| *n == name)
-            .map(|(_, ctor)| ctor(bytes))
+            .find(|entry| entry.type_name == name || entry.wire_id == name)
+            .map(|entry| (entry.ctor)(bytes))
+    }
+
+    /// Return the canonical wire identifier for a registered Rust type name.
+    #[must_use]
+    pub fn wire_id(&self, type_name: &str) -> Option<&'static str> {
+        self.entries
+            .iter()
+            .find(|entry| entry.type_name == type_name)
+            .map(|entry| entry.wire_id)
     }
 }
 
@@ -681,7 +729,58 @@ static QUERY_REGISTRY: OnceLock<QueryRegistry> = OnceLock::new();
 
 static DEFAULT_QUERY_REGISTRY: OnceLock<QueryRegistry> = OnceLock::new();
 
-/// Set the global query registry used to decode queries by type name.
+macro_rules! define_builtin_query_registry {
+    ($($ty:ty => $wire_id:literal),* $(,)?) => {
+        #[cfg(test)]
+        const BUILTIN_QUERY_WIRE_ASSIGNMENTS: &[(&str, &str)] = &[
+            $((stringify!($ty), $wire_id)),*
+        ];
+
+        fn build_builtin_query_registry() -> QueryRegistry {
+            QueryRegistry::new()
+                $(.register_with_id::<$ty>($wire_id))*
+        }
+    };
+}
+
+define_builtin_query_registry! {
+    ErasedIterQuery<crate::domain::Domain>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>",
+    ErasedIterQuery<crate::account::Account>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::account::model::Account>",
+    ErasedIterQuery<crate::asset::value::Asset>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::value::model::Asset>",
+    ErasedIterQuery<crate::asset::definition::AssetDefinition>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::asset::definition::model::AssetDefinition>",
+    ErasedIterQuery<crate::repo::RepoAgreement>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::repo::RepoAgreement>",
+    ErasedIterQuery<crate::nft::Nft>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nft::model::Nft>",
+    ErasedIterQuery<crate::role::Role>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::model::Role>",
+    ErasedIterQuery<crate::role::RoleId>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::role::model::RoleId>",
+    ErasedIterQuery<crate::peer::PeerId>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::peer::model::PeerId>",
+    ErasedIterQuery<crate::trigger::TriggerId>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::model::model::TriggerId>",
+    ErasedIterQuery<crate::trigger::Trigger>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::trigger::model::model::Trigger>",
+    ErasedIterQuery<CommittedTransaction>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::query::model::CommittedTransaction>",
+    ErasedIterQuery<crate::block::SignedBlock>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::model::SignedBlock>",
+    ErasedIterQuery<crate::block::BlockHeader>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::block::header::model::BlockHeader>",
+    ErasedIterQuery<crate::proof::ProofRecord>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::proof::ProofRecord>",
+    ErasedIterQuery<crate::nexus::FeeSponsorProgram>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgram>",
+    ErasedIterQuery<crate::nexus::FeeSponsorProgramId>
+        => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramId>",
+}
+
+/// Set the global query registry used to decode queries by type name or stable wire identifier.
 ///
 /// This should be called exactly once during application start-up. Subsequent
 /// calls are ignored.
@@ -693,34 +792,46 @@ pub fn set_query_registry(registry: QueryRegistry) {
     let _ = QUERY_REGISTRY.set(registry);
 }
 
-fn query_registry() -> &'static QueryRegistry {
-    QUERY_REGISTRY
-        .get()
-        .unwrap_or_else(|| builtin_query_registry())
+fn query_wire_id_from_registries(
+    type_name: &'static str,
+    builtin: &QueryRegistry,
+    installed: Option<&QueryRegistry>,
+) -> &'static str {
+    builtin
+        .wire_id(type_name)
+        .or_else(|| installed.and_then(|registry| registry.wire_id(type_name)))
+        .unwrap_or(type_name)
+}
+
+fn query_wire_id(type_name: &'static str) -> &'static str {
+    query_wire_id_from_registries(type_name, builtin_query_registry(), QUERY_REGISTRY.get())
+}
+
+fn decode_query_from_registries(
+    name: &str,
+    bytes: &[u8],
+    builtin: &QueryRegistry,
+    installed: Option<&QueryRegistry>,
+) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
+    builtin.decode(name, bytes).or_else(|| {
+        installed.and_then(|registry| registry.decode(name, bytes))
+    })
+}
+
+fn decode_registered_query(
+    name: &str,
+    bytes: &[u8],
+) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
+    decode_query_from_registries(
+        name,
+        bytes,
+        builtin_query_registry(),
+        QUERY_REGISTRY.get(),
+    )
 }
 
 fn builtin_query_registry() -> &'static QueryRegistry {
-    DEFAULT_QUERY_REGISTRY.get_or_init(|| {
-        crate::query_registry![
-            ErasedIterQuery<crate::domain::Domain>,
-            ErasedIterQuery<crate::account::Account>,
-            ErasedIterQuery<crate::asset::value::Asset>,
-            ErasedIterQuery<crate::asset::definition::AssetDefinition>,
-            ErasedIterQuery<crate::repo::RepoAgreement>,
-            ErasedIterQuery<crate::nft::Nft>,
-            ErasedIterQuery<crate::role::Role>,
-            ErasedIterQuery<crate::role::RoleId>,
-            ErasedIterQuery<crate::peer::PeerId>,
-            ErasedIterQuery<crate::trigger::TriggerId>,
-            ErasedIterQuery<crate::trigger::Trigger>,
-            ErasedIterQuery<CommittedTransaction>,
-            ErasedIterQuery<crate::block::SignedBlock>,
-            ErasedIterQuery<crate::block::BlockHeader>,
-            ErasedIterQuery<crate::proof::ProofRecord>,
-            ErasedIterQuery<crate::nexus::FeeSponsorProgram>,
-            ErasedIterQuery<crate::nexus::FeeSponsorProgramId>,
-        ]
-    })
+    DEFAULT_QUERY_REGISTRY.get_or_init(build_builtin_query_registry)
 }
 
 #[model]
@@ -824,12 +935,12 @@ mod model {
         /// Encode the concrete query behind the erased trait object without
         /// re-encoding the `QueryBox` wrapper (avoids recursion).
         fn encode_bytes(&self) -> Vec<u8>;
-        /// Return a stable registry key for this concrete query type.
+        /// Return the concrete Rust type key used for in-process registry lookup.
         ///
-        /// This must match what is used during registration (i.e.,
-        /// `std::any::type_name::<ConcreteQuery>()`). Using a dedicated
-        /// method avoids relying on `type_name_of_val` for trait objects,
-        /// which returns the trait object type rather than the concrete type.
+        /// The registry maps this key to the stable identifier emitted on the
+        /// wire. Using a dedicated method avoids relying on `type_name_of_val`
+        /// for trait objects, which returns the trait object type rather than
+        /// the concrete type.
         fn type_name_key(&self) -> &'static str;
     }
 
@@ -854,7 +965,7 @@ mod model {
 
     impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {
         fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-            let name = (**self).type_name_key().to_string();
+            let name = query_wire_id((**self).type_name_key()).to_string();
             let payload = (**self).encode_bytes();
             norito::core::NoritoSerialize::serialize(&(name, payload), writer)
         }
@@ -866,8 +977,7 @@ mod model {
         ) -> Self {
             let (name, bytes): (String, Vec<u8>) =
                 norito::core::NoritoDeserialize::deserialize(archived.cast());
-            query_registry()
-                .decode(&name, &bytes)
+            decode_registered_query(&name, &bytes)
                 .expect("query is not registered")
                 .expect("failed to decode query")
         }
@@ -1451,8 +1561,7 @@ mod model {
             {
                 let type_name = self.query.type_name_key();
                 let payload = self.query.encode_bytes();
-                let query = query_registry()
-                    .decode(type_name, &payload)
+                let query = decode_registered_query(type_name, &payload)
                     .expect("QueryWithParams::clone: query type is not registered")
                     .expect("QueryWithParams::clone: failed to decode boxed query");
 
@@ -3912,6 +4021,77 @@ mod json_roundtrip_tests {
             "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>"
         );
         assert_eq!(cloned.params, original.params);
+    }
+
+    #[test]
+    fn builtin_query_wire_ids_match_v1_golden_inventory() {
+        let mut actual = BUILTIN_QUERY_WIRE_ASSIGNMENTS
+            .iter()
+            .map(|(type_label, wire_id)| format!("{type_label}\t{wire_id}"))
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        assert!(
+            BUILTIN_QUERY_WIRE_ASSIGNMENTS
+                .iter()
+                .map(|(_, wire_id)| wire_id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                == BUILTIN_QUERY_WIRE_ASSIGNMENTS.len(),
+            "built-in query wire identifiers must be unique"
+        );
+
+        let expected = include_str!("../../tests/fixtures/query_wire_ids_v1.txt")
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn builtin_query_wire_ids_override_installed_registry_and_decode_falls_back() {
+        const WIRE_ID: &str =
+            "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>";
+        const CUSTOM_WIRE_ID: &str = "custom.domain.current-path";
+        type DomainQuery = ErasedIterQuery<Domain>;
+
+        let builtin = QueryRegistry::new().register_with_id::<DomainQuery>(WIRE_ID);
+        let installed =
+            QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
+        let query = DomainQuery::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            vec![0xA5, 0x5A],
+        );
+        let payload = norito::codec::Encode::encode(&query);
+        let type_name = std::any::type_name::<DomainQuery>();
+
+        assert_eq!(
+            query_wire_id_from_registries(type_name, &builtin, Some(&installed)),
+            WIRE_ID
+        );
+        for lookup_key in [type_name, WIRE_ID, CUSTOM_WIRE_ID] {
+            let decoded = decode_query_from_registries(
+                lookup_key,
+                &payload,
+                &builtin,
+                Some(&installed),
+            )
+                .expect("query lookup key is registered")
+                .expect("query payload decodes");
+            assert_eq!(decoded.as_ref().type_name_key(), type_name);
+            assert_eq!(decoded.as_ref().encode_bytes(), payload);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "query wire id collision")]
+    fn query_registry_rejects_wire_id_collisions() {
+        type DomainQuery = ErasedIterQuery<Domain>;
+        type AccountQuery = ErasedIterQuery<crate::account::Account>;
+
+        let _registry = QueryRegistry::new()
+            .register_with_id::<DomainQuery>("query.collision")
+            .register_with_id::<AccountQuery>("query.collision");
     }
 
     #[cfg(feature = "fast_dsl")]

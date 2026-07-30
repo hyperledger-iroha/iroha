@@ -12,10 +12,10 @@ workspace = true
 
 [dependencies]
 iroha_config = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
 
 color-eyre = { workspace = true }
-norito = {workspace = true}
+norito = { workspace = true, default-features = false, features = ["node-codec"] }
 tracing = { workspace = true }
 tracing-core = "0.1.34"
 tracing-futures = { version = "0.2.5", default-features = false, features = ["std-future", "std"] }

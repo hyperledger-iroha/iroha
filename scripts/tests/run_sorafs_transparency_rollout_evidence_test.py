@@ -18,6 +18,10 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    write_topology_qualification,
+)
+
 
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
@@ -35,13 +39,20 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--torii-url",
         "https://torii.example",
         "--deployment-id",
-        "transparency-staging-a",
+        "transparency-production-a",
         "--environment",
-        "staging",
+        "production",
         "--out-dir",
         str(tmp_path / "evidence"),
         "--now-unix",
         "1800400000",
+        "--topology-qualification-summary",
+        str(
+            write_topology_qualification(
+                tmp_path / "topology-qualification.json",
+                deployment_id="transparency-production-a",
+            )
+        ),
         "--max-evidence-age-secs",
         "604800",
         "--cycle-id",
@@ -93,8 +104,8 @@ def test_dry_run_prints_complete_rollout_plan(tmp_path: Path, capsys) -> None:
     assert plan["schema"] == "sorafs.transparency.rollout_evidence_collection_plan.v1"
     assert plan["verifier_summary_schema"] == "sorafs.transparency.rollout_evidence_gate.v1"
     assert plan["deployment_context"] == {
-        "deployment_id": "transparency-staging-a",
-        "environment": "staging",
+        "deployment_id": "transparency-production-a",
+        "environment": "production",
         "deployment_context_reviewed": True,
     }
     assert plan["evidence_contract"]["source_entry"]["schema"] == (
