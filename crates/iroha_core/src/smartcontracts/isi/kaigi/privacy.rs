@@ -23,7 +23,9 @@ use iroha_data_model::{
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use iroha_schema::Ident;
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
-use kaigi_zk::{KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, roster_root_limb_values};
+use kaigi_zk::{
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_ROOT_LIMBS, roster_root_limb_values, scalar_from_hash,
+};
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 use mv::storage::StorageReadOnly;
 
@@ -276,7 +278,7 @@ fn validate_roster_artifacts<'a>(
     let commitment = artifacts
         .commitment
         .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-    artifacts
+    let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
 
@@ -307,11 +309,19 @@ fn validate_roster_artifacts<'a>(
     }
 
     let envelope = decode_privacy_proof_envelope(proof_bytes)?;
-    if envelope.circuit_id == KAIGI_ROSTER_BACKEND {
-        let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
-            .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
-        verify_roster_root_limbs(&instance_cols, expected_root)?;
+    if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
+        return Err(privacy_error(
+            "privacy roster proof must use the canonical Kaigi roster circuit",
+        ));
     }
+    let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
+        .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
+    verify_roster_public_inputs(
+        &instance_cols,
+        expected_root,
+        &commitment.commitment,
+        &nullifier.digest,
+    )?;
 
     Ok(proof_bytes)
 }
@@ -326,7 +336,7 @@ fn validate_host_artifacts<'a>(
     let commitment = artifacts
         .commitment
         .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-    artifacts
+    let nullifier = artifacts
         .nullifier
         .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
 
@@ -359,11 +369,19 @@ fn validate_host_artifacts<'a>(
     }
 
     let envelope = decode_privacy_proof_envelope(proof_bytes)?;
-    if envelope.circuit_id == KAIGI_ROSTER_BACKEND {
-        let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
-            .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
-        verify_roster_root_limbs(&instance_cols, expected_root)?;
+    if envelope.circuit_id != KAIGI_ROSTER_BACKEND {
+        return Err(privacy_error(
+            "privacy roster proof must use the canonical Kaigi roster circuit",
+        ));
     }
+    let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
+        .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
+    verify_roster_public_inputs(
+        &instance_cols,
+        expected_root,
+        &commitment.commitment,
+        &nullifier.digest,
+    )?;
 
     Ok(proof_bytes)
 }
@@ -495,16 +513,25 @@ fn validate_privacy_proof_envelope_metadata(
 }
 
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
-fn verify_roster_root_limbs(
+fn verify_roster_public_inputs(
     instance_cols: &[Vec<halo2_proofs::halo2curves::pasta::Fp>],
     expected_root: &Hash,
+    expected_commitment: &Hash,
+    expected_nullifier: &Hash,
 ) -> Result<(), Error> {
     const OFFSET: usize = 2;
-    if instance_cols.len() < OFFSET + KAIGI_ROSTER_ROOT_LIMBS {
+    if instance_cols.len() != OFFSET + KAIGI_ROSTER_ROOT_LIMBS {
         return Err(privacy_error(
-            "privacy proof missing roster root limbs in public inputs",
+            "privacy proof must expose exactly commitment, nullifier, and four roster root limbs",
         ));
     }
+
+    verify_hash_public_input(
+        &instance_cols[0],
+        expected_commitment,
+        "commitment",
+    )?;
+    verify_hash_public_input(&instance_cols[1], expected_nullifier, "nullifier")?;
 
     let expected_limbs = roster_root_limb_values(expected_root);
     for (idx, expected) in expected_limbs.iter().enumerate() {
@@ -519,6 +546,30 @@ fn verify_roster_root_limbs(
         if limb != *expected {
             return Err(privacy_error("roster root limb mismatch"));
         }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+fn verify_hash_public_input(
+    column: &[halo2_proofs::halo2curves::pasta::Fp],
+    expected: &Hash,
+    label: &str,
+) -> Result<(), Error> {
+    if column.len() != 1 {
+        return Err(privacy_error(format!(
+            "privacy proof {label} must be a single-row public input"
+        )));
+    }
+    let expected_scalar = scalar_from_hash(expected).ok_or_else(|| {
+        privacy_error(format!(
+            "privacy proof {label} is not a canonical Pasta scalar"
+        ))
+    })?;
+    if column[0] != expected_scalar {
+        return Err(privacy_error(format!(
+            "privacy proof {label} does not match the instruction artifact"
+        )));
     }
     Ok(())
 }
@@ -540,22 +591,70 @@ fn scalar_le_u64(value: halo2_proofs::halo2curves::pasta::Fp) -> Option<u64> {
 #[cfg(all(test, not(feature = "kaigi_privacy_mocks")))]
 mod tests {
     use halo2_proofs::halo2curves::pasta::Fp;
-    use kaigi_zk::empty_roster_root_hash;
+    use kaigi_zk::{
+        compute_commitment_hash, compute_nullifier_hash, empty_roster_root_hash,
+    };
 
     use super::*;
 
     #[test]
-    fn roster_root_limb_validation_checks_values() {
+    fn roster_public_input_validation_binds_every_instruction_artifact() {
         let root = empty_roster_root_hash();
-        let mut columns = vec![vec![Fp::from(1u64)], vec![Fp::from(2u64)]];
+        let commitment = compute_commitment_hash(11, 31);
+        let nullifier = compute_nullifier_hash(11, 57);
+        let mut columns = vec![
+            vec![scalar_from_hash(&commitment).expect("canonical commitment")],
+            vec![scalar_from_hash(&nullifier).expect("canonical nullifier")],
+        ];
         for limb in roster_root_limb_values(&root) {
             columns.push(vec![Fp::from(limb)]);
         }
-        assert!(verify_roster_root_limbs(&columns, &root).is_ok());
+        assert!(
+            verify_roster_public_inputs(&columns, &root, &commitment, &nullifier).is_ok()
+        );
 
-        let mut mismatched = columns.clone();
-        mismatched[2][0] = Fp::from(999u64);
-        assert!(verify_roster_root_limbs(&mismatched, &root).is_err());
+        let mut wrong_commitment = columns.clone();
+        wrong_commitment[0][0] += Fp::from(1u64);
+        assert!(
+            verify_roster_public_inputs(
+                &wrong_commitment,
+                &root,
+                &commitment,
+                &nullifier
+            )
+            .is_err()
+        );
+
+        let mut wrong_nullifier = columns.clone();
+        wrong_nullifier[1][0] += Fp::from(1u64);
+        assert!(
+            verify_roster_public_inputs(
+                &wrong_nullifier,
+                &root,
+                &commitment,
+                &nullifier
+            )
+            .is_err()
+        );
+
+        let mut wrong_root = columns.clone();
+        wrong_root[2][0] = Fp::from(999u64);
+        assert!(
+            verify_roster_public_inputs(&wrong_root, &root, &commitment, &nullifier)
+                .is_err()
+        );
+
+        let mut extra_column = columns;
+        extra_column.push(vec![Fp::from(0u64)]);
+        assert!(
+            verify_roster_public_inputs(
+                &extra_column,
+                &root,
+                &commitment,
+                &nullifier
+            )
+            .is_err()
+        );
     }
 
     #[test]

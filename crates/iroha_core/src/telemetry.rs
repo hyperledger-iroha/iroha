@@ -6426,6 +6426,13 @@ impl Telemetry {
         }
     }
 
+    /// Remove DA receipt metric state owned by retired lanes.
+    pub fn prune_da_receipt_lanes(&self, lane_ids: impl IntoIterator<Item = u32>) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.prune_da_receipt_lanes(lane_ids);
+        }
+    }
+
     /// Record a DA shard cursor event with lane/shard labels.
     pub fn record_da_shard_cursor_event(
         &self,

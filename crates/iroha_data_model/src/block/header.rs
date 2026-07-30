@@ -987,7 +987,8 @@ mod tests {
         let SamplePayload { payload, flags } = encode_sample(&vec);
 
         let _flags_guard = norito::core::DecodeFlagsGuard::enter(flags);
-        let archived = norito::core::archived_from_slice_unchecked::<Vec<BlockSignature>>(&payload);
+        let archived = norito::core::archived_from_slice::<Vec<BlockSignature>>(&payload)
+            .expect("archived signature vector");
         let _payload_guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
         let decoded =
             <Vec<BlockSignature> as norito::core::NoritoDeserialize<'_>>::try_deserialize(

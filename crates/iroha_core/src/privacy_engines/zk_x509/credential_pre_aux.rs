@@ -265,10 +265,22 @@ impl ZkX509CredentialMainPostBaseChallengesV1 {
 /// decoded roots and verifier-owned profile/public digests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialPreAuxBindingV1 {
+    /// Exact MAIN commitment phase from which the joint schedule was derived.
+    ///
+    /// Retaining this typed provenance lets the consuming MAIN phase reject a
+    /// valid X5B1 capability minted for another six-root phase before any
+    /// challenge-dependent child is mutated. It is deliberately not exposed
+    /// as raw roots or digests.
+    main_pre_aux: ZkX509CredentialMainPreAuxV1,
     main_post_base: ZkX509CredentialMainPostBaseChallengesV1,
 }
 
 impl ZkX509CredentialPreAuxBindingV1 {
+    /// Test exact typed provenance without exposing its component roots.
+    pub(crate) fn matches_main_pre_aux_v1(self, expected: ZkX509CredentialMainPreAuxV1) -> bool {
+        self.main_pre_aux == expected
+    }
+
     /// Opaque phase token shared by all MAIN prover or verifier providers.
     pub(crate) const fn main_post_base(self) -> ZkX509CredentialMainPostBaseChallengesV1 {
         self.main_post_base
@@ -589,7 +601,10 @@ pub(crate) fn derive_zk_x509_credential_pre_aux_binding_v1(
         transcript_state: transcript.state(),
     };
     validate_main_post_base_challenges_v1(main_post_base)?;
-    Ok(ZkX509CredentialPreAuxBindingV1 { main_post_base })
+    Ok(ZkX509CredentialPreAuxBindingV1 {
+        main_pre_aux: main,
+        main_post_base,
+    })
 }
 
 /// Bind a recomputed joint pre-auxiliary schedule into one local transcript.
@@ -788,6 +803,7 @@ mod tests {
     fn exact_seven_root_schedule_is_deterministic_and_valid() {
         let binding = derive_v1(main_pre_aux_v1());
         assert_eq!(binding, derive_v1(main_pre_aux_v1()));
+        assert!(binding.matches_main_pre_aux_v1(main_pre_aux_v1()));
         let main_phase = binding.main_post_base();
         validate_main_post_base_challenges_v1(main_phase).expect("all eleven challenge families");
         assert_eq!(main_phase.sha(), binding.sha());
@@ -799,6 +815,52 @@ mod tests {
             main_phase.sha_word_base_folding
         );
         assert_ne!(binding.transcript_state(), [0; 32]);
+    }
+
+    #[test]
+    fn opaque_binding_rejects_every_main_phase_provenance_substitution() {
+        let canonical_main = main_pre_aux_v1();
+        let binding = derive_v1(canonical_main);
+        assert!(binding.matches_main_pre_aux_v1(canonical_main));
+
+        for byte in 0..32 {
+            let mut changed = canonical_main;
+            changed.consensus_context_digest_mut_for_test_v1()[byte] ^= 1;
+            assert!(
+                !binding.matches_main_pre_aux_v1(changed),
+                "consensus-context substitution at byte {byte}"
+            );
+
+            let mut changed = canonical_main;
+            changed.main_profile_digest_mut_for_test_v1()[byte] ^= 1;
+            assert!(
+                !binding.matches_main_pre_aux_v1(changed),
+                "MAIN-profile substitution at byte {byte}"
+            );
+        }
+        for root in 0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
+            for byte in 0..32 {
+                let mut changed = canonical_main;
+                changed.main_base_roots_mut_for_test_v1()[root][byte] ^= 1;
+                assert!(
+                    !binding.matches_main_pre_aux_v1(changed),
+                    "MAIN root {root} substitution at byte {byte}"
+                );
+            }
+        }
+
+        // CA material belongs to the outer X5S1 phase. A binding derived with
+        // different CA inputs still records the same exact MAIN provenance;
+        // the credential orchestrator separately enforces the typed CA hook.
+        let changed_ca = derive_zk_x509_credential_pre_aux_binding_v1(
+            canonical_main,
+            [0x45; 32],
+            [0x56; 32],
+            [0x67; 32],
+        )
+        .expect("alternative typed CA phase");
+        assert!(changed_ca.matches_main_pre_aux_v1(canonical_main));
+        assert_ne!(changed_ca, binding);
     }
 
     #[test]

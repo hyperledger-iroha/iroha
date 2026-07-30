@@ -5921,6 +5921,7 @@ mod tests {
     async fn run_viewer_transport_negotiation(
         settings: iroha_p2p::streaming::quic::TransportConfigSettings,
         listen_port: u16,
+        server_certificate_fingerprint: iroha_p2p::streaming::quic::CertificateFingerprint,
         viewer_handle: StreamingHandle,
         publisher_peer: Peer,
     ) {
@@ -5929,10 +5930,13 @@ mod tests {
             AudioCapability, CapabilityFlags, Resolution, TransportCapabilities,
         };
 
-        let mut client =
-            StreamingClient::connect(&format!("/ip4/127.0.0.1/udp/{listen_port}/quic"), settings)
-                .await
-                .expect("client");
+        let mut client = StreamingClient::connect(
+            &format!("/ip4/127.0.0.1/udp/{listen_port}/quic"),
+            server_certificate_fingerprint,
+            settings,
+        )
+        .await
+        .expect("client");
 
         let mut viewer_caps = TransportCapabilities::kyber768_default();
         viewer_caps.max_segment_datagram_size = 1_000;
@@ -5979,6 +5983,7 @@ mod tests {
             .await
             .expect("bind server");
         let listen_addr = server.local_addr().expect("listen addr");
+        let server_certificate_fingerprint = server.certificate_fingerprint();
 
         let publisher_keys = checked_random_ed25519_keypair();
         let viewer_keys = checked_random_keypair();
@@ -5998,6 +6003,7 @@ mod tests {
         let viewer_task = run_viewer_transport_negotiation(
             settings,
             listen_addr.port(),
+            server_certificate_fingerprint,
             viewer_handle.clone(),
             publisher_peer.clone(),
         );

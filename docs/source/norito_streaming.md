@@ -178,6 +178,14 @@ captures the key points so implementers can line them up with the codec spec.
 
 ### QUIC profile and capability negotiation
 
+- Streaming QUIC is fail-closed on server identity. `StreamingServer` exposes
+  the fingerprint of its self-signed leaf certificate, and callers must
+  distribute that value through an authenticated manifest, directory, or
+  operator configuration. `StreamingClient::connect` requires the expected
+  fingerprint, verifies the TLS `CertificateVerify` proof with the public key
+  in that certificate, and rejects a different leaf before any control frame is
+  accepted. QUIC 0-RTT is disabled so capability and key-update frames cannot be
+  replayed before server authentication completes.
 - During the QUIC handshake the peers exchange a Norito-encoded
   `TransportCapabilities` frame on control stream `0`. It advertises the HPKE
   suite bitmask, DATAGRAM support, maximum segment DATAGRAM size, feedback

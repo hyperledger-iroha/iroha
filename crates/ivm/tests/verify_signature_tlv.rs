@@ -728,7 +728,7 @@ fn opcode_verify_ed25519_batch_debits_payload_before_hash_validation() {
     *tlv.last_mut().expect("TLV checksum") ^= 1;
 
     let word = encoding::wide::encode_rr(instruction::wide::crypto::ED25519BATCHVERIFY, 5, 1, 2);
-    let base_gas = ivm::gas::cost_of(word);
+    let base_gas = ivm::gas::cost_of(word).expect("ED25519BATCHVERIFY opcode must be scheduled");
     let payload_gas = ivm::gas::ed25519_batch_extra_gas(payload.len() as u64, 0);
     let initial_gas = base_gas + payload_gas - 1;
     let mut vm = IVM::new(initial_gas);
@@ -765,7 +765,10 @@ fn opcode_verify_ed25519_batch_rejects_oversized_payload_before_hashing() {
 
     assert_eq!(vm.register(5), 0);
     assert_eq!(vm.register(2), 0);
-    assert_eq!(initial_gas - vm.gas_remaining, ivm::gas::cost_of(word));
+    assert_eq!(
+        initial_gas - vm.gas_remaining,
+        ivm::gas::cost_of(word).expect("ED25519BATCHVERIFY opcode must be scheduled")
+    );
 }
 
 #[test]

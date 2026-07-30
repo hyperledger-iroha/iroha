@@ -2,13 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use iroha_crypto::{
-    Hash,
-    blake2::{
-        Blake2bVar,
-        digest::{Update, VariableOutput},
-    },
-};
+use iroha_crypto::Hash;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -53,12 +47,6 @@ pub const VALIDATION_FEE_PLAIN_ELECTORATE_SNAPSHOT_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.validation_fee.plain_electorate.snapshot.v1";
 /// Domain separator for policy hashing.
 pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.parliament.v1";
-/// Canonical domain separator shared by all V1 governance proposal fingerprints.
-///
-/// This remains available without the `governance` feature because validation-fee
-/// registry authorization must reproduce the exact fingerprint of the governing
-/// proposal in lightweight data-model builds.
-pub(crate) const GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1: &[u8] = b"gov:proposal:v1";
 /// Domain separator for an exact Parliament-approved payout lifecycle.
 pub const VALIDATION_FEE_PAYOUT_LIFECYCLE_SEAL_DOMAIN: &[u8] =
     b"iroha.validation_fee.payout_lifecycle.seal.v1";
@@ -1388,8 +1376,10 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
 // that do not compile the governance API, but their authorization checks must
 // still reproduce the exact governance proposal fingerprint. Explicit V1
 // discriminants avoid placeholder variants and bind this private preimage to
-// the matching `ProposalKind` wire tags. Governance-enabled parity tests below
-// verify the complete encoded bytes.
+// the matching `ProposalKind` wire tags. Each semantic proposal kind also has
+// a distinct hash domain, so a future discriminant mistake cannot create a
+// cross-kind fingerprint collision. Governance-enabled parity tests below
+// verify the complete encoded bytes and fingerprints.
 #[derive(Encode)]
 enum ValidationFeePolicyProposalFingerprintEnvelopeV1 {
     #[codec(index = 3)]
@@ -1415,24 +1405,13 @@ struct ValidationFeePayoutLifecycleFingerprintPayloadV1 {
     plain_electorate_rules: ValidationFeePlainElectorateRulesV1,
 }
 
-fn validation_fee_proposal_fingerprint(proposal: &impl Encode) -> [u8; 32] {
-    let encoded = proposal.encode();
-    let mut hasher = Blake2bVar::new(32).expect("Blake2bVar length is fixed and valid");
-    hasher.update(GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1);
-    hasher.update(&encoded);
-    let mut fingerprint = [0_u8; 32];
-    hasher
-        .finalize_variable(&mut fingerprint)
-        .expect("fingerprint output has the configured Blake2b length");
-    fingerprint
-}
-
 fn validation_fee_policy_proposal_fingerprint(
     policy: &ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
     plain_electorate_rules: &ValidationFeePlainElectorateRulesV1,
 ) -> [u8; 32] {
-    validation_fee_proposal_fingerprint(
+    crate::governance_fingerprint::fingerprint(
+        crate::governance_fingerprint::VALIDATION_FEE_POLICY_V1,
         &ValidationFeePolicyProposalFingerprintEnvelopeV1::ValidationFeePolicy(
             ValidationFeePolicyFingerprintPayloadV1 {
                 policy: policy.clone(),
@@ -1447,7 +1426,8 @@ fn validation_fee_payout_lifecycle_proposal_fingerprint(
     payout_binding: &ValidationFeeTreasuryPayoutBindingV1,
     plain_electorate_rules: &ValidationFeePlainElectorateRulesV1,
 ) -> [u8; 32] {
-    validation_fee_proposal_fingerprint(
+    crate::governance_fingerprint::fingerprint(
+        crate::governance_fingerprint::VALIDATION_FEE_PAYOUT_LIFECYCLE_V1,
         &ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1::ValidationFeePayoutLifecycle(
             ValidationFeePayoutLifecycleFingerprintPayloadV1 {
                 payout_binding: payout_binding.clone(),

@@ -932,26 +932,14 @@ where
             Ok(vec)
         }
         Err(err) => {
-            #[cfg(not(debug_assertions))]
-            let _ = &err;
             #[cfg(debug_assertions)]
             if norito::debug_trace_enabled() {
                 eprintln!(
-                    "ConstVec::<{}>::decode streaming fallback failed err={err:?}; trying manual unpacked decode",
+                    "ConstVec::<{}>::decode streaming fallback rejected payload err={err:?}",
                     core::any::type_name::<T>()
                 );
             }
-            let _guard = ncore::DecodeFlagsGuard::enter_with_hint(flags, flags);
-            let vec = ncore::decode_archived_field::<Vec<T>>(decode_bytes)?;
-            #[cfg(debug_assertions)]
-            if norito::debug_trace_enabled() {
-                eprintln!(
-                    "ConstVec::<{}>::decode archived fallback succeeded len={}",
-                    core::any::type_name::<T>(),
-                    vec.len()
-                );
-            }
-            Ok(vec)
+            Err(err)
         }
     }
 }
@@ -1332,9 +1320,9 @@ mod tests {
     }
 
     #[test]
-    fn archived_recovery_rejects_truncated_payload_without_panicking() {
+    fn streaming_recovery_rejects_truncated_payload_without_panicking() {
         let error = decode_streaming_fallback::<u16>(&[0], 0)
-            .expect_err("truncated archived vector payload must be rejected");
+            .expect_err("truncated vector payload must be rejected");
 
         assert!(matches!(error, ncore::Error::LengthMismatch));
     }
@@ -1533,7 +1521,8 @@ mod tests {
             NoritoSerialize::serialize(&value, &mut payload).expect("serialize const vec");
         }
 
-        let archived = ncore::archived_from_slice_unchecked::<ConstVec<u8>>(&payload);
+        let archived =
+            ncore::archived_from_slice::<ConstVec<u8>>(&payload).expect("archived const vec");
         let _payload_ctx = ncore::PayloadCtxGuard::enter(&payload);
         let _flags = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
 
@@ -1833,7 +1822,8 @@ mod tests {
         // corrupted header.
         payload.extend_from_slice(&[0xAAu8; 8]);
 
-        let archived = ncore::archived_from_slice_unchecked::<ConstVec<Vec<u8>>>(&payload);
+        let archived = ncore::archived_from_slice::<ConstVec<Vec<u8>>>(&payload)
+            .expect("archived nested const vec");
         let _payload_ctx = ncore::PayloadCtxGuard::enter_with_flags(archived.bytes(), flags);
         let decoded = decode_const_vec_manual::<Vec<u8>>(archived.as_ref());
         assert!(

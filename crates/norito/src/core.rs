@@ -5600,32 +5600,20 @@ where
 
 /// Interpret `bytes` as an archived value and ensure the slice is large enough.
 ///
-/// Returns an error if `bytes` is shorter than the minimum archived header for `T`.
+/// This validates the archived footprint and produces suitably aligned backing
+/// storage. Payload structure and offsets are validated by the subsequent
+/// fallible [`NoritoDeserialize::try_deserialize`] call.
+///
+/// # Errors
+///
+/// Returns an error if `bytes` is shorter than the minimum archived header for
+/// `T` or if a misaligned payload cannot be copied into aligned storage.
 #[inline]
 pub fn archived_from_slice<'a, T>(bytes: &'a [u8]) -> Result<ArchivedRef<'a, T>, Error> {
     let min = core::mem::size_of::<Archived<T>>();
     if min > 0 && bytes.len() < min {
         return Err(Error::LengthMismatch);
     }
-    Ok(archived_from_slice_unchecked(bytes))
-}
-
-/// Interpret `bytes` as an archived value, realigning the payload if required.
-///
-/// This helper mirrors the historical behaviour of Iroha's block decoder which
-/// accepted misaligned archived payloads emitted by earlier Norito encoders.
-/// Callers must ensure the slice contains a valid archived representation of
-/// `T`. When the input is misaligned the bytes are copied into an internal
-/// buffer so the returned reference is always properly aligned.
-#[inline]
-#[allow(unsafe_code)]
-pub fn archived_from_slice_unchecked<'a, T>(bytes: &'a [u8]) -> ArchivedRef<'a, T> {
-    debug_assert!(
-        bytes.len() >= core::mem::size_of::<Archived<T>>()
-            || core::mem::size_of::<Archived<T>>() == 0,
-        "slice shorter than Archived<{}>",
-        core::any::type_name::<T>()
-    );
     let type_align = core::mem::align_of::<Archived<T>>();
     let min_align = core::mem::align_of::<u128>();
     let align_target = type_align.max(min_align);
@@ -5633,29 +5621,24 @@ pub fn archived_from_slice_unchecked<'a, T>(bytes: &'a [u8]) -> ArchivedRef<'a, 
     let needs_copy =
         align_target > 1 && !bytes.is_empty() && !ptr_usize.is_multiple_of(align_target);
     if needs_copy {
-        let slice = ArchiveSlice::new(bytes, align_target).unwrap_or_else(|err| {
-            panic!(
-                "failed to realign archived payload for {}: {err:?}",
-                core::any::type_name::<T>()
-            )
-        });
+        let slice = ArchiveSlice::new(bytes, align_target)?;
         let ptr = slice.as_slice().as_ptr() as *const Archived<T>;
-        ArchivedRef {
+        Ok(ArchivedRef {
             ptr,
             backing: ArchivedBacking::Owned(slice),
             _marker: PhantomData,
-        }
+        })
     } else {
         let ptr = if bytes.is_empty() {
             core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
         } else {
             bytes.as_ptr() as *const Archived<T>
         };
-        ArchivedRef {
+        Ok(ArchivedRef {
             ptr,
             backing: ArchivedBacking::Borrowed(bytes),
             _marker: PhantomData,
-        }
+        })
     }
 }
 
@@ -10441,7 +10424,45 @@ mod tests {
     }
 
     #[test]
-    fn archived_from_slice_unchecked_realigns_payload() {
+    fn archived_from_slice_rejects_truncated_payload() {
+        let bytes = [0_u8; core::mem::size_of::<u128>() - 1];
+
+        let error = match archived_from_slice::<u128>(&bytes) {
+            Ok(_) => panic!("undersized archived payload must be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, Error::LengthMismatch));
+    }
+
+    #[test]
+    fn archived_from_slice_propagates_realign_allocation_limit() {
+        let align = core::mem::align_of::<Archived<u128>>();
+        let mut storage = vec![0_u8; core::mem::size_of::<u128>() + align];
+        let base = storage.as_mut_ptr() as usize;
+        let offset = (0..align)
+            .find(|offset| !(base + offset).is_multiple_of(align))
+            .expect("u128 has a misaligned offset");
+        let end = offset + core::mem::size_of::<u128>();
+        let misaligned = &storage[offset..end];
+        let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
+
+        let error = with_decode_limits(limits, || {
+            archived_from_slice::<u128>(misaligned).map(|_| ())
+        })
+        .expect_err("realignment must honor the active allocation limit");
+
+        assert!(matches!(
+            error,
+            Error::TotalAllocationExceeded {
+                attempted,
+                limit: 0
+            } if attempted == core::mem::size_of::<u128>() as u64
+        ));
+    }
+
+    #[test]
+    fn archived_from_slice_realigns_payload() {
         #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
         #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
         struct AlignSensitive {
@@ -10469,7 +10490,8 @@ mod tests {
             "expected misaligned payload for test coverage"
         );
 
-        let archived = archived_from_slice_unchecked::<AlignSensitive>(misaligned);
+        let archived =
+            archived_from_slice::<AlignSensitive>(misaligned).expect("realign archived payload");
         let _flags = DecodeFlagsGuard::enter_with_hint(flags, flags);
         let _payload = PayloadCtxGuard::enter(archived.bytes());
         let decoded = <AlignSensitive as NoritoDeserialize>::try_deserialize(archived.as_ref())

@@ -49,7 +49,6 @@ use iroha_data_model::{
     asset::AssetDefinitionId,
     isi::{self, InstructionBox},
     name::Name,
-    prelude::ExposedPrivateKey,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, BfvEvaluationKeyRefreshTranscriptV1,
@@ -331,6 +330,7 @@ enum MutationMode {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedBundleRequest {
     pub bundle: SoraDeploymentBundleV1,
     #[norito(default)]
@@ -338,13 +338,10 @@ pub(crate) struct SignedBundleRequest {
     #[norito(default)]
     pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAppInfraRequest {
     #[norito(default)]
     pub deploy_services: Vec<SignedBundleRequest>,
@@ -352,10 +349,6 @@ pub(crate) struct SignedAppInfraRequest {
     pub upgrade_services: Vec<SignedBundleRequest>,
     pub manifest: SoraAppInfraManifestV1,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize)]
@@ -383,13 +376,10 @@ pub(crate) struct RollbackPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedRollbackRequest {
     pub payload: RollbackPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -426,13 +416,10 @@ pub(crate) struct StateMutationRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedStateMutationRequest {
     pub payload: StateMutationRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -443,13 +430,10 @@ pub(crate) struct ServiceConfigSetRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceConfigSetRequest {
     pub payload: ServiceConfigSetRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -459,13 +443,10 @@ pub(crate) struct ServiceConfigDeleteRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceConfigDeleteRequest {
     pub payload: ServiceConfigDeleteRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -476,13 +457,10 @@ pub(crate) struct ServiceSecretSetRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceSecretSetRequest {
     pub payload: ServiceSecretSetRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -492,13 +470,10 @@ pub(crate) struct ServiceSecretDeleteRequest {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedServiceSecretDeleteRequest {
     pub payload: ServiceSecretDeleteRequest,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(
@@ -530,13 +505,10 @@ pub(crate) struct RolloutAdvancePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedRolloutAdvanceRequest {
     pub payload: RolloutAdvancePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -548,13 +520,10 @@ pub(crate) struct AgentDeployPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentDeployRequest {
     pub payload: AgentDeployPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -564,13 +533,10 @@ pub(crate) struct AgentLeaseRenewPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentLeaseRenewRequest {
     pub payload: AgentLeaseRenewPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
@@ -589,6 +555,7 @@ pub(crate) struct HfDeployPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfDeployRequest {
     pub payload: HfDeployPayload,
     pub provenance: ManifestProvenance,
@@ -596,10 +563,6 @@ pub(crate) struct SignedHfDeployRequest {
     pub generated_service_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     pub generated_apartment_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -616,13 +579,10 @@ pub(crate) struct HfLeaseLeavePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfLeaseLeaveRequest {
     pub payload: HfLeaseLeavePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -641,6 +601,7 @@ pub(crate) struct HfLeaseRenewPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedHfLeaseRenewRequest {
     pub payload: HfLeaseRenewPayload,
     pub provenance: ManifestProvenance,
@@ -648,10 +609,6 @@ pub(crate) struct SignedHfLeaseRenewRequest {
     pub generated_service_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     pub generated_apartment_provenance: Option<ManifestProvenance>,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -660,13 +617,10 @@ pub(crate) struct ModelHostAdvertisePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelHostAdvertiseRequest {
     pub payload: ModelHostAdvertisePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -676,13 +630,10 @@ pub(crate) struct ModelHostHeartbeatPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelHostHeartbeatRequest {
     pub payload: ModelHostHeartbeatPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -691,13 +642,10 @@ pub(crate) struct ModelHostWithdrawPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelHostWithdrawRequest {
     pub payload: ModelHostWithdrawPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -707,13 +655,10 @@ pub(crate) struct AgentRestartPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentRestartRequest {
     pub payload: AgentRestartPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -725,13 +670,10 @@ pub(crate) struct AgentPolicyRevokePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentPolicyRevokeRequest {
     pub payload: AgentPolicyRevokePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize)]
@@ -742,13 +684,10 @@ pub(crate) struct AgentWalletSpendPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentWalletSpendRequest {
     pub payload: AgentWalletSpendPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -758,13 +697,10 @@ pub(crate) struct AgentWalletApprovePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentWalletApproveRequest {
     pub payload: AgentWalletApprovePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -776,13 +712,10 @@ pub(crate) struct AgentMessageSendPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentMessageSendRequest {
     pub payload: AgentMessageSendPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -792,13 +725,10 @@ pub(crate) struct AgentMessageAckPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentMessageAckRequest {
     pub payload: AgentMessageAckPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -810,13 +740,10 @@ pub(crate) struct AgentArtifactAllowPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentArtifactAllowRequest {
     pub payload: AgentArtifactAllowPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -832,13 +759,10 @@ pub(crate) struct AgentAutonomyRunPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedAgentAutonomyRunRequest {
     pub payload: AgentAutonomyRunPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -870,13 +794,10 @@ pub(crate) struct FheJobRunPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedFheJobRunRequest {
     pub payload: FheJobRunPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -894,13 +815,10 @@ pub(crate) struct TrainingJobStartPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedTrainingJobStartRequest {
     pub payload: TrainingJobStartPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -913,13 +831,10 @@ pub(crate) struct TrainingJobCheckpointPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedTrainingJobCheckpointRequest {
     pub payload: TrainingJobCheckpointPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -930,13 +845,10 @@ pub(crate) struct TrainingJobRetryPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedTrainingJobRetryRequest {
     pub payload: TrainingJobRetryPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -955,13 +867,10 @@ pub(crate) struct ModelWeightRegisterPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelWeightRegisterRequest {
     pub payload: ModelWeightRegisterPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -974,13 +883,10 @@ pub(crate) struct ModelWeightPromotePayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelWeightPromoteRequest {
     pub payload: ModelWeightPromotePayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -992,13 +898,10 @@ pub(crate) struct ModelWeightRollbackPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelWeightRollbackRequest {
     pub payload: ModelWeightRollbackPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1014,13 +917,10 @@ pub(crate) struct ModelArtifactRegisterPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedModelArtifactRegisterRequest {
     pub payload: ModelArtifactRegisterPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1051,14 +951,11 @@ pub(crate) struct UploadedModelRegisterPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedUploadedModelRegisterRequest {
     pub payload: UploadedModelRegisterPayload,
     pub bundle_provenance: ManifestProvenance,
     pub finalize_provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1069,13 +966,10 @@ pub(crate) struct DecryptionRequestPayload {
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+#[norito(deny_unknown_fields)]
 pub(crate) struct SignedDecryptionRequest {
     pub payload: DecryptionRequestPayload,
     pub provenance: ManifestProvenance,
-    #[norito(default)]
-    pub authority: Option<AccountId>,
-    #[norito(default)]
-    pub private_key: Option<ExposedPrivateKey>,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -6395,14 +6289,7 @@ fn verified_soracloud_request_identity(
 fn require_soracloud_mutation_signer(
     headers: &HeaderMap,
     provenance: &ManifestProvenance,
-    authority: Option<AccountId>,
-    private_key: Option<ExposedPrivateKey>,
 ) -> Result<SoracloudMutationSigner, SoracloudError> {
-    if authority.is_some() || private_key.is_some() {
-        return Err(SoracloudError::bad_request(
-            "authority/private_key fields are no longer accepted; sign the HTTP request with X-Iroha-Account plus X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce or X-Iroha-Witness",
-        ));
-    }
     let (authority, _request_signer, verified_signers) =
         verified_soracloud_request_identity(headers)?;
     if !verified_signers
@@ -10597,12 +10484,7 @@ pub(crate) async fn handle_deploy(
     if let Err(err) = admit_scr_host_bundle(&request.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10652,12 +10534,7 @@ pub(crate) async fn handle_upgrade(
     if let Err(err) = admit_scr_host_bundle(&request.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10892,12 +10769,7 @@ pub(crate) async fn handle_rollback(
     if let Err(err) = verify_rollback_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(
-        &headers,
-        &request.provenance,
-        request.authority,
-        request.private_key,
-    ) {
+    let signer = match require_soracloud_mutation_signer(&headers, &request.provenance) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };

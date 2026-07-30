@@ -24,6 +24,11 @@ specified in [Merge ledger](merge_ledger.md); formal and release evidence are
 tracked separately in the
 [Sumeragi V2 multilane closure ledger](sumeragi_v2_multilane_closure_ledger.md).
 
+Every Blake2b identity in the relay protocol has a distinct, length-framed
+domain: settlement payloads, FASTPQ claims, merge hints, fee-sponsor source
+state, and fee-sponsor allocation claims cannot be reinterpreted across
+contexts even when their canonical Norito payloads share a prefix.
+
 ## End-to-end flow
 
 1. The live Nexus router assigns each accepted transaction to a canonical
