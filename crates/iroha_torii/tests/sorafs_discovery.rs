@@ -43,6 +43,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, BlsNormal, KeyGenOption, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
     ChainId, IntoKeyValue, Registrable,
+    account::AccountId,
     block::BlockHeader,
     isi::sorafs::RegisterPinManifest,
     name::Name,
@@ -52,12 +53,15 @@ use iroha_data_model::{
         ManifestDigest as RegistryManifestDigest, PinPolicy as RegistryPinPolicy,
         StorageClass as RegistryStorageClass,
     },
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::Child;
 use iroha_primitives::json::Json;
 use iroha_torii::{
-    MaybeTelemetry, OnlinePeersProvider, Torii,
+    MaybeTelemetry, OnlinePeersProvider, SoraFsProofOutcomeSigningError,
+    SoraFsProofOutcomeTransactionSigner, SorafsNativeTransactionSignerProbeErrorV1,
+    SorafsNativeTransactionSignerProviderV1, SorafsNativeTransactionSignerQualificationV1,
+    SorafsNativeTransactionSignerRoleV1, Torii, ToriiRuntimeDeps,
     sorafs::{
         AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
         api::StorageStateResponseDto,
@@ -1601,10 +1605,104 @@ struct ToriiHarness {
     _torii_data_dir: TempDir,
 }
 
+const DISCOVERY_PROOF_SIGNER_HANDLE: &str = "hsm://sorafs/proof-outcome/primary";
+const DISCOVERY_PROOF_SIGNER_QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
+    SorafsNativeTransactionSignerQualificationV1::new(1, [0xD7; 32]);
+
+struct DiscoveryProofSigner {
+    key_pair: KeyPair,
+}
+
+impl DiscoveryProofSigner {
+    fn new() -> Self {
+        Self {
+            key_pair: KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::Ed25519)
+                .expect("derive deterministic discovery proof signer"),
+        }
+    }
+
+    fn configured_binding(
+        &self,
+    ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+        let public_key = self.key_pair.public_key().clone();
+        iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+            handle: DISCOVERY_PROOF_SIGNER_HANDLE.to_owned(),
+            authority: AccountId::new(public_key.clone()),
+            algorithm: Algorithm::Ed25519,
+            public_key,
+            revision: DISCOVERY_PROOF_SIGNER_QUALIFICATION.revision(),
+            policy_digest: DISCOVERY_PROOF_SIGNER_QUALIFICATION.policy_digest(),
+        }
+    }
+}
+
+impl SorafsNativeTransactionSignerProviderV1 for DiscoveryProofSigner {
+    fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
+        SorafsNativeTransactionSignerRoleV1::ProofOutcome
+    }
+
+    fn handle(&self) -> &str {
+        DISCOVERY_PROOF_SIGNER_HANDLE
+    }
+
+    fn authority(&self) -> AccountId {
+        AccountId::new(self.key_pair.public_key().clone())
+    }
+
+    fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
+        Ok(self.key_pair.public_key().clone())
+    }
+
+    fn qualification(
+        &self,
+    ) -> Result<
+        SorafsNativeTransactionSignerQualificationV1,
+        SorafsNativeTransactionSignerProbeErrorV1,
+    > {
+        Ok(DISCOVERY_PROOF_SIGNER_QUALIFICATION)
+    }
+}
+
+impl SoraFsProofOutcomeTransactionSigner for DiscoveryProofSigner {
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError> {
+        TransactionBuilder::from_payload(payload)
+            .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
+            .map_err(|_| SoraFsProofOutcomeSigningError::Refused)
+    }
+}
+
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
     cfg.torii.data_dir = torii_data_dir.path().join("torii");
+    let proof_signer = cfg.torii.sorafs_storage.enabled.then(|| {
+        let signer = Arc::new(DiscoveryProofSigner::new());
+        let binding = signer.configured_binding();
+        match cfg
+            .torii
+            .sorafs_storage
+            .native_transaction_signers
+            .proof_outcome
+            .as_ref()
+        {
+            Some(configured) => {
+                assert_eq!(
+                    configured, &binding,
+                    "discovery harness proof signer must match the configured binding"
+                );
+            }
+            None => {
+                cfg.torii
+                    .sorafs_storage
+                    .native_transaction_signers
+                    .proof_outcome = Some(binding);
+            }
+        }
+        signer
+    });
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -1625,6 +1723,13 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
 
     let chain_id = cfg.common.chain.clone();
     let chain_id_arc = Arc::new(chain_id.clone());
+    let runtime_deps = ToriiRuntimeDeps::new(MaybeTelemetry::disabled());
+    let runtime_deps = if let Some(signer) = proof_signer {
+        let signer: Arc<dyn SoraFsProofOutcomeTransactionSigner> = signer;
+        runtime_deps.with_sorafs_proof_outcome_signer(signer)
+    } else {
+        runtime_deps
+    };
     let torii = Torii::new_with_handle(
         chain_id,
         kiso,
@@ -1637,7 +1742,7 @@ fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        runtime_deps,
     );
     let app = torii.api_router_for_tests();
     let alias_policy = cfg.torii.sorafs_alias_cache;

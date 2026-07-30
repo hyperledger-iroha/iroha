@@ -34,6 +34,147 @@ use crate::{
 };
 use std::{fmt, sync::Arc};
 
+const BROKER_LIFECYCLE_STARTING_V1: u8 = 0;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const BROKER_LIFECYCLE_READY_V1: u8 = 1;
+const BROKER_LIFECYCLE_STOPPING_V1: u8 = 2;
+
+/// One-shot lifecycle control shared by a broker launcher and serving thread.
+///
+/// Readiness publication and shutdown are linearized through a bounded
+/// callback gate plus one atomic state. A shutdown request that wins while the
+/// server is starting prevents the readiness callback and short-circuits
+/// startup before backend qualification when it is already present at entry.
+#[derive(Debug)]
+pub struct RuntimeProviderBrokerLifecycleV1 {
+    state: std::sync::atomic::AtomicU8,
+    readiness_publication_gate: std::sync::Mutex<()>,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    active_provider_calls: std::sync::atomic::AtomicUsize,
+}
+
+impl RuntimeProviderBrokerLifecycleV1 {
+    /// Construct a fresh one-shot lifecycle in the starting state.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            state: std::sync::atomic::AtomicU8::new(BROKER_LIFECYCLE_STARTING_V1),
+            readiness_publication_gate: std::sync::Mutex::new(()),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            active_provider_calls: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Request orderly shutdown without waiting for in-flight provider calls.
+    ///
+    /// The serving call closes accepted local transports and joins every
+    /// session before it returns. A provider qualification already in progress
+    /// or an operation already admitted when this method linearizes is allowed
+    /// to finish because the synchronous V1 provider traits do not expose
+    /// cancellation. Operation admission is the final atomic check immediately
+    /// before dispatch; it can precede the actual trait-method call by a small
+    /// in-process interval.
+    ///
+    /// This call waits for a readiness callback that already owns the bounded
+    /// publication gate. The callback must therefore be bounded and must not
+    /// call `request_shutdown` reentrantly.
+    pub fn request_shutdown(&self) {
+        let _publication = self
+            .readiness_publication_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.state.store(
+            BROKER_LIFECYCLE_STOPPING_V1,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    /// Return whether orderly shutdown has been requested or begun.
+    #[must_use]
+    pub fn shutdown_requested(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn publish_ready<R>(&self, on_ready: R) -> bool
+    where
+        R: FnOnce(),
+    {
+        let _publication = self
+            .readiness_publication_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self
+            .state
+            .compare_exchange(
+                BROKER_LIFECYCLE_STARTING_V1,
+                BROKER_LIFECYCLE_READY_V1,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        on_ready();
+        true
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn try_begin_qualification(self: &Arc<Self>) -> Option<RuntimeProviderBrokerCallPermitV1> {
+        if self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1 {
+            return None;
+        }
+        self.active_provider_calls
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if self.state.load(std::sync::atomic::Ordering::SeqCst) == BROKER_LIFECYCLE_STOPPING_V1 {
+            self.active_provider_calls
+                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+            return None;
+        }
+        Some(RuntimeProviderBrokerCallPermitV1 {
+            lifecycle: Arc::clone(self),
+        })
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn try_begin_operation(self: &Arc<Self>) -> Option<RuntimeProviderBrokerCallPermitV1> {
+        if self.state.load(std::sync::atomic::Ordering::SeqCst) != BROKER_LIFECYCLE_READY_V1 {
+            return None;
+        }
+        self.active_provider_calls
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        if self.state.load(std::sync::atomic::Ordering::SeqCst) != BROKER_LIFECYCLE_READY_V1 {
+            self.active_provider_calls
+                .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+            return None;
+        }
+        Some(RuntimeProviderBrokerCallPermitV1 {
+            lifecycle: Arc::clone(self),
+        })
+    }
+}
+
+impl Default for RuntimeProviderBrokerLifecycleV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct RuntimeProviderBrokerCallPermitV1 {
+    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Drop for RuntimeProviderBrokerCallPermitV1 {
+    fn drop(&mut self) {
+        self.lifecycle
+            .active_provider_calls
+            .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 /// Stock platform-fixed runtime-provider registry used by `main_entry`.
 ///
 /// Construction performs no I/O. The registry connects to the fixed local
@@ -1042,6 +1183,9 @@ pub enum RuntimeProviderBrokerServerErrorV1 {
     BindingMismatch,
     /// The fixed service-UID-owned local endpoint could not be secured.
     EndpointUnavailable,
+    /// The broker could not prove and remove its bound endpoint entry without
+    /// risking a path-substitution unlink.
+    EndpointCleanupFailed,
     /// A canonical protocol or authenticated peer invariant failed.
     Protocol,
     /// This platform lacks the authenticated V1 local transport.
@@ -1055,6 +1199,9 @@ impl fmt::Display for RuntimeProviderBrokerServerErrorV1 {
             Self::BackendSetMismatch => "runtime-provider broker backend set is incomplete",
             Self::BindingMismatch => "runtime-provider broker binding is not qualified",
             Self::EndpointUnavailable => "runtime-provider broker endpoint is unavailable",
+            Self::EndpointCleanupFailed => {
+                "runtime-provider broker endpoint cleanup could not be completed safely"
+            }
             Self::Protocol => "runtime-provider broker protocol failed",
             Self::UnsupportedPlatform => {
                 "runtime-provider broker transport is unsupported on this platform"
@@ -1092,6 +1239,72 @@ pub fn serve_runtime_provider_broker_v1(
     }
 }
 
+/// Serve the exact catalog until the caller requests an orderly shutdown.
+///
+/// The caller retains a clone of `lifecycle` and requests shutdown through
+/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`]. `on_ready` runs
+/// exactly once, on the serving thread, after all requested backends have
+/// passed live qualification, the fixed endpoint has been securely bound, and
+/// the complete backend catalog has passed an immediate second qualification.
+/// A bounded gate linearizes the complete callback against shutdown: a
+/// shutdown that wins suppresses the callback, while a shutdown that loses
+/// waits for the callback to finish before returning.
+///
+/// The callback must be bounded and infallible, and it must not call
+/// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`] reentrantly. If it
+/// panics, endpoint cleanup is attempted while the panic unwinds.
+///
+/// After shutdown, the server closes every accepted transport and joins every
+/// session before returning. Synchronous deployment-owned provider methods do
+/// not expose cancellation or a uniform deadline, so a qualification call
+/// already in progress or an operation already admitted can delay this return;
+/// deployments must enforce their advertised bounds inside each provider
+/// adapter. Admission is the final atomic check immediately before dispatch
+/// and can precede entry into the trait method by a small in-process interval.
+/// No operation is admitted after the shutdown transition.
+///
+/// Startup binds an unpredictable staging name in a pinned parent directory,
+/// establishes the socket identity guard before permission changes, then
+/// atomically promotes that entry to the canonical name without replacement.
+/// Portable Linux/macOS pathname APIs do not provide an atomic
+/// “unlink-if-device-and-inode-match” operation. Cleanup resolves and unlinks
+/// relative to the pinned directory descriptor, checks the socket identity
+/// immediately before that unlink, and reports substitution instead of
+/// knowingly removing a different entry. These pathname APIs still leave
+/// check/use intervals around mode changes and cleanup, so the service-owned
+/// runtime directory must exclude untrusted same-UID pathname mutators. If the
+/// broker cannot establish the staging entry's identity immediately after a
+/// successful bind, it closes the listener, reports
+/// [`RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed`], and leaves
+/// that unpredictable staging entry for operator inspection rather than
+/// unlinking an unproven replacement.
+///
+/// # Errors
+///
+/// Fails before readiness if the catalog/backend set is incomplete, any live
+/// public binding is missing, substituted, stale, revoked, or test-marked, or
+/// the fixed endpoint cannot be created with the required ownership and mode.
+pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
+    bindings: &IrohaRuntimeProviderBindingsV1,
+    backends: RuntimeProviderBrokerBackendsV1,
+    lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+    on_ready: R,
+) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+where
+    R: FnOnce(),
+{
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        protocol::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        lifecycle.request_shutdown();
+        let _ = (bindings, backends, on_ready);
+        Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod protocol {
     #[cfg(not(target_pointer_width = "64"))]
@@ -1105,7 +1318,7 @@ mod protocol {
     use sorafs_manifest::GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1;
     use std::{
         cell::RefCell,
-        fmt,
+        fmt::{self, Write as _},
         sync::{
             Arc, Mutex, OnceLock,
             atomic::{AtomicUsize, Ordering},
@@ -1114,7 +1327,8 @@ mod protocol {
     };
 
     use crate::{
-        IrohaRuntimeDeps, RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerServerErrorV1,
+        IrohaRuntimeDeps, RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
+        RuntimeProviderBrokerServerErrorV1,
         runtime_provider_registry::{
             EvidenceViewerWebAuthnBindingV1, IrohaRuntimeProviderBindingV1,
             IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
@@ -12730,7 +12944,7 @@ mod protocol {
         use std::{
             fmt, fs,
             os::unix::{
-                fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _},
+                fs::{FileTypeExt as _, MetadataExt as _},
                 net::{UnixListener, UnixStream},
             },
             path::{Path, PathBuf},
@@ -14252,6 +14466,74 @@ mod protocol {
                 observations,
                 backends,
             })
+        }
+
+        #[derive(Debug)]
+        enum StartupQualificationErrorV1 {
+            Cancelled,
+            Failed(RuntimeProviderBrokerServerErrorV1),
+        }
+
+        fn prepare_server_state_for_lifecycle(
+            bindings: &IrohaRuntimeProviderBindingsV1,
+            backends: RuntimeProviderBrokerBackendsV1,
+            lifecycle: &Arc<RuntimeProviderBrokerLifecycleV1>,
+        ) -> Result<BrokerServerStateV1, StartupQualificationErrorV1> {
+            let catalog = bindings
+                .iter()
+                .map(ProviderBindingWireV1::try_from_binding)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    StartupQualificationErrorV1::Failed(
+                        RuntimeProviderBrokerServerErrorV1::BindingMismatch,
+                    )
+                })?;
+            validate_exact_backend_set(&catalog, &backends)
+                .map_err(StartupQualificationErrorV1::Failed)?;
+            let observations = catalog
+                .iter()
+                .map(|binding| {
+                    let Some(_qualification_permit) = lifecycle.try_begin_qualification() else {
+                        return Err(StartupQualificationErrorV1::Cancelled);
+                    };
+                    make_server_observation(binding, &backends)
+                        .map_err(StartupQualificationErrorV1::Failed)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(BrokerServerStateV1 {
+                chain_id: bindings.chain_id().to_owned(),
+                catalog,
+                observations,
+                backends,
+            })
+        }
+
+        fn requalify_server_state(
+            state: &BrokerServerStateV1,
+            lifecycle: &Arc<RuntimeProviderBrokerLifecycleV1>,
+        ) -> Result<(), StartupQualificationErrorV1> {
+            if lifecycle.shutdown_requested() {
+                return Err(StartupQualificationErrorV1::Cancelled);
+            }
+            validate_exact_backend_set(&state.catalog, &state.backends)
+                .map_err(StartupQualificationErrorV1::Failed)?;
+            let observations = state
+                .catalog
+                .iter()
+                .map(|binding| {
+                    let Some(_qualification_permit) = lifecycle.try_begin_qualification() else {
+                        return Err(StartupQualificationErrorV1::Cancelled);
+                    };
+                    make_server_observation(binding, &state.backends)
+                        .map_err(StartupQualificationErrorV1::Failed)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if observations != state.observations {
+                return Err(StartupQualificationErrorV1::Failed(
+                    RuntimeProviderBrokerServerErrorV1::BindingMismatch,
+                ));
+            }
+            Ok(())
         }
 
         /// Immutable endpoint and filesystem-identity policy for one connection.
@@ -18867,7 +19149,11 @@ mod protocol {
             mut session_permit: Option<tokio::sync::OwnedSemaphorePermit>,
             source_stream_permits: Arc<tokio::sync::Semaphore>,
             inbound_operation_budget: Arc<tokio::sync::Semaphore>,
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
         ) -> Result<(), BrokerError> {
+            if lifecycle.shutdown_requested() {
+                return Err(BrokerError::Unavailable);
+            }
             stream
                 .set_read_timeout(Some(BROKER_IO_TIMEOUT_V1))
                 .map_err(|_| BrokerError::Unavailable)?;
@@ -18881,6 +19167,9 @@ mod protocol {
                 MAX_HANDSHAKE_FRAME_BYTES_V1,
             )?;
             validate_handshake_request(&handshake)?;
+            if lifecycle.shutdown_requested() {
+                return Ok(());
+            }
             if handshake.chain_id != state.chain_id || handshake.requested_catalog != state.catalog
             {
                 return Err(BrokerError::BindingMismatch);
@@ -18889,10 +19178,16 @@ mod protocol {
                 .catalog
                 .iter()
                 .map(|binding| {
+                    let Some(_qualification_permit) = lifecycle.try_begin_qualification() else {
+                        return Err(BrokerError::Unavailable);
+                    };
                     let configured = configured_observation(state, binding)?;
                     qualify_server_binding(state, binding, configured.metadata_digest)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            if lifecycle.shutdown_requested() {
+                return Ok(());
+            }
             let mut session_id = [0_u8; 32];
             rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut session_id)
                 .map_err(|_| BrokerError::Unavailable)?;
@@ -18910,6 +19205,9 @@ mod protocol {
             let mut expected_request_id = 1_u64;
             let mut pop_session = PopBrokerServerSessionV1::default();
             loop {
+                if lifecycle.shutdown_requested() {
+                    return Ok(());
+                }
                 let (announced_slot, announced_operation, request_frame, decode_admission) =
                     read_operation_request_frame_with_budget(
                         &mut stream,
@@ -18939,6 +19237,13 @@ mod protocol {
                 expected_request_id = expected_request_id
                     .checked_add(1)
                     .ok_or(BrokerError::Protocol)?;
+                // This permit is the operation's admission boundary. The
+                // lifecycle's second state check closes the race with the
+                // shutdown transition; a request that loses that race never
+                // reaches a deployment-owned provider method.
+                let Some(_operation_permit) = lifecycle.try_begin_operation() else {
+                    return Ok(());
+                };
                 if request.binding.slot
                     == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
                     && request.operation == OPERATION_PROVIDER_INGEST_SOURCE_FETCH_V1
@@ -19011,72 +19316,451 @@ mod protocol {
         }
 
         struct BoundSocketGuard {
-            path: PathBuf,
+            parent_directory: fs::File,
+            socket_name: std::ffi::OsString,
             identity: SocketIdentity,
+            armed: bool,
+        }
+
+        impl BoundSocketGuard {
+            fn verify_entry(&self) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+                let metadata = rustix::fs::statat(
+                    &self.parent_directory,
+                    self.socket_name.as_os_str(),
+                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+                )
+                .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+                if rustix::fs::FileType::from_raw_mode(metadata.st_mode)
+                    != rustix::fs::FileType::Socket
+                    || socket_identity_from_stat(&metadata)? != self.identity
+                {
+                    return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                }
+                Ok(())
+            }
+
+            fn promote(
+                &mut self,
+                canonical_name: std::ffi::OsString,
+            ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+                rustix::fs::renameat_with(
+                    &self.parent_directory,
+                    self.socket_name.as_os_str(),
+                    &self.parent_directory,
+                    canonical_name.as_os_str(),
+                    rustix::fs::RenameFlags::NOREPLACE,
+                )
+                .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+                self.socket_name = canonical_name;
+                self.verify_entry()
+            }
+
+            fn cleanup(mut self) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+                self.armed = false;
+                cleanup_pinned_socket_entry(
+                    &self.parent_directory,
+                    self.socket_name.as_os_str(),
+                    self.identity,
+                )
+            }
         }
 
         impl Drop for BoundSocketGuard {
             fn drop(&mut self) {
-                let Ok(metadata) = fs::symlink_metadata(&self.path) else {
-                    return;
-                };
-                if !metadata.file_type().is_socket()
-                    || metadata.dev() != self.identity.device
-                    || metadata.ino() != self.identity.inode
-                {
+                if !self.armed {
                     return;
                 }
-                let _ = fs::remove_file(&self.path);
+                self.armed = false;
+                let _ = cleanup_pinned_socket_entry(
+                    &self.parent_directory,
+                    self.socket_name.as_os_str(),
+                    self.identity,
+                );
+            }
+        }
+
+        fn staging_socket_name() -> Result<std::ffi::OsString, RuntimeProviderBrokerServerErrorV1> {
+            let mut nonce = [0_u8; 12];
+            rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut nonce)
+                .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+            if nonce == [0; 12] {
+                return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+            }
+            let mut name = String::with_capacity(27);
+            name.push_str(".b-");
+            for byte in nonce {
+                write!(&mut name, "{byte:02x}")
+                    .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+            }
+            Ok(name.into())
+        }
+
+        #[cfg(target_os = "linux")]
+        const fn socket_device_identity_from_raw(device: rustix::fs::Dev) -> u64 {
+            device
+        }
+
+        #[cfg(target_os = "macos")]
+        const fn socket_device_identity_from_raw(device: rustix::fs::Dev) -> u64 {
+            // `MetadataExt::dev()` exposes `dev_t` through Rust's unsigned
+            // `u64` identity. On macOS `dev_t` is signed, so `as` preserves
+            // the exact conversion used by `MetadataExt` even when its high
+            // bit is set; a fallible numeric conversion would reject a valid
+            // filesystem identity.
+            device as u64
+        }
+
+        fn socket_identity_from_stat(
+            metadata: &rustix::fs::Stat,
+        ) -> Result<SocketIdentity, RuntimeProviderBrokerServerErrorV1> {
+            Ok(SocketIdentity {
+                device: socket_device_identity_from_raw(metadata.st_dev),
+                inode: metadata.st_ino,
+            })
+        }
+
+        fn cleanup_pinned_socket_entry(
+            parent_directory: &fs::File,
+            socket_name: &std::ffi::OsStr,
+            identity: SocketIdentity,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+            let metadata = match rustix::fs::statat(
+                parent_directory,
+                socket_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(metadata) => metadata,
+                Err(rustix::io::Errno::NOENT) => return Ok(()),
+                Err(_) => return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed),
+            };
+            if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Socket
+                || socket_identity_from_stat(&metadata)? != identity
+            {
+                return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
+            }
+            rustix::fs::unlinkat(parent_directory, socket_name, rustix::fs::AtFlags::empty())
+                .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed)?;
+            match rustix::fs::statat(
+                parent_directory,
+                socket_name,
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Err(rustix::io::Errno::NOENT) => Ok(()),
+                Ok(_) | Err(_) => Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed),
+            }
+        }
+
+        fn finish_startup_failure<T>(
+            listener: UnixListener,
+            guard: BoundSocketGuard,
+            error: RuntimeProviderBrokerServerErrorV1,
+        ) -> Result<T, RuntimeProviderBrokerServerErrorV1> {
+            drop(listener);
+            match guard.cleanup() {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(cleanup_error),
             }
         }
 
         fn bind_server_listener(
             policy: &EndpointPolicy,
-        ) -> Result<(tokio::net::UnixListener, BoundSocketGuard), BrokerError> {
-            let parent = policy.path.parent().ok_or(BrokerError::Unavailable)?;
-            verify_directory(parent, policy.expected_service_uid, false)?;
+        ) -> Result<(tokio::net::UnixListener, BoundSocketGuard), RuntimeProviderBrokerServerErrorV1>
+        {
+            let parent = policy
+                .path
+                .parent()
+                .ok_or(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+            verify_directory(parent, policy.expected_service_uid, false).map_err(server_error)?;
             if policy.verify_all_ancestors {
                 for ancestor in parent.ancestors().skip(1) {
-                    verify_directory(ancestor, policy.expected_service_uid, true)?;
+                    verify_directory(ancestor, policy.expected_service_uid, true)
+                        .map_err(server_error)?;
                 }
             }
-            match fs::symlink_metadata(&policy.path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Ok(_) | Err(_) => return Err(BrokerError::Unavailable),
+            let parent_directory = rustix::fs::open(
+                parent,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map(fs::File::from)
+            .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+            let parent_metadata = parent_directory
+                .metadata()
+                .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+            if !parent_metadata.is_dir()
+                || parent_metadata.uid() != policy.expected_service_uid
+                || parent_metadata.mode() & 0o022 != 0
+            {
+                return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
             }
-            let listener =
-                UnixListener::bind(&policy.path).map_err(|_| BrokerError::Unavailable)?;
-            fs::set_permissions(&policy.path, fs::Permissions::from_mode(policy.socket_mode))
-                .map_err(|_| BrokerError::Unavailable)?;
-            let identity = endpoint_identity(policy)?;
-            let guard = BoundSocketGuard {
-                path: policy.path.clone(),
-                identity,
+            let socket_name = policy
+                .path
+                .file_name()
+                .ok_or(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?
+                .to_owned();
+            match rustix::fs::statat(
+                &parent_directory,
+                socket_name.as_os_str(),
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Err(rustix::io::Errno::NOENT) => {}
+                Ok(_) | Err(_) => {
+                    return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                }
+            }
+            let staging_name = staging_socket_name()?;
+            let staging_path = parent.join(&staging_name);
+            let listener = UnixListener::bind(&staging_path)
+                .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
+            let bound_metadata = match rustix::fs::statat(
+                &parent_directory,
+                staging_name.as_os_str(),
+                rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+            ) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    drop(listener);
+                    // TODO: replace this fail-safe staging leak if the
+                    // supported platforms gain a descriptor-relative Unix
+                    // socket bind or unlink-if-identity-matches primitive.
+                    // Without an observed identity, unlinking this pathname
+                    // could remove a substituted entry.
+                    return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
+                }
             };
-            listener
-                .set_nonblocking(true)
-                .map_err(|_| BrokerError::Unavailable)?;
-            let listener = tokio::net::UnixListener::from_std(listener)
-                .map_err(|_| BrokerError::Unavailable)?;
+            let bound_identity = match socket_identity_from_stat(&bound_metadata) {
+                Ok(identity) => identity,
+                Err(_) => {
+                    drop(listener);
+                    // The same fail-safe rule applies when a platform identity
+                    // cannot be represented by the V1 guard.
+                    return Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed);
+                }
+            };
+            let mut guard = BoundSocketGuard {
+                parent_directory,
+                socket_name: staging_name,
+                identity: bound_identity,
+                armed: true,
+            };
+            if rustix::fs::FileType::from_raw_mode(bound_metadata.st_mode)
+                != rustix::fs::FileType::Socket
+                || bound_metadata.st_uid != policy.expected_service_uid
+            {
+                return finish_startup_failure(
+                    listener,
+                    guard,
+                    RuntimeProviderBrokerServerErrorV1::EndpointUnavailable,
+                );
+            }
+            let socket_mode = match rustix::fs::RawMode::try_from(policy.socket_mode) {
+                Ok(mode) => mode,
+                Err(_) => {
+                    return finish_startup_failure(
+                        listener,
+                        guard,
+                        RuntimeProviderBrokerServerErrorV1::EndpointUnavailable,
+                    );
+                }
+            };
+            if let Err(error) = guard.verify_entry() {
+                return finish_startup_failure(listener, guard, error);
+            }
+            #[cfg(target_os = "linux")]
+            let chmod_flags = rustix::fs::AtFlags::empty();
+            #[cfg(target_os = "macos")]
+            let chmod_flags = rustix::fs::AtFlags::SYMLINK_NOFOLLOW;
+            if rustix::fs::chmodat(
+                &guard.parent_directory,
+                guard.socket_name.as_os_str(),
+                rustix::fs::Mode::from_raw_mode(socket_mode),
+                chmod_flags,
+            )
+            .is_err()
+            {
+                return finish_startup_failure(
+                    listener,
+                    guard,
+                    RuntimeProviderBrokerServerErrorV1::EndpointUnavailable,
+                );
+            }
+            if let Err(error) = guard.verify_entry() {
+                return finish_startup_failure(listener, guard, error);
+            }
+            if let Err(error) = guard.promote(socket_name) {
+                return finish_startup_failure(listener, guard, error);
+            }
+            let identity = match endpoint_identity(policy) {
+                Ok(identity) if identity == guard.identity => identity,
+                Ok(_) | Err(_) => {
+                    return finish_startup_failure(
+                        listener,
+                        guard,
+                        RuntimeProviderBrokerServerErrorV1::EndpointUnavailable,
+                    );
+                }
+            };
+            debug_assert_eq!(identity, guard.identity);
+            if listener.set_nonblocking(true).is_err() {
+                return finish_startup_failure(
+                    listener,
+                    guard,
+                    RuntimeProviderBrokerServerErrorV1::EndpointUnavailable,
+                );
+            }
+            let listener = match tokio::net::UnixListener::from_std(listener) {
+                Ok(listener) => listener,
+                Err(_) => {
+                    return match guard.cleanup() {
+                        Ok(()) => Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable),
+                        Err(cleanup_error) => Err(cleanup_error),
+                    };
+                }
+            };
             Ok((listener, guard))
         }
 
-        fn serve_with_policy(
+        fn verify_endpoint_is_pinned(
+            policy: &EndpointPolicy,
+            guard: &BoundSocketGuard,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+            guard.verify_entry()?;
+            if endpoint_identity(policy).map_err(server_error)? != guard.identity {
+                return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+            }
+            Ok(())
+        }
+
+        struct BrokerServingLifecycleGuard {
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+        }
+
+        impl Drop for BrokerServingLifecycleGuard {
+            fn drop(&mut self) {
+                self.lifecycle.request_shutdown();
+            }
+        }
+
+        #[derive(Default)]
+        struct AcceptedSessionControlsV1 {
+            controls: std::collections::BTreeMap<u64, UnixStream>,
+        }
+
+        impl AcceptedSessionControlsV1 {
+            fn insert(&mut self, session_token: u64, control: UnixStream) {
+                let replaced = self.controls.insert(session_token, control);
+                debug_assert!(
+                    replaced.is_none(),
+                    "session tokens are monotonically allocated and never reused"
+                );
+            }
+
+            fn remove(&mut self, session_token: &u64) {
+                let _ = self.controls.remove(session_token);
+            }
+
+            fn shutdown_all(&self) {
+                for control in self.controls.values() {
+                    let _ = control.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        }
+
+        impl Drop for AcceptedSessionControlsV1 {
+            fn drop(&mut self) {
+                // A serving-thread panic or other unexpected unwind must wake
+                // every accepted session before its `JoinSet` is dropped.
+                // The control sockets are clones of the descriptors owned by
+                // the blocking workers, so shutdown applies to both handles.
+                self.shutdown_all();
+            }
+        }
+
+        fn serve_with_policy_and_lifecycle<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
             policy: &EndpointPolicy,
-            shutdown: &std::sync::atomic::AtomicBool,
-        ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
-            use std::sync::atomic::Ordering;
-
-            let state = Arc::new(prepare_server_state(bindings, backends)?);
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+            on_ready: R,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+        where
+            R: FnOnce(),
+        {
+            if lifecycle.shutdown_requested() {
+                return Ok(());
+            }
+            let _serving_lifecycle = BrokerServingLifecycleGuard {
+                lifecycle: Arc::clone(&lifecycle),
+            };
+            let state = match prepare_server_state_for_lifecycle(bindings, backends, &lifecycle) {
+                Ok(state) => Arc::new(state),
+                Err(StartupQualificationErrorV1::Cancelled) => return Ok(()),
+                Err(StartupQualificationErrorV1::Failed(error)) => return Err(error),
+            };
+            if lifecycle.shutdown_requested() {
+                return Ok(());
+            }
+            let source_stream_limit = state
+                .catalog
+                .iter()
+                .find(|binding| {
+                    binding.slot
+                        == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource.wire_id()
+                })
+                .and_then(|binding| binding.provider_ingest_source_limits)
+                .map(|limits| {
+                    usize::try_from(limits.max_concurrent_streams)
+                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+                })
+                .transpose()?
+                .unwrap_or(0);
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
-            runtime.block_on(async {
-                let (listener, _guard) = bind_server_listener(policy).map_err(server_error)?;
-                let pinned_identity = endpoint_identity(policy).map_err(server_error)?;
+            runtime.block_on(async move {
+                let (listener, guard) = bind_server_listener(policy)?;
+                if lifecycle.shutdown_requested() {
+                    drop(listener);
+                    return match guard.cleanup() {
+                        Ok(()) => Ok(()),
+                        Err(cleanup_error) => Err(cleanup_error),
+                    };
+                }
+                if let Err(outcome) = requalify_server_state(&state, &lifecycle) {
+                    let result = match outcome {
+                        StartupQualificationErrorV1::Cancelled => Ok(()),
+                        StartupQualificationErrorV1::Failed(error) => Err(error),
+                    };
+                    drop(listener);
+                    return match guard.cleanup() {
+                        Ok(()) => result,
+                        Err(cleanup_error) => Err(cleanup_error),
+                    };
+                }
+                if let Err(error) = verify_endpoint_is_pinned(policy, &guard) {
+                    drop(listener);
+                    return match guard.cleanup() {
+                        Ok(()) => Err(error),
+                        Err(cleanup_error) => Err(cleanup_error),
+                    };
+                }
+                if !lifecycle.publish_ready(on_ready) {
+                    let result = if lifecycle.shutdown_requested() {
+                        Ok(())
+                    } else {
+                        Err(RuntimeProviderBrokerServerErrorV1::Protocol)
+                    };
+                    drop(listener);
+                    return match guard.cleanup() {
+                        Ok(()) => result,
+                        Err(cleanup_error) => Err(cleanup_error),
+                    };
+                }
+
                 let session_permits = Arc::new(tokio::sync::Semaphore::new(MAX_BROKER_SESSIONS_V1));
                 // Hold a permit for every declared inbound operation byte until
                 // the decoded request leaves its server-loop iteration. A
@@ -19088,44 +19772,65 @@ mod protocol {
                         .checked_sub(MAX_BROKER_SHARED_DECODE_BYTES_V1)
                         .expect("combined broker memory ceiling includes raw frames"),
                 ));
-                let source_stream_limit = state
-                    .catalog
-                    .iter()
-                    .find(|binding| {
-                        binding.slot
-                            == IrohaRuntimeProviderSlotV1::ProviderIngestAuthenticatedSource
-                                .wire_id()
-                    })
-                    .and_then(|binding| binding.provider_ingest_source_limits)
-                    .map(|limits| {
-                        usize::try_from(limits.max_concurrent_streams)
-                            .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
-                    })
-                    .transpose()?
-                    .unwrap_or(0);
                 let source_stream_permits =
                     Arc::new(tokio::sync::Semaphore::new(source_stream_limit));
-                loop {
-                    if shutdown.load(Ordering::Acquire) {
-                        return Ok(());
+                let mut sessions = tokio::task::JoinSet::new();
+                let mut session_controls = AcceptedSessionControlsV1::default();
+                let mut next_session_token = 0_u64;
+
+                let mut serve_result = 'serve: loop {
+                    while let Some(joined) = sessions.try_join_next() {
+                        match joined {
+                            Ok((session_token, _session_result)) => {
+                                session_controls.remove(&session_token);
+                            }
+                            Err(_) => {
+                                break 'serve Err(RuntimeProviderBrokerServerErrorV1::Protocol);
+                            }
+                        }
+                    }
+                    if lifecycle.shutdown_requested() {
+                        break Ok(());
+                    }
+                    if let Err(error) = verify_endpoint_is_pinned(policy, &guard) {
+                        break Err(error);
                     }
                     let accepted = tokio::select! {
                         accepted = listener.accept() => Some(accepted),
                         () = tokio::time::sleep(Duration::from_millis(100)) => None,
                     };
                     let Some(accepted) = accepted else {
+                        if let Err(error) = verify_endpoint_is_pinned(policy, &guard) {
+                            break Err(error);
+                        }
                         continue;
                     };
-                    let (stream, _) = accepted
-                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
-                    if endpoint_identity(policy).map_err(server_error)? != pinned_identity {
-                        return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                    let (stream, _) = match accepted {
+                        Ok(accepted) => accepted,
+                        Err(_) => {
+                            break Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                        }
+                    };
+                    if lifecycle.shutdown_requested() {
+                        drop(stream);
+                        break Ok(());
                     }
-                    let credentials = stream
-                        .peer_cred()
-                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
-                    verify_peer_uid(credentials.uid(), policy.expected_service_uid)
-                        .map_err(server_error)?;
+                    if let Err(error) = verify_endpoint_is_pinned(policy, &guard) {
+                        drop(stream);
+                        break Err(error);
+                    }
+                    let credentials = match stream.peer_cred() {
+                        Ok(credentials) => credentials,
+                        Err(_) => {
+                            break Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                        }
+                    };
+                    if let Err(error) =
+                        verify_peer_uid(credentials.uid(), policy.expected_service_uid)
+                            .map_err(server_error)
+                    {
+                        break Err(error);
+                    }
                     let Ok(session_permit) = Arc::clone(&session_permits).try_acquire_owned()
                     else {
                         // Excess peers are closed immediately. They never
@@ -19133,32 +19838,82 @@ mod protocol {
                         drop(stream);
                         continue;
                     };
-                    let stream = stream
-                        .into_std()
-                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
-                    stream
-                        .set_nonblocking(false)
-                        .map_err(|_| RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)?;
-                    let state = Arc::clone(&state);
-                    let source_stream_permits = Arc::clone(&source_stream_permits);
-                    let inbound_operation_budget = Arc::clone(&inbound_operation_budget);
-                    let _session = tokio::task::spawn_blocking(move || {
+                    let stream = match stream.into_std() {
+                        Ok(stream) => stream,
+                        Err(_) => {
+                            break Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                        }
+                    };
+                    if stream.set_nonblocking(false).is_err() {
+                        break Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                    }
+                    let control = match stream.try_clone() {
+                        Ok(control) => control,
+                        Err(_) => {
+                            break Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                        }
+                    };
+                    let Some(session_token) = next_session_token.checked_add(1) else {
+                        break Err(RuntimeProviderBrokerServerErrorV1::Protocol);
+                    };
+                    next_session_token = session_token;
+                    session_controls.insert(session_token, control);
+                    let session_state = Arc::clone(&state);
+                    let session_source_stream_permits = Arc::clone(&source_stream_permits);
+                    let session_inbound_operation_budget = Arc::clone(&inbound_operation_budget);
+                    let session_lifecycle = Arc::clone(&lifecycle);
+                    let _session_registration = sessions.spawn_blocking(move || {
                         // A peer protocol error, timeout, disconnect, or
                         // backend rejection terminates only this authenticated
                         // session.
-                        let _ = serve_client(
+                        let result = serve_client(
                             stream,
-                            &state,
+                            &session_state,
                             Some(session_permit),
-                            source_stream_permits,
-                            inbound_operation_budget,
+                            session_source_stream_permits,
+                            session_inbound_operation_budget,
+                            session_lifecycle,
                         );
+                        (session_token, result)
                     });
-                    if endpoint_identity(policy).map_err(server_error)? != pinned_identity {
-                        return Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable);
+                    if let Err(error) = verify_endpoint_is_pinned(policy, &guard) {
+                        break Err(error);
+                    }
+                };
+
+                lifecycle.request_shutdown();
+                drop(listener);
+                session_controls.shutdown_all();
+                // TODO: add a deadline/cancellation contract to every
+                // synchronous provider trait before advertising a bounded
+                // shutdown duration; transport shutdown cannot preempt an
+                // adapter call already executing on a blocking thread.
+                while let Some(joined) = sessions.join_next().await {
+                    match joined {
+                        Ok((session_token, _session_result)) => {
+                            session_controls.remove(&session_token);
+                        }
+                        Err(_) if serve_result.is_ok() => {
+                            serve_result = Err(RuntimeProviderBrokerServerErrorV1::Protocol);
+                        }
+                        Err(_) => {}
                     }
                 }
+                drop(session_controls);
+                match guard.cleanup() {
+                    Ok(()) => serve_result,
+                    Err(cleanup_error) => Err(cleanup_error),
+                }
             })
+        }
+
+        fn serve_with_policy(
+            bindings: &IrohaRuntimeProviderBindingsV1,
+            backends: RuntimeProviderBrokerBackendsV1,
+            policy: &EndpointPolicy,
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
+            serve_with_policy_and_lifecycle(bindings, backends, policy, lifecycle, || {})
         }
 
         struct BrokerConnection {
@@ -28380,8 +29135,31 @@ mod protocol {
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
         ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
-            let shutdown = std::sync::atomic::AtomicBool::new(false);
-            serve_with_policy(bindings, backends, &EndpointPolicy::production(), &shutdown)
+            serve_with_policy(
+                bindings,
+                backends,
+                &EndpointPolicy::production(),
+                Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
+            )
+        }
+
+        /// Serve the stock catalog with caller-owned lifecycle controls.
+        pub(super) fn serve_with_lifecycle<R>(
+            bindings: &IrohaRuntimeProviderBindingsV1,
+            backends: RuntimeProviderBrokerBackendsV1,
+            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+            on_ready: R,
+        ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+        where
+            R: FnOnce(),
+        {
+            serve_with_policy_and_lifecycle(
+                bindings,
+                backends,
+                &EndpointPolicy::production(),
+                lifecycle,
+                on_ready,
+            )
         }
 
         #[cfg(test)]
@@ -28405,6 +29183,7 @@ mod protocol {
                 sync::{
                     Arc, Mutex,
                     atomic::{AtomicBool, AtomicU64, Ordering},
+                    mpsc,
                 },
                 thread,
             };
@@ -33393,7 +34172,7 @@ mod protocol {
                 tempfile::TempDir,
                 std::path::PathBuf,
                 EndpointPolicy,
-                Arc<AtomicBool>,
+                Arc<RuntimeProviderBrokerLifecycleV1>,
                 thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
             ) {
                 let directory = tempfile::tempdir().expect("create broker server directory");
@@ -33402,31 +34181,29 @@ mod protocol {
                 let path = directory.path().join("runtime-provider-broker-v1.sock");
                 let policy = EndpointPolicy::for_test(path.clone());
                 let server_policy = policy.clone();
-                let shutdown = Arc::new(AtomicBool::new(false));
+                let shutdown = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
                 let server_shutdown = Arc::clone(&shutdown);
+                let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
                 let server = thread::spawn(move || {
-                    serve_with_policy(
+                    serve_with_policy_and_lifecycle(
                         &server_test_catalog(),
                         server_test_backends(),
                         &server_policy,
-                        &server_shutdown,
+                        server_shutdown,
+                        move || ready_sender.send(()).expect("publish broker readiness"),
                     )
                 });
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                while endpoint_identity(&policy).is_err() {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "broker server did not bind its test endpoint"
-                    );
-                    thread::sleep(Duration::from_millis(5));
-                }
+                ready_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("broker server reaches its ready callback");
+                endpoint_identity(&policy).expect("ready broker endpoint remains pinned");
                 (directory, path, policy, shutdown, server)
             }
 
             fn start_request_auth_test_server() -> (
                 tempfile::TempDir,
                 EndpointPolicy,
-                Arc<AtomicBool>,
+                Arc<RuntimeProviderBrokerLifecycleV1>,
                 thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
             ) {
                 let directory = tempfile::tempdir().expect("create request-auth broker directory");
@@ -33435,24 +34212,26 @@ mod protocol {
                 let path = directory.path().join("runtime-provider-broker-v1.sock");
                 let policy = EndpointPolicy::for_test(path);
                 let server_policy = policy.clone();
-                let shutdown = Arc::new(AtomicBool::new(false));
+                let shutdown = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
                 let server_shutdown = Arc::clone(&shutdown);
+                let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
                 let server = thread::spawn(move || {
-                    serve_with_policy(
+                    serve_with_policy_and_lifecycle(
                         &request_auth_server_test_catalog(),
                         request_auth_server_test_backends(),
                         &server_policy,
-                        &server_shutdown,
+                        server_shutdown,
+                        move || {
+                            ready_sender
+                                .send(())
+                                .expect("publish request-auth broker readiness");
+                        },
                     )
                 });
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                while endpoint_identity(&policy).is_err() {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "request-auth broker did not bind its test endpoint"
-                    );
-                    thread::sleep(Duration::from_millis(5));
-                }
+                ready_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("request-auth broker reaches its ready callback");
+                endpoint_identity(&policy).expect("ready request-auth endpoint remains pinned");
                 (directory, policy, shutdown, server)
             }
 
@@ -33462,7 +34241,7 @@ mod protocol {
             ) -> (
                 tempfile::TempDir,
                 EndpointPolicy,
-                Arc<AtomicBool>,
+                Arc<RuntimeProviderBrokerLifecycleV1>,
                 thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
             ) {
                 let directory = tempfile::tempdir().expect("create native signer broker directory");
@@ -33471,26 +34250,33 @@ mod protocol {
                 let path = directory.path().join("runtime-provider-broker-v1.sock");
                 let policy = EndpointPolicy::for_test(path);
                 let server_policy = policy.clone();
-                let shutdown = Arc::new(AtomicBool::new(false));
+                let shutdown = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
                 let server_shutdown = Arc::clone(&shutdown);
+                let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
                 let server = thread::spawn(move || {
-                    serve_with_policy(&bindings, backends, &server_policy, &server_shutdown)
+                    serve_with_policy_and_lifecycle(
+                        &bindings,
+                        backends,
+                        &server_policy,
+                        server_shutdown,
+                        move || {
+                            ready_sender
+                                .send(())
+                                .expect("publish native signer broker readiness");
+                        },
+                    )
                 });
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                while endpoint_identity(&policy).is_err() {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "native signer broker did not bind its test endpoint"
-                    );
-                    thread::sleep(Duration::from_millis(5));
-                }
+                ready_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("native signer broker reaches its ready callback");
+                endpoint_identity(&policy).expect("ready native signer endpoint remains pinned");
                 (directory, policy, shutdown, server)
             }
 
             fn start_native_signer_test_server() -> (
                 tempfile::TempDir,
                 EndpointPolicy,
-                Arc<AtomicBool>,
+                Arc<RuntimeProviderBrokerLifecycleV1>,
                 thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
             ) {
                 start_native_signer_server(
@@ -33505,7 +34291,7 @@ mod protocol {
             ) -> (
                 tempfile::TempDir,
                 EndpointPolicy,
-                Arc<AtomicBool>,
+                Arc<RuntimeProviderBrokerLifecycleV1>,
                 thread::JoinHandle<Result<(), RuntimeProviderBrokerServerErrorV1>>,
             ) {
                 let directory = tempfile::tempdir().expect("create source broker directory");
@@ -33515,25 +34301,27 @@ mod protocol {
                 let policy = EndpointPolicy::for_test(path);
                 let server_policy = policy.clone();
                 let server_bindings = bindings.clone();
-                let shutdown = Arc::new(AtomicBool::new(false));
+                let shutdown = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
                 let server_shutdown = Arc::clone(&shutdown);
+                let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
                 let server = thread::spawn(move || {
-                    serve_with_policy(
+                    serve_with_policy_and_lifecycle(
                         &server_bindings,
                         RuntimeProviderBrokerBackendsV1::new()
                             .with_provider_ingest_authenticated_source(Arc::new(source)),
                         &server_policy,
-                        &server_shutdown,
+                        server_shutdown,
+                        move || {
+                            ready_sender
+                                .send(())
+                                .expect("publish source broker readiness");
+                        },
                     )
                 });
-                let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                while endpoint_identity(&policy).is_err() {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "source broker did not bind its test endpoint"
-                    );
-                    thread::sleep(Duration::from_millis(5));
-                }
+                ready_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("source broker reaches its ready callback");
+                endpoint_identity(&policy).expect("ready source endpoint remains pinned");
                 (directory, policy, shutdown, server)
             }
 
@@ -33725,15 +34513,19 @@ mod protocol {
                 let (_directory, path, policy, listener) = bind_fake_broker();
                 let before = endpoint_identity(&policy).expect("capture existing socket identity");
                 let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
-                let shutdown = AtomicBool::new(true);
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
                 assert_eq!(
                     serve_with_policy(
                         &bindings,
                         RuntimeProviderBrokerBackendsV1::new(),
                         &policy,
-                        &shutdown,
+                        Arc::clone(&lifecycle),
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)
+                );
+                assert!(
+                    lifecycle.shutdown_requested(),
+                    "every startup failure moves the lifecycle to stopping"
                 );
                 assert_eq!(
                     endpoint_identity(&policy).expect("existing socket remains"),
@@ -33741,6 +34533,492 @@ mod protocol {
                 );
                 assert!(path.exists());
                 drop(listener);
+            }
+
+            #[test]
+            fn broker_server_readiness_follows_qualification_and_secure_bind() {
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+                let server_policy = policy.clone();
+                let ready_policy = policy.clone();
+                let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let server_lifecycle = Arc::clone(&lifecycle);
+                let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+                let server = thread::spawn(move || {
+                    serve_with_policy_and_lifecycle(
+                        &bindings,
+                        RuntimeProviderBrokerBackendsV1::new(),
+                        &server_policy,
+                        server_lifecycle,
+                        move || {
+                            ready_sender
+                                .send(endpoint_identity(&ready_policy))
+                                .expect("publish broker readiness");
+                        },
+                    )
+                });
+                let ready_identity = ready_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("broker publishes readiness after secure bind")
+                    .expect("ready callback observes hardened endpoint");
+                assert_eq!(
+                    endpoint_identity(&policy).expect("inspect ready endpoint"),
+                    ready_identity
+                );
+                lifecycle.request_shutdown();
+                server
+                    .join()
+                    .expect("join ready broker server")
+                    .expect("ready broker server exits cleanly");
+                assert!(!path.exists(), "orderly shutdown removes the bound socket");
+
+                let rejected_path = directory.path().join("rejected-runtime-provider.sock");
+                let rejected_policy = EndpointPolicy::for_test(rejected_path.clone());
+                let rejected_lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let rejected_ready = AtomicBool::new(false);
+                assert_eq!(
+                    serve_with_policy_and_lifecycle(
+                        &server_test_catalog(),
+                        RuntimeProviderBrokerBackendsV1::new(),
+                        &rejected_policy,
+                        rejected_lifecycle,
+                        || rejected_ready.store(true, Ordering::Release),
+                    ),
+                    Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
+                );
+                assert!(
+                    !rejected_ready.load(Ordering::Acquire),
+                    "incomplete backend qualification must fail before readiness"
+                );
+                assert!(
+                    !rejected_path.exists(),
+                    "qualification failure must precede endpoint creation"
+                );
+            }
+
+            #[test]
+            fn broker_server_graceful_cleanup_allows_exact_endpoint_rebind() {
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+
+                for attempt in 0..2 {
+                    let server_policy = policy.clone();
+                    let bindings =
+                        IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
+                    let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                    let server_lifecycle = Arc::clone(&lifecycle);
+                    let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+                    let server = thread::spawn(move || {
+                        serve_with_policy_and_lifecycle(
+                            &bindings,
+                            RuntimeProviderBrokerBackendsV1::new(),
+                            &server_policy,
+                            server_lifecycle,
+                            move || ready_sender.send(()).expect("publish broker readiness"),
+                        )
+                    });
+                    ready_receiver
+                        .recv_timeout(Duration::from_secs(2))
+                        .unwrap_or_else(|error| {
+                            panic!("broker rebind attempt {attempt} did not become ready: {error}")
+                        });
+                    assert!(
+                        endpoint_identity(&policy).is_ok(),
+                        "rebind attempt {attempt} owns the hardened endpoint"
+                    );
+                    lifecycle.request_shutdown();
+                    server
+                        .join()
+                        .expect("join rebound broker server")
+                        .unwrap_or_else(|error| {
+                            panic!("broker rebind attempt {attempt} failed: {error}")
+                        });
+                    assert!(
+                        !path.exists(),
+                        "rebind attempt {attempt} cleans its pinned socket"
+                    );
+                }
+            }
+
+            #[test]
+            fn broker_server_never_signals_ready_for_existing_endpoint() {
+                let (_directory, path, policy, listener) = bind_fake_broker();
+                let original_identity =
+                    endpoint_identity(&policy).expect("capture existing socket identity");
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let existing_ready = AtomicBool::new(false);
+                let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
+                assert_eq!(
+                    serve_with_policy_and_lifecycle(
+                        &bindings,
+                        RuntimeProviderBrokerBackendsV1::new(),
+                        &policy,
+                        lifecycle,
+                        || existing_ready.store(true, Ordering::Release),
+                    ),
+                    Err(RuntimeProviderBrokerServerErrorV1::EndpointUnavailable)
+                );
+                assert!(
+                    !existing_ready.load(Ordering::Acquire),
+                    "an existing endpoint must fail before readiness"
+                );
+                assert_eq!(
+                    endpoint_identity(&policy).expect("existing endpoint remains pinned"),
+                    original_identity
+                );
+                assert!(path.exists());
+                drop(listener);
+            }
+
+            #[test]
+            fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalification() {
+                #[derive(Debug)]
+                struct BlockingReadySigner {
+                    qualification_calls: AtomicU64,
+                    second_probe_entered: Arc<std::sync::Barrier>,
+                    release_second_probe: Arc<std::sync::Barrier>,
+                }
+
+                impl sorafs_node::GovernanceDagRuntimeSigner for BlockingReadySigner {
+                    fn handle(&self) -> &str {
+                        SERVER_TEST_SIGNER_HANDLE
+                    }
+
+                    fn qualification(
+                        &self,
+                    ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
+                    {
+                        if self.qualification_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                            self.second_probe_entered.wait();
+                            self.release_second_probe.wait();
+                        }
+                        Ok(
+                            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                                7,
+                                TEST_POLICY_DIGEST,
+                            ),
+                        )
+                    }
+
+                    fn publisher_peer_id(&self) -> &[u8] {
+                        b"12D3KooWRuntimeBrokerServerPrimary"
+                    }
+
+                    fn public_key(&self) -> [u8; 32] {
+                        TEST_SIGNER_KEY
+                    }
+
+                    fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+                        Ok([0xA5; 64])
+                    }
+                }
+
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+                let server_policy = policy.clone();
+                let second_probe_entered = Arc::new(std::sync::Barrier::new(2));
+                let release_second_probe = Arc::new(std::sync::Barrier::new(2));
+                let ready = Arc::new(AtomicBool::new(false));
+                let server_ready = Arc::clone(&ready);
+                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let server = thread::spawn({
+                    let second_probe_entered = Arc::clone(&second_probe_entered);
+                    let release_second_probe = Arc::clone(&release_second_probe);
+                    move || {
+                        let result = serve_with_policy_and_lifecycle(
+                            &server_test_catalog(),
+                            RuntimeProviderBrokerBackendsV1::new().with_governance_dag_signer(
+                                Arc::new(BlockingReadySigner {
+                                    qualification_calls: AtomicU64::new(0),
+                                    second_probe_entered,
+                                    release_second_probe,
+                                }),
+                            ),
+                            &server_policy,
+                            Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
+                            move || server_ready.store(true, Ordering::Release),
+                        );
+                        result_sender
+                            .send(result)
+                            .expect("publish startup substitution result");
+                    }
+                });
+                second_probe_entered.wait();
+                let original_identity =
+                    endpoint_identity(&policy).expect("inspect bound pre-ready endpoint");
+                fs::remove_file(&path).expect("unlink pre-ready endpoint");
+                let replacement =
+                    UnixListener::bind(&path).expect("bind pre-ready endpoint substitution");
+                set_socket_mode(&path).expect("harden pre-ready endpoint substitution");
+                let replacement_identity =
+                    endpoint_identity(&policy).expect("inspect pre-ready replacement");
+                assert_ne!(replacement_identity, original_identity);
+                release_second_probe.wait();
+                assert_eq!(
+                    result_receiver
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("startup substitution is detected"),
+                    Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed)
+                );
+                server.join().expect("join pre-ready substituted broker");
+                assert!(
+                    !ready.load(Ordering::Acquire),
+                    "endpoint substitution before the ready transition suppresses the callback"
+                );
+                assert_eq!(
+                    endpoint_identity(&policy).expect("pre-ready replacement remains"),
+                    replacement_identity
+                );
+                drop(replacement);
+                fs::remove_file(&path).expect("remove pre-ready test replacement");
+            }
+
+            #[test]
+            fn broker_server_idle_loop_detects_endpoint_substitution_and_preserves_replacement() {
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+                let server_policy = policy.clone();
+                let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let server_lifecycle = Arc::clone(&lifecycle);
+                let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
+                let (result_sender, result_receiver) = mpsc::sync_channel(1);
+                let server = thread::spawn(move || {
+                    let result = serve_with_policy_and_lifecycle(
+                        &bindings,
+                        RuntimeProviderBrokerBackendsV1::new(),
+                        &server_policy,
+                        server_lifecycle,
+                        move || ready_sender.send(()).expect("publish broker readiness"),
+                    );
+                    result_sender
+                        .send(result)
+                        .expect("publish substituted endpoint result");
+                });
+                ready_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("broker becomes ready before substitution");
+                let original_identity =
+                    endpoint_identity(&policy).expect("inspect original endpoint");
+                fs::remove_file(&path).expect("unlink original broker endpoint");
+                let replacement =
+                    UnixListener::bind(&path).expect("bind substituted endpoint inode");
+                set_socket_mode(&path).expect("harden substituted endpoint");
+                let replacement_identity =
+                    endpoint_identity(&policy).expect("inspect substituted endpoint");
+                assert_ne!(replacement_identity, original_identity);
+                assert_eq!(
+                    result_receiver
+                        .recv_timeout(Duration::from_secs(2))
+                        .expect("idle broker detects endpoint substitution"),
+                    Err(RuntimeProviderBrokerServerErrorV1::EndpointCleanupFailed)
+                );
+                server.join().expect("join substituted endpoint broker");
+                assert!(lifecycle.shutdown_requested());
+                assert_eq!(
+                    endpoint_identity(&policy).expect("replacement endpoint remains"),
+                    replacement_identity,
+                    "cleanup must not knowingly unlink a substituted inode"
+                );
+                drop(replacement);
+                fs::remove_file(&path).expect("remove test replacement endpoint");
+            }
+
+            #[test]
+            fn broker_server_callback_panic_still_cleans_bound_endpoint() {
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+                let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let server_lifecycle = Arc::clone(&lifecycle);
+                let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = serve_with_policy_and_lifecycle(
+                        &bindings,
+                        RuntimeProviderBrokerBackendsV1::new(),
+                        &policy,
+                        server_lifecycle,
+                        || panic!("ready callback panic probe"),
+                    );
+                }));
+                assert!(panic.is_err());
+                assert!(lifecycle.shutdown_requested());
+                assert!(
+                    !path.exists(),
+                    "bound endpoint guard must run while callback panic unwinds"
+                );
+            }
+
+            #[test]
+            fn broker_server_requalifies_complete_catalog_immediately_before_ready() {
+                #[derive(Debug)]
+                struct DriftingReadySigner {
+                    qualification_calls: AtomicU64,
+                }
+
+                impl sorafs_node::GovernanceDagRuntimeSigner for DriftingReadySigner {
+                    fn handle(&self) -> &str {
+                        SERVER_TEST_SIGNER_HANDLE
+                    }
+
+                    fn qualification(
+                        &self,
+                    ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
+                    {
+                        let call = self.qualification_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(
+                            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                                if call == 0 { 7 } else { 8 },
+                                TEST_POLICY_DIGEST,
+                            ),
+                        )
+                    }
+
+                    fn publisher_peer_id(&self) -> &[u8] {
+                        b"12D3KooWRuntimeBrokerServerPrimary"
+                    }
+
+                    fn public_key(&self) -> [u8; 32] {
+                        TEST_SIGNER_KEY
+                    }
+
+                    fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+                        Ok([0xA5; 64])
+                    }
+                }
+
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let ready = AtomicBool::new(false);
+                assert_eq!(
+                    serve_with_policy_and_lifecycle(
+                        &server_test_catalog(),
+                        RuntimeProviderBrokerBackendsV1::new().with_governance_dag_signer(
+                            Arc::new(DriftingReadySigner {
+                                qualification_calls: AtomicU64::new(0),
+                            }),
+                        ),
+                        &policy,
+                        lifecycle,
+                        || ready.store(true, Ordering::Release),
+                    ),
+                    Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
+                );
+                assert!(!ready.load(Ordering::Acquire));
+                assert!(
+                    !path.exists(),
+                    "failed second qualification cleans the endpoint before returning"
+                );
+            }
+
+            #[test]
+            fn broker_server_preserves_requalification_failure_during_shutdown() {
+                #[derive(Debug)]
+                struct FailingReadySigner {
+                    qualification_calls: AtomicU64,
+                    second_probe_entered: Arc<std::sync::Barrier>,
+                    release_second_probe: Arc<std::sync::Barrier>,
+                }
+
+                impl sorafs_node::GovernanceDagRuntimeSigner for FailingReadySigner {
+                    fn handle(&self) -> &str {
+                        SERVER_TEST_SIGNER_HANDLE
+                    }
+
+                    fn qualification(
+                        &self,
+                    ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
+                    {
+                        if self.qualification_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                            self.second_probe_entered.wait();
+                            self.release_second_probe.wait();
+                            return Err("requalification failed after admission".to_owned());
+                        }
+                        Ok(
+                            sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(
+                                7,
+                                TEST_POLICY_DIGEST,
+                            ),
+                        )
+                    }
+
+                    fn publisher_peer_id(&self) -> &[u8] {
+                        b"12D3KooWRuntimeBrokerServerPrimary"
+                    }
+
+                    fn public_key(&self) -> [u8; 32] {
+                        TEST_SIGNER_KEY
+                    }
+
+                    fn sign(&self, _payload: &[u8]) -> Result<[u8; 64], String> {
+                        Ok([0xA5; 64])
+                    }
+                }
+
+                let directory = tempfile::tempdir().expect("create broker server directory");
+                fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+                    .expect("harden broker server directory");
+                let path = directory.path().join("runtime-provider-broker-v1.sock");
+                let policy = EndpointPolicy::for_test(path.clone());
+                let server_policy = policy.clone();
+                let second_probe_entered = Arc::new(std::sync::Barrier::new(2));
+                let release_second_probe = Arc::new(std::sync::Barrier::new(2));
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let server_lifecycle = Arc::clone(&lifecycle);
+                let ready = Arc::new(AtomicBool::new(false));
+                let server_ready = Arc::clone(&ready);
+                let server = thread::spawn({
+                    let second_probe_entered = Arc::clone(&second_probe_entered);
+                    let release_second_probe = Arc::clone(&release_second_probe);
+                    move || {
+                        serve_with_policy_and_lifecycle(
+                            &server_test_catalog(),
+                            RuntimeProviderBrokerBackendsV1::new().with_governance_dag_signer(
+                                Arc::new(FailingReadySigner {
+                                    qualification_calls: AtomicU64::new(0),
+                                    second_probe_entered,
+                                    release_second_probe,
+                                }),
+                            ),
+                            &server_policy,
+                            server_lifecycle,
+                            move || server_ready.store(true, Ordering::Release),
+                        )
+                    }
+                });
+                second_probe_entered.wait();
+                lifecycle.request_shutdown();
+                release_second_probe.wait();
+                assert_eq!(
+                    server.join().expect("join failed requalification server"),
+                    Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch),
+                    "an admitted backend failure remains an error when shutdown races it"
+                );
+                assert!(!ready.load(Ordering::Acquire));
+                assert!(lifecycle.shutdown_requested());
+                assert!(
+                    !path.exists(),
+                    "failed requalification cleans the endpoint during shutdown"
+                );
             }
 
             #[test]
@@ -33825,7 +35103,7 @@ mod protocol {
                 drop(fetched);
                 drop(source);
                 drop(runtime);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join source broker")
@@ -33873,7 +35151,7 @@ mod protocol {
                 drop(fetched);
                 drop(source);
                 drop(runtime);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join drift source broker")
@@ -33919,7 +35197,7 @@ mod protocol {
                 );
                 drop(source);
                 drop(runtime);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join timeout source broker")
@@ -33927,29 +35205,142 @@ mod protocol {
             }
 
             #[test]
-            fn broker_server_shutdown_cleans_only_its_pinned_socket() {
+            fn broker_server_pre_requested_shutdown_skips_qualification_and_bind() {
                 let directory = tempfile::tempdir().expect("create broker server directory");
                 fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
                     .expect("harden broker server directory");
                 let path = directory.path().join("runtime-provider-broker-v1.sock");
                 let policy = EndpointPolicy::for_test(path.clone());
-                let bindings = IrohaRuntimeProviderBindingsV1::empty_for_test("server-test-chain");
-                let shutdown = AtomicBool::new(true);
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                lifecycle.request_shutdown();
                 serve_with_policy(
-                    &bindings,
+                    &server_test_catalog(),
                     RuntimeProviderBrokerBackendsV1::new(),
                     &policy,
-                    &shutdown,
+                    lifecycle,
                 )
-                .expect("serve until pre-requested shutdown");
+                .expect("pre-requested shutdown wins before missing-backend qualification");
                 assert!(
                     !path.exists(),
-                    "normal shutdown removes only the socket inode owned by this server"
+                    "pre-requested shutdown must not create an endpoint"
                 );
             }
 
             #[test]
-            fn broker_server_serves_two_persistent_sessions_concurrently() {
+            fn lifecycle_linearizes_readiness_shutdown_and_operation_admission() {
+                let stopped_before_ready = RuntimeProviderBrokerLifecycleV1::new();
+                stopped_before_ready.request_shutdown();
+                let stopped_callback = AtomicBool::new(false);
+                assert!(!stopped_before_ready.publish_ready(|| {
+                    stopped_callback.store(true, Ordering::Release);
+                }));
+                assert!(!stopped_callback.load(Ordering::Acquire));
+
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                assert!(
+                    lifecycle.publish_ready(|| {}),
+                    "readiness wins the initial lifecycle transition"
+                );
+                let admitted = lifecycle
+                    .try_begin_operation()
+                    .expect("operation is admitted while ready");
+                lifecycle.request_shutdown();
+                assert!(
+                    lifecycle.try_begin_operation().is_none(),
+                    "shutdown prevents every later operation admission"
+                );
+                assert_eq!(
+                    lifecycle.active_provider_calls.load(Ordering::Acquire),
+                    1,
+                    "the already-admitted synchronous call remains explicitly in flight"
+                );
+                drop(admitted);
+                assert_eq!(lifecycle.active_provider_calls.load(Ordering::Acquire), 0);
+            }
+
+            #[test]
+            fn lifecycle_shutdown_waits_for_competing_readiness_callback() {
+                let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
+                let callback_finished = Arc::new(AtomicBool::new(false));
+                let shutdown_started = Arc::new(AtomicBool::new(false));
+                let shutdown_observed_callback = Arc::new(AtomicBool::new(false));
+                let (callback_entered_sender, callback_entered_receiver) = mpsc::sync_channel(0);
+                let (release_callback_sender, release_callback_receiver) = mpsc::sync_channel(0);
+
+                let publisher_lifecycle = Arc::clone(&lifecycle);
+                let publisher_callback_finished = Arc::clone(&callback_finished);
+                let publisher = thread::spawn(move || {
+                    publisher_lifecycle.publish_ready(|| {
+                        callback_entered_sender
+                            .send(())
+                            .expect("publish callback gate acquisition");
+                        release_callback_receiver
+                            .recv()
+                            .expect("release blocked readiness callback");
+                        publisher_callback_finished.store(true, Ordering::Release);
+                    })
+                });
+                callback_entered_receiver
+                    .recv()
+                    .expect("readiness callback owns the publication gate");
+
+                let shutdown_lifecycle = Arc::clone(&lifecycle);
+                let shutdown_started_probe = Arc::clone(&shutdown_started);
+                let shutdown_callback_probe = Arc::clone(&callback_finished);
+                let shutdown_observation = Arc::clone(&shutdown_observed_callback);
+                let shutdown = thread::spawn(move || {
+                    shutdown_started_probe.store(true, Ordering::Release);
+                    shutdown_lifecycle.request_shutdown();
+                    shutdown_observation.store(
+                        shutdown_callback_probe.load(Ordering::Acquire),
+                        Ordering::Release,
+                    );
+                });
+                while !shutdown_started.load(Ordering::Acquire) {
+                    thread::yield_now();
+                }
+                assert!(
+                    !callback_finished.load(Ordering::Acquire),
+                    "the callback remains blocked while shutdown competes for its gate"
+                );
+                release_callback_sender
+                    .send(())
+                    .expect("allow readiness callback to finish");
+                assert!(
+                    publisher.join().expect("join readiness publisher"),
+                    "the callback won the readiness publication race"
+                );
+                shutdown.join().expect("join competing shutdown request");
+                assert!(
+                    shutdown_observed_callback.load(Ordering::Acquire),
+                    "shutdown cannot return before the competing callback finishes"
+                );
+                assert!(lifecycle.shutdown_requested());
+            }
+
+            #[test]
+            fn accepted_session_controls_close_peer_during_unexpected_unwind() {
+                let (mut peer, accepted) =
+                    UnixStream::pair().expect("create accepted-session socket pair");
+                peer.set_read_timeout(Some(Duration::from_secs(1)))
+                    .expect("bound peer read");
+                let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut controls = AcceptedSessionControlsV1::default();
+                    controls.insert(1, accepted);
+                    panic!("panic after accepted-session registration");
+                }));
+                assert!(unwind.is_err());
+                let mut byte = [0_u8; 1];
+                assert_eq!(
+                    std::io::Read::read(&mut peer, &mut byte)
+                        .expect("observe accepted-session shutdown"),
+                    0,
+                    "RAII shutdown wakes a peer when serving unexpectedly unwinds"
+                );
+            }
+
+            #[test]
+            fn broker_server_drains_two_live_persistent_sessions_on_shutdown() {
                 let (_directory, _path, policy, shutdown, server) = start_test_server();
                 let first = connect_test_server_session(&policy);
                 let second = connect_test_server_session(&policy);
@@ -33957,12 +35348,12 @@ mod protocol {
                     !Arc::ptr_eq(&first, &second),
                     "both persistent sessions complete independent handshakes"
                 );
-                drop((first, second));
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join broker server")
-                    .expect("broker server exits cleanly");
+                    .expect("broker server closes and joins both live sessions");
+                drop((first, second));
             }
 
             #[test]
@@ -33972,12 +35363,10 @@ mod protocol {
                     .map(|_| connect_test_server_session(&policy))
                     .collect::<Vec<_>>();
                 let mut excess = connect_verified(&policy).expect("connect excess local peer");
-                excess
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .expect("bound excess read");
-                excess
-                    .set_write_timeout(Some(Duration::from_secs(2)))
-                    .expect("bound excess write");
+                // `connect_verified` already applies the fixed broker I/O
+                // timeout. Reapplying `SO_RCVTIMEO` after the server has won
+                // the immediate-close race returns `EINVAL` on macOS, which is
+                // itself compatible with the expected rejection.
                 let request = make_handshake_request(
                     "server-test-chain",
                     vec![signer_binding_for_server()],
@@ -34020,7 +35409,7 @@ mod protocol {
                 };
                 drop(replacement);
                 drop(sessions);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join broker server")
@@ -34999,7 +36388,7 @@ mod protocol {
                 assert_eq!(envelope.public_key(), server_test_request_auth_public_key());
 
                 drop(dependencies);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join request-auth broker")
@@ -35473,7 +36862,7 @@ mod protocol {
                     );
 
                     drop(dependencies);
-                    shutdown.store(true, Ordering::Release);
+                    shutdown.request_shutdown();
                     server
                         .join()
                         .expect("join adversarial native signer broker")
@@ -35537,7 +36926,7 @@ mod protocol {
                 );
 
                 drop(dependencies);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join native signer broker")
@@ -35783,7 +37172,7 @@ mod protocol {
                     .expect("verify brokered moderation signature");
 
                 drop(dependencies);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join moderation transaction signer broker")
@@ -35829,7 +37218,7 @@ mod protocol {
                     );
 
                     drop(dependencies);
-                    shutdown.store(true, Ordering::Release);
+                    shutdown.request_shutdown();
                     server
                         .join()
                         .expect("join adversarial moderation signer broker")
@@ -36418,7 +37807,7 @@ mod protocol {
                         );
                     }
                     drop(dependencies);
-                    shutdown.store(true, Ordering::Release);
+                    shutdown.request_shutdown();
                     server
                         .join()
                         .expect("join moderation handoff broker")
@@ -36458,7 +37847,7 @@ mod protocol {
                     assert_eq!(first.notification_id, request.notification.notification_id);
                 }
                 drop(dependencies);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join panel-notification broker")
@@ -36499,7 +37888,7 @@ mod protocol {
                     );
                 }
                 drop(dependencies);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join drifting handoff broker")
@@ -36537,7 +37926,7 @@ mod protocol {
                     );
                 }
                 drop(dependencies);
-                shutdown.store(true, Ordering::Release);
+                shutdown.request_shutdown();
                 server
                     .join()
                     .expect("join invalid-receipt panel broker")
@@ -40871,7 +42260,7 @@ mod protocol {
 
                 let mut multisig = exact;
                 multisig.set_multisig_signatures(
-                    iroha_data_model::transaction::MultisigSignatures::new(Vec::new()),
+                    iroha_data_model::transaction::signed::MultisigSignatures::new(Vec::new()),
                 );
                 assert_eq!(
                     ensure_provider_ingest_completion_transaction(
@@ -41081,6 +42470,21 @@ mod protocol {
                     connect_verified(&missing),
                     Err(BrokerError::Unavailable)
                 ));
+            }
+
+            #[cfg(target_os = "macos")]
+            #[test]
+            fn macos_socket_device_identity_preserves_signed_dev_t_bits() {
+                assert_eq!(
+                    socket_device_identity_from_raw(-1),
+                    u64::MAX,
+                    "the stat identity must use MetadataExt::dev()'s signed-to-u64 conversion"
+                );
+                assert_eq!(
+                    socket_device_identity_from_raw(i32::MIN),
+                    i32::MIN as u64,
+                    "valid high-bit macOS device identities must not be rejected"
+                );
             }
 
             #[test]
@@ -41814,5 +43218,18 @@ mod protocol {
         backends: RuntimeProviderBrokerBackendsV1,
     ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
         platform::serve(bindings, backends)
+    }
+
+    /// Serve the stock catalog with caller-owned lifecycle controls.
+    pub(super) fn serve_with_lifecycle<R>(
+        bindings: &IrohaRuntimeProviderBindingsV1,
+        backends: RuntimeProviderBrokerBackendsV1,
+        lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
+        on_ready: R,
+    ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
+    where
+        R: FnOnce(),
+    {
+        platform::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
     }
 }

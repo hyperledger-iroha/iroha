@@ -112,7 +112,6 @@ impl RuntimeLifecycleOrdinalSource {
         Ok(())
     }
 
-    #[cfg(test)]
     pub(super) fn next_ordinal(&self) -> Result<Option<u128>, String> {
         self.lock_next().map(|next| *next)
     }

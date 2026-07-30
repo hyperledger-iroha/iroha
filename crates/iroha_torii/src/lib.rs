@@ -53522,6 +53522,9 @@ impl ToriiRuntimeDeps {
     }
 
     /// Attach the runtime-only signer used for authoritative SoraFS proof outcomes.
+    ///
+    /// Construction qualifies the provider against the exact configured public
+    /// binding and rejects missing, unexpected, substituted, or stale roles.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_proof_outcome_signer(
@@ -53533,6 +53536,9 @@ impl ToriiRuntimeDeps {
     }
 
     /// Attach the runtime-only signer used for native SoraFS repair transactions.
+    ///
+    /// Construction qualifies the provider against the exact configured public
+    /// binding and rejects missing, unexpected, substituted, or stale roles.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_repair_transaction_signer(
@@ -53544,6 +53550,9 @@ impl ToriiRuntimeDeps {
     }
 
     /// Attach the runtime-only signer used for native SoraFS reserve/rent transactions.
+    ///
+    /// Construction qualifies the provider against the exact configured public
+    /// binding and rejects missing, unexpected, substituted, or stale roles.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_reserve_transaction_signer(
@@ -53555,6 +53564,9 @@ impl ToriiRuntimeDeps {
     }
 
     /// Attach the runtime-only signer used for native SoraFS orderbook transactions.
+    ///
+    /// Construction qualifies the provider against the exact configured public
+    /// binding and rejects missing, unexpected, substituted, or stale roles.
     #[cfg(feature = "app_api")]
     #[must_use]
     pub fn with_sorafs_orderbook_transaction_signer(
@@ -53923,6 +53935,284 @@ impl ToriiRuntimeDeps {
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
     fn from(telemetry: routing::MaybeTelemetry) -> Self {
         Self::new(telemetry)
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn qualify_configured_sorafs_native_transaction_signer_for_startup<S>(
+    role: SorafsNativeTransactionSignerRoleV1,
+    enabled: bool,
+    configured: Option<&iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding>,
+    provider: Option<Arc<S>>,
+    qualify: impl FnOnce(
+        SorafsNativeTransactionSignerBindingV1,
+        Arc<S>,
+    ) -> Result<Arc<S>, SorafsNativeTransactionSignerQualificationErrorV1>,
+) -> Result<Option<Arc<S>>, String>
+where
+    S: SorafsNativeTransactionSignerProviderV1 + ?Sized,
+{
+    let role_label = role.as_str();
+    match (enabled, configured.is_some()) {
+        (true, false) => {
+            return Err(format!(
+                "enabled SoraFS {role_label} signer role is missing its configured binding"
+            ));
+        }
+        (false, true) => {
+            return Err(format!(
+                "disabled SoraFS {role_label} signer role rejects a configured binding"
+            ));
+        }
+        _ => {}
+    }
+    match (configured.is_some(), provider.is_some()) {
+        (true, false) => {
+            return Err(format!(
+                "configured SoraFS {role_label} signer role is missing its runtime provider"
+            ));
+        }
+        (false, true) => {
+            return Err(format!(
+                "unconfigured SoraFS {role_label} signer role rejects an injected runtime provider"
+            ));
+        }
+        _ => {}
+    }
+    let (Some(configured), Some(provider)) = (configured, provider) else {
+        return Ok(None);
+    };
+    if configured.public_key.try_algorithm() != Ok(configured.algorithm) {
+        return Err(format!(
+            "configured SoraFS {role_label} signer binding has a substituted key algorithm"
+        ));
+    }
+    let binding = SorafsNativeTransactionSignerBindingV1::try_new(
+        role,
+        configured.handle.clone(),
+        configured.authority.clone(),
+        configured.public_key.clone(),
+        SorafsNativeTransactionSignerQualificationV1::new(
+            configured.revision,
+            configured.policy_digest,
+        ),
+    )
+    .map_err(|_| format!("configured SoraFS {role_label} signer binding is invalid"))?;
+    qualify(binding, provider).map(Some).map_err(|_| {
+        format!(
+            "SoraFS {role_label} signer provider is substituted, stale, test-marked, unavailable, or unstable"
+        )
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn preflight_sorafs_native_transaction_signers(
+    config: &Config,
+    runtime_deps: &mut ToriiRuntimeDeps,
+) -> Result<(), String> {
+    let configured = &config.sorafs_storage.native_transaction_signers;
+
+    let proof_provider = runtime_deps.sorafs_proof_outcome_signer.take();
+    runtime_deps.sorafs_proof_outcome_signer =
+        qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            config.sorafs_storage.enabled,
+            configured.proof_outcome.as_ref(),
+            proof_provider,
+            qualify_sorafs_proof_outcome_transaction_signer_v1,
+        )?;
+
+    let repair_provider = runtime_deps.sorafs_repair_transaction_signer.take();
+    runtime_deps.sorafs_repair_transaction_signer =
+        qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::Repair,
+            config.sorafs_repair.enabled,
+            configured.repair.as_ref(),
+            repair_provider,
+            qualify_sorafs_repair_transaction_signer_v1,
+        )?;
+
+    let reserve_provider = runtime_deps.sorafs_reserve_transaction_signer.take();
+    runtime_deps.sorafs_reserve_transaction_signer =
+        qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::Reserve,
+            config.sorafs_storage.reserve_worker.enabled,
+            configured.reserve.as_ref(),
+            reserve_provider,
+            qualify_sorafs_reserve_transaction_signer_v1,
+        )?;
+
+    let orderbook_provider = runtime_deps.sorafs_orderbook_transaction_signer.take();
+    runtime_deps.sorafs_orderbook_transaction_signer =
+        qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::Orderbook,
+            config.sorafs_storage.orderbook_worker.enabled,
+            configured.orderbook.as_ref(),
+            orderbook_provider,
+            qualify_sorafs_orderbook_transaction_signer_v1,
+        )?;
+
+    Ok(())
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod sorafs_native_transaction_signer_startup_tests {
+    use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+    use iroha_data_model::{
+        account::AccountId,
+        transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
+    };
+
+    use super::*;
+
+    const QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
+        SorafsNativeTransactionSignerQualificationV1::new(9, [0x59; 32]);
+
+    struct ProofSigner {
+        handle: String,
+        key_pair: KeyPair,
+    }
+
+    impl ProofSigner {
+        fn new(handle: impl Into<String>, seed: u8) -> Self {
+            Self {
+                handle: handle.into(),
+                key_pair: KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("derive native signer startup fixture"),
+            }
+        }
+
+        fn configured_binding(
+            &self,
+        ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+            let public_key = self.key_pair.public_key().clone();
+            iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+                handle: self.handle.clone(),
+                authority: AccountId::new(public_key.clone()),
+                algorithm: Algorithm::Ed25519,
+                public_key,
+                revision: QUALIFICATION.revision(),
+                policy_digest: QUALIFICATION.policy_digest(),
+            }
+        }
+    }
+
+    impl SorafsNativeTransactionSignerProviderV1 for ProofSigner {
+        fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome
+        }
+
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn authority(&self) -> AccountId {
+            AccountId::new(self.key_pair.public_key().clone())
+        }
+
+        fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
+            Ok(self.key_pair.public_key().clone())
+        }
+
+        fn qualification(
+            &self,
+        ) -> Result<
+            SorafsNativeTransactionSignerQualificationV1,
+            SorafsNativeTransactionSignerProbeErrorV1,
+        > {
+            Ok(QUALIFICATION)
+        }
+    }
+
+    impl SoraFsProofOutcomeTransactionSigner for ProofSigner {
+        fn sign(
+            &self,
+            payload: TransactionPayload,
+        ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError> {
+            TransactionBuilder::from_payload(payload)
+                .and_then(|builder| builder.try_sign(self.key_pair.private_key()))
+                .map_err(|_| SoraFsProofOutcomeSigningError::Refused)
+        }
+    }
+
+    #[test]
+    fn enabled_native_signer_role_rejects_missing_binding_and_provider() {
+        let error = qualify_configured_sorafs_native_transaction_signer_for_startup::<
+            dyn SoraFsProofOutcomeTransactionSigner,
+        >(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            true,
+            None,
+            None,
+            qualify_sorafs_proof_outcome_transaction_signer_v1,
+        )
+        .err()
+        .expect("enabled role must fail without a configured binding");
+
+        assert!(error.contains("missing its configured binding"));
+    }
+
+    #[test]
+    fn disabled_native_signer_role_rejects_injected_provider() {
+        let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = Arc::new(ProofSigner::new(
+            "hsm://sorafs/proof-outcome/unrequested",
+            0x11,
+        ));
+        let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            false,
+            None,
+            Some(provider),
+            qualify_sorafs_proof_outcome_transaction_signer_v1,
+        )
+        .err()
+        .expect("disabled role must reject an injected provider");
+
+        assert!(error.contains("rejects an injected runtime provider"));
+    }
+
+    #[test]
+    fn native_signer_startup_qualifies_exact_configured_provider() {
+        let provider = Arc::new(ProofSigner::new("hsm://sorafs/proof-outcome/primary", 0x21));
+        let configured = provider.configured_binding();
+        let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = provider;
+
+        let qualified = qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            true,
+            Some(&configured),
+            Some(provider),
+            qualify_sorafs_proof_outcome_transaction_signer_v1,
+        )
+        .expect("exact configured provider must qualify")
+        .expect("enabled role returns its qualified facade");
+
+        assert_eq!(qualified.handle(), configured.handle);
+        assert_eq!(qualified.authority(), configured.authority);
+        assert_eq!(qualified.public_key(), Ok(configured.public_key));
+        assert_eq!(qualified.qualification(), Ok(QUALIFICATION));
+    }
+
+    #[test]
+    fn native_signer_startup_rejects_substituted_provider() {
+        let expected = ProofSigner::new("hsm://sorafs/proof-outcome/primary", 0x31);
+        let configured = expected.configured_binding();
+        let substituted: Arc<dyn SoraFsProofOutcomeTransactionSigner> = Arc::new(ProofSigner::new(
+            "hsm://sorafs/proof-outcome/substituted",
+            0x32,
+        ));
+
+        let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
+            SorafsNativeTransactionSignerRoleV1::ProofOutcome,
+            true,
+            Some(&configured),
+            Some(substituted),
+            qualify_sorafs_proof_outcome_transaction_signer_v1,
+        )
+        .err()
+        .expect("substituted provider must fail startup qualification");
+
+        assert!(error.contains("substituted"));
     }
 }
 
@@ -57603,9 +57893,9 @@ impl Torii {
     /// # Panics
     ///
     /// Panics before global configuration or background-worker startup when
-    /// signed Governance producer or fused-privacy runtime roles are incomplete,
-    /// ambiguous, unexpected, substituted, stale, or do not match their exact
-    /// configured binding.
+    /// native SoraFS transaction signers, signed Governance producer roles, or
+    /// fused-privacy runtime roles are incomplete, ambiguous, unexpected,
+    /// substituted, stale, or do not match their exact configured binding.
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_handle(
         chain_id: ChainId,
@@ -57622,6 +57912,12 @@ impl Torii {
         runtime_deps: impl Into<ToriiRuntimeDeps>,
     ) -> Self {
         let runtime_deps = runtime_deps.into();
+        #[cfg(feature = "app_api")]
+        let mut runtime_deps = runtime_deps;
+        #[cfg(feature = "app_api")]
+        preflight_sorafs_native_transaction_signers(&config, &mut runtime_deps).unwrap_or_else(
+            |error| panic!("invalid SoraFS native signer runtime preflight: {error}"),
+        );
         #[cfg(feature = "app_api")]
         preflight_sorafs_fenced_privacy_runtime(
             &sorafs_node::config::StorageConfig::from(&config.sorafs_storage),

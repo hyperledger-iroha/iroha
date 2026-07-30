@@ -16068,17 +16068,6 @@ mod tests {
                 Some(_) => Err(reputation::runtime::ReputationRuntimeError::JournalSourceConflict),
             }
         }
-
-        fn record_stream_token_outcome(
-            &self,
-            _provider_id: ProviderId,
-            _outcome: iroha_data_model::sorafs::reputation::StreamTokenValidationOutcomeV1,
-        ) -> Result<
-            reputation::runtime::CountedStreamTokenProducerOutcomeV1,
-            reputation::runtime::ReputationRuntimeError,
-        > {
-            Err(reputation::runtime::ReputationRuntimeError::RuntimeBindingMismatch)
-        }
     }
 
     fn startup_por_archive_binding(seed: u8) -> PorFinalizedReplayArchiveBindingV1 {

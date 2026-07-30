@@ -661,7 +661,7 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
-        transaction::{FeePaymentIntent, MultisigSignatures, TransactionBuilder},
+        transaction::{FeePaymentIntent, TransactionBuilder, signed::MultisigSignatures},
     };
 
     use super::*;
