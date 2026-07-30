@@ -224,14 +224,14 @@ by `crates/iroha_data_model/tests/fixtures/query_wire_ids_v1.txt`. Encoders emit
 those identifiers rather than deriving new values from the current Rust module
 layout. The golden checks bind each built-in type label to its identifier, so
 swapping two otherwise valid identifiers is also a compatibility failure.
-Registries retain the concrete Rust type name as a decode lookup alias, while
-the frozen built-in mapping takes precedence over an installed application
-registry for canonical encoding and decoding. Application registries are then
-used as a fallback for custom query types. Internal refactors can therefore
-move an implementation without changing canonical bytes or breaking already
-encoded values. New built-ins must add a unique identifier and update the
-corresponding golden inventory; an existing V1 identifier must not be renamed
-or reused for a different layout.
+Registries retain the concrete Rust type name as a decode lookup alias. For
+queries, the frozen built-in mapping takes precedence over an installed
+application registry for canonical encoding and decoding; the application
+registry is then used as a fallback for custom query types. Internal refactors
+can therefore move an implementation without changing canonical bytes or
+breaking already encoded values. New built-ins must add a unique identifier
+and update the corresponding golden inventory; an existing V1 identifier must
+not be renamed or reused for a different layout.
 
 The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
 Version 4 changes the canonical validation-fee governance layout:
@@ -555,7 +555,12 @@ encoded as a single packed payload with one of two layouts:
   bit is set (varint-encoded per `COMPACT_LEN`), followed by concatenated field
   payloads in declaration order. Bit 0 of byte 0 refers to field 0, bit 1 to
   field 1, and so on. Fields that are fixed-size or self-delimiting omit the
-  explicit size header and are decoded sequentially.
+  explicit size header and are decoded sequentially. The bitset is part of the
+  type's canonical layout: a decoder recomputes it from the same compile-time
+  field classification as the encoder and rejects any mismatch, including
+  non-zero padding bits. Each declared size is decoded only as the compact
+  varint advertised by `COMPACT_LEN`; zero is a canonical one-byte varint and
+  is never reinterpreted as a fixed-width `u64`.
 
 Field payloads themselves use the active layout flags (e.g., `PACKED_SEQ`,
 `COMPACT_LEN`) when encoding nested collections or string/blob values.

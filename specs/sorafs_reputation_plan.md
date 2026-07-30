@@ -698,7 +698,8 @@ publication authority.
    - Stage 1: publish on the approved governance schedule, with routing usage
      optional.
    - Stage 2: enforce routing/incentive integration (threshold alerts active).
-8. Update documentation (`specs/sorafs/reputation_operator.md`, portal page, dashboards). Record status/roadmap update.
+8. Update the source-adjacent specification, dashboards, and any affected
+   public guide in `iroha-docs`.
 
 ## Rollout Status
 

@@ -47,7 +47,7 @@ test('checkOpenApiSignatures validates signed entries', async () => {
     }),
   );
 
-  const versionLabel = '2025-q3';
+  const versionLabel = 'preview';
   const versionRelative = join('versions', versionLabel, 'torii.json').split('\\').join('/');
   const versionSpec = releaseSpecBuffer('/v1/blocks');
   const versionSha = sha256Hex(versionSpec);
@@ -94,7 +94,7 @@ test('checkOpenApiSignatures validates signed entries', async () => {
     staticDir,
     versionsFile: join(staticDir, 'versions.json'),
   });
-  assert.deepEqual(summary.checkedLabels.sort(), ['2025-q3', 'latest']);
+  assert.deepEqual(summary.checkedLabels.sort(), ['latest', 'preview']);
   assert.deepEqual(summary.skippedLabels, []);
 });
 
@@ -229,9 +229,9 @@ test('checkOpenApiSignatures fails when manifests are missing signatures', async
     }),
   );
   await writeJson(
-    join(staticDir, 'versions', '2025-q4', 'manifest.json'),
+    join(staticDir, 'versions', 'candidate', 'manifest.json'),
     buildManifest({
-      path: 'versions/2025-q4/torii.json',
+      path: 'versions/candidate/torii.json',
       payload: spec,
       sha256: sha,
       signature: null,
@@ -239,7 +239,7 @@ test('checkOpenApiSignatures fails when manifests are missing signatures', async
   );
 
   await writeJson(join(staticDir, 'versions.json'), {
-    versions: ['2025-q4'],
+    versions: ['candidate'],
     generatedAt: new Date().toISOString(),
     entries: [
       buildVersionEntry({
@@ -251,11 +251,11 @@ test('checkOpenApiSignatures fails when manifests are missing signatures', async
         signature,
       }),
       buildVersionEntry({
-        label: '2025-q4',
-        path: 'versions/2025-q4/torii.json',
+        label: 'candidate',
+        path: 'versions/candidate/torii.json',
         payload: spec,
         sha256: sha,
-        manifestPath: `versions/2025-q4/manifest.json`,
+        manifestPath: `versions/candidate/manifest.json`,
         signature,
       }),
     ],
@@ -267,7 +267,7 @@ test('checkOpenApiSignatures fails when manifests are missing signatures', async
         staticDir,
         versionsFile: join(staticDir, 'versions.json'),
       }),
-    /2025-q4/i,
+    /candidate/i,
   );
 });
 
@@ -281,7 +281,7 @@ test('checkOpenApiSignatures allows opting out specific labels', async () => {
   const signature = signPayload(spec);
   await writeAllowedSigners(staticDir, [signature.publicKeyHex]);
   await writeAsset(join(staticDir, 'torii.json'), spec);
-  await writeAsset(join(staticDir, 'versions', '2025-q2', 'torii.json'), spec);
+  await writeAsset(join(staticDir, 'versions', 'candidate', 'torii.json'), spec);
   await writeJson(
     join(staticDir, 'manifest.json'),
     buildManifest({
@@ -293,7 +293,7 @@ test('checkOpenApiSignatures allows opting out specific labels', async () => {
   );
 
   await writeJson(join(staticDir, 'versions.json'), {
-    versions: ['2025-q2'],
+    versions: ['candidate'],
     generatedAt: new Date().toISOString(),
     entries: [
       buildVersionEntry({
@@ -305,8 +305,8 @@ test('checkOpenApiSignatures allows opting out specific labels', async () => {
         signature,
       }),
       buildVersionEntry({
-        label: '2025-q2',
-        path: 'versions/2025-q2/torii.json',
+        label: 'candidate',
+        path: 'versions/candidate/torii.json',
         payload: spec,
         sha256: sha,
         manifestPath: null,
@@ -319,9 +319,9 @@ test('checkOpenApiSignatures allows opting out specific labels', async () => {
   const summary = await checkOpenApiSignatures({
     staticDir,
     versionsFile: join(staticDir, 'versions.json'),
-    allowUnsigned: ['2025-q2'],
+    allowUnsigned: ['candidate'],
   });
-  assert.deepEqual(summary.skippedLabels, ['2025-q2']);
+  assert.deepEqual(summary.skippedLabels, ['candidate']);
   assert.deepEqual(summary.checkedLabels, ['latest']);
 });
 

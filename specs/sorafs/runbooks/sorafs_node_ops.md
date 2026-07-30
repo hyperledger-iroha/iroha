@@ -4,8 +4,8 @@ This runbook walks operators through validating an embedded `sorafs-node`
 deployment inside Torii. Each section maps directly to the SF-3 deliverables:
 pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/node-operations.md`. Update
-> both copies to keep operational guidance consistent across doc sets.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## 1. Prerequisites
 

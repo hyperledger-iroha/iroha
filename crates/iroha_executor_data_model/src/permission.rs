@@ -665,9 +665,10 @@ pub mod settlement {
         /// Exact consent from a debited counterparty for one bilateral settlement intent.
         ///
         /// Only the account named by `debited_asset` may delegate or revoke this
-        /// token. The intent hash commits to the complete domain-separated DvP
-        /// or PvP instruction, so changing either leg, the plan, metadata, or
-        /// settlement identifier requires fresh consent.
+        /// token. The intent hash commits to the complete domain-separated DvP,
+        /// PvP, or repo phase, so changing any economic term or the settlement
+        /// identifier requires fresh consent. Repo initiation requires distinct
+        /// cash-debit and maturity-collateral consents before any asset moves.
         pub struct CanExecuteSettlement {
             /// Exact balance bucket the authorized settlement may debit.
             pub debited_asset: AssetId,

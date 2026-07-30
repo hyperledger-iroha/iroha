@@ -133,7 +133,7 @@ admission suites.
 
 ## References
 
-- Binary controller encoding: [`docs/account_structure.md`](../../account_structure.md#23-controller-payload-encodings-addr-1a)
+- Binary controller encoding: [`docs/account_structure.md`](../../docs/account_structure.md#23-controller-payload-encodings-addr-1a)
 - Canonical curve registry: [`specs/references/address_curve_registry.md`](address_curve_registry.md)
-- Implementation: [`crates/iroha_data_model/src/account/controller.rs`](../../../crates/iroha_data_model/src/account/controller.rs)
-- Compliance fixtures: [`fixtures/account/address_vectors.json`](../../../fixtures/account/address_vectors.json)
+- Implementation: [`crates/iroha_data_model/src/account/controller.rs`](../../crates/iroha_data_model/src/account/controller.rs)
+- Compliance fixtures: [`fixtures/account/address_vectors.json`](../../fixtures/account/address_vectors.json)

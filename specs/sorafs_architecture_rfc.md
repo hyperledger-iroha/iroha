@@ -73,7 +73,7 @@ Determinism requirements:
 - Empty files yield a single zero-length chunk with its own CID (to preserve
   manifest ordering).
 
-Public test vectors are published under [`fixtures/sorafs_chunker`](../../fixtures/sorafs_chunker). The canonical
+Public test vectors are published under [`fixtures/sorafs_chunker`](../fixtures/sorafs_chunker). The canonical
 SF1 profile (`1 MiB` PRNG stream, seed `0x0000000000DEC0DED`) emits five chunks
 with lengths `[177082, 210377, 403145, 187169, 70803]`, offsets
 `[0, 177082, 387459, 790604, 977773]`, a SHA3-256 boundary digest of
@@ -88,21 +88,21 @@ the published vectors. Conformance details and steward responsibilities live in
 `specs/sorafs/chunker_conformance.md`.
 
 The constants above are enforced by
-[`ChunkProfile::DEFAULT`](../../crates/sorafs_chunker/src/lib.rs), and the same
-descriptor drives [`CarBuildPlan`](../../crates/sorafs_car/src/lib.rs) +
+[`ChunkProfile::DEFAULT`](../crates/sorafs_chunker/src/lib.rs), and the same
+descriptor drives [`CarBuildPlan`](../crates/sorafs_car/src/lib.rs) +
 `CarStreamingWriter` when staging CARs. Registry lookups thread through
-[`sorafs_manifest::chunker_registry`](../../crates/sorafs_manifest/src/chunker_registry.rs)
+[`sorafs_manifest::chunker_registry`](../crates/sorafs_manifest/src/chunker_registry.rs)
 so manifests, CAR tooling, and fixtures stay aligned.
 
 ### Implementation Reference Map
 
 | Artifact | Location | Highlights |
 |----------|----------|------------|
-| Chunker profile & CLI | [`sorafs_chunker`](../../crates/sorafs_chunker/src/lib.rs) · [`export_vectors`](../../crates/sorafs_chunker/src/bin/export_vectors.rs) | `ChunkProfile::DEFAULT` implements the SF-1 parameters, and the CLI regenerates signed fixtures with mandatory council signatures. |
-| CAR planner & fetch tooling | [`sorafs_car`](../../crates/sorafs_car/src/lib.rs) · [`sorafs_fetch`](../../crates/sorafs_car/src/bin/sorafs_fetch.rs) | `CarBuildPlan`, `CarStreamingWriter`, and `ChunkFetchPlan` emit deterministic chunk metadata and PoR descriptors; the fetch CLI replays manifests across multi-provider inputs, enforcing BLAKE3 digests before reassembly. |
-| Manifest builder CLI | [`sorafs_manifest`](../../crates/sorafs_manifest/src/lib.rs) · [`sorafs_manifest_builder`](../../crates/sorafs_car/src/bin/sorafs_manifest_builder.rs) | `ManifestBuilder` encodes Norito manifests, attaches pin policy and alias claims, and writes governance envelopes; the builder orchestrates end-to-end CAR + manifest generation for CI and release pipelines. |
-| Manifest validator & PoR CLI | [`sorafs_manifest_chunk_store`](../../crates/sorafs_car/src/bin/sorafs_manifest_chunk_store.rs) | Replays CAR payloads through `ChunkStore`, derives PoR trees, and emits manifest reports for QA and governance tooling. |
-| Fixture bundle | [`fixtures/sorafs_chunker`](../../fixtures/sorafs_chunker) | Signed JSON/Rust/Go/TS vectors plus manifest digests; CI (`ci/check_sorafs_fixtures.sh`) replays the generator to enforce determinism. |
+| Chunker profile & CLI | [`sorafs_chunker`](../crates/sorafs_chunker/src/lib.rs) · [`export_vectors`](../crates/sorafs_chunker/src/bin/export_vectors.rs) | `ChunkProfile::DEFAULT` implements the SF-1 parameters, and the CLI regenerates signed fixtures with mandatory council signatures. |
+| CAR planner & fetch tooling | [`sorafs_car`](../crates/sorafs_car/src/lib.rs) · [`sorafs_fetch`](../crates/sorafs_car/src/bin/sorafs_fetch.rs) | `CarBuildPlan`, `CarStreamingWriter`, and `ChunkFetchPlan` emit deterministic chunk metadata and PoR descriptors; the fetch CLI replays manifests across multi-provider inputs, enforcing BLAKE3 digests before reassembly. |
+| Manifest builder CLI | [`sorafs_manifest`](../crates/sorafs_manifest/src/lib.rs) · [`sorafs_manifest_builder`](../crates/sorafs_car/src/bin/sorafs_manifest_builder.rs) | `ManifestBuilder` encodes Norito manifests, attaches pin policy and alias claims, and writes governance envelopes; the builder orchestrates end-to-end CAR + manifest generation for CI and release pipelines. |
+| Manifest validator & PoR CLI | [`sorafs_manifest_chunk_store`](../crates/sorafs_car/src/bin/sorafs_manifest_chunk_store.rs) | Replays CAR payloads through `ChunkStore`, derives PoR trees, and emits manifest reports for QA and governance tooling. |
+| Fixture bundle | [`fixtures/sorafs_chunker`](../fixtures/sorafs_chunker) | Signed JSON/Rust/Go/TS vectors plus manifest digests; CI (`ci/check_sorafs_fixtures.sh`) replays the generator to enforce determinism. |
 
 ## DAG & CID Layout
 
@@ -140,8 +140,8 @@ struct SoraFsManifestV1 {
 }
 ````
 
-The canonical encoding ships as [`ManifestV1`](../../crates/sorafs_manifest/src/lib.rs) with
-[`ManifestBuilder`](../../crates/sorafs_manifest/src/lib.rs) wiring Norito values
+The canonical encoding ships as [`ManifestV1`](../crates/sorafs_manifest/src/lib.rs) with
+[`ManifestBuilder`](../crates/sorafs_manifest/src/lib.rs) wiring Norito values
 into manifests that the CLI emits.
 
 The V1 archive commitment is exact: `car_digest` hashes every byte of the
@@ -185,7 +185,7 @@ lifetime OS lock on the adjacent checkpoint lock file rejects multiple Torii
 owners of one replay store and prevents cross-process last-writer-wins rollback.
 
 The Norito payload is realised by
-[`ProviderAdvertV1`](../../crates/sorafs_manifest/src/provider_advert.rs) and
+[`ProviderAdvertV1`](../crates/sorafs_manifest/src/provider_advert.rs) and
 the corresponding builder/validation helpers.
 
 Manifest digests feed directly into the Pin Registry contract (SF-4). The

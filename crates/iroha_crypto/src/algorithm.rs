@@ -227,7 +227,7 @@ impl IntoSchema for Algorithm {
         }
 
         let mut variants = Vec::new();
-        let mut push_variant = |tag: &str, discriminant: u8| {
+        let mut push_variant = |tag: &str, discriminant: u32| {
             variants.push(iroha_schema::EnumVariant {
                 tag: tag.to_owned(),
                 discriminant,
@@ -235,39 +235,39 @@ impl IntoSchema for Algorithm {
             });
         };
 
-        push_variant("Ed25519", Algorithm::Ed25519 as u8);
-        push_variant("Secp256k1", Algorithm::Secp256k1 as u8);
+        push_variant("Ed25519", Algorithm::Ed25519 as u32);
+        push_variant("Secp256k1", Algorithm::Secp256k1 as u32);
         #[cfg(feature = "bls")]
         {
-            push_variant("BlsNormal", Algorithm::BlsNormal as u8);
-            push_variant("BlsSmall", Algorithm::BlsSmall as u8);
+            push_variant("BlsNormal", Algorithm::BlsNormal as u32);
+            push_variant("BlsSmall", Algorithm::BlsSmall as u32);
         }
-        push_variant("MlDsa", Algorithm::MlDsa as u8);
+        push_variant("MlDsa", Algorithm::MlDsa as u32);
         #[cfg(feature = "gost")]
         {
             push_variant(
                 "Gost3410_2012_256ParamSetA",
-                Algorithm::Gost3410_2012_256ParamSetA as u8,
+                Algorithm::Gost3410_2012_256ParamSetA as u32,
             );
             push_variant(
                 "Gost3410_2012_256ParamSetB",
-                Algorithm::Gost3410_2012_256ParamSetB as u8,
+                Algorithm::Gost3410_2012_256ParamSetB as u32,
             );
             push_variant(
                 "Gost3410_2012_256ParamSetC",
-                Algorithm::Gost3410_2012_256ParamSetC as u8,
+                Algorithm::Gost3410_2012_256ParamSetC as u32,
             );
             push_variant(
                 "Gost3410_2012_512ParamSetA",
-                Algorithm::Gost3410_2012_512ParamSetA as u8,
+                Algorithm::Gost3410_2012_512ParamSetA as u32,
             );
             push_variant(
                 "Gost3410_2012_512ParamSetB",
-                Algorithm::Gost3410_2012_512ParamSetB as u8,
+                Algorithm::Gost3410_2012_512ParamSetB as u32,
             );
         }
         #[cfg(feature = "sm")]
-        push_variant("Sm2", Algorithm::Sm2 as u8);
+        push_variant("Sm2", Algorithm::Sm2 as u32);
 
         map.insert::<Self>(iroha_schema::Metadata::Enum(iroha_schema::EnumMeta {
             variants,
@@ -358,27 +358,41 @@ mod tests {
 
     #[test]
     fn canonical_signature_payload_lengths_are_stable() {
-        let mut cases = vec![
-            (Algorithm::Ed25519, 64),
-            (Algorithm::Secp256k1, 64),
-            (Algorithm::MlDsa, 3_309),
-        ];
+        assert_eq!(Algorithm::Ed25519.signature_payload_len(), 64);
+        assert_eq!(Algorithm::Secp256k1.signature_payload_len(), 64);
+        assert_eq!(Algorithm::MlDsa.signature_payload_len(), 3_309);
 
         #[cfg(feature = "gost")]
-        cases.extend_from_slice(&[
-            (Algorithm::Gost3410_2012_256ParamSetA, 64),
-            (Algorithm::Gost3410_2012_256ParamSetB, 64),
-            (Algorithm::Gost3410_2012_256ParamSetC, 64),
-            (Algorithm::Gost3410_2012_512ParamSetA, 128),
-            (Algorithm::Gost3410_2012_512ParamSetB, 128),
-        ]);
+        {
+            assert_eq!(
+                Algorithm::Gost3410_2012_256ParamSetA.signature_payload_len(),
+                64
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_256ParamSetB.signature_payload_len(),
+                64
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_256ParamSetC.signature_payload_len(),
+                64
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_512ParamSetA.signature_payload_len(),
+                128
+            );
+            assert_eq!(
+                Algorithm::Gost3410_2012_512ParamSetB.signature_payload_len(),
+                128
+            );
+        }
         #[cfg(feature = "bls")]
-        cases.extend_from_slice(&[(Algorithm::BlsNormal, 96), (Algorithm::BlsSmall, 48)]);
+        {
+            assert_eq!(Algorithm::BlsNormal.signature_payload_len(), 96);
+            assert_eq!(Algorithm::BlsSmall.signature_payload_len(), 48);
+        }
         #[cfg(feature = "sm")]
-        cases.push((Algorithm::Sm2, 64));
-
-        for (algorithm, expected) in cases {
-            assert_eq!(algorithm.signature_payload_len(), expected);
+        {
+            assert_eq!(Algorithm::Sm2.signature_payload_len(), 64);
         }
     }
 }

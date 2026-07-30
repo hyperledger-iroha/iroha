@@ -1081,7 +1081,6 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     )
 }
 
-#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) fn normalize_stark_fri_circuit_id_for_backend(
     backend: &str,
     raw: &str,
@@ -2053,7 +2052,7 @@ pub mod test_utils {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn fixture_circuit_from_id(circuit_id: &str) -> Option<FixtureBundle> {
-        let backend = super::halo2_ipa_backend_from_circuit_id(circuit_id)?;
+        let backend = super::normalize_halo2_ipa_circuit_id(circuit_id)?;
         let name = backend.rsplit('/').next()?;
         match name {
             "tiny-add" => Some(tiny_add_bundle),
@@ -5731,12 +5730,14 @@ pub fn preverify_with_budget(
     PreverifyResult::Accepted
 }
 
-/// Minimal verifier selector. Dispatches to concrete verifiers behind feature flags.
+/// Normalize one portable, non-reserved Halo2 IPA circuit identifier.
 ///
-/// Backends without a real verifier return `false` (unsupported).
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn halo2_ipa_backend_from_circuit_id(circuit_id: &str) -> Option<String> {
-    if !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
+/// The same canonicalizer is used by proof admission, verifier selection, and
+/// overlay binding so those security boundaries cannot accept different alias
+/// sets.
+pub(crate) fn normalize_halo2_ipa_circuit_id(circuit_id: &str) -> Option<String> {
+    if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
+        || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
         || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_label_v1(
             circuit_id,
         )
@@ -5744,7 +5745,10 @@ fn halo2_ipa_backend_from_circuit_id(circuit_id: &str) -> Option<String> {
         return None;
     }
     let trimmed = circuit_id.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty()
+        || trimmed == ZK_BACKEND_HALO2_IPA
+        || matches!(trimmed, "halo2/pasta" | "halo2/pasta/ipa")
+    {
         return None;
     }
     if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
@@ -5791,7 +5795,7 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
     if env.vk_hash != expected_vk_hash {
         return false;
     }
-    let backend = match halo2_ipa_backend_from_circuit_id(&env.circuit_id) {
+    let backend = match normalize_halo2_ipa_circuit_id(&env.circuit_id) {
         Some(tag) => tag,
         None => return false,
     };
@@ -9239,22 +9243,31 @@ mod halo2_ipa_alias_tests {
     #[test]
     fn halo2_ipa_circuit_id_maps_to_pasta_backend() {
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("halo2/ipa:tiny-add").as_deref(),
+            normalize_halo2_ipa_circuit_id("halo2/ipa:tiny-add").as_deref(),
             Some("halo2/pasta/ipa/tiny-add")
         );
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("halo2/pasta/tiny-add").as_deref(),
+            normalize_halo2_ipa_circuit_id("halo2/pasta/tiny-add").as_deref(),
             Some("halo2/pasta/ipa/tiny-add")
         );
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("halo2/pasta/ipa/tiny-add").as_deref(),
+            normalize_halo2_ipa_circuit_id("halo2/pasta/ipa/tiny-add").as_deref(),
             Some("halo2/pasta/ipa/tiny-add")
         );
         assert_eq!(
-            halo2_ipa_backend_from_circuit_id("tiny-add").as_deref(),
+            normalize_halo2_ipa_circuit_id("tiny-add").as_deref(),
             Some("halo2/pasta/ipa/tiny-add")
         );
-        assert!(halo2_ipa_backend_from_circuit_id("").is_none());
+        assert!(normalize_halo2_ipa_circuit_id("").is_none());
+        assert!(normalize_halo2_ipa_circuit_id("halo2/ipa").is_none());
+        assert!(normalize_halo2_ipa_circuit_id("halo2/pasta").is_none());
+        assert!(normalize_halo2_ipa_circuit_id("halo2/pasta/ipa").is_none());
+        assert!(
+            normalize_halo2_ipa_circuit_id(
+                &"a".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1)
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -9267,13 +9280,13 @@ mod halo2_ipa_alias_tests {
                 format!("generic/namespace/{label}"),
             ] {
                 assert!(
-                    halo2_ipa_backend_from_circuit_id(&circuit_id).is_none(),
+                    normalize_halo2_ipa_circuit_id(&circuit_id).is_none(),
                     "reserved privacy circuit id {circuit_id:?} must not map to Halo2"
                 );
             }
             for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
                 assert!(
-                    halo2_ipa_backend_from_circuit_id(&near_miss).is_some(),
+                    normalize_halo2_ipa_circuit_id(&near_miss).is_some(),
                     "portable near miss {near_miss:?} must remain mappable"
                 );
             }
@@ -13416,14 +13429,13 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         Some(p) => p,
         None => return reject("missing/invalid IPAK parameters in verifying key envelope"),
     };
-    let expected_vk_circuit = match halo2_ipa_backend_from_circuit_id(backend) {
+    let expected_vk_circuit = match normalize_halo2_ipa_circuit_id(backend) {
         Some(circuit_id) => circuit_id,
         None => return reject("invalid backend circuit id"),
     };
     match zkparse::circuit_id_any(vk_box.bytes.as_slice()) {
         Ok(Some(vk_circuit_id)) => {
-            let Some(normalized_vk_circuit) = halo2_ipa_backend_from_circuit_id(&vk_circuit_id)
-            else {
+            let Some(normalized_vk_circuit) = normalize_halo2_ipa_circuit_id(&vk_circuit_id) else {
                 return reject("invalid verifying key CID1 circuit id");
             };
             if normalized_vk_circuit != expected_vk_circuit {

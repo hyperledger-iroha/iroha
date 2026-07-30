@@ -1600,7 +1600,7 @@
         {
           "context": "let crate_dir = Path::new(env!(\"CARGO_MANIFEST_DIR\"));",
           "line": 25,
-          "path": "crates/ivm/tests/norito_portal_snippets_compile.rs",
+          "path": "crates/ivm/tests/kotodama_documentation_examples.rs",
           "scope": "test"
         },
         {

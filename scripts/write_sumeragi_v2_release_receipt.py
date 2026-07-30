@@ -224,7 +224,7 @@ _APALACHE_LAYOUT_ONLY_RESULTS = (
         "inflight-first-release-layout",
         "SumeragiV2InFlightFirstRelease",
         "inflight_first_release_fixed.cfg",
-        "10",
+        "18",
     ),
 )
 _APALACHE_RESULTS = (
@@ -618,6 +618,7 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/scripts/build-dist.mjs",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
@@ -653,8 +654,8 @@ _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "java/iroha_android/gradlew",
     "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
     "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
-    "docs/portal/static/openapi/torii.json",
-    "docs/portal/static/openapi/versions/current/torii.json",
+    "artifacts/openapi/torii.json",
+    "artifacts/openapi/versions/current/torii.json",
 )
 _JS_STATUS_TESTS = (
     "getSumeragiStatusTyped validates and normalizes authoritative v2 status",

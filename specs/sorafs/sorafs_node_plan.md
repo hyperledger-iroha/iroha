@@ -6,8 +6,8 @@ its verification surface, and the genuine deployment evidence that remains.
 Use it alongside `sorafs_node_storage.md`, the provider admission policy, and
 the capacity marketplace contract.
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/node-plan.md`. Update both
-> copies to keep reviewers aligned.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## V1 Provider Scope
 
@@ -138,8 +138,8 @@ evidence, governance policy tuning, and SDK management ergonomics.
   automatically.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 - ✅ `sorafs-node ingest por` now replays PoR challenges, proofs, and optional verdicts against the embedded
   storage worker, emitting JSON summaries so operators can validate artefacts and archive evidence before calling
-  the HTTP API. Regression tests cover the new flow and the runbooks/portal docs describe the workflow for SREs
-  preparing governance tickets.【crates/sorafs_node/src/bin/sorafs-node.rs:184】【crates/sorafs_node/tests/cli.rs:103】【specs/sorafs/runbooks/sorafs_node_ops.md:57】【docs/portal/docs/sorafs/node-operations.md:59】
+  the HTTP API. Regression tests cover the new flow and the repository-local runbook describes the workflow for SREs
+  preparing governance tickets.【crates/sorafs_node/src/bin/sorafs-node.rs:184】【crates/sorafs_node/tests/cli.rs:103】【specs/sorafs/runbooks/sorafs_node_ops.md:57】
 
 These shipped items keep SF‑3 aligned with SF‑9 (PoR automation). Live rollout
 evidence and hosted governance archive hand-offs remain tracked in `roadmap.md`.

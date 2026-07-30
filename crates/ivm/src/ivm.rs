@@ -3173,6 +3173,7 @@ impl IVM {
             VMError::HTMAbort => VmTrapKind::HTMAbort,
             VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
             VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
+            VMError::HostOutputBudgetExceeded { .. } => VmTrapKind::HostOutputBudgetExceeded,
             VMError::AmxBudgetExceeded { .. } => VmTrapKind::AmxBudgetExceeded,
             VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
         }
@@ -9859,6 +9860,19 @@ seiyaku Demo {
         assert_eq!(
             IVM::classify_trap(&VMError::MissingHalt),
             VmTrapKind::MissingHalt
+        );
+    }
+
+    #[test]
+    fn host_output_budget_error_has_a_distinct_trap_kind() {
+        let error = VMError::HostOutputBudgetExceeded {
+            resource: crate::HostOutputResource::Bytes,
+            attempted: 9,
+            limit: 8,
+        };
+        assert_eq!(
+            IVM::classify_trap(&error),
+            VmTrapKind::HostOutputBudgetExceeded
         );
     }
 

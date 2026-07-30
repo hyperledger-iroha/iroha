@@ -15,7 +15,7 @@ when CI pipelines or dashboards are offline.
 
 | Path | Purpose |
 |------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
+| `docs/automation/android/` | Android SDK automation baselines, including parity summaries and SDK publishing evidence. |
 | `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
 
 Each subdirectory documents the commands that produce the evidence along with

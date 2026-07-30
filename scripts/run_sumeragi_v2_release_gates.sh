@@ -1272,7 +1272,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::transient_response_capacity_defers_materialization_on_the_same_delivery
   merge_sidecar::tests::writable_reconnect_during_materialization_keeps_exact_authorized_tenure
   sumeragi::v2::tests::deferred_locked_commit_delivery_tracks_generation_after_tc
-  sumeragi::v2::tests::prelock_current_commit_is_readmitted_after_exact_lock_persistence
+  sumeragi::v2::tests::prelock_current_commit_is_readmitted_with_priority_neutral_service_identity
   sumeragi::v2::tests::tc_reset_readmits_exact_locked_commit_once_per_generation
   sumeragi::v2::tests::tc_promoted_lock_requires_same_subject_reproposal_before_commit
   sumeragi::v2::tests::timeout_vote_installs_embedded_qc_before_forming_tc
@@ -1320,7 +1320,7 @@ required_production_liveness_tests=(
   sumeragi::v2_body_store::tests::rotating_leader_reproposal_authenticates_the_immutable_header_leader
   sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue
   sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts
-  sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_only_a_certified_signer_can_serve
+  sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_a_non_signer_archive_can_serve
   sumeragi::v2_apply::tests::committed_merge_reservation_rejects_bare_norito
   sumeragi::v2_effects::tests::retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it
   sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
@@ -1365,9 +1365,9 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
   sumeragi::v2_effects::tests::serialized_runtime_emits_proposal_a_prepare_qc_b_timeout_capacity_trace
-  sumeragi::v2_effects::tests::full_capacity_certified_fetch_remains_missing_and_retransmit_later_adopts_it
-  sumeragi::v2_effects::tests::certified_request_pressure_leaves_higher_authority_upgrade_for_retransmission
-  sumeragi::v2_effects::tests::reconstructible_new_certified_fetch_acquires_ownership_after_retransmission
+  sumeragi::v2_effects::tests::full_capacity_certified_fetch_retains_its_exact_owner_until_capacity_releases
+  sumeragi::v2_effects::tests::certified_request_pressure_retains_higher_authority_upgrade_under_one_owner
+  sumeragi::v2_effects::tests::reconstructible_new_certified_fetch_acquires_ownership_from_retained_admission
   sumeragi::v2_effects::tests::production_capacity_saturation_admits_response_and_reconstructible_fetch
   sumeragi::v2_effects::tests::durable_sign_preemption_orders_speculative_certified_and_locked_fetches
   sumeragi::v2_effects::tests::retained_producer_suffix_allows_exact_payload_chunk_to_release_fetch_capacity
@@ -1454,7 +1454,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation
   sumeragi::v2_runtime::tests::conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
   sumeragi::v2_runtime::tests::conflicting_local_and_validated_receipts_do_not_coalesce
-  sumeragi::v2_runtime::tests::production_busy_transfer_retains_exact_validation_evidence_for_retry_and_cleanup
+  sumeragi::v2_runtime::tests::applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation
   sumeragi::v2_runtime::tests::body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_duplicates
   sumeragi::v2_runtime::tests::decision_retires_proposal_owners_but_preserves_body_and_application_completions
   sumeragi::v2_runtime::tests::decision_retires_stale_local_completion_for_durable_recovery
@@ -1619,7 +1619,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_is_deadline_driven_edge_triggered_and_recovers_on_progress
   sumeragi::status::v2_liveness_watchdog_tests::active_watchdog_resets_on_successor_owner_and_status_clear
-  sumeragi::status::v2_liveness_watchdog_tests::rejected_running_successor_failure_projection_still_latches_restart_required
+  sumeragi::status::v2_liveness_watchdog_tests::rejected_running_successor_failure_projection_preserves_status
   zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin
   block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round
   offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin

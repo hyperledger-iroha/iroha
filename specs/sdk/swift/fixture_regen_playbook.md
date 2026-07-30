@@ -1,5 +1,10 @@
 <!-- Swift Norito fixture regeneration playbook -->
 
+---
+title: Swift Norito Fixture Regeneration and Rollback
+summary: Canonical cadence, validation, evidence, and rollback steps for Swift fixtures.
+---
+
 # Swift Norito Fixture Regeneration & Rollback (IOS2-WB1)
 
 This playbook records the agreed cadence and evidence bundle for Swift Norito

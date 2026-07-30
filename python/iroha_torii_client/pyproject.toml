@@ -16,7 +16,6 @@ dependencies = [
 ]
 keywords = ["iroha", "torii", "sdk", "blockchain"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python",

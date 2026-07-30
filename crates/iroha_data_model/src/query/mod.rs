@@ -92,25 +92,42 @@ pub enum QueryOutputBatchBoxTupleError {
 #[error("cannot extend query-output batches of different types")]
 pub struct QueryOutputBatchBoxTypeMismatch;
 
+/// Error returned when a signed query fails request or signature validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SignedQueryValidationError {
+    /// The JSON query request could not be reconstructed.
+    #[error("{0}")]
+    InvalidRequest(&'static str),
+    /// Query request authority must be single-key
+    #[error("Query request authority must be single-key")]
+    AuthorityNotSingleKey,
+    /// Query request signature material is not valid
+    #[error("Query request signature material is not valid")]
+    InvalidSignatureMaterial,
+    /// Query request signature is not valid
+    #[error("Query request signature is not valid")]
+    InvalidSignature,
+}
+
 fn verify_query_signature_for_signer(
     signature: &SignatureOf<QueryRequestWithAuthority>,
     signer: &PublicKey,
     payload: &QueryRequestWithAuthority,
-    material_error: &'static str,
-    verify_error: &'static str,
-) -> Result<(), &'static str> {
+) -> Result<(), SignedQueryValidationError> {
     match signer.try_algorithm() {
         Ok(iroha_crypto::Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(signature.payload())
-                .map_err(|_| material_error)?;
+                .map_err(|_| SignedQueryValidationError::InvalidSignatureMaterial)?;
         }
         Ok(iroha_crypto::Algorithm::MlDsa) => {
             iroha_crypto::mldsa65_parse_signature(signature.payload())
-                .map_err(|_| material_error)?;
+                .map_err(|_| SignedQueryValidationError::InvalidSignatureMaterial)?;
         }
         _ => {}
     }
-    signature.verify(signer, payload).map_err(|_| verify_error)
+    signature
+        .verify(signer, payload)
+        .map_err(|_| SignedQueryValidationError::InvalidSignature)
 }
 
 impl iroha_version::Version for SignedQuery {
@@ -488,23 +505,22 @@ pub mod json_wrappers {
     }
 
     impl TryFrom<SignedQueryJson> for SignedQuery {
-        type Error = &'static str;
+        type Error = SignedQueryValidationError;
         fn try_from(v: SignedQueryJson) -> Result<Self, Self::Error> {
             match v {
                 SignedQueryJson::Canonical(v1) => {
-                    let request = query_request_from_json(v1.payload.request)?;
+                    let request = query_request_from_json(v1.payload.request)
+                        .map_err(SignedQueryValidationError::InvalidRequest)?;
                     let payload = QueryRequestWithAuthority {
                         authority: v1.payload.authority,
                         request,
                     };
                     let QuerySignature(sig) = &v1.signature;
-                    verify_query_signature_for_signer(
-                        sig,
-                        payload.authority.signatory(),
-                        &payload,
-                        "invalid SignedQuery signature material",
-                        "invalid SignedQuery signature",
-                    )?;
+                    let signatory = payload
+                        .authority
+                        .try_signatory()
+                        .ok_or(SignedQueryValidationError::AuthorityNotSingleKey)?;
+                    verify_query_signature_for_signer(sig, signatory, &payload)?;
 
                     Ok(SignedQuery {
                         signature: v1.signature,
@@ -831,6 +847,10 @@ fn decode_registered_query(
 fn builtin_query_registry() -> &'static QueryRegistry {
     DEFAULT_QUERY_REGISTRY.get_or_init(build_builtin_query_registry)
 }
+
+#[cfg(test)]
+#[path = "tests/wire_ids.rs"]
+mod wire_id_tests;
 
 #[model]
 mod model {
@@ -3406,15 +3426,14 @@ mod candidate {
     }
 
     impl SignedQueryCandidate {
-        fn validate(self) -> Result<SignedQuery, &'static str> {
+        fn validate(self) -> Result<SignedQuery, SignedQueryValidationError> {
             let QuerySignature(signature) = &self.signature;
-            verify_query_signature_for_signer(
-                signature,
-                self.payload.authority.signatory(),
-                &self.payload,
-                "Query request signature material is not valid",
-                "Query request signature is not valid",
-            )?;
+            let signatory = self
+                .payload
+                .authority
+                .try_signatory()
+                .ok_or(SignedQueryValidationError::AuthorityNotSingleKey)?;
+            verify_query_signature_for_signer(signature, signatory, &self.payload)?;
 
             Ok(SignedQuery {
                 payload: self.payload,
@@ -3433,7 +3452,7 @@ mod candidate {
                 .map_err(|_| norito::core::Error::LengthMismatch)?;
             let decoded = candidate
                 .validate()
-                .map_err(|msg| norito::core::Error::Message(msg.to_owned()))?;
+                .map_err(|error| norito::core::Error::Message(error.to_string()))?;
             Ok((decoded, used))
         }
     }
@@ -3455,7 +3474,7 @@ mod candidate {
                 )?;
             candidate
                 .validate()
-                .map_err(|msg| norito::core::Error::Message(msg.to_owned()))
+                .map_err(|error| norito::core::Error::Message(error.to_string()))
         }
     }
 
@@ -3470,10 +3489,11 @@ mod candidate {
         use norito::json;
 
         use crate::{
-            account::AccountId,
+            account::{AccountId, MultisigMember, MultisigPolicy},
             query::{
-                FindExecutorDataModel, QueryRequest, SingularQueryBox,
-                candidate::SignedQueryCandidate, parameters,
+                FindExecutorDataModel, QueryRequest, QueryRequestWithAuthority,
+                SignedQueryValidationError, SingularQueryBox, candidate::SignedQueryCandidate,
+                parameters,
             },
         };
 
@@ -3528,6 +3548,13 @@ mod candidate {
             .unwrap()
         });
 
+        fn multisig_authority() -> AccountId {
+            let member =
+                MultisigMember::new(ALICE_KEYPAIR.public_key().clone(), 1).expect("valid member");
+            let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
+            AccountId::new_multisig(policy)
+        }
+
         #[test]
         fn valid() {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -3568,7 +3595,7 @@ mod candidate {
                 .validate()
                 .err()
                 .expect("expected signature validation to fail");
-            assert_eq!(err, "Query request signature is not valid");
+            assert_eq!(err, SignedQueryValidationError::InvalidSignature);
         }
 
         #[test]
@@ -3604,7 +3631,7 @@ mod candidate {
                     .validate()
                     .err()
                     .unwrap_or_else(|| panic!("{label} Ed25519 signature R must be rejected"));
-                assert_eq!(err, "Query request signature material is not valid");
+                assert_eq!(err, SignedQueryValidationError::InvalidSignatureMaterial);
             }
         }
 
@@ -3647,7 +3674,7 @@ mod candidate {
                     .validate()
                     .err()
                     .unwrap_or_else(|| panic!("{label} ML-DSA signature length must be rejected"));
-                assert_eq!(err, "Query request signature material is not valid");
+                assert_eq!(err, SignedQueryValidationError::InvalidSignatureMaterial);
             }
         }
 
@@ -3669,7 +3696,29 @@ mod candidate {
                 .validate()
                 .err()
                 .expect("expected signature validation to fail");
-            assert_eq!(err, "Query request signature is not valid");
+            assert_eq!(err, SignedQueryValidationError::InvalidSignature);
+        }
+
+        #[test]
+        fn multisig_authority_is_rejected_without_unwinding() {
+            let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                FindExecutorDataModel,
+            ))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+            let candidate = SignedQueryCandidate {
+                signature: signed_query.signature,
+                payload: QueryRequestWithAuthority {
+                    authority: multisig_authority(),
+                    request: signed_query.payload.request,
+                },
+            };
+
+            let error = match candidate.validate() {
+                Ok(_) => panic!("multisig query authority must be rejected"),
+                Err(error) => error,
+            };
+            assert_eq!(error, SignedQueryValidationError::AuthorityNotSingleKey);
         }
     }
 }
@@ -3685,7 +3734,7 @@ mod json_roundtrip_tests {
     #[cfg(not(feature = "fast_dsl"))]
     use crate::query::domain::prelude::FindDomains;
     use crate::{
-        account::AccountId,
+        account::{AccountId, MultisigMember, MultisigPolicy},
         domain::Domain,
         query::{
             executor::prelude::FindParameters,
@@ -3706,6 +3755,13 @@ mod json_roundtrip_tests {
         )
         .unwrap()
     });
+
+    fn multisig_authority() -> AccountId {
+        let member =
+            MultisigMember::new(ALICE_KEYPAIR.public_key().clone(), 1).expect("valid member");
+        let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
+        AccountId::new_multisig(policy)
+    }
 
     #[test]
     fn query_request_json_roundtrip_singular() {
@@ -3838,6 +3894,49 @@ mod json_roundtrip_tests {
     }
 
     #[test]
+    fn signed_query_decode_rejects_multisig_authority_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let invalid = SignedQuery {
+            signature: signed.signature,
+            payload: QueryRequestWithAuthority {
+                authority: multisig_authority(),
+                request: signed.payload.request,
+            },
+        };
+
+        let encoded = norito::to_bytes(&invalid).expect("encode multisig query fixture");
+        let archived =
+            norito::from_bytes::<SignedQuery>(&encoded).expect("archive multisig query fixture");
+        let archived_error =
+            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
+                Ok(_) => panic!("multisig archived query authority must be rejected"),
+                Err(error) => error,
+            };
+        assert!(
+            archived_error
+                .to_string()
+                .contains("Query request authority must be single-key"),
+            "unexpected archived query error: {archived_error}"
+        );
+
+        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
+            Ok(_) => panic!("multisig query authority must be rejected"),
+            Err(error) => error,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("Query request authority must be single-key"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "multisig authorities must not surface as decode panics: {message}"
+        );
+    }
+
+    #[test]
     fn signed_query_json_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -3870,10 +3969,27 @@ mod json_roundtrip_tests {
             };
 
             assert_eq!(
-                err, "invalid SignedQuery signature material",
+                err,
+                SignedQueryValidationError::InvalidSignatureMaterial,
                 "{label} signed query signature R was not rejected"
             );
         }
+    }
+
+    #[test]
+    fn signed_query_json_rejects_multisig_authority_without_unwinding() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut json = SignedQueryJson::from(&signed);
+        let SignedQueryJson::Canonical(canonical) = &mut json;
+        canonical.payload.authority = multisig_authority();
+
+        let error = match SignedQuery::try_from(json) {
+            Ok(_) => panic!("multisig JSON query authority must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error, SignedQueryValidationError::AuthorityNotSingleKey);
     }
 
     #[test]
@@ -4019,83 +4135,6 @@ mod json_roundtrip_tests {
             "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>"
         );
         assert_eq!(cloned.params, original.params);
-    }
-
-    #[test]
-    fn builtin_query_wire_ids_match_v1_golden_inventory() {
-        let mut actual = BUILTIN_QUERY_WIRE_ASSIGNMENTS
-            .iter()
-            .map(|(type_label, wire_id)| format!("{type_label}\t{wire_id}"))
-            .collect::<Vec<_>>();
-        actual.sort_unstable();
-        assert!(
-            BUILTIN_QUERY_WIRE_ASSIGNMENTS
-                .iter()
-                .map(|(_, wire_id)| wire_id)
-                .collect::<std::collections::BTreeSet<_>>()
-                .len()
-                == BUILTIN_QUERY_WIRE_ASSIGNMENTS.len(),
-            "built-in query wire identifiers must be unique"
-        );
-
-        let expected = include_str!("../../tests/fixtures/query_wire_ids_v1.txt")
-            .lines()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn builtin_query_wire_ids_override_installed_registry_and_decode_falls_back() {
-        const WIRE_ID: &str =
-            "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>";
-        const CUSTOM_WIRE_ID: &str = "custom.domain.current-path";
-        type DomainQuery = ErasedIterQuery<Domain>;
-
-        let builtin = QueryRegistry::new().register_with_id::<DomainQuery>(WIRE_ID);
-        let installed = QueryRegistry::new().register_with_id::<DomainQuery>(CUSTOM_WIRE_ID);
-        let query = DomainQuery::new(
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-            vec![0xA5, 0x5A],
-        );
-        let payload = norito::codec::Encode::encode(&query);
-        let type_name = std::any::type_name::<DomainQuery>();
-
-        assert_eq!(
-            query_wire_id_from_registries(type_name, &builtin, Some(&installed)),
-            WIRE_ID
-        );
-        for lookup_key in [type_name, WIRE_ID, CUSTOM_WIRE_ID] {
-            let decoded =
-                decode_query_from_registries(lookup_key, &payload, &builtin, Some(&installed))
-                    .expect("query lookup key is registered")
-                    .expect("query payload decodes");
-            assert_eq!(decoded.as_ref().type_name_key(), type_name);
-            assert_eq!(decoded.as_ref().encode_bytes(), payload);
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "query registry key collision")]
-    fn query_registry_rejects_wire_id_collisions() {
-        type DomainQuery = ErasedIterQuery<Domain>;
-        type AccountQuery = ErasedIterQuery<crate::account::Account>;
-
-        let _registry = QueryRegistry::new()
-            .register_with_id::<DomainQuery>("query.collision")
-            .register_with_id::<AccountQuery>("query.collision");
-    }
-
-    #[test]
-    #[should_panic(expected = "query registry key collision")]
-    fn query_registry_rejects_wire_id_and_type_name_collisions() {
-        type DomainQuery = ErasedIterQuery<Domain>;
-        type AccountQuery = ErasedIterQuery<crate::account::Account>;
-
-        let _registry = QueryRegistry::new()
-            .register_with_id::<DomainQuery>(std::any::type_name::<AccountQuery>())
-            .register::<AccountQuery>();
     }
 
     #[cfg(feature = "fast_dsl")]

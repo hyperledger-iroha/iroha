@@ -708,12 +708,12 @@ impl IntoSchema for GlobalPhase {
         let variants = vec![
             EnumVariant {
                 tag: "Prepare".to_owned(),
-                discriminant: Self::Prepare as u8,
+                discriminant: Self::Prepare as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "Commit".to_owned(),
-                discriminant: Self::Commit as u8,
+                discriminant: Self::Commit as u32,
                 ty: None,
             },
         ];

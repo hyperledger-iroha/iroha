@@ -20,8 +20,9 @@ use iroha::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::isi::RepoMarginCallIsi;
+use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 
 static GENESIS_STATUS: OnceLock<std::result::Result<(), ()>> = OnceLock::new();
 static START_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -113,6 +114,50 @@ where
     RepoInstructionBox: From<T>,
 {
     InstructionBox::from(RepoInstructionBox::from(instruction))
+}
+
+fn grant_repo_consents(
+    base_client: &Client,
+    instruction: &RepoIsi,
+    collateral_holder: (&AccountId, &KeyPair),
+) -> Result<()> {
+    let settlement_id = instruction.settlement_id();
+    let cash_consent = Permission::from(CanExecuteSettlement {
+        debited_asset: AssetId::new(
+            instruction.cash_leg().asset_definition_id().clone(),
+            instruction.counterparty().clone(),
+        ),
+        settlement_id: settlement_id.clone(),
+        intent_hash: instruction.initiation_intent_hash(),
+    });
+    let maturity_consent = Permission::from(CanExecuteSettlement {
+        debited_asset: AssetId::new(
+            instruction.collateral_leg().asset_definition_id().clone(),
+            collateral_holder.0.clone(),
+        ),
+        settlement_id,
+        intent_hash: instruction.maturity_intent_hash(),
+    });
+
+    let bob_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), base_client);
+    bob_client.submit_blocking(
+        Grant::account_permission(cash_consent, instruction.initiator().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+
+    let holder_client = if collateral_holder.0 == &*BOB_ID {
+        bob_client
+    } else {
+        alt_client(
+            (collateral_holder.0.clone(), collateral_holder.1.clone()),
+            base_client,
+        )
+    };
+    holder_client.submit_blocking(
+        Grant::account_permission(maturity_consent, instruction.initiator().clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(())
 }
 
 fn error_chain_contains(err: &eyre::Report, needle: &str) -> bool {
@@ -208,48 +253,9 @@ fn wait_for_repo_agreement(
     ))
 }
 
-fn wait_for_repo_agreement_absent(
-    client: &Client,
-    agreement_id: &RepoAgreementId,
-    context: &str,
-) -> Result<()> {
-    const POLL_INTERVAL: Duration = Duration::from_millis(100);
-    const TIMEOUT: Duration = Duration::from_secs(30);
-
-    let deadline = Instant::now() + TIMEOUT;
-    let mut last_observed = "repo agreements were not queried".to_owned();
-
-    while Instant::now() < deadline {
-        match client.query(FindRepoAgreements::new()).execute_all() {
-            Ok(agreements) => {
-                if agreements
-                    .iter()
-                    .all(|agreement| agreement.id() != agreement_id)
-                {
-                    return Ok(());
-                }
-                last_observed = agreements
-                    .iter()
-                    .map(|agreement| agreement.id().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-            }
-            Err(err) => {
-                last_observed = format!("query failed: {err}");
-            }
-        }
-
-        std::thread::sleep(POLL_INTERVAL);
-    }
-
-    Err(eyre!(
-        "timed out waiting for repo agreement removal after {context}; id={agreement_id}; last_observed={last_observed}"
-    ))
-}
-
 #[test]
 #[allow(clippy::too_many_lines)]
-fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
+fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     let Some((network, _rt)) = start_test_network() else {
         return Ok(());
     };
@@ -303,7 +309,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         let maturity_ms = u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)?
-                .checked_add(Duration::from_secs(86_400))
+                .checked_add(Duration::from_secs(3))
                 .ok_or_else(|| eyre!("maturity timestamp overflow"))?
                 .as_millis(),
         )
@@ -324,6 +330,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         ))
     };
     let repo_instruction = repo_instruction_template()?;
+    grant_repo_consents(&client, &repo_instruction, (&BOB_ID, &BOB_KEYPAIR))?;
     let repo_instruction_box = repo_instr_box(repo_instruction);
     let repo_tx = client.build_transaction(
         vec![repo_instruction_box],
@@ -387,21 +394,8 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         .expect("bob collateral after repo");
     assert_eq!(*bob_collateral.value(), Quantity::from(1100_u64));
 
-    // Pack the reverse repo instruction with a settlement timestamp measured at submission time.
-    let settlement_timestamp_ms =
-        u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
-            .expect("repo settlement timestamp fits in u64");
-    let future_reverse = ReverseRepoIsi::new(
-        agreement_id.clone(),
-        ALICE_ID.clone(),
-        BOB_ID.clone(),
-        RepoCashLeg {
-            asset_definition_id: cash_def_id.clone(),
-            quantity: Quantity::from(1000_u64),
-        },
-        RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1100_u64)),
-        settlement_timestamp_ms + 86_400_000,
-    );
+    let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "repo maturity lookup")?;
+    let future_reverse = ReverseRepoIsi::new(agreement_id.clone());
     let future_tx = client.build_transaction(
         vec![repo_instr_box(future_reverse)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -409,28 +403,29 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
     );
     let future_err = client.submit_transaction_blocking(&future_tx).unwrap_err();
     assert!(
-        error_chain_contains(&future_err, "future"),
-        "expected future-dated reverse repo to be rejected, got {future_err:?}"
+        error_chain_contains(&future_err, "before its recorded maturity"),
+        "expected pre-maturity repo settlement to be rejected, got {future_err:?}"
     );
 
-    let reverse_repo_instruction = ReverseRepoIsi::new(
-        agreement_id.clone(),
-        ALICE_ID.clone(),
-        BOB_ID.clone(),
-        RepoCashLeg {
-            asset_definition_id: cash_def_id.clone(),
-            quantity: Quantity::from(1000_u64),
-        },
-        RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1100_u64)),
-        settlement_timestamp_ms,
-    );
+    let now_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
+        .expect("current timestamp fits in u64");
+    if *repo_snapshot.maturity_timestamp_ms() >= now_ms {
+        std::thread::sleep(Duration::from_millis(
+            repo_snapshot
+                .maturity_timestamp_ms()
+                .saturating_sub(now_ms)
+                .saturating_add(500),
+        ));
+    }
+    let reverse_repo_instruction = ReverseRepoIsi::new(agreement_id.clone());
 
-    let reverse_tx = client.build_transaction(
+    let counterparty_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &client);
+    let reverse_tx = counterparty_client.build_transaction(
         vec![repo_instr_box(reverse_repo_instruction)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     );
-    client.submit_transaction_blocking(&reverse_tx)?;
+    counterparty_client.submit_transaction_blocking(&reverse_tx)?;
 
     let assets_after_reverse = wait_for_assets(
         &client,
@@ -471,7 +466,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         "bob collateral asset should be pruned on unwind"
     );
 
-    // Re-run the lifecycle to cover collateral substitution during unwind, reusing the same agreement id.
+    // A settled identifier remains on-chain and cannot be reused.
     let reopened_repo = RepoIsi::new(
         agreement_id.clone(),
         ALICE_ID.clone(),
@@ -486,122 +481,31 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
         u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)?
-                .checked_add(Duration::from_secs(43_200))
+                .checked_add(Duration::from_secs(3))
                 .expect("maturity arithmetic")
                 .as_millis(),
         )
         .expect("reverse maturity timestamp fits in u64"),
-        RepoGovernance::with_defaults(1_500, 43_200),
+        RepoGovernance::with_defaults(1_500, 3),
     );
+    grant_repo_consents(&client, &reopened_repo, (&BOB_ID, &BOB_KEYPAIR))?;
     let reopened_tx = client.build_transaction(
         vec![repo_instr_box(reopened_repo)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     );
-    client.submit_transaction_blocking(&reopened_tx)?;
-
-    let repo_snapshot = wait_for_repo_agreement(&client, &agreement_id, "repo reopen")?;
-    assert_ne!(
-        *repo_snapshot.initiated_timestamp_ms(),
-        0,
-        "repo initiation timestamp must be recorded"
-    );
-    let expected_margin_interval_ms = repo_snapshot
-        .governance()
-        .margin_frequency_secs()
-        .saturating_mul(1_000);
-    if expected_margin_interval_ms != 0 {
-        assert_eq!(
-            repo_snapshot.next_margin_check_after(*repo_snapshot.initiated_timestamp_ms()),
-            Some(
-                repo_snapshot
-                    .initiated_timestamp_ms()
-                    .saturating_add(expected_margin_interval_ms)
-            ),
-            "margin schedule should align with governance cadence"
-        );
-    }
-
-    // Provide additional collateral so the counterparty can settle above the recorded pledge.
-    client.submit_blocking(
-        Mint::asset_quantity(
-            Quantity::from(50_u64),
-            AssetId::new(collateral_def_id.clone(), BOB_ID.clone()),
-        ),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
-
-    let substitution_settlement_ms = *repo_snapshot.initiated_timestamp_ms();
-
-    let insufficient_reverse = ReverseRepoIsi::new(
-        agreement_id.clone(),
-        ALICE_ID.clone(),
-        BOB_ID.clone(),
-        RepoCashLeg {
-            asset_definition_id: cash_def_id.clone(),
-            quantity: Quantity::from(1000_u64),
-        },
-        RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1050_u64)),
-        substitution_settlement_ms,
-    );
-    let insufficient_tx = client.build_transaction(
-        vec![repo_instr_box(insufficient_reverse)],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        metadata.clone(),
-    );
-    let insufficient_err = client
-        .submit_transaction_blocking(&insufficient_tx)
-        .unwrap_err();
+    let reopened_err = client
+        .submit_transaction_blocking(&reopened_tx)
+        .expect_err("settled repo identifier must remain consumed");
     assert!(
-        error_chain_contains(&insufficient_err, "must not deliver less"),
-        "expected insufficient collateral substitution to be rejected, got {insufficient_err:?}"
+        error_chain_contains(&reopened_err, "already exists"),
+        "expected one-shot identifier rejection, got {reopened_err:?}"
     );
-    let substitution_reverse = ReverseRepoIsi::new(
-        agreement_id.clone(),
-        ALICE_ID.clone(),
-        BOB_ID.clone(),
-        RepoCashLeg {
-            asset_definition_id: cash_def_id.clone(),
-            quantity: Quantity::from(1000_u64),
-        },
-        RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1150_u64)),
-        substitution_settlement_ms,
-    );
-    let substitution_tx = client.build_transaction(
-        vec![repo_instr_box(substitution_reverse)],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        metadata.clone(),
-    );
-    client.submit_transaction_blocking(&substitution_tx)?;
-
-    let assets_after_substitution = wait_for_assets(
-        &client,
-        &[
-            (&bob_cash_id, Some(Quantity::from(2000_u64))),
-            (&alice_collateral_id, Some(Quantity::from(1550_u64))),
-        ],
-        "substitution unwind",
-    )?;
-
-    let bob_cash_after_substitution = assets_after_substitution
-        .iter()
-        .find(|asset| asset.id() == &bob_cash_id)
-        .expect("bob cash after substitution unwind");
+    let settled = wait_for_repo_agreement(&client, &agreement_id, "settled tombstone")?;
     assert_eq!(
-        *bob_cash_after_substitution.value(),
-        Quantity::from(2000_u64)
+        settled.settlement_timestamp_ms(),
+        &Some(*settled.maturity_timestamp_ms())
     );
-
-    let alice_collateral_after_substitution = assets_after_substitution
-        .iter()
-        .find(|asset| asset.id() == &alice_collateral_id)
-        .expect("alice collateral after substitution unwind");
-    assert_eq!(
-        *alice_collateral_after_substitution.value(),
-        Quantity::from(1550_u64)
-    );
-
-    wait_for_repo_agreement_absent(&client, &agreement_id, "substitution unwind")?;
 
     Ok(())
 }
@@ -684,6 +588,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         // integration test network.
         RepoGovernance::with_defaults(1_500, 300),
     );
+    grant_repo_consents(&client, &repo_instruction, (&BOB_ID, &BOB_KEYPAIR))?;
     let repo_tx = client.build_transaction(
         vec![repo_instr_box(repo_instruction)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -795,7 +700,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     let maturity_timestamp_ms = u64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)?
-            .checked_add(Duration::from_secs(86_400))
+            .checked_add(Duration::from_secs(3))
             .ok_or_else(|| eyre!("maturity timestamp overflow"))?
             .as_millis(),
     )
@@ -812,8 +717,13 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1100_u64)),
         0,
         maturity_timestamp_ms,
-        RepoGovernance::with_defaults(1_500, 86_400),
+        RepoGovernance::with_defaults(1_500, 3),
     );
+    grant_repo_consents(
+        &client,
+        &repo_instruction,
+        (&custodian_id, &custodian_keypair),
+    )?;
     let repo_tx = client.build_transaction(
         vec![repo_instr_box(repo_instruction)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -878,26 +788,24 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         "custodian id should be persisted in repo agreement"
     );
 
-    let settlement_timestamp_ms =
-        u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
-            .expect("settlement timestamp fits in u64");
-    let reverse_repo_instruction = ReverseRepoIsi::new(
-        agreement_id.clone(),
-        ALICE_ID.clone(),
-        BOB_ID.clone(),
-        RepoCashLeg {
-            asset_definition_id: cash_def_id.clone(),
-            quantity: Quantity::from(1000_u64),
-        },
-        RepoCollateralLeg::new(collateral_def_id.clone(), Quantity::from(1100_u64)),
-        settlement_timestamp_ms,
-    );
-    let reverse_tx = client.build_transaction(
+    let now_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
+        .expect("current timestamp fits in u64");
+    if *stored_agreement.maturity_timestamp_ms() >= now_ms {
+        std::thread::sleep(Duration::from_millis(
+            stored_agreement
+                .maturity_timestamp_ms()
+                .saturating_sub(now_ms)
+                .saturating_add(500),
+        ));
+    }
+    let reverse_repo_instruction = ReverseRepoIsi::new(agreement_id.clone());
+    let custodian_client = alt_client((custodian_id.clone(), custodian_keypair), &client);
+    let reverse_tx = custodian_client.build_transaction(
         vec![repo_instr_box(reverse_repo_instruction)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     );
-    client.submit_transaction_blocking(&reverse_tx)?;
+    custodian_client.submit_transaction_blocking(&reverse_tx)?;
 
     let assets_after_reverse = wait_for_assets(
         &client,
@@ -940,7 +848,11 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
         "custodian collateral asset should be pruned after unwind"
     );
 
-    wait_for_repo_agreement_absent(&client, &agreement_id, "tri-party reverse repo")?;
+    let settled = wait_for_repo_agreement(&client, &agreement_id, "tri-party reverse repo")?;
+    assert_eq!(
+        settled.settlement_timestamp_ms(),
+        &Some(*settled.maturity_timestamp_ms())
+    );
 
     Ok(())
 }

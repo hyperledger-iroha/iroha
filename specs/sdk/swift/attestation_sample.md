@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: Secure Enclave Attestation Sample
+summary: Canonical Swift Secure Enclave attestation payload and evidence fields.
+---
+
 # Secure Enclave Attestation Sample (IOS4)
 
 The snippet below captures the canonical payload produced by `swift

@@ -209,7 +209,12 @@
           "path": "crates/iroha_torii/src/routing.rs",
           "required_tokens": [
             "pub async fn handle_v1_sumeragi_status(",
-            "pub async fn handle_v1_sumeragi_diagnostics(",
+            "pub async fn handle_v1_sumeragi_diagnostics("
+          ]
+        },
+        {
+          "path": "crates/iroha_torii/src/tests/routing.rs",
+          "required_tokens": [
             "sumeragi_status_json_is_exact_authoritative_v2_schema",
             "permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state"
           ]
@@ -335,42 +340,85 @@
     "positive_config": "inflight_first_release_fixed.cfg",
     "runner": "scripts/formal/run_sumeragi_v2_inflight_first_release.sh",
     "evidence": "formal/sumeragi_v2/INFLIGHT_FIRST_RELEASE_EVIDENCE.md",
+    "required_actions": [
+      "SelectQueuePlanV4Conjunction",
+      "FsyncReservationV5",
+      "ActivateKura",
+      "PersistExecutionInput",
+      "AuthorizeReady",
+      "SignReady",
+      "PersistReadyQc",
+      "Crash",
+      "Recover",
+      "LaneCommit",
+      "ApplyCarrier",
+      "PersistReservationCommitted",
+      "PersistPlanTombstone",
+      "ForgetReservationCommit",
+      "PersistKuraRetirement",
+      "AdvanceReleasePendingPrefix",
+      "PrepareReservationRelease",
+      "AdvanceReleasedPrefix",
+      "CompleteReservationRelease",
+      "RestoreReleasedFifo",
+      "ForgetReservationRelease",
+      "RepairPostCarrierEvidence"
+    ],
     "required_invariants": [
       "FirstReleaseTypeInvariant",
       "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
       "MLValidatorCarrierOwnership",
-      "MLPutBatchV4BeforeReservationV5",
+      "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5",
       "MLReservationV5BeforeKuraActive",
       "MLKuraActiveBeforeExecutionInput",
-      "MLExecutionInputBeforeReady",
-      "MLCrashPrefixLossFree",
+      "MLExecutionInputBeforeReadyAuthorization",
+      "MLReadyAuthorizationBeforeLocalSignature",
+      "MLLocalSignaturesBeforeDurableReadyQc",
+      "MLCrashDurableFactsRecoverable",
+      "MLVolatileSessionLostOnCrash",
       "MLCommitAndReleaseRetainExactScope",
+      "MLLaneCommitBeforeAtomicWsvCarrierApplication",
       "MLExactlyOnceCarrierApplication",
-      "MLQueuePlanV4PutBatchBound4096"
+      "MLPostCarrierCommitCleanupOrder",
+      "MLReleasePrefixesRecoverable",
+      "MLReleaseStageOrder",
+      "MLQueuePlanV4SelectedConjunctionBound4096"
     ],
     "mutations": [
       {
-        "config": "inflight_first_release_reservation_before_put_batch_bug.cfg",
-        "invariant": "MLPutBatchV4BeforeReservationV5"
+        "config": "inflight_first_release_reservation_before_selected_queue_plan_bug.cfg",
+        "invariant": "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5"
       },
       {
         "config": "inflight_first_release_kura_before_reservation_bug.cfg",
         "invariant": "MLReservationV5BeforeKuraActive"
       },
       {
-        "config": "inflight_first_release_ready_before_input_bug.cfg",
-        "invariant": "MLExecutionInputBeforeReady"
+        "config": "inflight_first_release_ready_authorization_before_input_bug.cfg",
+        "invariant": "MLExecutionInputBeforeReadyAuthorization"
+      },
+      {
+        "config": "inflight_first_release_ready_signature_before_authorization_bug.cfg",
+        "invariant": "MLReadyAuthorizationBeforeLocalSignature"
+      },
+      {
+        "config": "inflight_first_release_ready_qc_before_signatures_bug.cfg",
+        "invariant": "MLLocalSignaturesBeforeDurableReadyQc"
       },
       {
         "config": "inflight_first_release_crash_drops_durable_bug.cfg",
-        "invariant": "MLCrashPrefixLossFree"
+        "invariant": "MLCrashDurableFactsRecoverable"
+      },
+      {
+        "config": "inflight_first_release_crash_retains_volatile_body_bug.cfg",
+        "invariant": "MLVolatileSessionLostOnCrash"
       },
       {
         "config": "inflight_first_release_payload_conflict_bug.cfg",
         "invariant": "MLPayloadSchemaV2CarriesExactAdmissionPreimage"
       },
       {
-        "config": "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "config": "inflight_first_release_lane_commit_scope_conflict_bug.cfg",
         "invariant": "MLCommitAndReleaseRetainExactScope"
       },
       {
@@ -382,8 +430,40 @@
         "invariant": "MLExactlyOnceCarrierApplication"
       },
       {
-        "config": "inflight_first_release_oversize_put_batch_bug.cfg",
-        "invariant": "MLQueuePlanV4PutBatchBound4096"
+        "config": "inflight_first_release_reservation_commit_before_carrier_bug.cfg",
+        "invariant": "MLPostCarrierCommitCleanupOrder"
+      },
+      {
+        "config": "inflight_first_release_plan_tombstone_before_reservation_commit_bug.cfg",
+        "invariant": "MLPostCarrierCommitCleanupOrder"
+      },
+      {
+        "config": "inflight_first_release_forget_commit_before_plan_tombstone_bug.cfg",
+        "invariant": "MLPostCarrierCommitCleanupOrder"
+      },
+      {
+        "config": "inflight_first_release_release_pending_before_retirement_bug.cfg",
+        "invariant": "MLReleaseStageOrder"
+      },
+      {
+        "config": "inflight_first_release_release_prepare_before_pending_bug.cfg",
+        "invariant": "MLReleaseStageOrder"
+      },
+      {
+        "config": "inflight_first_release_released_claims_before_prepare_bug.cfg",
+        "invariant": "MLReleaseStageOrder"
+      },
+      {
+        "config": "inflight_first_release_release_complete_before_released_bug.cfg",
+        "invariant": "MLReleaseStageOrder"
+      },
+      {
+        "config": "inflight_first_release_forget_release_before_fifo_bug.cfg",
+        "invariant": "MLReleaseStageOrder"
+      },
+      {
+        "config": "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
+        "invariant": "MLQueuePlanV4SelectedConjunctionBound4096"
       }
     ],
     "production_symbols": [
@@ -607,6 +687,7 @@
           "\"inflight-first-release-layout\"",
           "\"SumeragiV2InFlightFirstRelease\"",
           "\"inflight_first_release_fixed.cfg\"",
+          "\"inflight_first_release_fixed.cfg\",\n        \"18\",",
           "*_APALACHE_REFINEMENT_RESULTS",
           "*_APALACHE_LAYOUT_ONLY_RESULTS"
         ]
@@ -615,6 +696,7 @@
         "path": "pytests/scripts/sumeragi_v2_release_receipt_test.py",
         "required_tokens": [
           "canonical.replace(\"result_count\\t5\", \"result_count\\t4\", 1)",
+          "\"inflight_first_release_fixed.cfg\\t18\\tNoError\\t\"",
           "\"result\\tinflight-first-release-refinement\\t\"",
           "\"is not exact source-bound NoError evidence\""
         ]
@@ -622,6 +704,9 @@
     ],
     "forbidden_tokens": [
       "LaneExecutablePayloadV3",
+      "PutBatchV4",
+      "MLPutBatchV4BeforeReservationV5",
+      "MLQueuePlanV4PutBatchBound4096",
       "QueuePlanV5",
       "QueuePlan V5",
       "queuePlanV5",

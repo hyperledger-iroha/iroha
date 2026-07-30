@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Thank you for taking the time to contribute to Iroha 2!
+Thank you for taking the time to contribute to Iroha 3!
 
 Please read this guide to learn how you can contribute and which guidelines we expect you to follow. This includes the guidelines about code and documentation as well as our conventions regarding git workflow.
 

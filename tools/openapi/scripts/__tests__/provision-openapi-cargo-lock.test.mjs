@@ -475,7 +475,7 @@ test('OpenAPI workflow provisions before both release gates and stays clean', as
   assert.equal(
     Array.from(
       workflow.matchAll(
-        /node docs\/portal\/scripts\/provision-openapi-cargo-lock\.mjs/g,
+        /node tools\/openapi\/scripts\/provision-openapi-cargo-lock\.mjs/g,
       ),
     ).length,
     2,

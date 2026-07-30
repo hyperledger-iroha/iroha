@@ -10,12 +10,12 @@ under **JS5 — publishing automation & provenance**. It documents how the
 release, and the evidence/rollback steps SRE expects before the SDK can reach
 GA.
 
-The plan assumes the GitHub Actions workflow
-[`.github/workflows/javascript-sdk-publish.yml`](../../../../.github/workflows/javascript-sdk-publish.yml)
-remains the single entry point for production publishes. Local helpers such as
+No production JavaScript publish workflow is currently checked in. Local
+helpers such as
 `scripts/js_signed_staging.sh`, `scripts/js_sbom_provenance.sh`, and
 `javascript/iroha_js/scripts/release-matrix.mjs` provide the same checks for dry
-runs, staging rehearsals, and incident drills.
+runs, staging rehearsals, and incident drills; a reviewed workflow remains a
+prerequisite for a production publish.
 
 ## 1. Pipeline Overview
 

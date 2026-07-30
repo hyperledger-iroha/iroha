@@ -1,46 +1,14 @@
----
-id: runbooks-index
-title: Operator Runbooks Index
-description: Canonical entry point for the migrated SoraFS operator runbooks.
-sidebar_label: Runbook Index
----
+# SoraFS operator runbooks
 
-> Mirrors the owner ledger that lives under `specs/sorafs/runbooks/`.
-> Every new SoraFS operations guide must be linked here once it is published in
-> the portal build.
+These source-coupled runbooks define the checks and evidence expected by Iroha
+automation. In-depth operator documentation belongs in the sibling
+`iroha-docs` repository and is published at <https://docs.iroha.tech/>.
 
-Use this page to verify which runbooks have completed the migration from the
-source path, and the portal copy so reviewers can jump straight to the desired
-guide during the beta preview.
-
-## Beta preview host
-
-The DocOps wave has now promoted the reviewer-approved beta preview host at
-`https://docs.iroha.tech/`. When pointing operators or reviewers to a migrated
-runbook, reference that hostname so they exercise the checksum-gated portal
-snapshot. Publishing/rollback procedures live in
-[`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
-
-| Runbook | Owner(s) | Portal copy | Source |
-|---------|----------|-------------|--------|
-| Gateway & DNS kickoff | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `specs/sorafs_gateway_dns_design_runbook.md` |
-| SoraFS operations playbook | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `specs/sorafs/operations_playbook.md` |
-| Capacity reconciliation | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `specs/sorafs/runbooks/capacity_reconciliation.md` |
-| Pin registry ops | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `specs/sorafs/pin_registry_ops.md` |
-| Node operations checklist | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `specs/sorafs/runbooks/sorafs_node_ops.md` |
-| Dispute & revocation runbook | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `specs/sorafs/dispute_revocation_runbook.md` |
-| Staging manifest playbook | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `specs/sorafs/staging_manifest_playbook.md` |
-| Release rollback and yank | Release Engineering / Governance Council | [`sorafs/release-rollback-yank`](./release-rollback-yank.md) | `specs/sorafs_release_pipeline_plan.md` |
-| Taikai anchor observability | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `specs/taikai_anchor_monitoring.md` |
-
-## Verification checklist
-
-- [x] Portal build links to this index (sidebar entry).
-- [x] Every migrated runbook lists the canonical source path to keep reviewers
-  aligned during doc reviews.
-- [x] The DocOps preview pipeline blocks merges when a listed runbook is missing
-  from the portal output.
-
-Future migrations (e.g., new chaos drills or governance appendices) should add a
-row to the table above and update the DocOps checklist embedded in
-`fixtures/documentation/docs_preview_request_template.md`.
+- [Capacity reconciliation](./capacity_reconciliation.md)
+- [Multi-source rollout](./multi_source_rollout.md)
+- [Pin registry operations](./pin_registry_ops.md)
+- [Release rollback and yank](./release_rollback_yank.md)
+- [SoraFS capacity simulation](./sorafs_capacity_simulation.md)
+- [SoraFS node operations](./sorafs_node_ops.md)
+- [SoraFS orchestrator operations](./sorafs_orchestrator_ops.md)
+- [Staging manifest playbook](./staging_manifest_playbook.md)

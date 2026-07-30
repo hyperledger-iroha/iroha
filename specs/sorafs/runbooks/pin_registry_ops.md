@@ -8,8 +8,8 @@ the `/v1/sorafs/pin/*` endpoints. Import the curated dashboard
 (`specs/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps
 directly to the sections below.
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/pin-registry-ops.md`. Update both copies to keep
-> operator guidance aligned across doc sets.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## Metric reference
 

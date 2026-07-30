@@ -1969,7 +1969,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 f"{'a' * 64}\t{'b' * 64}\t{'c' * 64}",
                 "result\tinflight-first-release-layout\t"
                 "SumeragiV2InFlightFirstRelease\t"
-                "inflight_first_release_fixed.cfg\t10\tNoError\t"
+                "inflight_first_release_fixed.cfg\t18\tNoError\t"
                 f"{'d' * 64}\t{'e' * 64}\t{'f' * 64}",
             )
         )

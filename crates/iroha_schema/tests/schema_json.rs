@@ -230,13 +230,13 @@ fn test_enum_codec_attr() {
     );
     check_schema!(
         enum IndexEnum {
-            // ERROR: Fieldless enums with explicit discriminants are not allowed
-            // Variant1 = 12,
+            Variant1 = 12,
             #[codec(index = 42)]
             Variant2,
         },
         IndexEnum,
         {"Enum": [
+            {"discriminant": 12, "tag": "Variant1"},
             {"discriminant": 42, "tag": "Variant2"}
         ]}
     );

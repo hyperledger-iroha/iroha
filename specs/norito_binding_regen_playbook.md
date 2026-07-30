@@ -1,6 +1,5 @@
 <!--
   Norito binding regeneration playbook covering Python, Java, and Android SDKs.
-  Keep translations in sync if this file is localised.
 -->
 
 # Norito Binding Regeneration Playbook

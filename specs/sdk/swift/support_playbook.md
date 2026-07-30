@@ -31,7 +31,7 @@ engineers share a single source of truth.
 | Support Engineering Lead | Runs the Swift support rota, triages Sev 1/2 incidents, maintains partner distribution lists. | Publishes weekly digest via `make swift-status`. |
 | Release Engineering | Operates XCFramework builds, provenance, and artifact promotion. | Executes the reproducibility checklist and archives evidence. |
 | Telemetry & Observability | Maintains `dashboards/mobile_parity.swift`, `dashboards/mobile_ci.swift`, alert rules, and `scripts/swift_collect_redaction_status.py`. | Owns telemetry redaction diff reviews and chaos drills. |
-| Docs & Support Enablement | Keeps README/status entries current, localises notices, curates partner updates. | Syncs translations (`index.ja.md`, `index.he.md`) after each release. |
+| Docs & Support Enablement | Keeps README/status entries current and curates partner updates. | Coordinates public documentation changes in `iroha-docs`. |
 | Compliance & Legal | Tracks regulator artefacts, retention requirements, and data-sharing approvals. | Ensures telemetry overrides follow `specs/sdk/swift/telemetry_redaction.md`. |
 
 ### 2.1 Communications & On-call
@@ -86,7 +86,7 @@ Before sharing artefacts outside engineering:
 5. **Provenance & Publishing:** Document signing and SBOM steps in the release
    packet; reference Buildkite job IDs and the Git commit.
 6. **Partner Packet:** Bundle release notes, SLA reminders, telemetry summary,
-   and localized notices before distribution.
+   and approved notices before distribution.
 
 CI should block merges when `ci/swift_status_export.sh`, `ci/xcode-swift-parity`,
 or `ci/check_swift_fixtures.sh` fail; rerun only after the root cause is fixed.
@@ -114,15 +114,14 @@ or `ci/check_swift_fixtures.sh` fail; rerun only after the root cause is fixed.
 4. Close the incident only after telemetry + parity dashboards confirm recovery
    and the weekly digest captures the outcome.
 5. For partner-impacting changes, update `specs/sdk/swift/index.md`,
-   README, and localized pages with the new instructions.
+   README, and the corresponding public documentation in `iroha-docs`.
 
-## 8. Documentation & Localization Checklist
+## 8. Documentation checklist
 
 - Update this playbook whenever ownership/SLA, release cadence, or command
   surface changes; link revisions in `status.md`.
-- Translate critical updates into the Japanese and Hebrew index pages within
-  two weeks. Track translation owners in `specs/sdk/swift/index.ja.md`
-  / `index.he.md`.
+- Coordinate public guides and translations in the sibling `iroha-docs`
+  repository, published at <https://docs.iroha.tech/>.
 - Keep the following docs in sync with releases:
   `specs/sdk/swift/index.md`, `native_bridge_instrumentation_checklist.md`,
   `telemetry_redaction.md`, `telemetry_chaos_checklist.md`, and

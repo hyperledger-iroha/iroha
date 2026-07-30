@@ -27,7 +27,7 @@ of truth when triaging incidents or approving PyPI drops.
 | Support Engineering Lead | Runs the support rota, triages Sev 1/2 incidents, maintains partner distro lists. | Publishes digest entries via the shared SDK status exporter. |
 | Release Engineering | Operates CI (`.github/workflows/python-checks.yml`), provenance, and PyPI promotion. | Executes `python/iroha_python/scripts/release_smoke.sh`, archives manifests. |
 | Observability/SRE | Maintains telemetry dashboards (`dashboards/mobile_parity.python.json` once live) and alert routing. | Tracks `python_checks_success_total`, fixture rotation SLA, queue depth telemetry. |
-| Docs & Enablement | Keeps README/status entries fresh, publishes partner notices, localises critical updates. | Syncs translations on the monthly Docs/DevRel rotation. |
+| Docs & Enablement | Keeps README/status entries fresh and publishes partner notices. | Coordinates public documentation changes in `iroha-docs`. |
 
 ### 2.1 On-call Signals
 
@@ -79,7 +79,8 @@ Before distributing artefacts outside engineering:
    and pinned native verifier. Attach OIDC/cosign provenance only after that
    boundary; it cannot replace manifest authentication.
 5. **Docs & status:** Update `status.md` with the release summary, fixture age,
-   and support window; refresh README/localised quickstarts when instructions change.
+   and support window; refresh the README and coordinate public quickstart
+   changes in `iroha-docs`.
 
 CI (`.github/workflows/python-checks.yml`) blocks merges when any of these gates
 fail. Do not re-run until the root cause is addressed.
@@ -97,12 +98,12 @@ fail. Do not re-run until the root cause is addressed.
 5. **Closure:** Update `status.md` and this playbook (if procedures changed),
    archive Grafana screenshots, and link the AAR to the incident log.
 
-## 6. Partner Communication & Localization
+## 6. Partner communication and public documentation
 
 - Share release calendars ≥60 days in advance, highlighting blackout windows
   and cutover dependencies.
-- Translate critical notices (JP and HE) within two weeks using the Docs/DevRel
-  rota; note completion in the localization tracker.
+- Coordinate public guides and translations in the sibling `iroha-docs`
+  repository, published at <https://docs.iroha.tech/>.
 - Attach this playbook, the release automation guide, and current SLAs to the
   partner enablement packet referenced in roadmap AND8.
 

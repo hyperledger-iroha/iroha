@@ -614,9 +614,8 @@ When you only need the URL, call `ToriiClient.buildConnectWebSocketUrl()` or the
 custom transport/queue. Tokens are sent via `Authorization` headers by default; set
 `allowInsecure: true` only when dialing `http://` Torii bases in dev environments.
 
-For a turnkey CLI sample (including queue telemetry hooks), see
-`docs/portal/docs/sdks/recipes/javascript-connect-preview.md`, which now hosts the script called
-out in the roadmap for documenting the Connect preview + WebSocket walkthrough.
+For the maintained Connect and WebSocket walkthrough, see
+`specs/sdk/js/connect.md`.
 
 ### Queue telemetry & alerting
 
@@ -704,9 +703,8 @@ patterns: build XML with `buildPacs008Message`/`buildPacs009Message`, submit it 
 `submitIsoPacs008AndWait` or `submitIsoPacs009AndWait`, or call
 `waitForIsoMessageStatus` when you already have a message identifier. A dedicated guide
 with runnable snippets lives in {doc}`sdk/js/governance_iso_examples`, the README +
-recipes (`recipes/governance.mjs`, `recipes/iso_bridge.mjs`) provide copy-paste scripts
-for CI jobs, and the portal recipe (`docs/portal/docs/sdks/recipes/javascript-governance-iso.md`)
-packages both flows with downloadable samples to satisfy the JS5 documentation requirement.
+recipes (`recipes/governance.mjs`, `recipes/iso_bridge.mjs`) provide copy-paste
+scripts for CI jobs. Public, in-depth guidance belongs in `iroha-docs`.
 The guide now documents the exact environment variables and command
 invocations (`GOV_SUBMIT`, `GOV_FETCH`, `ISO_MESSAGE_KIND`, `ISO_MESSAGE_ID`, polling
 interval overrides, and the required Torii/AUTHORITY/PRIVATE_KEY_HEX triplet) so the same

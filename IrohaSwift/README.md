@@ -1,6 +1,6 @@
 # IrohaSwift
 
-Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
+Swift SDK for the first Hyperledger Iroha 3 release on Apple platforms.
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, VPN quote/session/receipt flows, pipeline recovery, time service, ZK attachments, prover reports, contracts)
@@ -17,47 +17,41 @@ Features:
 
 ## Installation
 
-`IrohaSwift` replaced the older ad-hoc Swift package names; make sure your dependency
-graph points at the renamed module.
+The current SDK ships in this repository under `IrohaSwift/`. Use the local
+package from the same source revision as the Iroha node you target.
 
-The remote coordinates below are the immutable first-release target. Do not
-advertise them until the signed `0.1.0` SwiftPM tag and
-`iroha-swift-v0.1.0` monorepo tag have passed the public package canary. Before
-that cutover, use the local-package form documented below.
+Build the required native bridge before resolving the package:
 
-### Swift Package Manager (Xcode UI)
-1. In Xcode select **File → Add Package Dependencies…**
-2. Enter `https://github.com/hyperledger/iroha-swift` and select the exact
-   first-release version `0.1.0`.
-3. Add the `IrohaSwift` library product to your application target. Apps using
-   NFC or Nearby peer transfer must also add `IrohaSwiftMobileTransports`.
+```bash
+cd /path/to/iroha
+make bridge-xcframework
+```
 
 ### Swift Package Manager (`Package.swift`)
 
 ```swift
 // Package.swift
 dependencies: [
-    .package(
-        url: "https://github.com/hyperledger/iroha-swift",
-        exact: "0.1.0"
-    )
+    .package(name: "IrohaSwift", path: "/path/to/iroha/IrohaSwift")
 ],
 targets: [
     .target(
         name: "YourApp",
         dependencies: [
-            .product(name: "IrohaSwift", package: "iroha-swift"),
-            .product(name: "IrohaSwiftMobileTransports", package: "iroha-swift")
+            .product(name: "IrohaSwift", package: "IrohaSwift"),
+            .product(name: "IrohaSwiftMobileTransports", package: "IrohaSwift"),
+            .product(name: "IrohaSwiftTransferUI", package: "IrohaSwift")
         ]
     )
 ]
 ```
 
-Peer-transfer apps import both modules:
+Import only the products your application uses:
 
 ```swift
 import IrohaSwift
 import IrohaSwiftMobileTransports
+import IrohaSwiftTransferUI
 ```
 
 The host app, not SwiftPM, owns Apple privacy strings and entitlements. Add the
@@ -112,9 +106,6 @@ device.
 </array>
 ```
 
-When working from the monorepo, use `.package(name: "IrohaSwift", path: "../../IrohaSwift")`
-instead of the Git URL so Xcode consumes the local sources.
-
 #### NoritoBridge policy (SwiftPM)
 
 `Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
@@ -138,7 +129,7 @@ CI runs `.github/workflows/mobile_sdk_artifacts.yml` (see `ci/check_swift_spm_va
 ### CocoaPods
 
 ```ruby
-pod 'IrohaSwift', :podspec => 'https://raw.githubusercontent.com/hyperledger-iroha/iroha/iroha-swift-v0.1.0/IrohaSwift/IrohaSwift.podspec'
+pod 'IrohaSwift', :path => '/path/to/iroha/IrohaSwift'
 ```
 
 The podspec pulls sources from this repository and requires `dist/NoritoBridge.xcframework`
@@ -217,7 +208,7 @@ torii.listAttachments { result in
     print("attachments:", result)
 }
 
-// Submit transfer (WIP encoder)
+// Build and submit a signed transfer.
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
@@ -1289,10 +1280,11 @@ try await sdk.submit(unshield: request, keypair: keypair)
 
 ### Multisig spec builder
 
-The IOS4 multisig roadmap now ships a Swift builder so apps can assemble deterministic
-registration payloads before submitting `MultisigRegister` instructions. The helper mirrors
-`MultisigSpec` from the executor data model, validating quorum/TTL/signatory bounds and
-exporting the exact JSON layout Torii expects:
+The Swift SDK provides a multisignature builder so apps can assemble
+deterministic registration payloads before submitting `MultisigRegister`
+instructions. The helper mirrors `MultisigSpec` from the executor data model,
+validates quorum, TTL, and signatory bounds, and exports the exact JSON layout
+Torii expects:
 
 ```swift
 let specBuilder = MultisigSpecBuilder()
@@ -1739,11 +1731,6 @@ for attempt in 0..<5 {
 
 The Android and JavaScript SDKs use the same seed/attempt mapping, so reconnect back-off remains identical regardless of the client stack.
 
-Status:
-- Envelope encoder is complete; transaction payload encoder is under active development.
-- Nexus/Torii v3 surface coverage is in progress; see the workspace `roadmap.md` for the active backlog.
-- PRs welcome for additional endpoints and full Norito encoding coverage.
-
 ### Governance API helpers
 
 `ToriiClient` now wraps the governance REST endpoints so apps can draft contract deployment proposals, submit ballots, and fetch referendum state without reimplementing the HTTP layer. The responses include Norito transaction skeletons (`tx_instructions`) that you can feed into the SDK transaction builders:
@@ -1768,9 +1755,10 @@ The same helpers are exposed on `IrohaSDK` via convenience methods (for example,
 
 ### Norito RPC helper
 
-Use `NoritoRpcClient` when you need direct access to the binary RPC surface (see roadmap
-task NRPC-3B). The helper mirrors the JavaScript client and centralises the
-`application/x-norito` headers, optional query parameters, and timeout handling.
+Use `NoritoRpcClient` when you need direct access to the binary RPC surface.
+The helper mirrors the JavaScript client and centralizes the
+`application/x-norito` headers, optional query parameters, and timeout
+handling.
 
 ```swift
 import IrohaSwift
@@ -1871,11 +1859,11 @@ through one atomic directory exchange.
 
 A SwiftUI wallet example (`examples/ios/NoritoDemoXcode`) showcases token balances,
 Torii WebSocket subscriptions, and IRH transfers. The Xcode project, Swift sources, and
-configuration templates are checked into the repository. Launch the demo by supplying the
-Norito bridge XCFramework and populating the `.env` file (keys such as `TORII_NODE_URL`,
-`CONNECT_SESSION_ID`, `CONNECT_TOKEN_APP`, `CONNECT_TOKEN_WALLET`, and `CONNECT_CHAIN_ID`
-are read on startup). Validation hooks live in `scripts/ci/verify_norito_demo.sh` and will
-be extended to run `xcodebuild` once macOS CI runners are available.
+configuration templates are checked into the repository. Launch the demo by
+supplying the Norito bridge XCFramework and populating the `.env` file (keys
+such as `TORII_NODE_URL`, `CONNECT_SESSION_ID`, `CONNECT_TOKEN_APP`,
+`CONNECT_TOKEN_WALLET`, and `CONNECT_CHAIN_ID` are read on startup). Validation
+hooks for local and CI use live in `scripts/ci/verify_norito_demo.sh`.
 
 For contributor setup and Torii mock ledger instructions, refer to
 [`docs/norito_demo_contributor.md`](../docs/norito_demo_contributor.md).

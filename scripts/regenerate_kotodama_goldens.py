@@ -74,7 +74,6 @@ RETIRED_OUTPUTS = (
     Path("crates/ivm/tests/data/dai.to"),
     Path("crates/kotodama_lang/src/samples/kotodama_jp.to"),
     Path("crates/kotodama_lang/src/samples/trigger_cat_and_mouse.to"),
-    Path("docs/portal/static/norito-snippets/init-entrypoint.to"),
     Path("integration_tests/fixtures/ivm/trigger_cat_and_mouse.to"),
 )
 

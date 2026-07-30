@@ -2,8 +2,8 @@
 
 Last updated: 2026-07-11
 
-The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
-history lives in [`../../status.md`](../../status.md). This file should only
+The public roadmap lives in [`../roadmap.md`](../roadmap.md). Completed
+history lives in [`../status.md`](../status.md). This file should only
 track detailed unfinished engineering work.
 
 The 2026-07-05 BFV crypto production-readiness hardening tranche is complete:
@@ -179,9 +179,10 @@ SCCP-facing code, SDKs, scripts, or docs unnoticed.
 The scanner composes HTML-entity and URL-percent decoding to stability before
 matching, with deep adversarial guard cases for both retired-family names and
 runtime-style tokens.
-Translated public bridge-proof launch-scope docs now carry the same generic
-unsupported-family and not-remaining-work boundary, and the retired-network
-surface guard pins those localized files before release evidence can pass.
+Public bridge-proof launch-scope docs carry the same generic
+unsupported-family and not-remaining-work boundary in `iroha-docs`, while the
+retired-network surface guard pins the canonical source claims before release
+evidence can pass.
 Launch-scope constant inventory now also pins the current Nexus-or-TAIRA
 finality chain-id guard, so strict release evidence no longer depends on the
 retired single-chain `proof.chain_id != SCCP_NEXUS_FINALITY_CHAIN_ID_V1`
@@ -3071,7 +3072,8 @@ evidence `verified_at`/canary/trust-source windows, receipt `submitted_at` and
 format controls locally, so timestamp parsing cannot preserve bidi or zero-width
 text even if validator call order changes. Parseable timezone-aware timestamps
 must also use the canonical evidence shape
-`YYYY-MM-DDTHH:MM:SS[.ffffff](Z|+HH:MM|-HH:MM)`, rejecting space separators,
+`YYYY-MM-DDTHH:MM:SS.ffffffZ` (or the equivalent form with a numeric offset),
+rejecting space separators,
 lowercase separators, comma fractions, compact offsets, and the unknown-offset
 `-00:00` spelling while preserving the existing malformed/missing-timezone
 diagnostics.
@@ -7519,10 +7521,11 @@ redistributable schemas, and official trust/revocation bundles.
   audit, V1 Kagemusha, and version-nested routes instead of preserving
   rejection or compatibility shims. Router and catalog tests assert those
   method/path pairs cannot resolve through aliases or parameter capture.
-- Completed 2026-06-06: removed the default governance council derive-vrf
-  not-implemented fallback and aligned HTTP route registration, OpenAPI paths,
-  and MCP tools behind `gov_vrf` for council persist/replace/derive-vrf
-  mutation helpers.
+- Completed 2026-07-30: removed the unshipped governance council
+  `derive-vrf` prototype, its `gov_vrf` feature, HTTP/MCP surfaces, and
+  documentation. Council selection uses the canonical on-chain bonded-citizen
+  sortition path; the independently authorized persist/replace administration
+  helpers remain.
 - Completed 2026-06-06: refreshed `fixtures/offline/interop_contract_v2.json`
   and its generator so the published redeem vector uses
   `OFFLINE_NOTE_KEY_CERTIFICATE_VERSION` directly. Torii now consumes the
@@ -10697,9 +10700,9 @@ redistributable schemas, and official trust/revocation bundles.
     checked builder signature;
     SoraFS gateway conformance attestations now sign reports through
     `Signature::try_new`, with regression coverage that verifies the emitted
-    envelope signature and rejects a wrong key, and the conformance docs plus
-    translated copies now show the checked signing helper instead of the
-    compatibility signer;
+    envelope signature and rejects a wrong key, and the canonical conformance
+    docs now show the checked signing helper instead of the compatibility
+    signer;
     irohad Soracloud runtime provider advert/admission fixtures and recording
     mutation-sink heartbeat/Inrou provenance fixtures now use checked signing,
     with remote provider hydration and local heartbeat/Inrou regressions covering
@@ -11142,24 +11145,6 @@ redistributable schemas, and official trust/revocation bundles.
 - Carry the materialized-signatory multisig authoring coverage into the next broader integration corridor.
   - Added a 4-peer `integration_tests/tests/multisig.rs` regression where `MultisigRegister` materializes a previously unregistered signatory and that signatory successfully authors `MultisigPropose` on the network.
   - The same test asserts single-key proposal and approval transaction-authority shape, submits approval from an existing signatory, and waits for the proposed metadata write to execute after quorum.
-- Extend and burn down the translation metadata audit backlog.
-  - The retired `formal/sumeragi/` proof corridor and its stale
-    translations have been removed. `formal/sumeragi_v2/` is the sole
-    Sumeragi proof source for the first release; do not revive or translate the
-    legacy model.
-  - If Sumeragi v2 formal translations are added after the release proof is
-    frozen, generate them from the final v2 sources and require current source
-    metadata before advertising them as complete.
-  - The metadata checker no longer treats source-only generated English pages
-    as translations, and new portal translation stubs now include
-    `source_hash`, `source_last_modified`, and `translation_last_reviewed:
-    null`; existing `specs` and `docs/portal` translated pages still need
-    metadata backfill before those trees can join the CI gate.
-  - Clean the existing `specs` and `docs/portal` metadata debt, including
-    files missing `source_hash` and `translation_last_reviewed`, before adding
-    those trees to the CI gate. The latest audit has 18,156 errors after the
-    source-only false positives are excluded.
-  - Refresh only the files the checker flags, then record the clean audit command in `status.md`.
 - Carry Petal renderer-specific capture gates beyond the core PNG/Katakana
   encode, PNG `eval-capture`, PNG `simulate-realtime`, and
   `score-styles` report.

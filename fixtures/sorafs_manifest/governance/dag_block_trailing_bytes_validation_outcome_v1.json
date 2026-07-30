@@ -4,7 +4,7 @@
   "category": "norito",
   "message": "failed to decode governance DAG block Norito payload: length mismatch",
   "action": "Re-encode the governance DAG block with the canonical SoraFS Norito schema.",
-  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
     "sorafs.reference.governance_dag.block",
     "sorafs.reference.code.SFS-NORITO-001"

@@ -1,5 +1,10 @@
 <!-- Sample project pointers for Swift developers -->
 
+---
+title: Swift Connect Sample Projects
+summary: Source-coupled sample wiring for Connect and offline Swift flows.
+---
+
 # Sample projects (Connect + offline)
 
 Use these starter paths to validate your environment and mirror production wiring.

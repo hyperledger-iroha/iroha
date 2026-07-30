@@ -12,8 +12,6 @@ Ahead of the February SRE governance session, please review the Android telemetr
 - Readiness outline: `specs/sdk/android/telemetry_readiness_outline.md`
 - Enablement deck: `specs/sdk/android/readiness/deck/telemetry_redaction_v1.md`
 - Quick-reference card: `specs/sdk/android/readiness/cards/telemetry_redaction_qrc.md`
-  (localized mirrors under `..._qrc.<ar|es|fr|he|ja|pt|ru|ur>.md`, PDF exports
-  generated on demand and stored in the enablement archive)
 - Lab guide & report template: `specs/sdk/android/readiness/labs/`
 - Chaos rehearsal checklist: `specs/sdk/android/telemetry_chaos_checklist.md`
 

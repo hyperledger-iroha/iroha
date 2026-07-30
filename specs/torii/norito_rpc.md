@@ -214,7 +214,8 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
 
 - **Torii Platform (NRPC-2 owners)**: review the transport RFC in the 2026-03-21 platform sync. Agenda circulated via `specs/torii/norito_rpc_sync_notes.md`, covering ingress/auth/telemetry rollout requirements and open questions on hybrid streaming.
 - **SDK Program (Swift, JS, Python, Android leads)**: consume the summary deck at `specs/torii/norito_rpc_brief.md` and log adoption checkpoints (client helpers, fixture parity) before the April SDK alignment review. Shared action item tracker lives in `specs/torii/norito_rpc_tracker.md`.
-- **Docs/DevRel**: integrate the RFC highlights into the developer portal (`docs/portal/docs/devportal/torii-rpc-overview.md`) and refresh the Try-It console guidance to include Norito payload examples by 2026-03-25.
+- **Docs/DevRel**: keep public Norito-RPC guidance current in the sibling
+  `iroha-docs` repository and publish it at <https://docs.iroha.tech/>.
 - **Status Broadcasting**: status.md entry references this RFC so weekly triage sees NRPC-1 closed and downstream follow-ups assigned.
 - **Observability**: implement the Norito-RPC telemetry and alert suite described in `specs/torii/norito_rpc_telemetry.md`, landing dashboards/alerts ahead of production rollout.
 

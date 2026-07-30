@@ -2,7 +2,7 @@
   "generated": "2026-11-22T00:00:00Z",
   "zones": [
     {
-      "zone": "docs-preview.sora.link.",
+      "zone": "property-preview.sora.link.",
       "description": "Preview hostname served from the SoraFS gateway and used for resolver staging bakes.",
       "ds": [
         {

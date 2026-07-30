@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: Swift Torii Spec Review
+summary: Review agenda for Swift pipeline and Norito RPC parity.
+---
+
 # Swift Torii Spec Review (IOS2)
 
 This agenda schedules the Torii spec review called out in `roadmap.md` for the
@@ -39,7 +44,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
 - `specs/status/swift_weekly_digest_feedback.md` (stakeholder asks)
 - `specs/sdk/swift/connect_risk_tracker.md` (CR-2 telemetry gap context)
 - `specs/sdk/swift/ios2_fixture_cadence_brief.md` (fixture governance contract)
-- Latest OpenAPI snapshot (`docs/portal/static/openapi/torii.json`) and checksum manifest
+- Latest OpenAPI snapshot (`artifacts/openapi/torii.json`) and checksum manifest
 - Sample parity diff export (`artifacts/swift/parity_diffs/latest.json`)
 
 ## Agenda (90 minutes)
@@ -67,7 +72,7 @@ the CI parity work can proceed with a frozen spec and documented action items.
   gauges to review.
 - **Release Engineering:** confirm the OpenAPI snapshot hash matches the signed
   manifest and bring the markdown snippet produced by
-  `docs/portal/scripts/check-openapi-signatures.mjs`.
+  `tools/openapi/scripts/check-openapi-signatures.mjs`.
 
 ## Decision Capture Scaffolding
 

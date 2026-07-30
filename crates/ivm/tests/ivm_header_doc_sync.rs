@@ -1,4 +1,4 @@
-//! Ensure all generated IVM header policy sections match the implementation.
+//! Ensure the canonical generated IVM header policy matches the implementation.
 
 const BEGIN: &str = "<!-- BEGIN GENERATED HEADER POLICY -->";
 const END: &str = "<!-- END GENERATED HEADER POLICY -->";
@@ -48,27 +48,6 @@ fn generated_header_policy_sections_are_up_to_date() {
         .and_then(|path| path.parent())
         .expect("workspace root")
         .join("specs");
-    let mut paths = std::fs::read_dir(&source_dir)
-        .expect("read specs")
-        .map(|entry| entry.expect("read specs entry").path())
-        .filter(|path| {
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                return false;
-            };
-            path.is_file()
-                && (name == "ivm_header.md"
-                    || (name.starts_with("ivm_header.") && name.ends_with(".md")))
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    assert!(
-        !paths.is_empty(),
-        "no IVM header documents found under {}",
-        source_dir.display()
-    );
-
     let expected = expected_header_policy();
-    for path in paths {
-        assert_generated_header_policy(&path, &expected);
-    }
+    assert_generated_header_policy(&source_dir.join("ivm_header.md"), &expected);
 }

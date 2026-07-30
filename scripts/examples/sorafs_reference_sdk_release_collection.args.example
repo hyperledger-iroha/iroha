@@ -1,6 +1,8 @@
 # Reviewed SF-11 reference SDK release evidence collection arguments.
 # The runner only verifies existing payload-free JSON artifacts; collect them
 # from the release pipeline and downstream package jobs before running this plan.
+# Replace the supply-chain source root and public provenance trust tuple with
+# values reviewed for the same deployment context.
 # Run with:
 #   python3 scripts/run_sorafs_reference_sdk_release_evidence.py \
 #     @scripts/examples/sorafs_reference_sdk_release_collection.args.example \
@@ -20,4 +22,8 @@
 --min-release-targets 5
 --min-downstream-packages 6
 --max-smoke-duration-secs 1800
+--supply-chain-source-root /var/tmp/sorafs/reference-sdk-supply-chain-source
+--provenance-certificate-identity https://github.com/hyperledger/iroha/.github/workflows/sorafs-cli-release.yml@refs/tags/sorafs-cli-v1.0.0
+--provenance-oidc-issuer https://token.actions.githubusercontent.com
+--provenance-verification-public-key-hex 1111111111111111111111111111111111111111111111111111111111111111
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

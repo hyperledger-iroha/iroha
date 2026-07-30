@@ -5,8 +5,8 @@ aligned with the SoraFS deterministic chunker profile (SF1). It also
 documents the regeneration workflow, signing policy, and verification steps so
 fixture consumers across SDKs remain in sync.
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/chunker-conformance.md`.
-> Update both copies to keep reviewers aligned.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## Canonical Profile
 

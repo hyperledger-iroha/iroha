@@ -809,7 +809,12 @@ pipeline, and the authenticated terminal Apply boundary before successor
 construction. The sixth production kernel has no `MaxHeight` input: it proves
 that exact context, receipt, artifact, block, and durable-predecessor identity
 agree while no successor activation is pending. `MaxHeight` remains only a
-finite-horizon projection. Source token/order checks,
+finite-horizon projection. A valid checked Running failure latches the local
+snapshot; an invalid projection preserves it, while the runner's already
+latched process output guard remains authoritative in public status.
+Historical body service requires frozen-roster membership, not participation
+in the old QC; the QC authenticates the subject and the archive signs the
+response. Source token/order checks,
 adversarial production tests, stale-token mutation tests, and source-manifest
 binding constrain those claims, but do not prove any of them. Consequently the
 already proved abstract successor invariant cannot discharge this production
@@ -1243,7 +1248,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f`.
+`328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,

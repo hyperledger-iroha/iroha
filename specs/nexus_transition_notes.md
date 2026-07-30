@@ -626,7 +626,7 @@ alarms match the rehearsal topology.
 
 | Asset | Location | Notes |
 |-------|----------|-------|
-| Routed-trace audit report (Q1 2026) | `specs/nexus_routed_trace_audit_report_2026q1.md` | Canonical source for Phase B1 evidence; mirrored for the portal under `docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.md`. |
+| Routed-trace audit report (Q1 2026) | `specs/nexus_routed_trace_audit_report_2026q1.md` | Canonical repository-local source for Phase B1 evidence; coordinate any public summary in `iroha-docs`. |
 | Config delta tracker | `specs/project_tracker/nexus_config_deltas/2026Q1.md` | Contains the TRACE-CONFIG-DELTA diff summaries, reviewer initials, and GOV-2026-03-19 vote log. |
 | Telemetry remediation plan | `specs/nexus_telemetry_remediation_plan.md` | Documents the alert pack, OTLP batch sizing, and export budget guardrails tied to B2. |
 | Multi-lane rehearsal tracker | `specs/project_tracker/nexus_rehearsal_2026q1.md` | Lists Apr 9 rehearsal artefacts, validator manifest/digest, Q2 prep notes/agenda, and rollback evidence. |

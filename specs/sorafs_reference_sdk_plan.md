@@ -386,7 +386,7 @@ Error catalogue:
 - `SFS-NORITO-001` decode error.
 - `SFS-INT-001` internal panic/unexpected.
 
-CLI prints `docs_url` pointing to `docs/portal/docs/sorafs/reference-sdk/errors.md`.
+CLI prints `docs_url` pointing to `https://docs.iroha.tech/`.
 
 ## Library API Highlights
 - `sorafs_manifest::reference::validate_provider_advert_bytes(...)`.
@@ -507,7 +507,7 @@ convert decoded or raw Norito payloads into the shared validation functions.
 - Implemented: `fixtures/documentation/sorafs_reference_sdk/` sample scripts, README, and
   smoke runner that emits `ValidationOutcomeV1` JSON for committed fixtures.
 - Implemented: portal reference SDK error catalogue at
-  `docs/portal/docs/sorafs/reference-sdk/errors.md`.
+  `https://docs.iroha.tech/`.
 - Implemented: the operator, metrics, and binding-generation guides below cover
   the local release helper, `ValidationOutcomeV1` telemetry contract, checked C
   header, and downstream package evidence handoff. Final release-specific URLs,

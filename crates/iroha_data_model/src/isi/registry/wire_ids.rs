@@ -41,6 +41,7 @@ macro_rules! built_in_wire_id {
     };
 }
 
+#[cfg(feature = "governance")]
 macro_rules! governance_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!($ty => $wire_id, governance_only = true)

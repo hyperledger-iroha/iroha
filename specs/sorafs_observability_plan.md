@@ -5,9 +5,8 @@ summary: SF-7 telemetry schema, dashboards, and SLO enforcement for gateways and
 
 # SoraFS Observability & SLO Plan
 
-> **Note:** This plan is also mirrored in the Docusaurus developer portal at
-> `docs/portal/docs/sorafs/observability-plan.md`. Keep both copies in sync until
-> the migration away from the Sphinx documentation set is complete.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## Objectives
 - Define metrics/events schema for gateways/nodes/orchestrator.

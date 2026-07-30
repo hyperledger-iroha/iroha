@@ -93,7 +93,6 @@ mod address_manifest;
 mod codec;
 mod compute;
 mod compute_harness;
-mod docs_preview;
 mod fastpq;
 mod gar;
 mod gar_bus;
@@ -184,7 +183,6 @@ enum CommandKind {
     SoranetChaosReport {
         options: soranet_chaos::ChaosReportOptions,
     },
-    DocsPreview(docs_preview::Command),
     ComputeSloReport {
         options: compute::ComputeSloReportOptions,
     },
@@ -226,9 +224,6 @@ enum CommandKind {
     SorafsAdoptionCheck {
         options: sorafs::AdoptionCheckOptions,
         report: Option<PathBuf>,
-    },
-    SnsPortalStub {
-        options: sns::PortalStubOptions,
     },
     SorafsScoreboardDiff {
         options: sorafs::ScoreboardDiffOptions,
@@ -1223,9 +1218,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 summary.scenarios.len()
             );
         }
-        CommandKind::DocsPreview(command) => {
-            docs_preview::run(command)?;
-        }
         CommandKind::ComputeSloReport { options } => {
             compute::run_slo_report(options)?;
         }
@@ -1322,9 +1314,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 fs::write(&path, rendered)?;
                 println!("sorafs adoption check report written to {}", path.display());
             }
-        }
-        CommandKind::SnsPortalStub { options } => {
-            sns::write_portal_stub(options)?;
         }
         CommandKind::SorafsScoreboardDiff { options, report } => {
             let diff = sorafs::run_scoreboard_diff(options)?;
@@ -2584,76 +2573,6 @@ where
                 .into()),
             }
         }
-        "docs-preview" => {
-            let mut pending = args.peekable();
-            let Some(subcommand) = pending.next() else {
-                return Err("docs-preview requires a subcommand (summary)".into());
-            };
-            match subcommand.as_str() {
-                "summary" => {
-                    let mut log_path = docs_preview::default_log_path();
-                    let mut filter_wave: Option<String> = None;
-                    let mut output = docs_preview::SummaryOutput::Human;
-                    while let Some(arg) = pending.next() {
-                        match arg.as_str() {
-                            "--log" => {
-                                let Some(path) = pending.next() else {
-                                    return Err("--log requires a path".into());
-                                };
-                                log_path = PathBuf::from(path);
-                            }
-                            "--wave" => {
-                                let Some(label) = pending.next() else {
-                                    return Err("--wave requires a label".into());
-                                };
-                                filter_wave = Some(label);
-                            }
-                            "--json" => {
-                                let Some(target) = pending.next() else {
-                                    return Err("--json requires a path or '-'".into());
-                                };
-                                if target == "-" {
-                                    output = docs_preview::SummaryOutput::JsonStdout;
-                                } else {
-                                    output = docs_preview::SummaryOutput::JsonFile(PathBuf::from(
-                                        target,
-                                    ));
-                                }
-                            }
-                            "--json-stdout" => {
-                                output = docs_preview::SummaryOutput::JsonStdout;
-                            }
-                            "--text" => {
-                                output = docs_preview::SummaryOutput::Human;
-                            }
-                            flag if flag.starts_with('-') => {
-                                return Err(format!(
-                                    "unknown option `{flag}` for docs-preview summary"
-                                )
-                                .into());
-                            }
-                            other => {
-                                return Err(format!(
-                                    "unexpected argument `{other}` for docs-preview summary"
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    Ok(CommandKind::DocsPreview(docs_preview::Command::Summary(
-                        docs_preview::SummaryOptions {
-                            log_path,
-                            filter_wave,
-                            output,
-                        },
-                    )))
-                }
-                other => Err(format!(
-                    "unknown docs-preview subcommand `{other}` (expected summary)"
-                )
-                .into()),
-            }
-        }
         "compute" => {
             let Some(subcmd) = args.next() else {
                 return Err("compute requires a subcommand (slo-report|fixtures)".into());
@@ -3256,55 +3175,6 @@ where
                     require_direct_only,
                 },
                 report,
-            })
-        }
-        "sns-portal-stub" => {
-            let mut pending = args.peekable();
-            let mut cycle: Option<String> = None;
-            let mut suffixes: Vec<String> = Vec::new();
-            let mut output: Option<PathBuf> = None;
-            let mut overwrite = false;
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--cycle" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --cycle".into());
-                        };
-                        cycle = Some(value);
-                    }
-                    "--suffix" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --suffix".into());
-                        };
-                        suffixes.push(value);
-                    }
-                    "--output" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output = Some(normalize_path(Path::new(&value))?);
-                    }
-                    "--force" | "--overwrite" => {
-                        overwrite = true;
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for sns-portal-stub: {flag}").into());
-                    }
-                }
-            }
-            let cycle =
-                cycle.ok_or_else(|| "--cycle is required for sns-portal-stub".to_string())?;
-            if suffixes.is_empty() {
-                return Err("sns-portal-stub requires at least one --suffix <.suffix>".into());
-            }
-            let output = output.unwrap_or_else(|| sns::default_portal_stub_path(&cycle));
-            Ok(CommandKind::SnsPortalStub {
-                options: sns::PortalStubOptions {
-                    cycle,
-                    suffixes,
-                    output,
-                    overwrite,
-                },
             })
         }
         "sorafs-scoreboard-diff" => {
@@ -7705,7 +7575,6 @@ where
             let mut dashboard_label: Option<String> = None;
             let mut dashboard_artifact: Option<PathBuf> = None;
             let mut regulatory_entry: Option<PathBuf> = None;
-            let mut portal_entry: Option<PathBuf> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -7755,12 +7624,6 @@ where
                         };
                         regulatory_entry = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--portal-entry" | "--portal-memo" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --portal-entry (portal memo)".into());
-                        };
-                        portal_entry = Some(normalize_path(Path::new(&path))?);
-                    }
                     flag => {
                         return Err(format!("unknown flag for sns-annex: {flag}").into());
                     }
@@ -7787,7 +7650,6 @@ where
                 dashboard_label,
                 dashboard_artifact,
                 regulatory_entry,
-                portal_entry,
             }))
         }
         "codec" => {
@@ -10026,20 +9888,13 @@ const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     "Cargo.toml",
     "IrohaSwift",
     "Makefile",
+    "artifacts/openapi/allowed_signers.json",
     "ci",
     "ci/check_android_codegen.sh",
     "ci/check_openapi_spec.sh",
     "crates",
     "csharp",
     "data_model",
-    "docs/i18n",
-    "tools/openapi/package-lock.json",
-    "tools/openapi/package.json",
-    "tools/openapi/scripts",
-    "artifacts/openapi/allowed_signers.json",
-    "specs/sdk/android/generated",
-    "specs/sdk/android/generated/codegen_hash_tree.json",
-    "specs/sdk/android/generated/codegen_manifest_metadata.json",
     "fixtures",
     "integration_tests",
     "java/iroha_android",
@@ -10058,6 +9913,9 @@ const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     "scripts/android_codegen_replay_sorafs_fixture.py",
     "scripts/check_android_codegen_parity.py",
     "scripts/check_sorafs_release_version_map.py",
+    "specs/sdk/android/generated",
+    "specs/sdk/android/generated/codegen_hash_tree.json",
+    "specs/sdk/android/generated/codegen_manifest_metadata.json",
     "tools",
     "vendor",
     "xtask",
@@ -12138,7 +11996,7 @@ mod openapi_tests {
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
             openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
-            "d46a10a45a97a731c8c20330f435f6ca2ab143dfc38b9ca7949c2ab5010fb9f1"
+            "6f93a76e9e1490ce1ff577bbd6d0c32760f0a9656920e122000608cc6bbc0e41"
         );
     }
 
@@ -12196,9 +12054,6 @@ mod openapi_tests {
             "crates",
             "csharp",
             "data_model",
-            "docs/i18n",
-            "tools/openapi/scripts",
-            "specs/sdk/android/generated",
             "fixtures",
             "integration_tests",
             "java/iroha_android",
@@ -12209,6 +12064,7 @@ mod openapi_tests {
             "python/iroha_python",
             "python/iroha_torii_client",
             "scripts",
+            "specs/sdk/android/generated",
             "tools",
             "vendor",
             "xtask",
@@ -15333,7 +15189,7 @@ fn print_usage() {
         "  cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> [--alias <alias>] [--content-cid <cid>] [--hostname <host>] [--proof-status <status>] [--manifest-json <path>]"
     );
     eprintln!(
-        "    Validate docs portal gateway binding artefacts before attaching them to DG-3 change tickets. Confirms Sora-Name/Proof headers, route metadata, and proof payloads match the expected alias/content CID."
+        "    Validate gateway binding artefacts before attaching them to DG-3 change tickets. Confirms Sora-Name/Proof headers, route metadata, and proof payloads match the expected alias/content CID."
     );
     eprintln!(
         "  cargo xtask sorafs-adoption-check [--scoreboard <path>] [--summary <path>] [--min-providers <count>] [--allow-zero-weight] [--allow-single-source] [--adoption-override-id <id>] [--allow-implicit-metadata] [--require-direct-only] [--require-telemetry] [--require-telemetry-region] [--report <path>]"
@@ -15349,12 +15205,6 @@ fn print_usage() {
     );
     eprintln!(
         "    Compare eligible provider weights between scoreboards; highlights deltas and flags entries exceeding the configured threshold."
-    );
-    eprintln!(
-        "  cargo xtask docs-preview summary [--log <path>] [--wave <label>] [--json <path|->]"
-    );
-    eprintln!(
-        "    Summarise docs portal preview invite logs (DOCS-SORA) and emit human or JSON output. Defaults to artifacts/docs_portal_preview/feedback_log.json."
     );
     eprintln!(
         "  cargo xtask compute slo-report [--manifest <path>] [--json-out <path>] [--markdown-out <path|->] [--samples <n>]"
@@ -15746,20 +15596,6 @@ mod tests {
             }
             _ => panic!("expected sorafs-adoption-check command"),
         }
-    }
-
-    #[test]
-    fn parse_sns_portal_stub_requires_explicit_suffix() {
-        let args = ["xtask", "sns-portal-stub", "--cycle", "2026-11"];
-        let iter = args.into_iter().map(String::from);
-        let err = match parse_command(iter) {
-            Ok(_) => panic!("sns-portal-stub must require an explicit suffix"),
-            Err(err) => err,
-        };
-        assert!(
-            err.to_string()
-                .contains("requires at least one --suffix <.suffix>")
-        );
     }
 
     #[test]

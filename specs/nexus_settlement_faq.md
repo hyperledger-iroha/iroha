@@ -156,9 +156,8 @@ from `nexus_lanes.json`, Alertmanager state, and `nexus_lane_rules.yml`).
 - Feature gaps → open an issue tagged `NX-14` and cross-link to the roadmap.
 - Urgent settlement incidents → page the Nexus primary (see
   `specs/nexus_operations.md`) and attach router logs.
-- Documentation corrections → file PRs against this file and the portal
-  counterparts (`docs/portal/docs/nexus/overview.md`,
-  `docs/portal/docs/nexus/operations.md`).
+- Documentation corrections → update code-adjacent facts here and coordinate
+  public, in-depth changes in the sibling `iroha-docs` repository.
 
 ### Can you show example settlement flows?
 

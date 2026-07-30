@@ -1326,7 +1326,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   operator evidence, archived receipts, and final readiness replay also reject
   Unicode format controls locally before timestamp parsing, then require
   parseable timezone-aware timestamps to use the canonical evidence shape
-  `YYYY-MM-DDTHH:MM:SS[.ffffff](Z|+HH:MM|-HH:MM)` rather than accepting
+  `YYYY-MM-DDTHH:MM:SS.ffffffZ` (or the equivalent form with a numeric offset)
+  rather than accepting
   space separators, lowercase separators, comma fractions, compact offsets, or
   the unknown-offset `-00:00` spelling.
   Compact canary

@@ -77,8 +77,8 @@ touching `roadmap.md` items or replying to behaviour questions.
   telemetry.
 
 ### Documentation & Evidence
-- Mirror any public-facing doc change in the portal (`docs/portal/...`) when
-  applicable so the docs site stays current with the Markdown sources.
+- Coordinate public-facing and in-depth documentation changes in the sibling
+  `iroha-docs` repository, which publishes <https://docs.iroha.tech/>.
 - When new workflows are introduced, add runbooks, governance notes, or
   checklists explaining how to rehearse, rollback, and capture evidence.
 - When translating content into Akkadian, provide semantic renderings written
@@ -93,8 +93,8 @@ touching `roadmap.md` items or replying to behaviour questions.
 ## Ready-to-Ship Checklist
 
 1. Code compiles and `cargo fmt` produced no diffs.
-2. Updated docs (workspace Markdown plus portal mirrors) describe the new
-   behaviour, new CLI flags, or config knobs.
+2. Updated source-adjacent docs describe the new behaviour, CLI flags, or
+   config knobs; affected public guidance is coordinated in `iroha-docs`.
 3. Tests cover every new code path and fail deterministically when regressions
    appear.
 4. Telemetry, dashboards, and alert definitions reference any new metrics or

@@ -97,7 +97,7 @@ use iroha_data_model::{
         },
         time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     },
-    executor::{ContractRejection, ValidationFail},
+    executor::ValidationFail,
     isi::{
         BatchMode, Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue,
         Revoke, SetAssetHoldingLimit, SetAssetTransferAvailability, SetAssetTransferBlacklist,
@@ -802,8 +802,17 @@ fn parse_asset_id(value: &str) -> PyResult<AssetId> {
     Ok(AssetId::with_scope(definition, account, scope))
 }
 
+fn require_single_signatory<'a>(account: &'a AccountId, context: &str) -> PyResult<&'a PublicKey> {
+    account.try_signatory().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{context} requires a single-key account controller"
+        ))
+    })
+}
+
 fn ensure_ed25519_account(account: &AccountId) -> PyResult<()> {
-    let (algorithm, _) = public_key_to_bytes(account.signatory(), "account signatory public key")?;
+    let signatory = require_single_signatory(account, "account")?;
+    let (algorithm, _) = public_key_to_bytes(signatory, "account signatory public key")?;
     algorithm_guard(algorithm)
 }
 
@@ -7926,7 +7935,9 @@ mod tests {
     #[test]
     fn signed_transaction_python_boundaries_use_the_canonical_transaction_limit() {
         let maximum = usize::try_from(
-            iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+            iroha_data_model::parameter::system::TransactionParameters::default()
+                .max_tx_bytes()
+                .get(),
         )
         .expect("canonical transaction limit fits the test platform");
         let adversarial = vec![0_u8; maximum + 1];
@@ -9193,7 +9204,7 @@ mod tests {
             "NotPermitted"
         );
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
-            ContractRejection {
+            iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
                 namespace: "FiLiquidityError".into(),
                 name: "BelowMinimum".into(),
@@ -10973,8 +10984,8 @@ impl PyAccountId {
 
     #[getter]
     fn public_key_hex(&self) -> PyResult<String> {
-        let (algorithm, bytes) =
-            public_key_to_bytes(self.inner.signatory(), "account signatory public key")?;
+        let signatory = require_single_signatory(&self.inner, "AccountId")?;
+        let (algorithm, bytes) = public_key_to_bytes(signatory, "account signatory public key")?;
         algorithm_guard(algorithm)?;
         Ok(hex::encode(bytes))
     }
@@ -12384,34 +12395,12 @@ impl Instruction {
     }
 
     #[classmethod]
-    #[pyo3(signature = (agreement_id, initiator, counterparty, cash_leg, collateral_leg, settlement_timestamp_ms))]
-    fn repo_unwind<'py>(
-        cls: &Bound<'py, PyType>,
-        agreement_id: &str,
-        initiator: &str,
-        counterparty: &str,
-        cash_leg: &Bound<'py, PyAny>,
-        collateral_leg: &Bound<'py, PyAny>,
-        settlement_timestamp_ms: u64,
-    ) -> PyResult<Self> {
+    #[pyo3(signature = (agreement_id))]
+    fn repo_unwind(_cls: &Bound<'_, PyType>, agreement_id: &str) -> PyResult<Self> {
         let agreement_id = RepoAgreementId::from_str(agreement_id).map_err(|err| {
             PyValueError::new_err(format!("invalid repo agreement id `{agreement_id}`: {err}"))
         })?;
-        let initiator = parse_account_id(initiator)?;
-        ensure_ed25519_account(&initiator)?;
-        let counterparty = parse_account_id(counterparty)?;
-        ensure_ed25519_account(&counterparty)?;
-        let py = cls.py();
-        let cash_leg = parse_repo_cash_leg(py, cash_leg)?;
-        let collateral_leg = parse_repo_collateral_leg(py, collateral_leg)?;
-        let instruction = ReverseRepoIsi::new(
-            agreement_id,
-            initiator,
-            counterparty,
-            cash_leg,
-            collateral_leg,
-            settlement_timestamp_ms,
-        );
+        let instruction = ReverseRepoIsi::new(agreement_id);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -13699,8 +13688,8 @@ impl TransactionBuilder {
         let signed_bytes = codec::encode_adaptive(signed);
         let signed_versioned = signed.encode_versioned();
 
-        let (_, public_key_bytes) =
-            public_key_to_bytes(signed.authority().signatory(), "authority public key")?;
+        let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
+        let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
         Ok(SignedTransactionEnvelope {
             chain_id: self.chain_id.to_string(),
             authority: self.authority.to_string(),
@@ -14048,16 +14037,8 @@ impl TransactionBuilder {
         let policy = python_zk_ace_policy_v1(canonical_policy_archive)?;
         require_non_blank_unpadded(source_account_id, "source_account_id")?;
         require_non_blank_unpadded(destination_account_id, "destination_account_id")?;
-        let source = AccountId::from_str(source_account_id).map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid ZK-ACE source_account_id `{source_account_id}`: {error}"
-            ))
-        })?;
-        let destination = AccountId::from_str(destination_account_id).map_err(|error| {
-            PyValueError::new_err(format!(
-                "invalid ZK-ACE destination_account_id `{destination_account_id}`: {error}"
-            ))
-        })?;
+        let source = parse_account_id(source_account_id)?;
+        let destination = parse_account_id(destination_account_id)?;
         let amount = parse_canonical_u128_text(amount, "amount")?;
         if amount == 0 {
             return Err(PyValueError::new_err(
@@ -14837,9 +14818,7 @@ impl TransactionBuilder {
             ));
         }
         require_non_blank_unpadded(account_id, "account_id")?;
-        let account_id = AccountId::from_str(account_id).map_err(|error| {
-            PyValueError::new_err(format!("invalid ZK-AMS account_id `{account_id}`: {error}"))
-        })?;
+        let account_id = parse_account_id(account_id)?;
         if seed_secret_bytes.0.len() != 32 {
             return Err(PyValueError::new_err(
                 "seed_secret must be exactly 32 bytes",
@@ -15784,8 +15763,8 @@ fn python_privacy_action_signed_envelope_v1(
     let hash_bytes: [u8; Hash::LENGTH] = *hash.as_ref();
     let signed_transaction = codec::encode_adaptive(signed);
     let signed_transaction_versioned = signed.encode_versioned();
-    let (_, public_key_bytes) =
-        public_key_to_bytes(signed.authority().signatory(), "authority public key")?;
+    let signatory = require_single_signatory(signed.authority(), "transaction authority")?;
+    let (_, public_key_bytes) = public_key_to_bytes(signatory, "authority public key")?;
     Ok(SignedTransactionEnvelope {
         chain_id: context.chain_id.to_string(),
         authority: context.authority.to_string(),
@@ -17019,7 +16998,8 @@ fn sign_query_request(
     let key_pair = KeyPair::from_private_key(private).map_err(|error| {
         PyValueError::new_err(format!("failed to reconstruct key pair: {error}"))
     })?;
-    if key_pair.public_key() != authority.signatory() {
+    let authority_signatory = require_single_signatory(&authority, "query authority")?;
+    if key_pair.public_key() != authority_signatory {
         return Err(PyValueError::new_err(
             "query private key does not match the authority account",
         ));
@@ -17806,7 +17786,9 @@ fn hash_blake2b_32_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyBytes>> {
 
 fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<()> {
     let maximum = usize::try_from(
-        iroha_data_model::parameter::system::defaults::transaction::max_tx_bytes().get(),
+        iroha_data_model::parameter::system::TransactionParameters::default()
+            .max_tx_bytes()
+            .get(),
     )
     .map_err(|_| {
         PyRuntimeError::new_err("canonical transaction byte limit does not fit this platform")

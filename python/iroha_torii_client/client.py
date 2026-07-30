@@ -11316,8 +11316,16 @@ class ToriiClient:
         return ConfigurationSnapshot.from_payload(mapping)
 
     def update_configuration(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Update node configuration (`POST /v1/configuration`)."""
+        """Update mutable node configuration (`POST /v1/configuration`).
 
+        Confidential gas is consensus-relevant startup state and is rejected here.
+        """
+
+        if "confidential_gas" in payload:
+            raise ValueError(
+                "confidential_gas is read-only runtime state; change the startup "
+                "configuration and restart the node"
+            )
         response = self._request(
             "POST",
             "/v1/configuration",
@@ -11331,37 +11339,10 @@ class ToriiClient:
         return self._ensure_mapping(body, "configuration update response")
 
     def get_confidential_gas_schedule(self) -> Optional[ConfidentialGasSchedule]:
-        """Return the advertised confidential verification gas schedule."""
+        """Return the read-only confidential verification gas schedule."""
 
         snapshot = self.get_configuration()
         return snapshot.confidential_gas
-
-    def set_confidential_gas_schedule(
-        self,
-        *,
-        proof_base: int,
-        per_public_input: int,
-        per_proof_byte: int,
-        per_nullifier: int,
-        per_commitment: int,
-    ) -> Mapping[str, Any]:
-        """Update confidential gas schedule while preserving the logger settings."""
-
-        snapshot = self.get_configuration()
-        logger_payload = snapshot.logger.to_payload()
-        schedule = ConfidentialGasSchedule(
-            proof_base=int(proof_base),
-            per_public_input=int(per_public_input),
-            per_proof_byte=int(per_proof_byte),
-            per_nullifier=int(per_nullifier),
-            per_commitment=int(per_commitment),
-        )
-        return self.update_configuration(
-            {
-                "logger": logger_payload,
-                "confidential_gas": schedule.to_payload(),
-            }
-        )
 
     def get_time_now(self) -> NetworkTimeSnapshot:
         """Fetch the Network Time Service snapshot (`GET /v1/time/now`)."""

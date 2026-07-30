@@ -261,13 +261,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_config_layer(|layer| {
-            layer
-                .write(["zk", "stark", "enabled"], true)
-                .write(["pipeline", "ivm_proved", "enabled"], true)
-                .write(
-                    ["pipeline", "ivm_proved", "allowed_circuits"],
-                    vec![ivm_circuit_id.to_owned()],
-                );
+            layer.write(["zk", "stark", "enabled"], true);
         });
 
     let Some(network) = sandbox::start_network_async_or_skip(

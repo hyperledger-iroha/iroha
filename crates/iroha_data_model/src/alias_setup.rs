@@ -1366,9 +1366,14 @@ mod tests {
         fn verify(&self) -> bool {
             self.plan_hash == self.body.canonical_hash()
                 && self
-                    .signature
-                    .verify(self.body.authority.signatory(), self.plan_hash.as_ref())
-                    .is_ok()
+                    .body
+                    .authority
+                    .try_signatory()
+                    .is_some_and(|signatory| {
+                        self.signature
+                            .verify(signatory, self.plan_hash.as_ref())
+                            .is_ok()
+                    })
         }
     }
 

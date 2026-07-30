@@ -770,11 +770,6 @@ impl FastJsonWrite for ConfigUpdateDTO {
             out.push_str("\"network\":");
             network.write_json(out);
         }
-        if let Some(gas) = &self.confidential_gas {
-            out.push(',');
-            out.push_str("\"confidential_gas\":");
-            gas.write_json(out);
-        }
         if let Some(handshake) = &self.soranet_handshake {
             out.push(',');
             out.push_str("\"soranet_handshake\":");
@@ -807,7 +802,7 @@ pub struct ConfigGetDTO {
     pub queue: Queue,
     /// Consensus-related configuration summary.
     pub consensus: Consensus,
-    /// Confidential verification gas schedule.
+    /// Read-only confidential verification gas schedule committed by the ZK policy.
     pub confidential_gas: ConfidentialGas,
     /// Transport-specific configuration summary (Norito-RPC, streaming).
     pub transport: Transport,
@@ -2108,14 +2103,13 @@ impl<'a> FastFromJson<'a> for ConfigUpdateDTO {
         let kh_logger = norito::json::key_hash_const("logger");
         let kh_acl = norito::json::key_hash_const("network_acl");
         let kh_network = norito::json::key_hash_const("network");
-        let kh_gas = norito::json::key_hash_const("confidential_gas");
+        let kh_confidential_gas = norito::json::key_hash_const("confidential_gas");
         let kh_handshake = norito::json::key_hash_const("soranet_handshake");
         let kh_transport = norito::json::key_hash_const("transport");
         let kh_compute = norito::json::key_hash_const("compute_pricing");
         let mut logger: Option<Logger> = None;
         let mut network_acl: Option<NetworkAcl> = None;
         let mut network: Option<NetworkUpdate> = None;
-        let mut confidential_gas: Option<ConfidentialGas> = None;
         let mut soranet_handshake: Option<SoranetHandshakeUpdate> = None;
         let mut transport: Option<TransportUpdate> = None;
         let mut compute_pricing: Option<ComputePricingUpdate> = None;
@@ -2132,8 +2126,10 @@ impl<'a> FastFromJson<'a> for ConfigUpdateDTO {
                 x if x == kh_network && w.last_key() == "network" => {
                     network = Some(<NetworkUpdate as FastFromJson>::parse(w, arena)?);
                 }
-                x if x == kh_gas && w.last_key() == "confidential_gas" => {
-                    confidential_gas = Some(ConfidentialGas::parse(w, arena)?);
+                x if x == kh_confidential_gas && w.last_key() == "confidential_gas" => {
+                    return Err(NoritoError::Message(
+                        "confidential_gas is read-only and cannot be updated at runtime".into(),
+                    ));
                 }
                 x if x == kh_handshake && w.last_key() == "soranet_handshake" => {
                     soranet_handshake = Some(SoranetHandshakeUpdate::parse(w, arena)?);
@@ -2153,7 +2149,6 @@ impl<'a> FastFromJson<'a> for ConfigUpdateDTO {
             logger: logger.ok_or_else(|| NoritoError::Message("missing logger".into()))?,
             network_acl,
             network,
-            confidential_gas,
             soranet_handshake,
             transport,
             compute_pricing,
@@ -2582,8 +2577,6 @@ pub struct ConfigUpdateDTO {
     pub network_acl: Option<NetworkAcl>,
     /// Optional network update.
     pub network: Option<NetworkUpdate>,
-    /// Optional confidential gas schedule override.
-    pub confidential_gas: Option<ConfidentialGas>,
     /// Optional `SoraNet` handshake override.
     pub soranet_handshake: Option<SoranetHandshakeUpdate>,
     /// Optional transport configuration override.
@@ -3726,6 +3719,14 @@ mod test {
               }
             }"#]];
         expected.assert_eq(&actual);
+
+        let parsed: ConfigGetDTO =
+            norito::json::from_json(&actual).expect("configuration snapshot should deserialize");
+        assert_eq!(parsed.confidential_gas.proof_base, 777_777);
+        assert_eq!(parsed.confidential_gas.per_public_input, 3_333);
+        assert_eq!(parsed.confidential_gas.per_proof_byte, 42);
+        assert_eq!(parsed.confidential_gas.per_nullifier, 123);
+        assert_eq!(parsed.confidential_gas.per_commitment, 321);
     }
 
     #[test]
@@ -3741,7 +3742,6 @@ mod test {
                 require_sm_openssl_preview_match: Some(true),
                 lane_profile: None,
             }),
-            confidential_gas: None,
             soranet_handshake: Some(SoranetHandshakeUpdate {
                 descriptor_commit_hex: Some("0a0b0c0d".to_string()),
                 client_capabilities_hex: Some("010203".to_string()),
@@ -3787,6 +3787,28 @@ mod test {
         let network = parsed.network.expect("network update should roundtrip");
         assert_eq!(network.require_sm_handshake_match, Some(false));
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));
+    }
+
+    #[test]
+    fn config_update_rejects_confidential_gas_override() {
+        let err = norito::json::from_json::<ConfigUpdateDTO>(
+            r#"{
+                "logger": {"level": "INFO", "filter": null},
+                "confidential_gas": {
+                    "proof_base": 1,
+                    "per_public_input": 2,
+                    "per_proof_byte": 3,
+                    "per_nullifier": 4,
+                    "per_commitment": 5
+                }
+            }"#,
+        )
+        .expect_err("confidential gas must not be mutable at runtime");
+
+        assert!(
+            err.to_string().contains("confidential_gas is read-only"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

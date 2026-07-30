@@ -266,10 +266,10 @@ confirm which fields differ before responding to an incident.
    Manager, SRE enablement team. The module structure and assessment plan live
    in the Readiness Outline section below; facilitators must use
    `specs/sdk/android/readiness/forms/telemetry_quiz_2026-02.md`
-   (localized variants under the same directory), collect responses in
-   `specs/sdk/android/readiness/forms/responses/<stamp>.csv`, and attach
-   both the raw CSV and the scored summary to the governance packet alongside
-   the attendance log.
+   as the canonical quiz, collect responses in
+   `specs/sdk/android/readiness/forms/responses/<stamp>.csv`, and attach both
+   the raw CSV and the scored summary to the governance packet alongside the
+   attendance log.
 
 ## Rust ↔ Android Policy Delta Matrix
 
@@ -514,7 +514,7 @@ brief; keep it updated before every council meeting.
 
 ## Runbook Integration & On-Call Alignment
 
-- **Support playbooks.** `specs/android_support_playbook.md` (plus the localized copies under `specs/android_support_playbook.*.md`) now points at this policy for override scope, hashing rules, and retention. Any change to the signal table or override workflow must land in those playbooks at the same time so frontline responders and governance reviewers share a single source of truth.
+- **Support playbooks.** `specs/android_support_playbook.md` points at this policy for override scope, hashing rules, and retention. Any change to the signal table or override workflow must land in that playbook at the same time so frontline responders and governance reviewers share a single source of truth.
 - **Enablement kit linkage.** `specs/sdk/android/readiness/and7_operator_enablement.md` and `specs/sdk/android/telemetry_readiness_outline.md` embed the override CLI drills, schema-diff lab, and dashboard review material from §1–3. Update both references whenever this plan changes so presenters never rely on stale screenshots or CLI output.
 - **Override ledger threading.** Every live override appears in `specs/sdk/android/telemetry_override_log.md` and in the hashed digests under `specs/sdk/android/readiness/override_logs/`. Support engineers must cite both artefacts inside the incident ticket (hash + Markdown row) before SRE will approve the change request recorded in §2.
 - **On-call checklist.** The “Telemetry Redaction” section inside `specs/android_support_playbook.md` now mirrors the evidence matrix above: paging SRE requires a schema diff link, dashboard diff, chaos log, and override digest. Missing artefacts keep the incident in triage until the matrix is complete.

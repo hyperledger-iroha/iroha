@@ -331,6 +331,116 @@ fn norito_roundtrip_params_and_proof_bn254() {
     bn254::Polynomial::verify_open(&params2, &mut tr_v, z, commitment, t, &proof2).unwrap();
 }
 
+fn assert_checked_bare_decoder<T>(
+    bytes: &[u8],
+    decode: impl Fn(&[u8]) -> Result<T, norito::Error>,
+) {
+    let empty_error = match decode(&[]) {
+        Ok(_) => panic!("empty payload must not decode"),
+        Err(error) => error,
+    };
+    assert!(matches!(empty_error, norito::Error::LengthMismatch));
+
+    let truncated = bytes
+        .get(..bytes.len().saturating_sub(1))
+        .expect("non-empty encoded payload");
+    assert!(
+        decode(truncated).is_err(),
+        "truncated payload must not decode"
+    );
+
+    let mut trailing = bytes.to_vec();
+    trailing.push(0xA5);
+    let trailing_error = match decode(&trailing) {
+        Ok(_) => panic!("trailing payload must not decode"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        trailing_error,
+        norito::Error::LengthMismatch | norito::Error::NonCanonicalEncoding
+    ));
+
+    let align = core::mem::align_of::<norito::core::Archived<T>>();
+    if align > 1 {
+        let mut storage = vec![0_u8; bytes.len() + align];
+        let base = storage.as_ptr() as usize;
+        let offset = (0..align)
+            .find(|offset| !(base + offset).is_multiple_of(align))
+            .expect("an alignment greater than one has a misaligned offset");
+        storage[offset..offset + bytes.len()].copy_from_slice(bytes);
+        decode(&storage[offset..offset + bytes.len()])
+            .expect("misaligned payload should be realigned and decoded");
+    }
+}
+
+#[test]
+fn standalone_norito_decoders_are_bounded_exact_and_alignment_safe() {
+    let params = IpaParams {
+        version: 1,
+        curve_id: ZkCurveId::Pallas.as_u16(),
+        n: 1,
+        g: vec![[1; 32]],
+        h: vec![[2; 32]],
+        u: [3; 32],
+    };
+    assert_checked_bare_decoder(&params.encode_bytes(), IpaParams::decode_bytes);
+
+    let proof = IpaProofData {
+        version: 1,
+        l: vec![[4; 32]],
+        r: vec![[5; 32]],
+        a_final: [6; 32],
+        b_final: [7; 32],
+    };
+    assert_checked_bare_decoder(&proof.encode_bytes(), IpaProofData::decode_bytes);
+
+    let public = PolyOpenPublic {
+        version: 1,
+        curve_id: ZkCurveId::Pallas.as_u16(),
+        n: 1,
+        z: [8; 32],
+        t: [9; 32],
+        p_g: [10; 32],
+    };
+    assert_checked_bare_decoder(&public.encode_bytes(), PolyOpenPublic::decode_bytes);
+}
+
+#[test]
+fn standalone_params_decoder_rejects_forged_generator_count_before_allocation() {
+    let params = IpaParams {
+        version: 1,
+        curve_id: ZkCurveId::Pallas.as_u16(),
+        n: 1,
+        g: vec![[1; 32]],
+        h: vec![[2; 32]],
+        u: [3; 32],
+    };
+    let mut bytes = params.encode_bytes();
+    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+    let mut offset = 0;
+    for _ in 0..3 {
+        let (field_len, header_len) =
+            norito::core::read_len_dyn_slice(&bytes[offset..]).expect("fixed field frame");
+        offset += header_len + field_len;
+    }
+    let (g_len, g_header_len) =
+        norito::core::read_len_dyn_slice(&bytes[offset..]).expect("generator vector frame");
+    let g_start = offset + g_header_len;
+    assert!(g_len >= core::mem::size_of::<u64>());
+    bytes[g_start..g_start + core::mem::size_of::<u64>()].copy_from_slice(&u64::MAX.to_le_bytes());
+    drop(_flags);
+
+    let error = IpaParams::decode_bytes(&bytes)
+        .expect_err("forged generator count must be rejected before allocation");
+
+    assert!(matches!(
+        error,
+        norito::Error::SequenceLengthExceeded { .. }
+            | norito::Error::TotalElementsExceeded { .. }
+            | norito::Error::TotalAllocationExceeded { .. }
+    ));
+}
+
 #[cfg(feature = "goldilocks_backend")]
 #[test]
 fn norito_roundtrip_params_and_proof_goldilocks() {

@@ -22,6 +22,14 @@ SPEC.loader.exec_module(MODULE)
 from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
 
 
+PROVENANCE_CERTIFICATE_IDENTITY = (
+    "https://github.com/hyperledger-iroha/iroha/"
+    ".github/workflows/sorafs-cli-release.yml@refs/heads/main"
+)
+PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = "11" * 32
+
+
 def write_payload(path: Path) -> Path:
     path.write_text("{}", encoding="utf-8")
     return path
@@ -66,7 +74,9 @@ def topology_args(tmp_path: Path) -> list[str]:
 
 def complete_args(tmp_path: Path) -> list[str]:
     payload_dir = tmp_path / "payloads"
-    payload_dir.mkdir()
+    payload_dir.mkdir(parents=True, exist_ok=True)
+    source_root = tmp_path / "supply-chain-sources"
+    source_root.mkdir(exist_ok=True)
     return [
         "--out-dir",
         str(tmp_path / "evidence"),
@@ -81,6 +91,14 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--max-smoke-duration-secs",
         "1800",
         *topology_args(tmp_path),
+        "--supply-chain-source-root",
+        str(source_root),
+        "--provenance-certificate-identity",
+        PROVENANCE_CERTIFICATE_IDENTITY,
+        "--provenance-oidc-issuer",
+        PROVENANCE_OIDC_ISSUER,
+        "--provenance-verification-public-key-hex",
+        PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX,
         "--release-archive-evidence",
         str(write_payload(payload_dir / "release-archive.json")),
         "--signed-manifest-evidence",
@@ -140,6 +158,15 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert plan["external_evidence"]["supply_chain"] == [
         str(tmp_path / "payloads" / "supply-chain.json")
     ]
+    assert plan["supply_chain_source"] == {
+        "provenance_certificate_identity": PROVENANCE_CERTIFICATE_IDENTITY,
+        "provenance_oidc_issuer": PROVENANCE_OIDC_ISSUER,
+        "provenance_verification_key_fingerprint_hex": hashlib.sha256(
+            bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
+        ).hexdigest(),
+        "required": True,
+        "source_root": str(tmp_path / "supply-chain-sources"),
+    }
     assert plan["evidence_contract"]["release_archive"]["schema"] == (
         "sorafs.reference_sdk.release_archive_canary.v1"
     )
@@ -203,6 +230,18 @@ def test_dry_run_prints_complete_reference_sdk_release_plan(tmp_path: Path, caps
     assert verifier.count("--require-kind") == len(MODULE.DEFAULT_REQUIRED_KINDS)
     assert "--max-smoke-duration-secs" in verifier
     assert "--now-unix" in verifier
+    assert verifier[
+        verifier.index("--supply-chain-source-root") + 1
+    ] == str(tmp_path / "supply-chain-sources")
+    assert verifier[
+        verifier.index("--provenance-certificate-identity") + 1
+    ] == PROVENANCE_CERTIFICATE_IDENTITY
+    assert verifier[
+        verifier.index("--provenance-oidc-issuer") + 1
+    ] == PROVENANCE_OIDC_ISSUER
+    assert verifier[
+        verifier.index("--provenance-verification-public-key-hex") + 1
+    ] == PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
@@ -222,6 +261,7 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     rendered["thresholds"] = {}
     rendered["external_evidence"] = {}
     rendered["evidence_contract"] = {}
+    rendered["supply_chain_source"] = {}
     rendered["steps"] = []
 
     errors = MODULE.validate_plan_json(rendered, plan, args)
@@ -237,6 +277,15 @@ def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
     assert "reference SDK release runner plan external_evidence must match args" in diagnostics
     assert (
         "reference SDK release runner plan evidence_contract must match checker fields"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan supply_chain_source fields "
+        "must match the schema-closed contract"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan supply_chain_source must match args"
         in diagnostics
     )
     assert "runner plan steps must match command plan" in diagnostics
@@ -288,6 +337,14 @@ def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
             "schema": MODULE.KIND_BY_NAME["release_archive"].schema,
             "required_payload_fields": ["schema"],
         },
+    }
+    rendered["supply_chain_source"] = {
+        "required": "yes",
+        "source_root": "bad\npath",
+        "provenance_certificate_identity": "runtime-only-key-material",
+        "provenance_oidc_issuer": PROVENANCE_OIDC_ISSUER,
+        "provenance_verification_key_fingerprint_hex": "private_key",
+        "bad\nfield": True,
     }
 
     errors = MODULE.validate_plan_json(rendered, plan, args)
@@ -393,6 +450,25 @@ def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
     )
     assert (
         "reference SDK release runner plan evidence_contract required_payload_fields must match checker fields"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan supply_chain_source fields "
+        "must be canonical strings"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan supply_chain_source fields "
+        "must match the schema-closed contract"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan supply_chain_source.required "
+        "must be boolean"
+        in diagnostics
+    )
+    assert (
+        "reference SDK release runner plan supply_chain_source must match args"
         in diagnostics
     )
     assert "unknown_kind" not in diagnostics
@@ -529,6 +605,62 @@ def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     assert captured.out == ""
 
 
+def test_missing_supply_chain_source_inputs_fail_before_plan(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    option_diagnostics = {
+        "--supply-chain-source-root": "--supply-chain-source-root is required",
+        "--provenance-certificate-identity": (
+            "--provenance-certificate-identity is required"
+        ),
+        "--provenance-oidc-issuer": "--provenance-oidc-issuer is required",
+        "--provenance-verification-public-key-hex": (
+            "--provenance-verification-public-key-hex must be a non-zero"
+        ),
+    }
+    for option, diagnostic in option_diagnostics.items():
+        args = complete_args(tmp_path / option.removeprefix("--"))
+        option_index = args.index(option)
+        del args[option_index : option_index + 2]
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert captured.out == ""
+
+
+def test_supply_chain_source_root_must_exist_and_not_be_a_symlink(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    for case in ("missing", "symlink"):
+        case_root = tmp_path / case
+        case_root.mkdir()
+        args = complete_args(case_root)
+        source_index = args.index("--supply-chain-source-root") + 1
+        if case == "missing":
+            source_root = case_root / "missing-source-root"
+        else:
+            target = case_root / "source-target"
+            target.mkdir()
+            source_root = case_root / "source-link"
+            source_root.symlink_to(target, target_is_directory=True)
+        args[source_index] = str(source_root)
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "--supply-chain-source-root" in captured.err
+        assert (
+            "must exist and be a directory" in captured.err
+            if case == "missing"
+            else "must not be a symlink" in captured.err
+        )
+        assert captured.out == ""
+
+
 def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None:
     payload = write_payload(tmp_path / "release-archive.json")
 
@@ -551,9 +683,114 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
     plan = json.loads(capsys.readouterr().out)
     assert plan["required_kinds"] == ["release_archive"]
     assert list(plan["evidence_contract"]) == ["release_archive"]
+    assert plan["supply_chain_source"] == {
+        "provenance_certificate_identity": None,
+        "provenance_oidc_issuer": None,
+        "provenance_verification_key_fingerprint_hex": None,
+        "required": False,
+        "source_root": None,
+    }
     verifier = plan["steps"][0]["command"]
     assert verifier.count("--require-kind") == 1
     assert "release_archive" in verifier
+    assert "--supply-chain-source-root" not in verifier
+
+
+def test_subset_gate_rejects_supply_chain_source_inputs(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    payload = write_payload(tmp_path / "release-archive.json")
+    source_root = tmp_path / "supply-chain-sources"
+    source_root.mkdir()
+
+    exit_code = MODULE.main(
+        [
+            "--out-dir",
+            str(tmp_path / "evidence"),
+            *topology_args(tmp_path),
+            "--require-kind",
+            "release_archive",
+            "--release-archive-evidence",
+            str(payload),
+            "--supply-chain-source-root",
+            str(source_root),
+            "--provenance-certificate-identity",
+            PROVENANCE_CERTIFICATE_IDENTITY,
+            "--provenance-oidc-issuer",
+            PROVENANCE_OIDC_ISSUER,
+            "--provenance-verification-public-key-hex",
+            PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX,
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert (
+        "supply-chain source inputs require the `supply_chain` evidence kind"
+        in captured.err
+    )
+    assert PROVENANCE_CERTIFICATE_IDENTITY not in captured.err
+    assert PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX not in captured.err
+    assert captured.out == ""
+
+
+def test_supply_chain_verification_key_must_be_canonical_nonzero_ed25519_hex(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    invalid_values = (
+        "00" * 32,
+        "11" * 31,
+        "AA" * 32,
+        "not-hex",
+    )
+    for index, invalid in enumerate(invalid_values):
+        args = complete_args(tmp_path / f"invalid-key-{index}")
+        key_index = args.index("--provenance-verification-public-key-hex") + 1
+        args[key_index] = invalid
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert (
+            "--provenance-verification-public-key-hex must be a non-zero "
+            "raw 32-byte Ed25519 public key in lowercase hex"
+            in captured.err
+        )
+        assert invalid not in captured.err
+        assert captured.out == ""
+
+
+def test_supply_chain_provenance_identity_must_be_canonical(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    cases = (
+        (
+            "--provenance-certificate-identity",
+            "https://example.com/workflow\ninjected",
+            "argument must be a non-empty canonical string",
+        ),
+        (
+            "--provenance-oidc-issuer",
+            "https://issuer.example.com\ninjected",
+            "argument must be a non-empty canonical string",
+        ),
+    )
+    for index, (option, invalid, diagnostic) in enumerate(cases):
+        args = complete_args(tmp_path / f"invalid-url-{index}")
+        value_index = args.index(option) + 1
+        args[value_index] = invalid
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert invalid not in captured.err
+        assert "injected" not in captured.err
+        assert captured.out == ""
 
 
 def test_subset_gate_rejects_evidence_for_unrequired_kind(

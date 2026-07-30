@@ -104,8 +104,7 @@ status, or scope change.
   `connect.reconnects_total`, `connect.latency_ms`, replay counters) through the
   existing OpenTelemetry exporters.
 - **Deliverables:**
-  - Metric schemas documented in `specs/references/ios_metrics.md` (and
-    localized variants).
+  - Metric schemas documented in `specs/references/ios_metrics.md`.
   - SDK instrumentation with unit/integration test coverage.
   - Dashboard updates referencing the new metrics.
 

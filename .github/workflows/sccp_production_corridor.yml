@@ -50,7 +50,7 @@ on:
       - "javascript/iroha_js/**"
       - "kotlin/**"
       - "python/iroha_torii_client/**"
-      - "docs/portal/static/openapi/**"
+      - "artifacts/openapi/**"
       - "pytests/scripts/check_sccp_production_corridor_test.py"
       - "pytests/scripts/sccp_release_readiness_report_test.py"
       - "pytests/scripts/sccp_*"

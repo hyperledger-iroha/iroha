@@ -6,9 +6,8 @@
 
 This document scopes the documentation generation tooling required by roadmap
 item **AND3 — Norito codegen MVP**. The goal is to turn the metadata already
-produced by the Kotlin/Java codegen pipeline into deterministic reference docs
-that stay in lockstep with Rust data-model changes and can be published in the
-Docs/DevRel portal without manual editing.
+produced by the Kotlin/Java codegen pipeline into deterministic repository-local
+reference docs that stay in lockstep with Rust data-model changes.
 
 ## Objectives
 
@@ -17,8 +16,9 @@ Docs/DevRel portal without manual editing.
   within the 48-hour SLA defined for AND1/AND3.
 - **Deterministic artefacts:** Produce Markdown + Dokka bundles with embedded
   hashes and provenance notes so Release Engineering can attest to the output.
-- **Portal-ready content:** Emit Docs portal sections (EN) plus Ja/He stubs that
-  feed `docs/i18n/manifest.json` and keep localized copies in sync.
+- **Canonical source output:** Emit concise English reference material for
+  source validation. Public guides and translations belong in the sibling
+  `iroha-docs` repository.
 - **Automation hooks:** Provide `make android-codegen-docs` and a CI workflow
   so docs regenerate automatically whenever codegen manifests change.
 
@@ -47,10 +47,6 @@ Docs/DevRel portal without manual editing.
   - Dokka sourcesets wired into `java/iroha_android/build.gradle` so `./gradlew
     dokkaHtml -PcodegenDocs` produces HTML+Javadoc bundles that match the
     Markdown content.
-- The CLI supports `--locale` to emit Ja/He stubs (English text wrapped in
-  `<!-- translate -->` blocks) so `scripts/sync_docs_i18n.py` can pull in
-  the new files automatically. Example:
-  `python3 scripts/android_codegen_docs.py --manifest target-codex/.../instruction_manifest.json --builders target-codex/.../builder_index.json --out specs/sdk/android/generated --locale ja --locale he`.
 - Ownership: Docs/DevRel (0.25 eng-week) partnering with Android Data Model TL
   (0.25 eng-week for schema annotations).
 
@@ -76,7 +72,7 @@ Docs/DevRel portal without manual editing.
 |--------------|----------|----------|---------------|--------------|
 | WP1 — Metadata export hardening | Android Data Model TL | 0.5 eng-week | 2026-03-07 | Norito fixture exporter, `AND1` regeneration hooks |
 | WP2 — Doc generator CLI + Dokka wiring | Docs/DevRel + Android Data Model TL | 0.5 eng-week | 2026-03-21 | WP1 manifests, Kotlin builder annotations |
-| WP3 — Publishing workflow & CI | Docs/DevRel + Release Eng | 0.5 eng-week | 2026-04-04 | WP2 CLI, `docs/i18n` sync tooling |
+| WP3 — Publishing workflow & CI | Docs/DevRel + Release Eng | 0.5 eng-week | 2026-04-04 | WP2 CLI |
 
 Total bandwidth: **1.5 eng-weeks** (Android Data Model TL) + **0.5 eng-week**
 (Docs/DevRel) + **0.25 eng-week** (Release Eng) spread across Q2 2026 sprint
@@ -85,11 +81,10 @@ planning, matching the resource call-out in `roadmap.md`.
 ## Tooling Stack
 
 - Rust exporter (`norito_codegen_exporter`) for schema metadata.
-- Python 3.11 script for Markdown generation and locale stubs.
+- Python 3.11 script for Markdown generation.
 - Gradle/Dokka for Kotlin API docs (`dokkaHtml` + Dokka JSON for future portal
   ingestion).
-- Existing Docs linting (`scripts/check_markdown.sh`) plus `docs/i18n`
-  synchronization to keep localized placeholders fresh.
+- Existing Docs linting (`scripts/check_markdown.sh`).
 
 ## Testing & Acceptance
 
@@ -98,8 +93,8 @@ planning, matching the resource call-out in `roadmap.md`.
   files.
 - Dokka output zipped under `artifacts/android/codegen_docs/<git-sha>.zip` and
   attached to the CI run.
-- Markdown lint + link-check succeed; `docs/portal` preview picks up the new
-  content via checksum gated publish.
+- Markdown lint + link-check succeed. Public documentation changes are
+  coordinated in `iroha-docs` and published at <https://docs.iroha.tech/>.
 - Sign-off required from Android Data Model TL + Docs/DevRel Manager; once
   approved, add an entry under `status.md` → Android → AND3.
 
@@ -108,7 +103,6 @@ planning, matching the resource call-out in `roadmap.md`.
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Schema/manifest drift between Rust and Android runs | Broken builder docs or stale hashes | Tie manifest version to [`norito_instruction_changes.md`](norito_instruction_changes.md), fail CI when discriminants differ, document fallback workflow in `scripts/android_fixture_regen.sh`. |
-| Translation backlog for Ja/He copies | Docs portal shows outdated locales | Emit stub files with checksum markers so localization contractors can diff and translate asynchronously; keep stubs in git until the translated body lands and update the front-matter status accordingly. |
 | CI runtime spikes due to Dokka | Longer Android pipeline waits | Run Dokka only when manifests change (hash compare), cache Gradle outputs, and document override env vars for emergency skips. |
 | Ownership gaps once automation lands | Docs fall behind | Runbook described in this scope will be linked from `status.md`, naming Docs/DevRel as DRI with Android Data Model TL as backup. |
 
@@ -118,8 +112,8 @@ planning, matching the resource call-out in `roadmap.md`.
    `instruction_manifest.json` / `builder_index.json` with Rust data-model
    maintainers; record sample files under `target-codex/android_codegen/sample/`.
 2. **Prototype CLI (due 2026-03-14):** Implement
-   `scripts/android_codegen_docs.py` with Markdown emission + locale stub
-   support; validate against current manifests.
+   `scripts/android_codegen_docs.py` with deterministic English Markdown
+   emission; validate against current manifests.
 3. **Wire Dokka & CI (due 2026-03-28):** Add Gradle task, Makefile target, and
    GitHub Actions workflow; capture the process in README snippets plus
    `specs/sdk/android/index.md`.

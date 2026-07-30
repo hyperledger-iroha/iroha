@@ -16,7 +16,7 @@ candidate tag.
 Before executing the technical release gate, capture the latest security review
 artefacts:
 
-- Download the most recent SF-6 security review memo ([reports/sf6-security-review](./reports/sf6-security-review.md))
+- Download the most recent SF-6 security review memo ([reports/sf6-security-review](../reports/sf6_security_review.md))
   and record its SHA256 hash in the release ticket.
 - Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
   approvers from Security Engineering and the Tooling Working Group.
@@ -174,7 +174,7 @@ After the checks pass and hooks complete:
    three packaged binaries there before checksums, provenance, and signing.
 5. Upload artefacts (CAR bundles, manifests, proof summaries, release notes,
    attestation outputs) to the project registry following the governance
-   checklist in [deployment guide](./developer-deployment.md). If the release
+   checklist in [deployment guide](./deployment.md). If the release
    minted new fixtures, push them to the shared fixture repo or object store so
    audit automation can diff the published bundle against source control.
 6. Notify the governance channel with links to the signed tag, release notes,
@@ -190,7 +190,8 @@ After the checks pass and hooks complete:
 Before promotion, select and verify the previous known-good signed release and
 complete the release-notes rollback/yank record. If a candidate is stopped or a
 published release is withdrawn, follow
-[SoraFS Release Rollback and Yank](./release-rollback-yank.md). Preserve the
+[SoraFS Release Rollback and Yank](../runbooks/release_rollback_yank.md).
+Preserve the
 affected tag and evidence, restore only a checksum/provenance/signature-verified
 archive, and record a registry-confirmed result for every Cargo, npm, Python,
 C#/NuGet, JVM/Android, Swift, and GitHub artifact channel in scope.

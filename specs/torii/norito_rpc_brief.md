@@ -18,12 +18,13 @@
 | ----- | ------ | -------- | ---- |
 | Torii Platform TL | Review RFC, confirm NRPC-2 scope doc outline | 2026-03-24 | `specs/torii/norito_rpc_sync_notes.md` |
 | SDK Program Lead | Ensure SDK representatives update tracker with parity checkpoints | 2026-03-25 | `specs/torii/norito_rpc_tracker.md` |
-| Docs/DevRel | Publish developer portal overview and Try-It updates | 2026-03-25 | `docs/portal/docs/devportal/torii-rpc-overview.md` |
+| Docs/DevRel | Publish public Norito-RPC guidance from `iroha-docs` | 2026-03-25 | <https://docs.iroha.tech/> |
 
 ### Key references
 - Transport RFC: `specs/torii/norito_rpc.md`
 - Tracker: `specs/torii/norito_rpc_tracker.md`
-- Portal doc (public facing): `docs/portal/docs/devportal/torii-rpc-overview.md`
+- Public documentation: <https://docs.iroha.tech/> (source:
+  sibling `iroha-docs` repository)
 
 ### Mock Harness Contract (2026-06-18 workshop outcome)
 - **Purpose:** Provide a reusable Torii mock harness so Android AND4, Swift IOS3, and JS JS4 can share the same deterministic fixtures, retry semantics, and telemetry hooks during NRPC rollouts.

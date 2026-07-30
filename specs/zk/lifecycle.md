@@ -1,6 +1,8 @@
 # Verifying-Key & Proof Lifecycle
 
-This document captures how verifying keys (VKs) and zero-knowledge proof envelopes flow through Iroha v2. The intent is to give operators and SDK authors a single reference that ties together on-chain state, Torii app endpoints, and the CLI helpers.
+This document captures how verifying keys (VKs) and zero-knowledge proof
+envelopes flow through the first Iroha 3 release. It ties together on-chain
+state, Torii app endpoints, and the CLI helpers for operators and SDK authors.
 
 ## High-level flow
 
@@ -57,7 +59,7 @@ The JSON DTOs mirror the `iroha_data_model::proof` payloads. Embedded VK record 
   - `gas_policy_commitment`
 - Torii derives the authoritative `IvmProved` payload from deterministic execution before proving. If clients supply an optional `proved` object, Torii treats it as a strict consistency check and rejects mismatches.
 - Witness inputs are node-local execution artefacts (program body, tx context, deterministic execution trace/host effects needed to derive the commitments). Plaintext `gas_used` is not exposed by the app API.
-- Admission verifies proof bindings and backend proof validity, then deterministically replays execution by default. Replay skipping is controlled by `pipeline.ivm_proved.skip_replay` and is intended only for full-semantics execution circuits.
+- Admission verifies proof bindings and backend proof validity, then always performs deterministic ABI V1 execution replay. The active on-chain `ivm-execution-v1` verifier-key record is the sole circuit admission policy; its activation/withdrawal window and `max_proof_bytes` limit are enforced. There is no node-local enable, circuit allowlist, or replay-bypass switch.
 
 ### Query surface
 

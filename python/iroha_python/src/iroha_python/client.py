@@ -3753,6 +3753,7 @@ def _configuration_update_payload(snapshot: ConfigurationSnapshot) -> Dict[str, 
     payload = _configuration_snapshot_to_dict(snapshot)
     payload.pop("public_key", None)
     payload.pop("transport", None)
+    payload.pop("confidential_gas", None)
     return payload
 
 
@@ -15579,7 +15580,7 @@ class ToriiClient(_BaseToriiClient):
         return super().get_configuration()
 
     def get_confidential_gas_schedule(self) -> Optional[Mapping[str, int]]:
-        """Return the confidential verification gas schedule as a mapping, when available."""
+        """Return the read-only confidential gas schedule as a mapping, when available."""
 
         schedule = self.get_confidential_gas_schedule_typed()
         if schedule is None:
@@ -15587,40 +15588,10 @@ class ToriiClient(_BaseToriiClient):
         return schedule.to_payload()
 
     def get_confidential_gas_schedule_typed(self) -> Optional[ConfidentialGasSchedule]:
-        """Typed confidential verification gas schedule."""
+        """Typed read-only confidential verification gas schedule."""
 
         snapshot = self.get_configuration_typed()
         return snapshot.confidential_gas
-
-    def set_confidential_gas_schedule(
-        self,
-        *,
-        proof_base: int,
-        per_public_input: int,
-        per_proof_byte: int,
-        per_nullifier: int,
-        per_commitment: int,
-    ) -> Optional[Any]:
-        """Update the node's confidential verification gas schedule.
-
-        Torii requires the current logger configuration to be supplied alongside updates.
-        This helper fetches the latest configuration, reuses the existing ``logger`` section,
-        and posts the new ``confidential_gas`` payload.
-        """
-
-        schedule = ConfidentialGasSchedule(
-            proof_base=int(proof_base),
-            per_public_input=int(per_public_input),
-            per_proof_byte=int(per_proof_byte),
-            per_nullifier=int(per_nullifier),
-            per_commitment=int(per_commitment),
-        )
-        snapshot = self.get_configuration_typed()
-        payload = {
-            "logger": snapshot.logger.to_payload(),
-            "confidential_gas": schedule.to_payload(),
-        }
-        return self.update_configuration(payload)
 
     def set_network_gossip_config(
         self,
@@ -15632,7 +15603,7 @@ class ToriiClient(_BaseToriiClient):
     ) -> Mapping[str, Any]:
         """Update Torii gossip fan-out and interval parameters.
 
-        The helper fetches the latest configuration, preserves the existing logger/queue/gas sections,
+        The helper fetches the latest configuration, preserves the mutable logger/queue sections,
         and posts the updated `network` payload so PY6 admin-surface evidence can remain deterministic.
         """
 
@@ -15659,8 +15630,8 @@ class ToriiClient(_BaseToriiClient):
     def set_queue_capacity(self, *, capacity: int) -> Mapping[str, Any]:
         """Update the transaction queue capacity exposed by `/v1/configuration`.
 
-        The payload reuses the current logger/network/confidential gas configuration so the queue
-        change mirrors the node's existing state.
+        The payload reuses the current mutable logger/network configuration so the queue change
+        mirrors the node's existing state. Confidential gas is startup-only and is omitted.
         """
 
         snapshot = self.get_configuration_typed()
@@ -15671,7 +15642,7 @@ class ToriiClient(_BaseToriiClient):
         return self.update_configuration(payload)
 
     def update_configuration(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
-        """Update node configuration (`POST /v1/configuration`)."""
+        """Update mutable node configuration (`POST /v1/configuration`)."""
 
         return super().update_configuration(payload)
 

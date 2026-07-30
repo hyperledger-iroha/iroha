@@ -304,9 +304,9 @@ The command produces a JSON descriptor
 
 Attach the plan JSON and the header templates to the release ticket alongside
 the DNS cutover descriptor so reviewers can diff the new binding versus the
-recorded rollback state. The descriptor mirrors the `gateway_binding` block used
-by `docs/portal/scripts/sorafs-pin-release.sh`, ensuring the DNS and gateway
-automation pipelines promote identical headers.
+recorded rollback state. The property release system must consume the same
+`gateway_binding` block so the DNS and gateway automation pipelines promote
+identical headers.
 
 ## Telemetry Reference
 

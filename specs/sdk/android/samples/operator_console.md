@@ -57,7 +57,8 @@ Publish `specs/sdk/android/samples/operator_console.md` (this file) plus a walkt
 - step-by-step governance transaction creation, StrongBox enrolment, attestation upload, and queue inspection;
 - troubleshooting matrix (attestation mismatch, queue stuck, proxy failure) with references back to `android_support_playbook.md`.
 
-Localization requirements: Japanese by beta, Hebrew by GA. Track translations in `specs/sdk/android/i18n_plan.md`.
+Public walkthroughs and translations are maintained in the sibling
+`iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## 7. Decisions & KPIs
 
@@ -244,7 +245,7 @@ Follow these phases whenever you demo the console for operators or auditors.
 |---------|------------|
 | **Attestation capture fails** | Confirm the device appears as 🈴 in the [StrongBox matrix](../readiness/android_strongbox_device_matrix.md), re-run `scripts/android_keystore_attestation.sh --require-strongbox`, and document the remediation in `android_strongbox_attestation_run_log.md`. |
 | **Pipeline panel never clears** | Tail the Torii log referenced by `ANDROID_SAMPLE_TORII_LOG` and cross-check the pending queue with `iroha_cli pipeline inspect`. If retries climb above the thresholds in Section 6, roll back to the last known-good sample config and file an AND4 bug. |
-| **Dashboard parity diff fails** | Review the JSON written by `ci/check_android_dashboard_parity.sh`, compare it against the allowance file, and follow the override escalation in [android_support_playbook.md](../../../android_support_playbook.md#8-telemetry-redaction--observability-and7). |
+| **Dashboard parity diff fails** | Review the JSON written by `ci/check_android_dashboard_parity.sh`, compare it against the allowance file, and follow the public operator guidance at [docs.iroha.tech](https://docs.iroha.tech/). |
 | **Telemetry export refuses to run** | Ensure `scripts/android_sample_env.sh` was invoked without `--no-telemetry` and that the dry-run file `ANDROID_SAMPLE_TELEMETRY_LOG` exists. For live tests, pass `--telemetry-live --telemetry-cluster <cluster>` and capture the HTTP 202 receipts in the evidence bundle. |
 | **StrongBox downgrade banner** | Device lacks StrongBox or its keystore service failed. Reboot into the latest Android 14 QPR2 build, clear the alias, and regenerate keys following the [alias lifecycle guidance](../key_management.md#3-alias-lifecycle). Do not continue until the banner clears. |
 

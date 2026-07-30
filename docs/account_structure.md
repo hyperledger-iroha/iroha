@@ -235,7 +235,7 @@ decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
 fail-closed behaviour.
 
 The canonical registry (including a machine-readable JSON export) lives under
-[`specs/references/address_curve_registry.md`](source/references/address_curve_registry.md).
+[`specs/references/address_curve_registry.md`](../specs/references/address_curve_registry.md).
 Tooling SHOULD consume that dataset directly so curve identifiers remain
 consistent across SDKs and operator workflows.
 
@@ -257,7 +257,7 @@ consistent across SDKs and operator workflows.
 
 `AccountController::Multisig` serialises policies via
 `crates/iroha_data_model/src/account/controller.rs` and enforces the schema
-documented in [`specs/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+documented in [`specs/references/multisig_policy_schema.md`](../specs/references/multisig_policy_schema.md).
 Key implementation details:
 
 - Policies are normalised and validated by `MultisigPolicy::validate()` before
@@ -343,7 +343,7 @@ of truth instead of duplicating stale inline strings.
   i105 codec. Well-known discriminants use sentinels such as `sora`, `test`,
   or `dev` as part of the canonical i105 literal; there is no separate ASCII
   account-id codec. The authoritative assignments live in
-  [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
+  [`address_prefix_registry.md`](../specs/references/address_prefix_registry.md);
   SDKs MUST keep the matching JSON registry in sync to avoid collisions.
 - **Account material:** I105 encodes the canonical payload built by
   `AccountAddress::canonical_bytes()`—header byte and controller payload.
@@ -407,7 +407,7 @@ consume the same fixture to guarantee codec parity across SDKs and Torii admissi
 
 ### 3. Globally unique domains & normalization
 
-See also: [`specs/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+See also: [`specs/references/address_norm_v1.md`](../specs/references/address_norm_v1.md)
 for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
 
 Redefine `DomainId` as a tagged tuple:
@@ -433,7 +433,7 @@ expanded structure allows routing decisions.
 
 Norm v1 defines the canonical pipeline every component must use before a domain
 name is persisted or embedded into an `AccountAddress`. The full walkthrough
-lives in [`specs/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+lives in [`specs/references/address_norm_v1.md`](../specs/references/address_norm_v1.md);
 the summary below captures the steps that wallets, Torii, SDKs, and governance
 tools must implement.
 
@@ -496,7 +496,7 @@ vector suites tracked under ADDR‑2.
 
 Nexus publishes an **append-only manifest** so every domain or alias assignment
 can be audited and replayed. Operators must treat the bundle described in the
-[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+[address manifest runbook](../specs/runbooks/address_manifest_ops.md) as the
 sole source of truth: if a manifest is missing or fails validation, Torii must
 refuse to resolve the affected domain.
 
@@ -596,9 +596,9 @@ their change tickets.
 
 #### Accessibility & Safe Sharing Guidance
 
-- Implementation guidance for product surfaces is tracked live in
-  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
-  adapting these requirements to wallet or explorer UX.
+- Keep repository-local implementation requirements in this section. Public,
+  in-depth wallet and explorer UX guidance belongs in the sibling
+  `iroha-docs` repository and is published at <https://docs.iroha.tech/>.
 - **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
 - **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
 - **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
@@ -625,7 +625,7 @@ their change tickets.
   defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
   expectations on parse, and rejects `@domain` suffixes so operator pipelines
   stay on canonical address literals only.
-- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
+- **Wallet/explorer UX:** Follow the [address display guidelines](../specs/sns/address_display_guidelines.md)
   shipped with ADDR-6—keep canonical I105 as the single copy/QR payload and
   apply IME-safe input/output handling.
 - **Torii integration:** Cache Nexus manifests respecting TTL, emit

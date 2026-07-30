@@ -9,7 +9,7 @@ account address envelope. It corresponds to roadmap item **ADDR‑1b** and
 documents exactly how Torii, the data model, SDKs, and tooling normalise domain
 labels before they are encoded into an `AccountAddress`.
 
-Norm v1 applies to every place where [`Name`](../../../crates/iroha_data_model/src/name.rs)
+Norm v1 applies to every place where [`Name`](../../crates/iroha_data_model/src/name.rs)
 is parsed under a domain context:
 
 - domain registration (`RegisterDomain` / `NewDomain`);

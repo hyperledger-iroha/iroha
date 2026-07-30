@@ -1,15 +1,15 @@
 # Iroha VM + Kotodama Docs Index
 
-This index links the main design and reference documents for IVM, Kotodama, and the IVM‑first pipeline. 日本語訳は [`README.ja.md`](./README.ja.md) を参照してください。
+This index links the main design and reference documents for IVM, Kotodama, and the IVM‑first pipeline.
 
-- IVM architecture and language mapping: `../../ivm.md`
+- IVM architecture and language mapping: `../ivm.md`
 - IVM syscall ABI: `ivm_syscalls.md`
 - Generated syscall constants: `ivm_syscalls_generated.md` (run `make docs-syscalls` to refresh)
 - IVM bytecode header: `ivm_header.md`
 - Kotodama grammar and semantics: `kotodama_grammar.md`
 - Kotodama examples and syscall mappings: `kotodama_examples.md`
 - Machine-readable Kotodama V1 documentation policy: `kotodama_v1_docs.json`
-- Transaction pipeline (IVM‑first): `../../new_pipeline.md`
+- Transaction pipeline (IVM‑first): `../new_pipeline.md`
 - Torii Contracts API (manifests): `torii_contracts_api.md`
 - Universal account/UAID operations guide: `universal_accounts_guide.md`
 - JSON query envelope (CLI / tooling): `query_json.md`
@@ -17,19 +17,19 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 - Runtime ABI samples: `samples/runtime_abi_active.md`, `samples/runtime_abi_hash.md`, `samples/find_active_abi_versions.md`
 - ZK App API (attachments, prover, vote tally): `zk_app_api.md`
 - Torii ZK attachments/prover runbook: `zk/prover_runbook.md`
-- Torii ZK App API operator guide (attachments/prover; crate doc): `../../crates/iroha_torii/docs/zk_app_api.md`
-- Torii MCP API guide (agent/tool bridge; crate doc): `../../crates/iroha_torii/docs/mcp_api.md`
+- Torii ZK App API operator guide (attachments/prover; crate doc): `../crates/iroha_torii/docs/zk_app_api.md`
+- Torii MCP API guide (agent/tool bridge; crate doc): `../crates/iroha_torii/docs/mcp_api.md`
 - VK/proof lifecycle (registry, verification, telemetry): `zk/lifecycle.md`
 - Torii Operator Aids (endpoints for visibility): `references/operator_aids.md`
 - Nexus default-lane quickstart: `quickstart/default_lane.md`
 - MOCHI supervisor quickstart & architecture: `mochi/index.md`
 - JavaScript SDK guides (quickstart, configuration, publishing): `sdk/js/index.md`
 - Swift SDK parity/CI dashboards: `references/ios_metrics.md`
-- Governance: `../../gov.md`
+- Governance: `../gov.md`
 - Domain endorsements (committees, policies, validation): `domain_endorsements.md`
 - JDG attestations (offline validation tooling): `jdg_attestations.md`
 - Clarification coordination prompts: `coordination_llm_prompts.md`
-- Roadmap: `../../roadmap.md`
+- Roadmap: `../roadmap.md`
 - Docker builder image usage: `docker_build.md`
 
 Usage tips

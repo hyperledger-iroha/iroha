@@ -8,7 +8,7 @@ description: Canonical commitment schemes, proof hashes, and registry workflow f
 
 > **Status:** 🈴 Completed (NX-10)  
 > **Owners:** Cryptography WG · Privacy WG · Nexus Core WG  
-> **Related code:** [`crates/iroha_crypto/src/privacy.rs`](../../crates/iroha_crypto/src/privacy.rs)
+> **Related code:** [`crates/iroha_crypto/src/privacy.rs`](../crates/iroha_crypto/src/privacy.rs)
 
 NX-10 introduces a common commitment surface for private lanes. Every dataspace publishes a deterministic descriptor that ties its Merkle roots or zk-SNARK circuits to reproducible hashes. The global Nexus ring can therefore validate cross-lane transfers and confidentiality proofs without bespoke parsers.
 
@@ -198,4 +198,4 @@ unless a matching attachment verifies successfully, so programmable-money lanes 
 committed without the required witness. Unit coverage lives in `interlane::tests` and the lane
 compliance tests to keep the attachment path and policy guardrails stable.
 
-For immediate experimentation, see the unit tests in [`privacy.rs`](../../crates/iroha_crypto/src/privacy.rs) which demonstrate both success and failure cases for Merkle and zk-SNARK commitments.
+For immediate experimentation, see the unit tests in [`privacy.rs`](../crates/iroha_crypto/src/privacy.rs) which demonstrate both success and failure cases for Merkle and zk-SNARK commitments.

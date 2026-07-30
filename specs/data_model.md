@@ -1,6 +1,8 @@
-# Iroha v2 Data Model – Deep Dive
+# Iroha 3 Data Model – Deep Dive
 
-This document explains the structures, identifiers, traits, and protocols that form the Iroha v2 data model, as implemented in the `iroha_data_model` crate and used across the workspace. It is meant to be a precise reference you can review and propose updates to.
+This document explains the structures, identifiers, traits, and protocols that
+form the first-release Iroha 3 data model, as implemented in the
+`iroha_data_model` crate and used across the workspace.
 
 ## Scope and Foundations
 
@@ -107,7 +109,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 - `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`. `max_time_to_live_ms` defaults to one day and bounds every signature-bound transaction lifetime.
-  - `SmartContractParameters { fuel, memory, execution_depth }`.
+  - `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`. The output limits bound the aggregate queued instructions, durable writes, FastPQ entries, completed AXT states, and access artifacts retained by one IVM execution.
 - `Parameters` groups all families and a `custom: BTreeMap<CustomParameterId, CustomParameter>`.
 - Single-parameter enums: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` for diff-like updates and iteration.
 - Custom parameters: executor-defined, carried as `Json`, identified by `CustomParameterId` (a `Name`).
@@ -343,10 +345,9 @@ Migration note:
 
 - `SignedTransaction`, `SignedBlock`, and `SignedQuery` are canonical Norito-encoded structs. Each implements `iroha_version::Version` to prefix their payload with the current ABI version (currently `1`) when encoded via `EncodeVersioned`.
 
-## Review Notes / Potential Updates
+## Documentation Ownership
 
-- Query DSL: consider documenting a stable user-facing subset and examples for common filters/selectors.
-- Instruction families: expand public docs listing the built-in ISI variants exposed by `mint_burn`, `register`, `transfer`.
-
----
-If any part needs more depth (e.g., full ISI catalog, complete query registry list, or block header fields), let me know and I’ll extend those sections accordingly.
+Keep this source-adjacent data-model specification aligned with the
+implementation. The public query and instruction catalogs, examples, and
+translations are maintained in the sibling `iroha-docs` repository and
+published at <https://docs.iroha.tech/>.

@@ -19,7 +19,7 @@ evidence bundles. Follow the linked runbook sections for deep dives.
 |----------|-----|------------------|-------------------|
 | **Sev 1** – Critical outage | Bridge up ≤10 min, mitigation ≤1 h | Ledger integrity risk, Torii submission halted globally, telemetry export fully stalled | Grafana screenshots (latency/queue/deck), manifest hash, queue dump, incident log |
 | **Sev 2** – Degraded | Acknowledge ≤15 min, mitigation ≤4 h | Regional queue backlog, StrongBox regression on subset of devices, redaction alert flapping | Targeted dashboard snapshots, device profile list, PendingQueueInspector JSON |
-| **Sev 3** – Limited impact | Response next business day | Single-partner config drift, localized doc issue | Support ticket notes + config diff |
+| **Sev 3** – Limited impact | Response next business day | Single-partner config drift or documentation issue | Support ticket notes + config diff |
 
 Escalate to Release Engineering and Compliance immediately for Sev 1, and loop
 Program Lead if mitigation exceeds the SLA.
@@ -59,13 +59,11 @@ Program Lead if mitigation exceeds the SLA.
 4. **Postmortem:** For Sev 1/2, update `status.md` and ensure the Android
    support playbook (#8) references any new mitigations or SLA adjustments.
 
-## 5. Localization Guidance
+## 5. Public documentation
 
-- Strings in tables are phrased in declarative sentences to simplify JP/HE
-  localization; avoid idioms when editing this file.
-- Link targets must remain stable so translators can cross-check context.
-- When adding new scenarios, include both the script/command names and the
-  runbook section so localized versions can keep English commands verbatim.
+Keep this repository-local matrix tied to the implementation. Public
+troubleshooting guides and translations are maintained in the sibling
+`iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 Questions or edits should be filed via the Docs tracker and flagged during the
 weekly Android DX sync.

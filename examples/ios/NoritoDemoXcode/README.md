@@ -1,7 +1,7 @@
 # NoritoDemoXcode
 
 `NoritoDemoXcode` is a reference SwiftUI wallet application that demonstrates how to
-connect to an Iroha 2 Torii node, derive keys, and submit token transfers using the
+connect to an Iroha 3 Torii node, derive keys, and submit token transfers using the
 `NoritoBridge` Swift bindings. The repository now includes the full Xcode project and
 SwiftUI sources so contributors can open the demo without regenerating scaffolding.
 

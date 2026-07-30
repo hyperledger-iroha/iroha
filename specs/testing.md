@@ -1,6 +1,6 @@
 # Testing and Troubleshooting Guide
 
-This guide explains how to reproduce integration scenarios, what infrastructure needs to be online, and how to collect actionable logs. Refer back to the project-wide [status report](../../status.md) before starting so you know which components are currently green.
+This guide explains how to reproduce integration scenarios, what infrastructure needs to be online, and how to collect actionable logs. Refer back to the project-wide [status report](../status.md) before starting so you know which components are currently green.
 
 ## Reproduction Steps
 
@@ -38,7 +38,7 @@ The following services must be reachable before executing either suite:
 - **Torii HTTP API**: default `127.0.0.1:1337`. Override via `torii.address` in your config (see `specs/references/peer.template.toml`).
 - **Torii WebSocket notifications**: default `127.0.0.1:8080` for client subscriptions used by `pytests`.
 - **Telemetry exporter**: default `127.0.0.1:8180`. Integration tests expect metrics to stream here for health assertions.
-- **PostgreSQL** (when enabled): default `127.0.0.1:5432`. Ensure credentials align with the compose profile in [`defaults/docker-compose.local.yml`](../../defaults/docker-compose.local.yml).
+- **PostgreSQL** (when enabled): default `127.0.0.1:5432`. Ensure credentials align with the compose profile in [`defaults/docker-compose.local.yml`](../defaults/docker-compose.local.yml).
 
 Check the [telemetry troubleshooting guide](telemetry.md) if any endpoint is unavailable.
 
@@ -75,9 +75,9 @@ IROHA_TEST_REAL_NETWORK=1 cargo test -p iroha_core <test_name> -- --nocapture
 
 Start from a clean run directory so previous artifacts do not hide new issues. The scripts below collect logs in formats that downstream Norito tooling can consume.
 
-- Use [`scripts/analyze_telemetry.sh`](../../scripts/analyze_telemetry.sh) after test execution to aggregate node metrics into timestamped Norito JSON snapshots.
-- When investigating networking issues, run [`scripts/run_iroha_monitor_demo.py`](../../scripts/run_iroha_monitor_demo.py) to stream Torii events into `monitor_output.norito.json`.
-- Integration test logs are stored under `integration_tests/target/`; compress them with [`scripts/profile_build.sh`](../../scripts/profile_build.sh) for sharing with other teams.
+- Use [`scripts/analyze_telemetry.sh`](../scripts/analyze_telemetry.sh) after test execution to aggregate node metrics into timestamped Norito JSON snapshots.
+- When investigating networking issues, run [`scripts/run_iroha_monitor_demo.py`](../scripts/run_iroha_monitor_demo.py) to stream Torii events into `monitor_output.norito.json`.
+- Integration test logs are stored under `integration_tests/target/`; compress them with [`scripts/profile_build.sh`](../scripts/profile_build.sh) for sharing with other teams.
 - Export Python client logs alongside captured telemetry with a dry-run report before filing an issue:
   ```bash
   python3 scripts/report_red_team_failures.py \
@@ -100,4 +100,4 @@ the peer logs for analysis.
 
 ## Next Steps
 
-For release-specific checklists, see [pipeline](pipeline.md). If you uncover regressions or failures, document them in the shared [status tracker](../../status.md) and cross-reference any relevant [sumeragi troubleshooting](sumeragi.md) entries.
+For release-specific checklists, see [pipeline](pipeline.md). If you uncover regressions or failures, document them in the shared [status tracker](../status.md) and cross-reference any relevant [sumeragi troubleshooting](sumeragi.md) entries.

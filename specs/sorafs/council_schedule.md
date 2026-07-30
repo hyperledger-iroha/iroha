@@ -37,17 +37,18 @@ can subscribe to the correct artefact folders and pre-read bundles.
 
 ## Minutes Archive
 
-| Date | Minutes | Decision Highlights | Evidence Bucket |
-|------|---------|--------------------|-----------------|
-| 2025-10-29 | [`council_minutes_2025-10-29.md`](council_minutes_2025-10-29.md) | Ratified SF‑1 architecture RFC, confirmed manifest/chunker governance plumbing, and published the CI fixture enforcement evidence. | `artifacts/council_minutes/2025-10-29/` |
-| 2025-03-05 | [`council_minutes_2025-03-05.md`](council_minutes_2025-03-05.md) | Logged the priority snapshot ACK bundle, Gateway/DNS rehearsal digest, and action tracker for SF‑3/SF‑6b/SF‑9. | `artifacts/council_minutes/2025-03-05/` |
+Governance minutes are external release artifacts; no historical minute files
+are maintained in this repository.
 
 For every new meeting:
 
 1. Copy the template below to `specs/sorafs/council_minutes_<YYYY-MM-DD>.md`
-   and localize as needed (`.ar.md`, `.es.md`, etc.).
+   as the canonical implementation record.
 2. Export a PDF of the filled minutes and store it alongside the evidence bundle.
 3. Update the archive table and roadmap/status references with the new link.
+
+Public summaries and translations are maintained in the sibling `iroha-docs`
+repository and published at <https://docs.iroha.tech/>.
 
 ## Minutes Template Snippet
 
@@ -91,8 +92,8 @@ summary: Topics, evidence, and decisions for the <focus> session.
 3. **During the session:** Live-edit the minute file in this directory and
    capture attendance (names + roles). Use the template’s evidence table to
    record bundle hashes as they are read into the record.
-4. **Post-session:** Within 48 hours, merge the minute file, add localized
-   copies if required, upload the PDF, and update the archive table above.
+4. **Post-session:** Within 48 hours, merge the canonical minute file, upload
+   the PDF, and update the archive table above.
 5. **Status/roadmap updates:** Link the new minutes from `status.md` (Latest
    Updates) and annotate the relevant roadmap entries so auditors can trace the
    decision to a specific meeting.

@@ -65,7 +65,7 @@ def _manifest() -> Any:
         },
         generated_patterns=("target/**", "**/target/**"),
         all_patterns=("Cargo.toml", "fixtures/**"),
-        ignore_patterns=("docs/**",),
+        ignore_patterns=("docs/**", "specs/**"),
         lane_patterns={
             "foundation": ("codec/**",),
             "node": (),
@@ -123,7 +123,7 @@ def test_deepest_nested_package_owns_path(tmp_path: Path) -> None:
         },
         generated_patterns=("target/**", "**/target/**"),
         all_patterns=("Cargo.toml",),
-        ignore_patterns=("docs/**",),
+        ignore_patterns=("docs/**", "specs/**"),
         lane_patterns={"foundation": (), "node": (), "integration": ()},
     )
     result = rust_ci.classify_paths(

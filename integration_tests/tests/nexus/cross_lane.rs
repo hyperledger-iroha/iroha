@@ -916,8 +916,8 @@ fn build_registry(
 
 fn write_manifest(dir: &Path, alias: &str, include_privacy: bool) -> Result<()> {
     fs::create_dir_all(dir)?;
-    let alice_peer = PeerId::from(ALICE_ID.signatory().clone()).to_string();
-    let bob_peer = PeerId::from(BOB_ID.signatory().clone()).to_string();
+    let alice_peer = PeerId::from(ALICE_ID.expect_single_signatory().clone()).to_string();
+    let bob_peer = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
     let mut alice_binding = norito::json::native::Map::new();
     alice_binding.insert("validator".into(), ALICE_ID.to_string().into());
     alice_binding.insert("peer_id".into(), alice_peer.into());

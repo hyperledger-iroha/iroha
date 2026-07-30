@@ -10,8 +10,8 @@ high-priority incident classes (gateway outage, proof failure, replication lag),
 defines the chaos-drill cadence, and provides a reusable postmortem template for
 incident retrospectives.
 
-> **Portal:** This runbook is mirrored in the Docusaurus portal at
-> `docs/portal/docs/sorafs/operations-playbook.md`. Keep the two copies in sync
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## Key References
 

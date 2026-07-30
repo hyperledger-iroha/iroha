@@ -13,7 +13,7 @@ You are scheduled for the upcoming Sora Name Service training covering the
 
 **Pre-work (30 minutes)**
 1. Read `specs/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
+2. Skim the current SNS guidance at <https://docs.iroha.tech/>.
 3. Install the tooling listed in `specs/sns/training_collateral.md#13-lab-prerequisites`.
 
 **What to expect**

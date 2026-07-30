@@ -19,7 +19,7 @@ def test_hedging_plan_uses_the_current_bridge_abi() -> None:
     plan = read("specs/sorafs_hedging_plan.md")
     bridge = read("crates/connect_norito_bridge/src/lib.rs")
     header = read("crates/connect_norito_bridge/include/connect_norito_bridge.h")
-    privacy = read("crates/iroha_data_model/src/privacy.rs")
+    privacy = read("crates/iroha_data_model/src/privacy/protocol.rs")
 
     source_match = re.search(
         r"CONNECT_NORITO_BRIDGE_ABI_VERSION:\s*u32\s*=\s*"

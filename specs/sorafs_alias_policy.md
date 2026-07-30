@@ -27,7 +27,7 @@ Gateways staple two headers on every SoraFS response:
 - `Sora-Proof`: Base64-encoded Norito payload `AliasProofBundleV1`.
 
 `AliasProofBundleV1` is defined canonically in
-[`sorafs_manifest::AliasProofBundleV1`](../../crates/sorafs_manifest/src/pin_registry.rs).
+[`sorafs_manifest::AliasProofBundleV1`](../crates/sorafs_manifest/src/pin_registry.rs).
 The bundle pairs the alias binding with the registry Merkle root/height,
 generated and expiry timestamps, optional Merkle path entries, and governance
 signatures. See `AliasProofBundleV1::validate` for the invariants enforced on

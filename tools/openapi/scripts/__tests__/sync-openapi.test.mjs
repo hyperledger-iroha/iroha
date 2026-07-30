@@ -32,18 +32,18 @@ test('default repository root contains the Cargo workspace', async () => {
 
 test('parseArgs handles version, latest, and mirrors', () => {
   const options = parseArgs([
-    '--version=2025-q4',
+    '--version=candidate',
     '--latest',
     '--mirror=current',
-    '--mirror=2025-q3',
+    '--mirror=preview',
     '--allow-unsigned',
     '--require-signed',
     '--allowed-signers=operator/openapi-signers.json',
   ]);
 
-  assert.equal(options.version, '2025-q4');
+  assert.equal(options.version, 'candidate');
   assert.equal(options.latest, true);
-  assert.deepEqual(options.mirrors, ['current', '2025-q3']);
+  assert.deepEqual(options.mirrors, ['current', 'preview']);
   assert.equal(options.requireSigned, true);
   assert.equal(
     options.allowedSignersFile,
@@ -202,9 +202,9 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
 
   await syncOpenApi(
     {
-      version: '2025-q4',
+      version: 'candidate',
       latest: true,
-      mirrors: ['current', '2025-q3', '2025-q4', 'current'],
+      mirrors: ['current', 'preview', 'candidate', 'current'],
     },
     {
       repoRoot: tempRoot,
@@ -217,9 +217,9 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
     }
   );
 
-  const baseContent = await readFile(join(versionsDir, '2025-q4', 'torii.json'), 'utf8');
+  const baseContent = await readFile(join(versionsDir, 'candidate', 'torii.json'), 'utf8');
   const mirrorContent = await readFile(join(versionsDir, 'current', 'torii.json'), 'utf8');
-  const otherMirrorContent = await readFile(join(versionsDir, '2025-q3', 'torii.json'), 'utf8');
+  const otherMirrorContent = await readFile(join(versionsDir, 'preview', 'torii.json'), 'utf8');
   const latestContent = await readFile(join(outputDir, 'torii.json'), 'utf8');
 
   assert.equal(baseContent, fakeSpec);
@@ -230,11 +230,11 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
   const versionsManifest = JSON.parse(
     await readFile(join(outputDir, 'versions.json'), 'utf8')
   );
-  assert.deepEqual(versionsManifest.versions, ['2025-q3', '2025-q4', 'current']);
+  assert.deepEqual(versionsManifest.versions, ['candidate', 'current', 'preview']);
   assert.ok(versionsManifest.generatedAt, 'generatedAt timestamp recorded');
   assert.ok(Array.isArray(versionsManifest.entries), 'entries array recorded');
   const entryLabels = versionsManifest.entries.map((entry) => entry.label);
-  assert.deepEqual(entryLabels, ['latest', '2025-q3', '2025-q4', 'current']);
+  assert.deepEqual(entryLabels, ['latest', 'candidate', 'current', 'preview']);
   const latestEntry = versionsManifest.entries.find((entry) => entry.label === 'latest');
   assert.equal(latestEntry.path, 'torii.json');
   assert.equal(latestEntry.sha256.toLowerCase(), sha256.toLowerCase());
@@ -245,17 +245,17 @@ test('syncOpenApi mirrors specs into multiple version directories', async () => 
   assert.equal(latestEntry.signaturePublicKeyHex, canonicalSignature.public_key_hex);
   assert.equal(latestEntry.signatureHex, canonicalSignature.signature_hex);
 
-  await access(join(versionsDir, '2025-q4', 'torii.json'));
+  await access(join(versionsDir, 'candidate', 'torii.json'));
   await access(join(versionsDir, 'current', 'torii.json'));
-  await access(join(versionsDir, '2025-q3', 'torii.json'));
+  await access(join(versionsDir, 'preview', 'torii.json'));
 
   const versionManifest = JSON.parse(
-    await readFile(join(versionsDir, '2025-q4', 'manifest.json'), 'utf8')
+    await readFile(join(versionsDir, 'candidate', 'manifest.json'), 'utf8')
   );
   assert.equal(versionManifest.artifact.path, 'torii.json');
   assert.equal(versionManifest.artifact.sha256_hex.toLowerCase(), sha256.toLowerCase());
   assert.deepEqual(
-    await readFile(join(versionsDir, '2025-q4', 'manifest.json')),
+    await readFile(join(versionsDir, 'candidate', 'manifest.json')),
     canonicalManifestBytes,
     'version publication must copy the signed manifest byte-for-byte',
   );
@@ -270,7 +270,7 @@ test('syncOpenApi rejects unsigned publications by default', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-unsigned-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const versionDir = join(versionsDir, '2025-q4');
+  const versionDir = join(versionsDir, 'candidate');
   const existingSpec = releaseSpec('existing');
   await mkdir(versionDir, {recursive: true});
   await writeFile(join(versionDir, 'torii.json'), existingSpec, 'utf8');
@@ -279,7 +279,7 @@ test('syncOpenApi rejects unsigned publications by default', async () => {
     () =>
       syncOpenApi(
         {
-          version: '2025-q4',
+          version: 'candidate',
           latest: false,
           mirrors: [],
         },
@@ -313,7 +313,7 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
 
   await syncOpenApi(
     {
-      version: '2025-q4',
+      version: 'candidate',
       latest: true,
       mirrors: ['current'],
       requireSigned: false,
@@ -329,7 +329,7 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
     }
   );
 
-  const manifestPath = join(versionsDir, '2025-q4', 'manifest.json');
+  const manifestPath = join(versionsDir, 'candidate', 'manifest.json');
   assert.equal(await pathExists(manifestPath), true);
   const versionManifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   assert.equal(versionManifest.artifact.signature, null);
@@ -337,16 +337,16 @@ test('syncOpenApi allows unsigned manifests only when opted-in', async () => {
   const versionsManifest = JSON.parse(
     await readFile(join(outputDir, 'versions.json'), 'utf8')
   );
-  const entry = versionsManifest.entries.find((candidate) => candidate.label === '2025-q4');
+  const entry = versionsManifest.entries.find((candidate) => candidate.label === 'candidate');
   assert.equal(entry?.signed, false);
-  assert.equal(entry?.manifestPath, 'versions/2025-q4/manifest.json');
+  assert.equal(entry?.manifestPath, 'versions/candidate/manifest.json');
 });
 
 test('syncOpenApi rejects a forged signature before changing tracked snapshots', async () => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-forged-signature-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const versionDir = join(versionsDir, '2025-q4');
+  const versionDir = join(versionsDir, 'candidate');
   const existingSpec = releaseSpec('existing');
   const existingManifest = JSON.stringify({sentinel: true});
   const freshSpec = releaseSpec('fresh');
@@ -361,7 +361,7 @@ test('syncOpenApi rejects a forged signature before changing tracked snapshots',
   await assert.rejects(
     () =>
       syncOpenApi(
-        {version: '2025-q4', latest: false, mirrors: []},
+        {version: 'candidate', latest: false, mirrors: []},
         testContext(tempRoot, outputDir, versionsDir, freshSpec),
       ),
     /signature verification failed/i,
@@ -375,7 +375,7 @@ test('syncOpenApi rejects an artifact byte-count mismatch before changing tracke
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-byte-mismatch-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const versionDir = join(versionsDir, '2025-q4');
+  const versionDir = join(versionsDir, 'candidate');
   const existingSpec = releaseSpec('existing');
   const freshSpec = releaseSpec('fresh');
 
@@ -392,7 +392,7 @@ test('syncOpenApi rejects an artifact byte-count mismatch before changing tracke
   await assert.rejects(
     () =>
       syncOpenApi(
-        {version: '2025-q4', latest: false, mirrors: []},
+        {version: 'candidate', latest: false, mirrors: []},
         testContext(tempRoot, outputDir, versionsDir, freshSpec),
       ),
     /artifact\.bytes .* does not match/i,
@@ -405,7 +405,7 @@ test('syncOpenApi rejects a valid signature from an unapproved key before tracke
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-unapproved-signer-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const versionDir = join(versionsDir, '2025-q4');
+  const versionDir = join(versionsDir, 'candidate');
   const existingSpec = releaseSpec('existing');
   const freshSpec = releaseSpec('fresh');
   const manifestSignature = signatureFor(freshSpec);
@@ -419,7 +419,7 @@ test('syncOpenApi rejects a valid signature from an unapproved key before tracke
   await assert.rejects(
     () =>
       syncOpenApi(
-        {version: '2025-q4', latest: false, mirrors: []},
+        {version: 'candidate', latest: false, mirrors: []},
         testContext(tempRoot, outputDir, versionsDir, freshSpec),
       ),
     /signer is not present/i,
@@ -432,7 +432,7 @@ test('syncOpenApi rejects signed publication when no signer is provisioned', asy
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-empty-allowlist-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const versionDir = join(versionsDir, '2025-q4');
+  const versionDir = join(versionsDir, 'candidate');
   const existingSpec = releaseSpec('existing');
   const freshSpec = releaseSpec('fresh');
 
@@ -446,7 +446,7 @@ test('syncOpenApi rejects signed publication when no signer is provisioned', asy
   await assert.rejects(
     () =>
       syncOpenApi(
-        {version: '2025-q4', latest: false, mirrors: []},
+        {version: 'candidate', latest: false, mirrors: []},
         testContext(tempRoot, outputDir, versionsDir, freshSpec),
       ),
     /signer is not present/i,
@@ -470,7 +470,7 @@ test('syncOpenApi accepts an operator-provided signer allowlist override', async
   await writeAllowedSigners(operatorDir, [manifestSignature.public_key_hex]);
 
   const options = parseArgs([
-    '--version=2025-q4',
+    '--version=candidate',
     '--latest',
     '--mirror=current',
     `--allowed-signers=${operatorAllowlist}`,
@@ -481,7 +481,7 @@ test('syncOpenApi accepts an operator-provided signer allowlist override', async
   );
 
   assert.equal(
-    await readFile(join(versionsDir, '2025-q4', 'torii.json'), 'utf8'),
+    await readFile(join(versionsDir, 'candidate', 'torii.json'), 'utf8'),
     freshSpec,
   );
 });
@@ -491,7 +491,7 @@ test('syncOpenApi refuses to overwrite or mirror an existing historical version'
     const tempRoot = await mkdtemp(join(tmpdir(), `sync-openapi-immutable-${mode}-`));
     const outputDir = join(tempRoot, 'static', 'openapi');
     const versionsDir = join(outputDir, 'versions');
-    const historicalDir = join(versionsDir, '2025-q2');
+    const historicalDir = join(versionsDir, 'candidate');
     const historicalSpec = releaseSpec('historical');
     const freshSpec = releaseSpec('fresh');
     await mkdir(historicalDir, {recursive: true});
@@ -499,9 +499,9 @@ test('syncOpenApi refuses to overwrite or mirror an existing historical version'
     await writeCanonicalManifest(outputDir, freshSpec, {signature: null});
 
     const options = {
-      version: mode === 'version' ? '2025-q2' : 'current',
+      version: mode === 'version' ? 'candidate' : 'current',
       latest: true,
-      mirrors: mode === 'mirror' ? ['2025-q2'] : [],
+      mirrors: mode === 'mirror' ? ['candidate'] : [],
       requireSigned: false,
     };
     await assert.rejects(
@@ -521,7 +521,7 @@ test('syncOpenApi validates every historical entry before any tracked write', as
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const currentDir = join(versionsDir, 'current');
-  const invalidHistoricalSpec = join(versionsDir, '2025-q2', 'torii.json');
+  const invalidHistoricalSpec = join(versionsDir, 'candidate', 'torii.json');
   const oldSpec = releaseSpec('old');
   const freshSpec = releaseSpec('fresh');
 
@@ -580,7 +580,7 @@ test('syncOpenApi rejects symlinks in the artifact tree before tracked writes', 
   const tempRoot = await mkdtemp(join(tmpdir(), 'sync-openapi-symlink-tree-'));
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
-  const historicalDir = join(versionsDir, '2025-q2');
+  const historicalDir = join(versionsDir, 'candidate');
   const externalSpec = join(tempRoot, 'external-torii.json');
   const freshSpec = releaseSpec('fresh');
 
@@ -609,7 +609,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
   const outputDir = join(tempRoot, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const currentDir = join(versionsDir, 'current');
-  const historicalDir = join(versionsDir, '2025-q2');
+  const historicalDir = join(versionsDir, 'candidate');
   const spec = releaseSpec('stable');
   const historicalSpec = releaseSpec('historical');
   const generatedAt = '2025-01-01T00:00:00.123Z';
@@ -635,7 +635,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
   await writeFile(
     join(outputDir, 'versions.json'),
     JSON.stringify({
-      versions: ['2025-q2', 'current'],
+      versions: ['candidate', 'current'],
       generatedAt,
       entries: [
         {
@@ -644,7 +644,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
           ...unsignedFields, manifestPath: 'manifest.json',
         },
         {
-          label: '2025-q2', path: 'versions/2025-q2/torii.json',
+          label: 'candidate', path: 'versions/candidate/torii.json',
           bytes: Buffer.byteLength(historicalSpec), sha256: historicalSha,
           blake3: null, updatedAt: historicalUpdatedAt,
           ...unsignedFields, manifestPath: null,
@@ -692,7 +692,7 @@ test('syncOpenApi index is independent of source mtimes and preserves historical
   const parsed = JSON.parse(secondIndex);
   assert.equal(parsed.generatedAt, generatedAt);
   assert.equal(
-    parsed.entries.find((entry) => entry.label === '2025-q2')?.updatedAt,
+    parsed.entries.find((entry) => entry.label === 'candidate')?.updatedAt,
     historicalUpdatedAt,
   );
 });

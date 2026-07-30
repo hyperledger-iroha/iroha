@@ -313,7 +313,7 @@ Total references: **741** · Unique variables: **194**
 - test: crates/ivm/tests/ivm_header_doc_sync.rs:8 — `let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/ivm/tests/kotodama.rs:2535 — `let samples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../kotodama_lang/src/samples");`
 - test: crates/ivm/tests/kotodama_argument_record.rs:54 — `let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
-- test: crates/ivm/tests/norito_portal_snippets_compile.rs:25 — `let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
+- test: crates/ivm/tests/kotodama_documentation_examples.rs:23 — `let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/ivm/tests/numeric_v1_sdk_fixture.rs:16 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/ivm/tests/numeric_v1_sdk_fixture.rs:24 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/ivm/tests/pointer_types_doc_generated.rs:7 — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/pointer_abi.md");`

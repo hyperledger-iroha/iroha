@@ -204,6 +204,7 @@ ignore = [
   "kotlin/**",
   "pytests/**",
   "python/**",
+  "specs/**",
 ]
 
 # Non-package shared paths can select one or more seed lanes. Reverse

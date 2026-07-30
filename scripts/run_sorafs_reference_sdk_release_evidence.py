@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -36,6 +38,7 @@ from sorafs_response_args import (  # noqa: E402
     positive_int_arg,
 )
 from sorafs_runner_preflight import (  # noqa: E402
+    canonical_runner_plan_string,
     emit_runner_error_block,
     emit_runner_error_lines,
     emit_runner_exception,
@@ -45,6 +48,7 @@ from sorafs_runner_preflight import (  # noqa: E402
     require_runner_non_negative_int,
     require_runner_positive_int,
     validate_runner_evidence_plan,
+    validate_runner_output_dir,
     validate_runner_plan_steps,
     validate_runner_preflight,
     write_runner_plan,
@@ -62,7 +66,17 @@ PLAN_FIELDS = frozenset(
         "thresholds",
         "external_evidence",
         "evidence_contract",
+        "supply_chain_source",
         "steps",
+    }
+)
+SUPPLY_CHAIN_SOURCE_PLAN_FIELDS = frozenset(
+    {
+        "required",
+        "source_root",
+        "provenance_certificate_identity",
+        "provenance_oidc_issuer",
+        "provenance_verification_key_fingerprint_hex",
     }
 )
 PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
@@ -125,6 +139,102 @@ def evidence_paths_by_kind(args: argparse.Namespace) -> dict[str, list[Path]]:
     }
 
 
+def supply_chain_source_required(args: argparse.Namespace) -> bool:
+    """Return whether this plan must re-open the SF-11 source bundle."""
+
+    return "supply_chain" in args.required_kinds
+
+
+def provenance_verification_key_fingerprint(
+    public_key_hex: Any,
+) -> str | None:
+    """Return the trusted raw Ed25519 public-key fingerprint when canonical."""
+
+    if (
+        not isinstance(public_key_hex, str)
+        or len(public_key_hex) != 64
+        or any(character not in "0123456789abcdef" for character in public_key_hex)
+    ):
+        return None
+    public_key = bytes.fromhex(public_key_hex)
+    if not any(public_key):
+        return None
+    return hashlib.sha256(public_key).hexdigest()
+
+
+def supply_chain_source_plan(args: argparse.Namespace) -> dict[str, object]:
+    """Return the payload-free source trust configuration for the dry-run plan."""
+
+    required = supply_chain_source_required(args)
+    fingerprint = provenance_verification_key_fingerprint(
+        args.provenance_verification_public_key_hex
+    )
+    return {
+        "required": required,
+        "source_root": (
+            str(args.supply_chain_source_root)
+            if required and args.supply_chain_source_root is not None
+            else None
+        ),
+        "provenance_certificate_identity": (
+            args.provenance_certificate_identity if required else None
+        ),
+        "provenance_oidc_issuer": (
+            args.provenance_oidc_issuer if required else None
+        ),
+        "provenance_verification_key_fingerprint_hex": (
+            fingerprint if required else None
+        ),
+    }
+
+
+def validate_supply_chain_source_inputs(
+    args: argparse.Namespace,
+    errors: list[str],
+) -> None:
+    """Require source-root and provenance trust inputs exactly when SF-11 needs them."""
+
+    required = supply_chain_source_required(args)
+    configured_values = (
+        args.supply_chain_source_root,
+        args.provenance_certificate_identity,
+        args.provenance_oidc_issuer,
+        args.provenance_verification_public_key_hex,
+    )
+    if not required:
+        if any(value is not None for value in configured_values):
+            errors.append(
+                "supply-chain source inputs require the `supply_chain` evidence kind"
+            )
+        return
+
+    if args.supply_chain_source_root is None:
+        errors.append("--supply-chain-source-root is required for supply_chain")
+    else:
+        validate_runner_output_dir(
+            args.supply_chain_source_root,
+            errors,
+            label="--supply-chain-source-root",
+            require_exists=True,
+        )
+    if canonical_runner_plan_string(args.provenance_certificate_identity) is None:
+        errors.append(
+            "--provenance-certificate-identity is required and must be canonical"
+        )
+    if canonical_runner_plan_string(args.provenance_oidc_issuer) is None:
+        errors.append("--provenance-oidc-issuer is required and must be canonical")
+    if (
+        provenance_verification_key_fingerprint(
+            args.provenance_verification_public_key_hex
+        )
+        is None
+    ):
+        errors.append(
+            "--provenance-verification-public-key-hex must be a non-zero "
+            "raw 32-byte Ed25519 public key in lowercase hex"
+        )
+
+
 def validate_inputs(args: argparse.Namespace) -> list[str]:
     errors = validate_runner_preflight(
         args,
@@ -154,6 +264,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     require_runner_positive_int(args, "min_release_targets", errors)
     require_runner_positive_int(args, "min_downstream_packages", errors)
     require_runner_positive_int(args, "max_smoke_duration_secs", errors)
+    validate_supply_chain_source_inputs(args, errors)
     return errors
 
 
@@ -186,6 +297,19 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     )
     if args.now_unix is not None:
         verifier_command.extend(["--now-unix", str(args.now_unix)])
+    if supply_chain_source_required(args):
+        verifier_command.extend(
+            [
+                "--supply-chain-source-root",
+                str(args.supply_chain_source_root),
+                "--provenance-certificate-identity",
+                args.provenance_certificate_identity,
+                "--provenance-oidc-issuer",
+                args.provenance_oidc_issuer,
+                "--provenance-verification-public-key-hex",
+                args.provenance_verification_public_key_hex,
+            ]
+        )
 
     return [CommandPlan("release_evidence_gate", summary_out, verifier_command)]
 
@@ -234,6 +358,7 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "thresholds": threshold_values(args),
         "external_evidence": external_evidence(args),
         "evidence_contract": evidence_contract(args),
+        "supply_chain_source": supply_chain_source_plan(args),
         "steps": [
             {
                 "label": step.label,
@@ -252,7 +377,7 @@ def validate_plan_json(
 ) -> list[str]:
     """Validate the SF-11 collection-plan envelope before use."""
 
-    return validate_runner_evidence_plan(
+    errors = validate_runner_evidence_plan(
         rendered,
         plan,
         diagnostic_prefix="reference SDK release runner plan",
@@ -269,6 +394,35 @@ def validate_plan_json(
         evidence_contract=evidence_contract(args),
         evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
     )
+    if not isinstance(rendered, Mapping):
+        return errors
+    source = rendered.get("supply_chain_source")
+    if not isinstance(source, Mapping):
+        errors.append(
+            "reference SDK release runner plan supply_chain_source must be an object"
+        )
+        return errors
+    if any(canonical_runner_plan_string(field) is None for field in source):
+        errors.append(
+            "reference SDK release runner plan supply_chain_source fields "
+            "must be canonical strings"
+        )
+    if set(source) != SUPPLY_CHAIN_SOURCE_PLAN_FIELDS:
+        errors.append(
+            "reference SDK release runner plan supply_chain_source fields "
+            "must match the schema-closed contract"
+        )
+    if not isinstance(source.get("required"), bool):
+        errors.append(
+            "reference SDK release runner plan supply_chain_source.required "
+            "must be boolean"
+        )
+    expected = supply_chain_source_plan(args)
+    if source != expected:
+        errors.append(
+            "reference SDK release runner plan supply_chain_source must match args"
+        )
+    return errors
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -330,6 +484,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--max-smoke-duration-secs",
         type=positive_int_arg,
         default=DEFAULT_MAX_SMOKE_DURATION_SECS,
+    )
+    parser.add_argument(
+        "--supply-chain-source-root",
+        type=Path,
+        help="Root containing the exact source artifacts bound by the supply-chain canary.",
+    )
+    parser.add_argument(
+        "--provenance-certificate-identity",
+        help="Expected OIDC certificate identity for supply-chain provenance.",
+    )
+    parser.add_argument(
+        "--provenance-oidc-issuer",
+        help="Expected OIDC issuer for supply-chain provenance.",
+    )
+    parser.add_argument(
+        "--provenance-verification-public-key-hex",
+        help="Trusted raw Ed25519 key authenticating provenance verification receipts.",
     )
     parser.add_argument(
         "--dry-run",

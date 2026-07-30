@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import importlib.util
 import json
 import os
@@ -36,6 +37,9 @@ CERTIFICATE_IDENTITY = (
     ".github/workflows/sorafs-cli-release.yml@refs/tags/sorafs-cli-v1.0.0"
 )
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+VERIFICATION_KEY_FINGERPRINT = hashlib.sha256(
+    b"trusted-provenance-verification-key"
+).hexdigest()
 MappingByTarget = dict[str, Any]
 RELEASE_OPERATIONS = (
     "binary_smoke",
@@ -66,6 +70,33 @@ def file_ref(root: Path, path: Path) -> dict[str, str]:
         "artifact_path": path.relative_to(root).as_posix(),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
     }
+
+
+def receipt_test_signature(message: bytes) -> bytes:
+    return hashlib.sha512(b"test-ed25519-boundary\x00" + message).digest()
+
+
+def sign_release_rehearsal_receipt(payload: dict[str, Any]) -> None:
+    payload["signature_hex"] = "01" * 64
+    signing_bytes = MODULE.release_rehearsal_receipt_signing_bytes(payload)
+    payload["signature_hex"] = receipt_test_signature(signing_bytes).hex()
+
+
+def sign_provenance_receipt(payload: dict[str, Any]) -> None:
+    payload["signature_hex"] = "01" * 64
+    signing_bytes = MODULE.provenance_receipt_signing_bytes(payload)
+    payload["signature_hex"] = receipt_test_signature(signing_bytes).hex()
+
+
+def authenticate_test_receipt(
+    key_fingerprint: str,
+    message: bytes,
+    signature: bytes,
+) -> bool:
+    return key_fingerprint == VERIFICATION_KEY_FINGERPRINT and hmac.compare_digest(
+        signature,
+        receipt_test_signature(message),
+    )
 
 
 def common(schema: str, *, generated_at: int = GENERATED_AT) -> dict[str, Any]:
@@ -139,6 +170,10 @@ def write_source_bundle(
     vulnerability_rows: list[dict[str, Any]] = []
     provenance_rows: list[dict[str, Any]] = []
     for target in MODULE.REQUIRED_RELEASE_TARGETS:
+        release_artifact = root / f"raw/{target}.release"
+        release_artifact.parent.mkdir(parents=True, exist_ok=True)
+        release_artifact.write_bytes(f"release artifact for {target}\n".encode())
+        release_artifact_digest = file_ref(root, release_artifact)["sha256"]
         operations = {operation: "passed" for operation in RELEASE_OPERATIONS}
         operations.update(release_statuses.get(target, {}))
         release_receipt_payload = common(
@@ -147,9 +182,16 @@ def write_source_bundle(
         release_receipt_payload.update(
             {
                 "target": target,
+                "subject_sha256": release_artifact_digest,
                 "operations": operations,
+                "verification_key_fingerprint_hex": (
+                    VERIFICATION_KEY_FINGERPRINT
+                ),
+                "signature_algorithm": "ed25519",
+                "signature_hex": "01" * 64,
             }
         )
+        sign_release_rehearsal_receipt(release_receipt_payload)
         release_receipt = write_json(
             root / f"receipts/{target}.release.json",
             release_receipt_payload,
@@ -157,6 +199,7 @@ def write_source_bundle(
         release_rows.append(
             {
                 "target": target,
+                "release_artifact": file_ref(root, release_artifact),
                 "receipt": file_ref(root, release_receipt),
             }
         )
@@ -191,6 +234,16 @@ def write_source_bundle(
             root / f"raw/{target}.sigstore.json",
             {"bundle": "cosign", "target": target},
         )
+        sha256sums = root / f"raw/{target}/SHA256SUMS"
+        sha256sums.parent.mkdir(parents=True, exist_ok=True)
+        sha256sums.write_text(
+            f"{release_artifact_digest}  {target}.release\n",
+            encoding="utf-8",
+        )
+        sha256sums_cosign = write_json(
+            root / f"raw/{target}/SHA256SUMS.sigstore.json",
+            {"bundle": "sha256sums-cosign", "target": target},
+        )
         statuses = {
             "oidc_identity_status": "verified",
             "cosign_provenance_status": "verified",
@@ -204,14 +257,23 @@ def write_source_bundle(
                 "target": target,
                 "certificate_identity": CERTIFICATE_IDENTITY,
                 "oidc_issuer": OIDC_ISSUER,
-                "subject_sha256": hashlib.sha256(
-                    f"subject:{target}".encode()
-                ).hexdigest(),
+                "verification_key_fingerprint_hex": (
+                    VERIFICATION_KEY_FINGERPRINT
+                ),
+                "subject_sha256": release_artifact_digest,
                 "attestation_bundle_sha256": file_ref(root, attestation)["sha256"],
                 "cosign_bundle_sha256": file_ref(root, cosign)["sha256"],
+                "sha256sums_sha256": file_ref(root, sha256sums)["sha256"],
+                "sha256sums_cosign_bundle_sha256": file_ref(
+                    root,
+                    sha256sums_cosign,
+                )["sha256"],
+                "signature_algorithm": "ed25519",
+                "signature_hex": "01" * 64,
                 **statuses,
             }
         )
+        sign_provenance_receipt(provenance_receipt_payload)
         provenance_receipt = write_json(
             root / f"receipts/{target}.provenance.json",
             provenance_receipt_payload,
@@ -221,6 +283,11 @@ def write_source_bundle(
                 "target": target,
                 "attestation_bundle": file_ref(root, attestation),
                 "cosign_bundle": file_ref(root, cosign),
+                "sha256sums": file_ref(root, sha256sums),
+                "sha256sums_cosign_bundle": file_ref(
+                    root,
+                    sha256sums_cosign,
+                ),
                 "verification_receipt": file_ref(root, provenance_receipt),
             }
         )
@@ -246,6 +313,7 @@ def write_source_bundle(
         {
             "certificate_identity": CERTIFICATE_IDENTITY,
             "oidc_issuer": OIDC_ISSUER,
+            "verification_key_fingerprint_hex": VERIFICATION_KEY_FINGERPRINT,
             "targets": provenance_rows,
         }
     )
@@ -274,6 +342,10 @@ def validate(root: Path, **overrides: Any):
         "expected_environment": ENVIRONMENT,
         "expected_release_manifest_digest_hex": MANIFEST_DIGEST,
         "expected_certificate_identity": CERTIFICATE_IDENTITY,
+        "expected_verification_key_fingerprint_hex": (
+            VERIFICATION_KEY_FINGERPRINT
+        ),
+        "verification_receipt_authenticator": authenticate_test_receipt,
         "expected_oidc_issuer": OIDC_ISSUER,
         "now_unix": NOW_UNIX,
     }
@@ -339,6 +411,20 @@ def test_valid_bundle_derives_deterministic_canary_fields(tmp_path: Path) -> Non
     assert result.canary_fields()["source_artifacts"] == result.to_dict()[
         "source_artifacts"
     ]
+
+
+def test_result_timestamp_is_oldest_validated_constituent(tmp_path: Path) -> None:
+    paths = write_source_bundle(tmp_path)
+    oldest = GENERATED_AT - 300
+    payload = read_json(paths["sbom_index"])
+    payload["generated_at_unix"] = oldest
+    write_json(paths["sbom_index"], payload)
+
+    result, errors = validate(tmp_path)
+
+    assert errors == []
+    assert result is not None
+    assert result.generated_at_unix == oldest
 
 
 def test_vulnerability_counts_are_derived_from_opened_sarif(tmp_path: Path) -> None:
@@ -594,6 +680,22 @@ def test_rejects_symlinked_indexed_file(tmp_path: Path) -> None:
     assert any("must not contain symlinks" in error for error in errors)
 
 
+def test_rejects_symlinked_intermediate_directory(tmp_path: Path) -> None:
+    write_source_bundle(tmp_path)
+    raw = tmp_path / "raw"
+    actual_raw = tmp_path / "actual-raw"
+    raw.replace(actual_raw)
+    try:
+        os.symlink(actual_raw, raw)
+    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
+        pytest.skip("symlinks unavailable")
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any("must not contain symlinks" in error for error in errors)
+
+
 def test_rejects_symlinked_source_root(tmp_path: Path) -> None:
     real_root = tmp_path / "real"
     write_source_bundle(real_root)
@@ -609,11 +711,83 @@ def test_rejects_symlinked_source_root(tmp_path: Path) -> None:
     assert errors == ["supply-chain source root must not be a symlink"]
 
 
+def test_fails_closed_without_descriptor_relative_file_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_source_bundle(tmp_path)
+    monkeypatch.setattr(MODULE.os, "supports_dir_fd", frozenset())
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert errors == [
+        "supply-chain validation requires descriptor-relative file access"
+    ]
+
+
+def test_rejects_same_size_mutation_during_file_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    source = paths["release_rehearsal"]
+    source.write_text(
+        source.read_text(encoding="utf-8") + " " * 70_000,
+        encoding="utf-8",
+    )
+    real_read = os.read
+    mutated = False
+
+    def read_then_mutate(descriptor: int, amount: int) -> bytes:
+        nonlocal mutated
+        chunk = real_read(descriptor, amount)
+        if chunk and not mutated:
+            with source.open("r+b", buffering=0) as handle:
+                handle.seek(-1, os.SEEK_END)
+                handle.write(b"\t")
+            mutated = True
+        return chunk
+
+    monkeypatch.setattr(MODULE.os, "read", read_then_mutate)
+
+    result, errors = validate(tmp_path)
+
+    assert mutated is True
+    assert result is None
+    assert any("changed while it was being read" in error for error in errors)
+
+
 def test_rejects_duplicate_indexed_file_identity(tmp_path: Path) -> None:
     paths = write_source_bundle(tmp_path)
     payload = read_json(paths["sbom_index"])
     payload["targets"][1]["platform_sbom"] = payload["targets"][0]["platform_sbom"]
     write_json(paths["sbom_index"], payload)
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any("must not duplicate another source file" in error for error in errors)
+
+
+def test_rejects_hard_linked_indexed_files(tmp_path: Path) -> None:
+    paths = write_source_bundle(tmp_path)
+    first_target, second_target = MODULE.REQUIRED_RELEASE_TARGETS[:2]
+    first = tmp_path / f"raw/{first_target}.spdx.json"
+    second = tmp_path / f"raw/{second_target}.spdx.json"
+    second.unlink()
+    try:
+        os.link(first, second)
+    except (OSError, NotImplementedError):  # pragma: no cover - platform policy
+        pytest.skip("hard links unavailable")
+    update_reference(
+        tmp_path,
+        paths["sbom_index"],
+        "targets",
+        second,
+        row=1,
+        field="platform_sbom",
+    )
 
     result, errors = validate(tmp_path)
 
@@ -669,6 +843,32 @@ def test_rejects_sarif_finding_without_explicit_severity(tmp_path: Path) -> None
     assert any("must carry an explicit severity" in error for error in errors)
 
 
+def test_rejects_oversized_integer_sarif_severity_without_crashing(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    report = tmp_path / f"raw/{target}-vulnerabilities.sarif"
+    payload = sarif(("high",))
+    payload["runs"][0]["tool"]["driver"]["rules"][0]["properties"][
+        "security-severity"
+    ] = 10**1_000
+    write_json(report, payload)
+    update_reference(
+        tmp_path,
+        paths["vulnerability_report"],
+        "targets",
+        report,
+        row=0,
+        field="platform_report",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any("must carry a recognized severity" in error for error in errors)
+
+
 def test_rejects_untrusted_provenance_identity_and_issuer(tmp_path: Path) -> None:
     write_source_bundle(tmp_path)
 
@@ -682,6 +882,289 @@ def test_rejects_untrusted_provenance_identity_and_issuer(tmp_path: Path) -> Non
     diagnostics = "\n".join(errors)
     assert "must match the trusted identity" in diagnostics
     assert "must match the trusted issuer" in diagnostics
+
+
+def test_rejects_release_receipt_subject_not_bound_to_indexed_artifact(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.release.json"
+    payload = read_json(receipt)
+    payload["subject_sha256"] = hashlib.sha256(b"different release").hexdigest()
+    write_json(receipt, payload)
+    update_reference(
+        tmp_path,
+        paths["release_rehearsal"],
+        "targets",
+        receipt,
+        row=0,
+        field="receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "subject_sha256 must match the indexed release artifact" in error
+        for error in errors
+    )
+
+
+def test_receipt_signing_domains_are_distinct_and_schema_closed(
+    tmp_path: Path,
+) -> None:
+    write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    release_receipt = read_json(
+        tmp_path / f"receipts/{target}.release.json"
+    )
+    provenance_receipt = read_json(
+        tmp_path / f"receipts/{target}.provenance.json"
+    )
+
+    release_signing_bytes = MODULE.release_rehearsal_receipt_signing_bytes(
+        release_receipt
+    )
+    provenance_signing_bytes = MODULE.provenance_receipt_signing_bytes(
+        provenance_receipt
+    )
+
+    assert release_signing_bytes != provenance_signing_bytes
+    assert authenticate_test_receipt(
+        release_receipt["verification_key_fingerprint_hex"],
+        release_signing_bytes,
+        bytes.fromhex(release_receipt["signature_hex"]),
+    )
+    assert authenticate_test_receipt(
+        provenance_receipt["verification_key_fingerprint_hex"],
+        provenance_signing_bytes,
+        bytes.fromhex(provenance_receipt["signature_hex"]),
+    )
+    with pytest.raises(ValueError, match="wrong exact schema"):
+        MODULE.release_rehearsal_receipt_signing_bytes(provenance_receipt)
+    with pytest.raises(ValueError, match="wrong exact schema"):
+        MODULE.provenance_receipt_signing_bytes(release_receipt)
+
+
+@pytest.mark.parametrize(
+    ("missing_field", "diagnostic"),
+    (
+        (
+            "verification_key_fingerprint_hex",
+            "verification_key_fingerprint_hex must be non-zero lowercase SHA-256",
+        ),
+        (
+            "signature_algorithm",
+            "signature_algorithm must be `ed25519`",
+        ),
+        (
+            "signature_hex",
+            "signature_hex must be a non-zero lowercase Ed25519 signature",
+        ),
+    ),
+)
+def test_rejects_unsigned_or_incomplete_release_rehearsal_receipt(
+    tmp_path: Path,
+    missing_field: str,
+    diagnostic: str,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.release.json"
+    payload = read_json(receipt)
+    payload.pop(missing_field)
+    write_json(receipt, payload)
+    update_reference(
+        tmp_path,
+        paths["release_rehearsal"],
+        "targets",
+        receipt,
+        row=0,
+        field="receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    diagnostics = "\n".join(errors)
+    assert "fields must match the schema-closed contract" in diagnostics
+    assert diagnostic in diagnostics
+
+
+def test_rejects_tampered_release_rehearsal_signature(tmp_path: Path) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.release.json"
+    payload = read_json(receipt)
+    payload["signature_hex"] = "ab" * 64
+    write_json(receipt, payload)
+    update_reference(
+        tmp_path,
+        paths["release_rehearsal"],
+        "targets",
+        receipt,
+        row=0,
+        field="receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "signature must authenticate with the trusted verifier" in error
+        for error in errors
+    )
+
+
+def test_rejects_substituted_release_rehearsal_signature(tmp_path: Path) -> None:
+    paths = write_source_bundle(tmp_path)
+    first_target, second_target = MODULE.REQUIRED_RELEASE_TARGETS[:2]
+    first_receipt = tmp_path / f"receipts/{first_target}.release.json"
+    second_receipt = tmp_path / f"receipts/{second_target}.release.json"
+    first_payload = read_json(first_receipt)
+    first_payload["signature_hex"] = read_json(second_receipt)["signature_hex"]
+    write_json(first_receipt, first_payload)
+    update_reference(
+        tmp_path,
+        paths["release_rehearsal"],
+        "targets",
+        first_receipt,
+        row=0,
+        field="receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "signature must authenticate with the trusted verifier" in error
+        for error in errors
+    )
+
+
+def test_rejects_cross_type_receipt_signature_substitution(tmp_path: Path) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    release_receipt = tmp_path / f"receipts/{target}.release.json"
+    provenance_receipt = tmp_path / f"receipts/{target}.provenance.json"
+    release_payload = read_json(release_receipt)
+    release_payload["signature_hex"] = read_json(provenance_receipt)[
+        "signature_hex"
+    ]
+    write_json(release_receipt, release_payload)
+    update_reference(
+        tmp_path,
+        paths["release_rehearsal"],
+        "targets",
+        release_receipt,
+        row=0,
+        field="receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "signature must authenticate with the trusted verifier" in error
+        for error in errors
+    )
+
+
+def test_rejects_release_rehearsal_signature_from_substituted_key(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.release.json"
+    payload = read_json(receipt)
+    payload["verification_key_fingerprint_hex"] = hashlib.sha256(
+        b"substituted-release-rehearsal-key"
+    ).hexdigest()
+    sign_release_rehearsal_receipt(payload)
+    write_json(receipt, payload)
+    update_reference(
+        tmp_path,
+        paths["release_rehearsal"],
+        "targets",
+        receipt,
+        row=0,
+        field="receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "verification_key_fingerprint_hex must match the trusted verifier"
+        in error
+        for error in errors
+    )
+
+
+def test_rejects_signed_provenance_subject_for_another_artifact(
+    tmp_path: Path,
+) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.provenance.json"
+    payload = read_json(receipt)
+    payload["subject_sha256"] = hashlib.sha256(b"different release").hexdigest()
+    sign_provenance_receipt(payload)
+    write_json(receipt, payload)
+    update_reference(
+        tmp_path,
+        paths["provenance_bundle"],
+        "targets",
+        receipt,
+        row=0,
+        field="verification_receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "subject_sha256 must match the indexed release artifact" in error
+        for error in errors
+    )
+
+
+def test_rejects_forged_provenance_verification_receipt(tmp_path: Path) -> None:
+    paths = write_source_bundle(tmp_path)
+    target = MODULE.REQUIRED_RELEASE_TARGETS[0]
+    receipt = tmp_path / f"receipts/{target}.provenance.json"
+    payload = read_json(receipt)
+    payload["signature_hex"] = "ab" * 64
+    write_json(receipt, payload)
+    update_reference(
+        tmp_path,
+        paths["provenance_bundle"],
+        "targets",
+        receipt,
+        row=0,
+        field="verification_receipt",
+    )
+
+    result, errors = validate(tmp_path)
+
+    assert result is None
+    assert any(
+        "signature must authenticate with the trusted verifier" in error
+        for error in errors
+    )
+
+
+def test_rejects_missing_provenance_authenticator(tmp_path: Path) -> None:
+    write_source_bundle(tmp_path)
+
+    result, errors = validate(
+        tmp_path,
+        verification_receipt_authenticator=None,
+    )
+
+    assert result is None
+    assert errors == ["verification receipt authenticator must be callable"]
 
 
 def test_rejects_provenance_receipt_not_bound_to_opened_bundle(
@@ -738,6 +1221,7 @@ def test_rejects_non_scalar_provenance_status(tmp_path: Path) -> None:
     )
     payload = read_json(receipt)
     payload["oidc_identity_status"] = {"status": "verified"}
+    sign_provenance_receipt(payload)
     write_json(receipt, payload)
     update_reference(
         tmp_path,

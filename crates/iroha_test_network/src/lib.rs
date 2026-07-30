@@ -9022,7 +9022,7 @@ impl NetworkPeer {
                     .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
-                        account_id.signatory().to_string(),
+                        account_id.expect_single_signatory().to_string(),
                     )
                     .write(
                         ["account", "private_key"],

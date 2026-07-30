@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = (
     Path(__file__).resolve().parents[1] / "check_sorafs_reference_sdk_release_evidence.py"
@@ -21,6 +23,11 @@ assert SPEC and SPEC.loader  # pragma: no cover - defensive
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+from sorafs_reference_sdk_supply_chain import (  # noqa: E402
+    SourceArtifactBinding,
+    SupplyChainSourceResult,
+    SupplyChainTargetResult,
+)
 from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
 
 
@@ -30,6 +37,30 @@ DEPLOYMENT_ID = "reference-sdk-release-2026-06"
 ENVIRONMENT = "production"
 DIGEST = "12" * 32
 DIGEST_2 = "34" * 32
+PROVENANCE_CERTIFICATE_IDENTITY = (
+    "https://github.com/hyperledger-iroha/iroha/.github/workflows/"
+    "sorafs-cli-release.yml@refs/heads/main"
+)
+PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = (
+    "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325"
+    "af021a68f707511a"
+)
+PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX = hashlib.sha256(
+    bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
+).hexdigest()
+SOURCE_ARTIFACT_PATHS = {
+    "release_rehearsal": "release-rehearsal.json",
+    "sbom_index": "sbom-index.json",
+    "vulnerability_report": "vulnerability-report.json",
+    "provenance_bundle": "provenance-bundle.json",
+}
+SOURCE_ARTIFACT_DIGESTS = {
+    "release_rehearsal": "56" * 32,
+    "sbom_index": "78" * 32,
+    "vulnerability_report": "9a" * 32,
+    "provenance_bundle": "bc" * 32,
+}
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -140,10 +171,29 @@ def supply_chain(
                 }
                 for target in targets
             ],
+            "source_artifacts": [
+                {
+                    "kind": kind,
+                    "artifact_path": SOURCE_ARTIFACT_PATHS[kind],
+                    "sha256": SOURCE_ARTIFACT_DIGESTS[kind],
+                }
+                for kind in MODULE.SOURCE_ARTIFACT_KINDS
+            ],
             "release_manifest_digest_hex": DIGEST,
-            "sbom_index_digest_hex": DIGEST,
-            "vulnerability_report_digest_hex": DIGEST,
-            "provenance_bundle_digest_hex": DIGEST,
+            "sbom_index_digest_hex": SOURCE_ARTIFACT_DIGESTS["sbom_index"],
+            "vulnerability_report_digest_hex": SOURCE_ARTIFACT_DIGESTS[
+                "vulnerability_report"
+            ],
+            "provenance_bundle_digest_hex": SOURCE_ARTIFACT_DIGESTS[
+                "provenance_bundle"
+            ],
+            "provenance_certificate_identity": (
+                PROVENANCE_CERTIFICATE_IDENTITY
+            ),
+            "provenance_oidc_issuer": PROVENANCE_OIDC_ISSUER,
+            "provenance_verification_key_fingerprint_hex": (
+                PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX
+            ),
             "raw_sboms_included": False,
             "raw_vulnerability_reports_included": False,
             "raw_provenance_included": False,
@@ -246,6 +296,92 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+def source_validation_result(
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    environment: str = ENVIRONMENT,
+    release_manifest_digest_hex: str = DIGEST,
+    release_rehearsal_path: str = SOURCE_ARTIFACT_PATHS["release_rehearsal"],
+    sbom_index_path: str = SOURCE_ARTIFACT_PATHS["sbom_index"],
+    vulnerability_report_path: str = SOURCE_ARTIFACT_PATHS[
+        "vulnerability_report"
+    ],
+    provenance_bundle_path: str = SOURCE_ARTIFACT_PATHS["provenance_bundle"],
+) -> SupplyChainSourceResult:
+    """Return the checker layer's deterministic source-validator result."""
+
+    canonical_payload = supply_chain()
+    paths = {
+        "release_rehearsal": release_rehearsal_path,
+        "sbom_index": sbom_index_path,
+        "vulnerability_report": vulnerability_report_path,
+        "provenance_bundle": provenance_bundle_path,
+    }
+    return SupplyChainSourceResult(
+        generated_at_unix=GENERATED_AT,
+        deployment_id=deployment_id,
+        environment=environment,
+        release_manifest_digest_hex=release_manifest_digest_hex,
+        source_artifacts=tuple(
+            SourceArtifactBinding(
+                kind,
+                paths[kind],
+                SOURCE_ARTIFACT_DIGESTS[kind],
+            )
+            for kind in MODULE.SOURCE_ARTIFACT_KINDS
+        ),
+        target_results=tuple(
+            SupplyChainTargetResult(**target_result)
+            for target_result in canonical_payload["target_results"]
+        ),
+        sbom_index_digest_hex=SOURCE_ARTIFACT_DIGESTS["sbom_index"],
+        vulnerability_report_digest_hex=SOURCE_ARTIFACT_DIGESTS[
+            "vulnerability_report"
+        ],
+        provenance_bundle_digest_hex=SOURCE_ARTIFACT_DIGESTS[
+            "provenance_bundle"
+        ],
+    )
+
+
+def deterministic_supply_chain_source_validation_stub(
+    _source_root: Path,
+    **kwargs,
+) -> tuple[SupplyChainSourceResult, list[str]]:
+    """Return deterministic source validation without requiring pytest fixtures."""
+
+    assert (
+        kwargs["expected_verification_key_fingerprint_hex"]
+        == PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX
+    )
+    assert callable(kwargs["verification_receipt_authenticator"])
+    return (
+        source_validation_result(
+            deployment_id=kwargs["expected_deployment_id"],
+            environment=kwargs["expected_environment"],
+            release_manifest_digest_hex=(
+                kwargs["expected_release_manifest_digest_hex"]
+            ),
+            release_rehearsal_path=kwargs["release_rehearsal_path"],
+            sbom_index_path=kwargs["sbom_index_path"],
+            vulnerability_report_path=kwargs["vulnerability_report_path"],
+            provenance_bundle_path=kwargs["provenance_bundle_path"],
+        ),
+        [],
+    )
+
+
+@pytest.fixture(autouse=True)
+def deterministic_supply_chain_source_validation(monkeypatch) -> None:
+    """Keep checker-layer tests independent from the validator's E2E corpus."""
+
+    monkeypatch.setattr(
+        MODULE,
+        "validate_supply_chain_sources",
+        deterministic_supply_chain_source_validation_stub,
+    )
+
+
 RELEASE_MANIFEST_BOUND_FIXTURES = (
     ("release_archive", "release-archive.json", release_archive),
     ("supply_chain", "supply-chain.json", supply_chain),
@@ -300,6 +436,33 @@ def write_topology_qualification(
     return path
 
 
+def supply_chain_cli_args(
+    root: Path,
+    *,
+    omit: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Return the checker trust/source arguments, minus selected flags."""
+
+    options = (
+        ("--supply-chain-source-root", str(root)),
+        (
+            "--provenance-certificate-identity",
+            PROVENANCE_CERTIFICATE_IDENTITY,
+        ),
+        ("--provenance-oidc-issuer", PROVENANCE_OIDC_ISSUER),
+        (
+            "--provenance-verification-public-key-hex",
+            PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX,
+        ),
+    )
+    return [
+        argument
+        for option, value in options
+        if option not in omit
+        for argument in (option, value)
+    ]
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(
         [
@@ -309,6 +472,28 @@ def run_gate(root: Path, *extra: str) -> int:
             str(NOW_UNIX),
             "--topology-qualification-summary",
             str(write_topology_qualification(root)),
+            *supply_chain_cli_args(root),
+            *extra,
+        ]
+    )
+
+
+def run_gate_omitting_supply_chain_args(
+    root: Path,
+    omitted: frozenset[str],
+    *extra: str,
+) -> int:
+    """Run the checker without selected source/trust arguments."""
+
+    return MODULE.main(
+        [
+            "--evidence-dir",
+            str(root),
+            "--now-unix",
+            str(NOW_UNIX),
+            "--topology-qualification-summary",
+            str(write_topology_qualification(root)),
+            *supply_chain_cli_args(root, omit=omitted),
             *extra,
         ]
     )
@@ -327,18 +512,46 @@ def test_complete_release_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_ffi_contract_digests"] == [DIGEST]
     assert payload["valid_header_digests"] == [DIGEST]
     assert payload["valid_package_index_digests"] == [DIGEST]
-    assert payload["valid_provenance_bundle_digests"] == [DIGEST]
+    assert payload["valid_provenance_bundle_digests"] == [
+        SOURCE_ARTIFACT_DIGESTS["provenance_bundle"]
+    ]
     assert payload["valid_release_manifest_digests"] == [DIGEST]
     assert payload["valid_release_manifest_reference_digests"] == [DIGEST]
     assert payload["valid_release_key_fingerprints"] == [DIGEST]
-    assert payload["valid_sbom_index_digests"] == [DIGEST]
+    assert payload["valid_sbom_index_digests"] == [
+        SOURCE_ARTIFACT_DIGESTS["sbom_index"]
+    ]
     assert payload["signature_algorithms"] == ["ed25519"]
     signed_manifest_artifact = payload["required"]["signed_manifest"]["artifacts"][0]
     assert signed_manifest_artifact["fingerprint"]["signature_algorithm"] == "ed25519"
+    supply_chain_artifact = payload["required"]["supply_chain"]["artifacts"][0]
+    assert supply_chain_artifact["fingerprint"]["source_artifacts"] == supply_chain()[
+        "source_artifacts"
+    ]
+    source_digests = [
+        artifact["sha256"]
+        for artifact in supply_chain_artifact["fingerprint"]["source_artifacts"]
+    ]
+    assert len(source_digests) == len(set(source_digests)) == 4
+    assert supply_chain_artifact["fingerprint"][
+        "provenance_certificate_identity"
+    ] == PROVENANCE_CERTIFICATE_IDENTITY
+    assert (
+        supply_chain_artifact["fingerprint"]["provenance_oidc_issuer"]
+        == PROVENANCE_OIDC_ISSUER
+    )
+    assert (
+        supply_chain_artifact["fingerprint"][
+            "provenance_verification_key_fingerprint_hex"
+        ]
+        == PROVENANCE_VERIFICATION_KEY_FINGERPRINT_HEX
+    )
     governance_artifact = payload["required"]["governance_approval"]["artifacts"][0]
     assert governance_artifact["fingerprint"]["public_key_fingerprint_hex"] == DIGEST
     assert payload["valid_smoke_output_digests"] == [DIGEST]
-    assert payload["valid_vulnerability_report_digests"] == [DIGEST]
+    assert payload["valid_vulnerability_report_digests"] == [
+        SOURCE_ARTIFACT_DIGESTS["vulnerability_report"]
+    ]
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["required"]["release_archive"]["valid"] is True
 
@@ -362,6 +575,7 @@ def test_release_lane_rejects_mismatched_topology_context(tmp_path: Path) -> Non
                 str(summary),
                 "--topology-qualification-summary",
                 str(topology),
+                *supply_chain_cli_args(tmp_path),
             ]
         )
         == 1
@@ -545,6 +759,12 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
             f"--evidence-dir {tmp_path}\n"
             f"--now-unix {NOW_UNIX}\n"
             f"--topology-qualification-summary {topology}\n"
+            f"--supply-chain-source-root {tmp_path}\n"
+            "--provenance-certificate-identity "
+            f"{PROVENANCE_CERTIFICATE_IDENTITY}\n"
+            f"--provenance-oidc-issuer {PROVENANCE_OIDC_ISSUER}\n"
+            "--provenance-verification-public-key-hex "
+            f"{PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX}\n"
         ),
         encoding="utf-8",
     )
@@ -673,6 +893,213 @@ def test_supply_chain_rejects_high_vulnerabilities(tmp_path: Path) -> None:
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["supply_chain"]["artifacts"][0]
     assert "high_vulnerability_count must be zero" in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("omitted_option", "expected_error"),
+    (
+        (
+            "--supply-chain-source-root",
+            "supply_chain validation requires --supply-chain-source-root",
+        ),
+        (
+            "--provenance-certificate-identity",
+            "supply_chain validation requires "
+            "--provenance-certificate-identity",
+        ),
+        (
+            "--provenance-oidc-issuer",
+            "supply_chain validation requires --provenance-oidc-issuer",
+        ),
+        (
+            "--provenance-verification-public-key-hex",
+            "supply_chain validation requires a non-zero raw Ed25519 "
+            "--provenance-verification-public-key-hex",
+        ),
+    ),
+)
+def test_supply_chain_requires_source_and_trust_inputs(
+    tmp_path: Path,
+    omitted_option: str,
+    expected_error: str,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        run_gate_omitting_supply_chain_args(
+            tmp_path,
+            frozenset({omitted_option}),
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert expected_error in artifact["errors"]
+
+
+def test_supply_chain_rejects_source_validation_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    monkeypatch.setattr(
+        MODULE,
+        "validate_supply_chain_sources",
+        lambda *_args, **_kwargs: (None, ["release rehearsal could not be opened"]),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert (
+        "supply-chain source: release rehearsal could not be opened"
+        in artifact["errors"]
+    )
+
+
+def test_supply_chain_rejects_derived_field_mismatch(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload["sbom_index_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert (
+        "sbom_index_digest_hex must equal the source-derived value"
+        in artifact["errors"]
+    )
+
+
+def test_supply_chain_rejects_reordered_source_bindings(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload["source_artifacts"][0], payload["source_artifacts"][1] = (
+        payload["source_artifacts"][1],
+        payload["source_artifacts"][0],
+    )
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert (
+        "source_artifacts kinds must match the canonical four-source order"
+        in artifact["errors"]
+    )
+    assert "source_artifacts must equal the source-derived value" in artifact[
+        "errors"
+    ]
+
+
+def test_supply_chain_rejects_tampered_source_binding(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload["source_artifacts"][2]["sha256"] = DIGEST_2
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert "source_artifacts must equal the source-derived value" in artifact[
+        "errors"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    (
+        (
+            "provenance_certificate_identity",
+            "https://example.invalid/untrusted-workflow",
+            "provenance_certificate_identity must match the operator-trusted "
+            "identity",
+        ),
+        (
+            "provenance_oidc_issuer",
+            "https://issuer.example.invalid",
+            "provenance_oidc_issuer must match the operator-trusted issuer",
+        ),
+        (
+            "provenance_verification_key_fingerprint_hex",
+            DIGEST_2,
+            "provenance_verification_key_fingerprint_hex must match the "
+            "operator-trusted key",
+        ),
+    ),
+)
+def test_supply_chain_rejects_trust_metadata_mismatch(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    expected_error: str,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload[field] = value
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert expected_error in artifact["errors"]
+
+
+def test_supply_chain_public_trust_metadata_does_not_exempt_secret_fields(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload["private_key"] = "11" * 32
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert any("sensitive" in error for error in artifact["errors"])
+
+
+def test_supply_chain_untrusted_secret_like_metadata_remains_scanned(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = supply_chain()
+    payload["provenance_oidc_issuer"] = (
+        "authorization: bearer not-a-public-issuer"
+    )
+    write_json(tmp_path / "supply-chain.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["supply_chain"]["artifacts"][0]
+    assert (
+        "provenance_oidc_issuer must not contain secret-looking values in "
+        "release evidence"
+        in artifact["errors"]
+    )
+    assert (
+        "provenance_oidc_issuer must match the operator-trusted issuer"
+        in artifact["errors"]
+    )
 
 
 def test_release_evidence_payloads_are_schema_closed(tmp_path: Path) -> None:

@@ -213,8 +213,8 @@ whitelists malicious providers, or suppresses alerts.
 - Capacity and repair soak results live under
   `specs/sorafs/reports/sf2c_capacity_soak.md`, while the broader
   Sumeragi soak matrix is tracked in `specs/sumeragi_soak_matrix.md`
-  (localized variants included). These artefacts capture the long-running drills
-  referenced in the residual risk register.
+  These artefacts capture the long-running drills referenced in the residual
+  risk register.
 - Reconciliation + privilege-audit automation lives in
   `docs/automation/da/README.md` and the new `cargo xtask da-commitment-reconcile`
   / `cargo xtask da-privilege-audit` commands; use the default outputs under
@@ -254,6 +254,5 @@ drift in detection rates, repair queues, or QoS samples.
 To refresh the table above for docs, run `make docs-da-threat-model`, which
 invokes `cargo xtask da-threat-model-report`, regenerates
 `specs/da/_generated/threat_model_report.json`, and rewrites this section
-via `scripts/docs/render_da_threat_model_tables.py`. The `docs/portal` mirror
-(`docs/portal/docs/da/threat-model.md`) is updated in the same pass so both
-copies stay in sync.
+via `scripts/docs/render_da_threat_model_tables.py`. Coordinate any public,
+in-depth update in the sibling `iroha-docs` repository.

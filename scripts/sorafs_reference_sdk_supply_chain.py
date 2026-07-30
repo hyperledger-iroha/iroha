@@ -3,7 +3,10 @@
 The public :func:`validate_supply_chain_sources` entry point opens four
 schema-closed indexes under one reviewed source root, verifies every indexed
 file digest, and derives the existing SF-11 per-target result fields.  It does
-not accept precomputed canary booleans or vulnerability totals.
+not accept precomputed canary booleans or vulnerability totals.  Release
+rehearsal and provenance receipts must be signed, and callers supply the
+trusted Ed25519 authenticator; the module never treats an unsigned status as
+authoritative.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ import os
 import re
 import stat
 import unicodedata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -58,9 +61,17 @@ DEFAULT_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 DEFAULT_MAX_SOURCE_AGE_SECS = 14 * 24 * 60 * 60
 MAX_SOURCE_ARTIFACT_BYTES = 2 * 1024 * 1024
 MAX_INDEXED_JSON_BYTES = 16 * 1024 * 1024
+MAX_RELEASE_ARTIFACT_BYTES = 512 * 1024 * 1024
 MAX_TIMESTAMP = (1 << 63) - 1
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}\Z")
+_HEX128 = re.compile(r"^[0-9a-f]{128}\Z")
+_RELEASE_REHEARSAL_RECEIPT_SIGNATURE_DOMAIN = (
+    b"sorafs-reference-sdk-release-rehearsal-receipt-v1\x00"
+)
+_PROVENANCE_RECEIPT_SIGNATURE_DOMAIN = (
+    b"sorafs-reference-sdk-provenance-verification-receipt-v1\x00"
+)
 _COMMON_SOURCE_FIELDS = frozenset(
     {
         "schema",
@@ -80,8 +91,17 @@ _RELEASE_OPERATIONS = (
     "yank",
 )
 _RELEASE_REHEARSAL_FIELDS = _COMMON_SOURCE_FIELDS | {"targets"}
-_RELEASE_REHEARSAL_TARGET_FIELDS = frozenset({"target", "receipt"})
-_RELEASE_RECEIPT_FIELDS = _COMMON_SOURCE_FIELDS | {"target", "operations"}
+_RELEASE_REHEARSAL_TARGET_FIELDS = frozenset(
+    {"target", "release_artifact", "receipt"}
+)
+_RELEASE_RECEIPT_FIELDS = _COMMON_SOURCE_FIELDS | {
+    "target",
+    "subject_sha256",
+    "operations",
+    "verification_key_fingerprint_hex",
+    "signature_algorithm",
+    "signature_hex",
+}
 _SBOM_INDEX_FIELDS = _COMMON_SOURCE_FIELDS | {"source_sbom", "targets"}
 _SBOM_TARGET_FIELDS = frozenset({"target", "platform_sbom"})
 _VULNERABILITY_INDEX_FIELDS = _COMMON_SOURCE_FIELDS | {
@@ -92,6 +112,7 @@ _VULNERABILITY_TARGET_FIELDS = frozenset({"target", "platform_report"})
 _PROVENANCE_INDEX_FIELDS = _COMMON_SOURCE_FIELDS | {
     "certificate_identity",
     "oidc_issuer",
+    "verification_key_fingerprint_hex",
     "targets",
 }
 _PROVENANCE_TARGET_FIELDS = frozenset(
@@ -99,6 +120,8 @@ _PROVENANCE_TARGET_FIELDS = frozenset(
         "target",
         "attestation_bundle",
         "cosign_bundle",
+        "sha256sums",
+        "sha256sums_cosign_bundle",
         "verification_receipt",
     }
 )
@@ -106,12 +129,19 @@ _PROVENANCE_RECEIPT_FIELDS = _COMMON_SOURCE_FIELDS | {
     "target",
     "certificate_identity",
     "oidc_issuer",
+    "verification_key_fingerprint_hex",
     "subject_sha256",
     "attestation_bundle_sha256",
     "cosign_bundle_sha256",
+    "sha256sums_sha256",
+    "sha256sums_cosign_bundle_sha256",
     "oidc_identity_status",
     "cosign_provenance_status",
+    "signature_algorithm",
+    "signature_hex",
 }
+
+VerificationReceiptAuthenticator = Callable[[str, bytes, bytes], bool]
 
 
 @dataclass(frozen=True)
@@ -227,6 +257,12 @@ class _LoadedJson:
     payload: Any
 
 
+@dataclass(frozen=True)
+class _SourceRoot:
+    path: Path
+    signature: tuple[int, ...]
+
+
 class _DuplicateJsonKey(ValueError):
     """Raised internally when an input JSON object repeats a key."""
 
@@ -293,6 +329,60 @@ def _canonical_hex64(value: Any) -> str | None:
     return value
 
 
+def _canonical_hex128(value: Any) -> str | None:
+    if not isinstance(value, str) or _HEX128.fullmatch(value) is None:
+        return None
+    if not any(character != "0" for character in value):
+        return None
+    return value
+
+
+def release_rehearsal_receipt_signing_bytes(
+    receipt: Mapping[str, Any],
+) -> bytes:
+    """Return domain-separated canonical release-rehearsal receipt bytes."""
+
+    if set(receipt) != _RELEASE_RECEIPT_FIELDS:
+        raise ValueError("release rehearsal receipt has the wrong exact schema")
+    unsigned = dict(receipt)
+    unsigned.pop("signature_hex")
+    try:
+        encoded = json.dumps(
+            unsigned,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
+        raise ValueError(
+            "release rehearsal receipt is not canonically encodable"
+        ) from error
+    return _RELEASE_REHEARSAL_RECEIPT_SIGNATURE_DOMAIN + encoded
+
+
+def provenance_receipt_signing_bytes(receipt: Mapping[str, Any]) -> bytes:
+    """Return the domain-separated canonical bytes an authenticator must sign."""
+
+    if set(receipt) != _PROVENANCE_RECEIPT_FIELDS:
+        raise ValueError("provenance verification receipt has the wrong exact schema")
+    unsigned = dict(receipt)
+    unsigned.pop("signature_hex")
+    try:
+        encoded = json.dumps(
+            unsigned,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
+        raise ValueError(
+            "provenance verification receipt is not canonically encodable"
+        ) from error
+    return _PROVENANCE_RECEIPT_SIGNATURE_DOMAIN + encoded
+
+
 def _closed_object(
     value: Any,
     fields: frozenset[str],
@@ -349,10 +439,53 @@ def _decode_json(data: bytes, label: str, errors: list[str]) -> Any | None:
         return None
 
 
-def _prepare_source_root(source_root: Path, errors: list[str]) -> Path | None:
+def _stat_signature(metadata: os.stat_result) -> tuple[int, ...]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_nlink,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _is_link_like(metadata: os.stat_result) -> bool:
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    file_attributes = getattr(metadata, "st_file_attributes", 0)
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        reparse_flag and file_attributes & reparse_flag
+    )
+
+
+def _directory_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _prepare_source_root(
+    source_root: Path,
+    errors: list[str],
+) -> _SourceRoot | None:
     if not isinstance(source_root, Path):
         errors.append("supply-chain source root must be a path")
         return None
+    if (
+        os.open not in os.supports_dir_fd
+        or os.stat not in os.supports_dir_fd
+        or os.stat not in os.supports_follow_symlinks
+    ):
+        errors.append(
+            "supply-chain validation requires descriptor-relative file access"
+        )
+        return None
+    descriptor = -1
     try:
         if source_root.is_symlink():
             errors.append("supply-chain source root must not be a symlink")
@@ -360,77 +493,173 @@ def _prepare_source_root(source_root: Path, errors: list[str]) -> Path | None:
         if not source_root.is_dir():
             errors.append("supply-chain source root must be an existing directory")
             return None
-        return source_root.resolve(strict=True)
+        resolved = source_root.resolve(strict=True)
+        before = resolved.lstat()
+        if _is_link_like(before) or not stat.S_ISDIR(before.st_mode):
+            errors.append(
+                "supply-chain source root must be a non-symlink directory"
+            )
+            return None
+        descriptor = os.open(resolved, _directory_open_flags())
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or _stat_signature(before) != _stat_signature(opened)
+        ):
+            errors.append("supply-chain source root changed while it was opened")
+            return None
+        return _SourceRoot(resolved, _stat_signature(opened))
     except (OSError, RuntimeError):
         errors.append("supply-chain source root cannot be inspected")
         return None
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _open_source_root(
+    root: _SourceRoot,
+    label: str,
+    errors: list[str],
+) -> int:
+    descriptor = -1
+    try:
+        before = root.path.lstat()
+        if (
+            _is_link_like(before)
+            or not stat.S_ISDIR(before.st_mode)
+            or _stat_signature(before) != root.signature
+        ):
+            errors.append(f"{label} source root changed during validation")
+            return -1
+        descriptor = os.open(root.path, _directory_open_flags())
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or _stat_signature(opened) != root.signature
+        ):
+            errors.append(f"{label} source root changed during validation")
+            os.close(descriptor)
+            return -1
+        return descriptor
+    except (OSError, RuntimeError):
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        errors.append(f"{label} source root could not be opened safely")
+        return -1
 
 
 def _read_relative_file(
-    root: Path,
+    root: _SourceRoot,
     artifact_path: Any,
     *,
     label: str,
     max_bytes: int,
     registry: _FileRegistry,
     errors: list[str],
-) -> tuple[str, bytes, str] | None:
+    capture_bytes: bool = True,
+) -> tuple[str, bytes | None, str] | None:
     relative = _canonical_relative_path(artifact_path)
     if relative is None:
         errors.append(f"{label} artifact_path must be a canonical relative path")
         return None
-    candidate = root.joinpath(*PurePosixPath(relative).parts)
-    current = root
-    try:
-        for component in PurePosixPath(relative).parts:
-            current = current / component
-            if current.is_symlink():
-                errors.append(f"{label} path must not contain symlinks")
-                return None
-        resolved = candidate.resolve(strict=True)
-        if not resolved.is_relative_to(root):
-            errors.append(f"{label} path must remain under the source root")
-            return None
-    except (OSError, RuntimeError):
-        errors.append(f"{label} must reference an existing regular file")
-        return None
 
+    parts = PurePosixPath(relative).parts
+    directory_fd = _open_source_root(root, label, errors)
+    if directory_fd < 0:
+        return None
     fd = -1
     try:
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-        nofollow = getattr(os, "O_NOFOLLOW", 0)
-        if nofollow:
-            flags |= nofollow
-        fd = os.open(candidate, flags)
-        before = os.fstat(fd)
+        for component in parts[:-1]:
+            before_directory = os.stat(
+                component,
+                dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+            if _is_link_like(before_directory):
+                errors.append(f"{label} path must not contain symlinks")
+                return None
+            if not stat.S_ISDIR(before_directory.st_mode):
+                errors.append(f"{label} must reference an existing regular file")
+                return None
+            child_fd = os.open(
+                component,
+                _directory_open_flags(),
+                dir_fd=directory_fd,
+            )
+            opened_directory = os.fstat(child_fd)
+            if (
+                not stat.S_ISDIR(opened_directory.st_mode)
+                or _stat_signature(before_directory)
+                != _stat_signature(opened_directory)
+            ):
+                os.close(child_fd)
+                errors.append(f"{label} path changed while it was opened")
+                return None
+            os.close(directory_fd)
+            directory_fd = child_fd
+
+        before = os.stat(
+            parts[-1],
+            dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        if _is_link_like(before):
+            errors.append(f"{label} path must not contain symlinks")
+            return None
         if not stat.S_ISREG(before.st_mode):
             errors.append(f"{label} must reference a regular file")
             return None
-        if before.st_size > max_bytes:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        fd = os.open(parts[-1], flags, dir_fd=directory_fd)
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _stat_signature(before) != _stat_signature(opened)
+        ):
+            errors.append(f"{label} changed while it was opened")
+            return None
+        if opened.st_size == 0:
+            errors.append(f"{label} must not be empty")
+            return None
+        if opened.st_size > max_bytes:
             errors.append(f"{label} exceeds the bounded file-size limit")
             return None
         chunks: list[bytes] = []
+        hasher = hashlib.sha256()
         total = 0
         while True:
             chunk = os.read(fd, min(64 * 1024, max_bytes + 1 - total))
             if not chunk:
                 break
-            chunks.append(chunk)
+            hasher.update(chunk)
+            if capture_bytes:
+                chunks.append(chunk)
             total += len(chunk)
             if total > max_bytes:
                 errors.append(f"{label} exceeds the bounded file-size limit")
                 return None
         after = os.fstat(fd)
-        if (
-            (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
-            or before.st_size != after.st_size
-            or total != after.st_size
-        ):
+        if _stat_signature(opened) != _stat_signature(after) or total != after.st_size:
             errors.append(f"{label} changed while it was being read")
             return None
+        resolved = root.path.joinpath(*parts)
         registry.record(resolved, after, label, errors)
-        data = b"".join(chunks)
-        return relative, data, hashlib.sha256(data).hexdigest()
+        data = b"".join(chunks) if capture_bytes else None
+        return relative, data, hasher.hexdigest()
+    except FileNotFoundError:
+        errors.append(f"{label} must reference an existing regular file")
+        return None
     except (OSError, RuntimeError):
         errors.append(f"{label} could not be read safely")
         return None
@@ -440,10 +669,15 @@ def _read_relative_file(
                 os.close(fd)
             except OSError:
                 pass
+        if directory_fd >= 0:
+            try:
+                os.close(directory_fd)
+            except OSError:
+                pass
 
 
 def _load_json_file(
-    root: Path,
+    root: _SourceRoot,
     artifact_path: Any,
     *,
     label: str,
@@ -463,6 +697,9 @@ def _load_json_file(
     if opened is None:
         return None
     relative, data, digest = opened
+    if data is None:  # pragma: no cover - guarded by capture_bytes default
+        errors.append(f"{label} JSON bytes were not retained")
+        return None
     if expected_sha256 is not None and digest != expected_sha256:
         errors.append(f"{label} sha256 must match the indexed file bytes")
     payload = _decode_json(data, label, errors)
@@ -589,7 +826,7 @@ def _target_rows(
 
 
 def _load_indexed_json(
-    root: Path,
+    root: _SourceRoot,
     reference_value: Any,
     *,
     label: str,
@@ -611,14 +848,65 @@ def _load_indexed_json(
     )
 
 
+def _load_indexed_file_digest(
+    root: _SourceRoot,
+    reference_value: Any,
+    *,
+    label: str,
+    max_bytes: int,
+    registry: _FileRegistry,
+    errors: list[str],
+) -> str | None:
+    reference = _file_reference(reference_value, label, errors)
+    if reference is None:
+        return None
+    artifact_path, expected_sha256 = reference
+    opened = _read_relative_file(
+        root,
+        artifact_path,
+        label=label,
+        max_bytes=max_bytes,
+        registry=registry,
+        errors=errors,
+        capture_bytes=False,
+    )
+    if opened is None:
+        return None
+    _relative, _data, digest = opened
+    if digest != expected_sha256:
+        errors.append(f"{label} sha256 must match the indexed file bytes")
+    return digest
+
+
+def _load_indexed_release_artifact(
+    root: _SourceRoot,
+    reference_value: Any,
+    *,
+    label: str,
+    registry: _FileRegistry,
+    errors: list[str],
+) -> str | None:
+    return _load_indexed_file_digest(
+        root,
+        reference_value,
+        label=label,
+        max_bytes=MAX_RELEASE_ARTIFACT_BYTES,
+        registry=registry,
+        errors=errors,
+    )
+
+
 def _validate_release_receipt(
     payload: Any,
     *,
     target: str,
+    expected_subject_sha256: str,
     label: str,
     expected_deployment_id: str,
     expected_environment: str,
     expected_release_manifest_digest_hex: str,
+    expected_verification_key_fingerprint_hex: str,
+    verification_receipt_authenticator: VerificationReceiptAuthenticator,
     now_unix: int,
     max_age_secs: int,
     errors: list[str],
@@ -639,6 +927,55 @@ def _validate_release_receipt(
     )
     if receipt.get("target") != target:
         errors.append(f"{label}.target must match its release-rehearsal row")
+    subject_sha256 = _canonical_hex64(receipt.get("subject_sha256"))
+    if subject_sha256 is None:
+        errors.append(f"{label}.subject_sha256 must be non-zero lowercase SHA-256")
+    elif subject_sha256 != expected_subject_sha256:
+        errors.append(
+            f"{label}.subject_sha256 must match the indexed release artifact"
+        )
+    verification_key_fingerprint = _canonical_hex64(
+        receipt.get("verification_key_fingerprint_hex")
+    )
+    if verification_key_fingerprint is None:
+        errors.append(
+            f"{label}.verification_key_fingerprint_hex must be non-zero lowercase SHA-256"
+        )
+    elif verification_key_fingerprint != expected_verification_key_fingerprint_hex:
+        errors.append(
+            f"{label}.verification_key_fingerprint_hex must match the trusted verifier"
+        )
+    signature_algorithm = receipt.get("signature_algorithm")
+    if signature_algorithm != "ed25519":
+        errors.append(f"{label}.signature_algorithm must be `ed25519`")
+    signature_hex = _canonical_hex128(receipt.get("signature_hex"))
+    if signature_hex is None:
+        errors.append(
+            f"{label}.signature_hex must be a non-zero lowercase Ed25519 signature"
+        )
+    if (
+        verification_key_fingerprint is not None
+        and verification_key_fingerprint
+        == expected_verification_key_fingerprint_hex
+        and signature_algorithm == "ed25519"
+        and signature_hex is not None
+    ):
+        try:
+            signing_bytes = release_rehearsal_receipt_signing_bytes(receipt)
+            authenticated = verification_receipt_authenticator(
+                verification_key_fingerprint,
+                signing_bytes,
+                bytes.fromhex(signature_hex),
+            )
+        except Exception:
+            errors.append(
+                f"{label} signature could not be authenticated by the trusted verifier"
+            )
+        else:
+            if authenticated is not True:
+                errors.append(
+                    f"{label} signature must authenticate with the trusted verifier"
+                )
     operations = _closed_object(
         receipt.get("operations"),
         frozenset(_RELEASE_OPERATIONS),
@@ -688,8 +1025,12 @@ def _validate_spdx(payload: Any, label: str, errors: list[str]) -> bool:
 def _severity_value(value: Any) -> str | None:
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        if value < 0 or value > 10:
+            return None
         score = float(value)
+    elif isinstance(value, float):
+        score = value
     elif isinstance(value, str):
         normalized = value.strip().lower()
         labels = {
@@ -871,8 +1212,13 @@ def _validate_provenance_receipt(
     expected_release_manifest_digest_hex: str,
     expected_certificate_identity: str,
     expected_oidc_issuer: str,
+    expected_verification_key_fingerprint_hex: str,
+    expected_subject_sha256: str,
+    verification_receipt_authenticator: VerificationReceiptAuthenticator,
     attestation_bundle_sha256: str,
     cosign_bundle_sha256: str,
+    sha256sums_sha256: str,
+    sha256sums_cosign_bundle_sha256: str,
     now_unix: int,
     max_age_secs: int,
     errors: list[str],
@@ -897,14 +1243,41 @@ def _validate_provenance_receipt(
         errors.append(f"{label}.certificate_identity must match the trusted identity")
     if receipt.get("oidc_issuer") != expected_oidc_issuer:
         errors.append(f"{label}.oidc_issuer must match the trusted issuer")
-    if _canonical_hex64(receipt.get("subject_sha256")) is None:
+    subject_sha256 = _canonical_hex64(receipt.get("subject_sha256"))
+    if subject_sha256 is None:
         errors.append(f"{label}.subject_sha256 must be non-zero lowercase SHA-256")
+    elif subject_sha256 != expected_subject_sha256:
+        errors.append(
+            f"{label}.subject_sha256 must match the indexed release artifact"
+        )
+    verification_key_fingerprint = _canonical_hex64(
+        receipt.get("verification_key_fingerprint_hex")
+    )
+    if verification_key_fingerprint is None:
+        errors.append(
+            f"{label}.verification_key_fingerprint_hex must be non-zero lowercase SHA-256"
+        )
+    elif verification_key_fingerprint != expected_verification_key_fingerprint_hex:
+        errors.append(
+            f"{label}.verification_key_fingerprint_hex must match the trusted verifier"
+        )
     if receipt.get("attestation_bundle_sha256") != attestation_bundle_sha256:
         errors.append(
             f"{label}.attestation_bundle_sha256 must match the opened bundle"
         )
     if receipt.get("cosign_bundle_sha256") != cosign_bundle_sha256:
         errors.append(f"{label}.cosign_bundle_sha256 must match the opened bundle")
+    if receipt.get("sha256sums_sha256") != sha256sums_sha256:
+        errors.append(
+            f"{label}.sha256sums_sha256 must match the opened SHA256SUMS"
+        )
+    if (
+        receipt.get("sha256sums_cosign_bundle_sha256")
+        != sha256sums_cosign_bundle_sha256
+    ):
+        errors.append(
+            f"{label}.sha256sums_cosign_bundle_sha256 must match the opened bundle"
+        )
     oidc_status = receipt.get("oidc_identity_status")
     cosign_status = receipt.get("cosign_provenance_status")
     if oidc_status not in ("verified", "failed"):
@@ -915,6 +1288,37 @@ def _validate_provenance_receipt(
         errors.append(
             f"{label}.cosign_provenance_status must be `verified` or `failed`"
         )
+    signature_algorithm = receipt.get("signature_algorithm")
+    if signature_algorithm != "ed25519":
+        errors.append(f"{label}.signature_algorithm must be `ed25519`")
+    signature_hex = _canonical_hex128(receipt.get("signature_hex"))
+    if signature_hex is None:
+        errors.append(
+            f"{label}.signature_hex must be a non-zero lowercase Ed25519 signature"
+        )
+    if (
+        verification_key_fingerprint is not None
+        and verification_key_fingerprint
+        == expected_verification_key_fingerprint_hex
+        and signature_algorithm == "ed25519"
+        and signature_hex is not None
+    ):
+        try:
+            signing_bytes = provenance_receipt_signing_bytes(receipt)
+            authenticated = verification_receipt_authenticator(
+                verification_key_fingerprint,
+                signing_bytes,
+                bytes.fromhex(signature_hex),
+            )
+        except Exception:
+            errors.append(
+                f"{label} signature could not be authenticated by the trusted verifier"
+            )
+        else:
+            if authenticated is not True:
+                errors.append(
+                    f"{label} signature must authenticate with the trusted verifier"
+                )
     if oidc_status not in ("verified", "failed") or cosign_status not in (
         "verified",
         "failed",
@@ -930,6 +1334,8 @@ def validate_supply_chain_sources(
     expected_environment: str,
     expected_release_manifest_digest_hex: str,
     expected_certificate_identity: str,
+    expected_verification_key_fingerprint_hex: str,
+    verification_receipt_authenticator: VerificationReceiptAuthenticator,
     now_unix: int,
     max_source_age_secs: int = DEFAULT_MAX_SOURCE_AGE_SECS,
     expected_oidc_issuer: str = DEFAULT_OIDC_ISSUER,
@@ -948,7 +1354,10 @@ def validate_supply_chain_sources(
 
     The returned error list is deterministic and payload-free.  A result is
     returned only when every top-level source, indexed receipt, SBOM, SARIF
-    report, and provenance bundle validates.
+    report, and provenance bundle validates.  The receipt authenticator is the
+    explicit trust boundary for release-rehearsal and externally verified
+    OIDC/cosign results, and must verify domain-separated Ed25519 signatures
+    against the expected key fingerprint.
     """
 
     errors: list[str] = []
@@ -958,6 +1367,9 @@ def validate_supply_chain_sources(
         expected_release_manifest_digest_hex
     )
     certificate_identity = _canonical_string(expected_certificate_identity)
+    verification_key_fingerprint = _canonical_hex64(
+        expected_verification_key_fingerprint_hex
+    )
     oidc_issuer = _canonical_string(expected_oidc_issuer)
     if deployment_id is None:
         errors.append("expected deployment_id must be canonical")
@@ -969,6 +1381,12 @@ def validate_supply_chain_sources(
         )
     if certificate_identity is None:
         errors.append("expected certificate identity must be canonical")
+    if verification_key_fingerprint is None:
+        errors.append(
+            "expected verification key fingerprint must be non-zero lowercase SHA-256"
+        )
+    if not callable(verification_receipt_authenticator):
+        errors.append("verification receipt authenticator must be callable")
     if oidc_issuer is None:
         errors.append("expected OIDC issuer must be canonical")
     if (
@@ -992,6 +1410,7 @@ def validate_supply_chain_sources(
     assert environment is not None
     assert release_manifest_digest is not None
     assert certificate_identity is not None
+    assert verification_key_fingerprint is not None
     assert oidc_issuer is not None
 
     registry = _FileRegistry()
@@ -1063,6 +1482,7 @@ def validate_supply_chain_sources(
     release_results: list[dict[str, bool] | None] = [None] * len(
         REQUIRED_RELEASE_TARGETS
     )
+    release_subjects: list[str | None] = [None] * len(REQUIRED_RELEASE_TARGETS)
     sbom_results: list[bool | None] = [None] * len(REQUIRED_RELEASE_TARGETS)
     vulnerability_results: list[tuple[int, int] | None] = [None] * len(
         REQUIRED_RELEASE_TARGETS
@@ -1082,6 +1502,16 @@ def validate_supply_chain_sources(
         for index, target in enumerate(REQUIRED_RELEASE_TARGETS):
             if index >= len(rows) or rows[index] is None:
                 continue
+            release_subject = _load_indexed_release_artifact(
+                root,
+                rows[index].get("release_artifact"),
+                label=f"release_rehearsal release artifact[{index}]",
+                registry=registry,
+                errors=errors,
+            )
+            if release_subject is None:
+                continue
+            release_subjects[index] = release_subject
             loaded = _load_indexed_json(
                 root,
                 rows[index].get("receipt"),
@@ -1094,10 +1524,17 @@ def validate_supply_chain_sources(
             validated = _validate_release_receipt(
                 loaded.payload,
                 target=target,
+                expected_subject_sha256=release_subject,
                 label=f"release_rehearsal receipt[{index}]",
                 expected_deployment_id=deployment_id,
                 expected_environment=environment,
                 expected_release_manifest_digest_hex=release_manifest_digest,
+                expected_verification_key_fingerprint_hex=(
+                    verification_key_fingerprint
+                ),
+                verification_receipt_authenticator=(
+                    verification_receipt_authenticator
+                ),
                 now_unix=now_unix,
                 max_age_secs=max_source_age_secs,
                 errors=errors,
@@ -1208,6 +1645,14 @@ def validate_supply_chain_sources(
             errors.append(
                 "provenance_bundle source.oidc_issuer must match the trusted issuer"
             )
+        if (
+            provenance_source.payload.get("verification_key_fingerprint_hex")
+            != verification_key_fingerprint
+        ):
+            errors.append(
+                "provenance_bundle source.verification_key_fingerprint_hex "
+                "must match the trusted verifier"
+            )
         rows = _target_rows(
             provenance_source.payload.get("targets"),
             fields=_PROVENANCE_TARGET_FIELDS,
@@ -1216,6 +1661,12 @@ def validate_supply_chain_sources(
         )
         for index, target in enumerate(REQUIRED_RELEASE_TARGETS):
             if index >= len(rows) or rows[index] is None:
+                continue
+            expected_subject = release_subjects[index]
+            if expected_subject is None:
+                errors.append(
+                    f"provenance_bundle target[{index}] requires an indexed release artifact"
+                )
                 continue
             row = rows[index]
             attestation = _load_indexed_json(
@@ -1229,6 +1680,24 @@ def validate_supply_chain_sources(
                 root,
                 row.get("cosign_bundle"),
                 label=f"provenance_bundle cosign bundle[{index}]",
+                registry=registry,
+                errors=errors,
+            )
+            sha256sums_sha256 = _load_indexed_file_digest(
+                root,
+                row.get("sha256sums"),
+                label=f"provenance_bundle SHA256SUMS[{index}]",
+                max_bytes=MAX_INDEXED_JSON_BYTES,
+                registry=registry,
+                errors=errors,
+            )
+            sha256sums_cosign_bundle = _load_indexed_json(
+                root,
+                row.get("sha256sums_cosign_bundle"),
+                label=(
+                    "provenance_bundle SHA256SUMS cosign bundle"
+                    f"[{index}]"
+                ),
                 registry=registry,
                 errors=errors,
             )
@@ -1251,7 +1720,22 @@ def validate_supply_chain_sources(
                     f"provenance_bundle cosign bundle[{index}]",
                     errors,
                 )
-            if attestation is None or cosign is None or receipt is None:
+            if sha256sums_cosign_bundle is not None:
+                _validate_bundle_json(
+                    sha256sums_cosign_bundle.payload,
+                    (
+                        "provenance_bundle SHA256SUMS cosign bundle"
+                        f"[{index}]"
+                    ),
+                    errors,
+                )
+            if (
+                attestation is None
+                or cosign is None
+                or sha256sums_sha256 is None
+                or sha256sums_cosign_bundle is None
+                or receipt is None
+            ):
                 continue
             validated = _validate_provenance_receipt(
                 receipt.payload,
@@ -1262,8 +1746,19 @@ def validate_supply_chain_sources(
                 expected_release_manifest_digest_hex=release_manifest_digest,
                 expected_certificate_identity=certificate_identity,
                 expected_oidc_issuer=oidc_issuer,
+                expected_verification_key_fingerprint_hex=(
+                    verification_key_fingerprint
+                ),
+                expected_subject_sha256=expected_subject,
+                verification_receipt_authenticator=(
+                    verification_receipt_authenticator
+                ),
                 attestation_bundle_sha256=attestation.sha256,
                 cosign_bundle_sha256=cosign.sha256,
+                sha256sums_sha256=sha256sums_sha256,
+                sha256sums_cosign_bundle_sha256=(
+                    sha256sums_cosign_bundle.sha256
+                ),
                 now_unix=now_unix,
                 max_age_secs=max_source_age_secs,
                 errors=errors,
@@ -1317,7 +1812,7 @@ def validate_supply_chain_sources(
     binding_by_kind = {binding.kind: binding for binding in bindings}
     return (
         SupplyChainSourceResult(
-            generated_at_unix=max(source_timestamps),
+            generated_at_unix=min(source_timestamps),
             deployment_id=deployment_id,
             environment=environment,
             release_manifest_digest_hex=release_manifest_digest,
@@ -1350,5 +1845,8 @@ __all__ = [
     "SupplyChainSourceResult",
     "SupplyChainTargetResult",
     "VULNERABILITY_REPORT_SCHEMA",
+    "VerificationReceiptAuthenticator",
+    "provenance_receipt_signing_bytes",
+    "release_rehearsal_receipt_signing_bytes",
     "validate_supply_chain_sources",
 ]

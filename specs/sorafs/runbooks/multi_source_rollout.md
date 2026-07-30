@@ -11,9 +11,8 @@ This runbook guides SRE and on-call engineers through two critical workflows:
 2. Blacklisting or de-prioritising misbehaving providers without destabilising
    existing sessions.
 
-> **Portal:** Published in the Docusaurus portal as
-> `docs/portal/docs/sorafs/multi-source-rollout.md`. Update both versions when
-> making changes.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 It assumes the orchestration stack delivered under SF-6 is already deployed
 (`sorafs_orchestrator`, gateway chunk-range API, telemetry exporters).

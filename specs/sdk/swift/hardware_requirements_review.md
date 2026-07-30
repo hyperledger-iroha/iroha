@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: Swift Hardware Requirements Review
+summary: Review agenda for Swift key storage, attestation, and crypto dependencies.
+---
+
 # Swift Hardware Requirements Review (IOS4)
 
 This brief schedules the hardware requirements review called out in the IOS4

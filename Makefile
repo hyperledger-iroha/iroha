@@ -144,10 +144,10 @@ docs-syscalls:
 docs-da-threat-model:
 	@echo "Generating DA threat-model report JSON..."
 	@scripts/telemetry/run_da_threat_model_report.sh specs/da/_generated
-	@echo "Updating specs/da/threat_model.md and docs/portal/docs/da/threat-model.md..."
+	@echo "Updating specs/da/threat_model.md..."
 	@python3 scripts/docs/render_da_threat_model_tables.py \
 		--input specs/da/_generated/threat_model_report.json \
-		--docs specs/da/threat_model.md docs/portal/docs/da/threat-model.md
+		--docs specs/da/threat_model.md
 	@echo "DA threat-model docs refreshed."
 
 check-docs:

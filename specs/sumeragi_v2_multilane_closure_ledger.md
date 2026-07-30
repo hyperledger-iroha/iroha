@@ -93,12 +93,14 @@ evidence; total refinement theorem open.
 for the accepted schema V2 carried by the production
 `LaneExecutablePayloadV1` container and its exact
 `QueuePlanAdmissionBindingV2` preimage. Its fixed and mutation configurations
-cover producer-selected versus replicated-carrier ownership, QueuePlan journal
-V4 `PutBatch` then reservation journal V5 fsync then Kura Active then
-execution-input durability then READY, missing/late bodies, producer death
-after fanout, crash-prefix durable recovery, exact Commit/Release scope,
-duplicate carrier application, conflicting/ABA bindings, and the 4096 entry
-limit.
+cover producer-selected versus replicated-carrier ownership; a selected-batch
+conjunction over individual QueuePlan journal V4 `Put` records; reservation journal V5,
+Kura Active, execution-input, READY authorization/signature/QC,
+and lane-commit ordering; volatile body loss; crash-prefix durable recovery;
+atomic WSV application; separate post-carrier reservation
+Commit/QueuePlan-tombstone/ForgetCommit steps; prefix-recoverable four-stage
+release; exact lane-commit/release scope; conflicting/ABA bindings; and the
+4096 entry limit. Auxiliary post-WSV repair is explicit stuttering.
 
 This row is deliberately **not** a production-refinement claim. TLC exhausts
 the stated finite model and Apalache typechecks/bounds its abstract actions;
@@ -1135,7 +1137,7 @@ source hash drift, then archive model, configuration, tool-version, result,
 and source hashes. Existing generic Sumeragi models are not substitutes for
 these multilane models.
 
-The separate in-flight carrier contract is layout-only: its nine exact TLC
+The separate in-flight carrier contract is layout-only: its twenty exact TLC
 mutation witnesses and fifth positive Apalache row are mandatory release
 evidence after the four refinement rows, but they do not promote the missing
 total Rust transition projection to a theorem.

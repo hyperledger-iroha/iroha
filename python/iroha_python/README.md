@@ -1,15 +1,23 @@
-# Iroha Python SDK (work in progress)
+# Iroha Python SDK
 
-`iroha-python` packages the client-side utilities Python developers need to
-interact with Hyperledger Iroha v2 nodes. It bundles Norito codecs, Torii client
-helpers, and crypto primitives aligned with the Rust implementation—more high
-level builders are being added as the SDK matures. See [`DESIGN.md`](DESIGN.md) for a
-full architecture overview.
+`iroha-python` packages the client-side utilities Python developers need for
+the first Hyperledger Iroha 3 release. It bundles Norito codecs, Torii client
+helpers, typed builders, and cryptographic primitives aligned with the Rust
+implementation. See [`DESIGN.md`](DESIGN.md) for the package architecture and
+the [Python tutorial](https://docs.iroha.tech/guide/tutorials/python.html) for
+public integration guidance.
 
 ## Quickstart
 
+Build and install the package from the same Iroha source revision as the node
+you target:
+
 ```bash
-pip install iroha-python
+cd python/iroha_python
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install "maturin>=1.5,<2"
+maturin develop --release
 ```
 
 ```python
@@ -127,6 +135,8 @@ round-trip canonical bytes and canonical I105 account literals without bespoke c
 ```python
 from iroha_python.address import AccountAddress
 
+# Account IDs are domainless. The compatibility `domain` argument is validated
+# but is not encoded into the canonical address.
 address = AccountAddress.from_account(domain="default", public_key=b"\x00" * 32)
 print(address.canonical_hex())
 print(address.to_i105(753))
@@ -1083,15 +1093,17 @@ draft.repo_initiate(
     maturity_timestamp_ms=1_704_000_000_000,
     governance=governance,
 )
-draft.repo_unwind(
-    agreement_id="daily_repo",
-    initiator="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
-    counterparty="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-    cash_leg=cash,
-    collateral_leg=collateral,
-    settlement_timestamp_ms=1_704_086_400_000,
-)
+draft.repo_unwind(agreement_id="daily_repo")
 ```
+
+Before the initiation transaction is submitted, the counterparty must grant the
+initiator an exact `CanExecuteSettlement` permission for its cash balance and
+the collateral holder must grant the phase-separated maturity permission for
+its collateral balance. Both permissions bind the complete initiation terms,
+including the agreement identifier, parties, asset definitions, quantities,
+rate, maturity, governance, and custodian. The unwind is accepted only at the
+recorded maturity; every economic term and exact balance scope is loaded from
+the immutable on-chain agreement.
 
 Load repo agreements from a Torii response and compute the next margin checkpoint:
 
@@ -1161,7 +1173,8 @@ draft.settlement_pvp(
 )
 ```
 
-Only the `all_or_nothing` atomicity policy is currently supported; the host will reject other modes until their semantics are implemented.
+The first release supports only the `all_or_nothing` atomicity policy. The host
+rejects every other mode.
 
 See `specs/finance/repo_runbook.md` for operator-facing CLI flows, determinism notes, and automation guidance covering both repo and settlement helpers.
 
@@ -1403,11 +1416,6 @@ print("Lock owners:", list(locks.locks))
 print("Expired locks:", unlock_stats_typed.expired_locks_now)
 print("Governed contract:", governed_contract.contract_address, governed_contract.code_hash_hex)
 print("Protected namespaces:", protected)
-
-# VRF helpers (Torii must be built with `gov_vrf`)
-client.derive_governance_council_vrf(
-    {"committee_size": 21, "candidates": [{"account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF", "variant": "Normal"}]}
-)
 ```
 
 ## Runtime upgrades and ABI helpers
@@ -1441,9 +1449,9 @@ cancel = client.cancel_runtime_upgrade("0x" + "feedface" * 4)
 
 ## Peer inventory & Network Time Service
 
-The roadmap’s admin-surface work (PY6-P0/PY6-P5) requires typed access to `/v1/peers`
-and `/v1/time/{now,status}` so operators can capture evidence without falling back to
-curl. The client exposes these helpers directly:
+The client exposes typed access to `/v1/peers` and
+`/v1/time/{now,status}` so operators can capture evidence without falling back
+to `curl`:
 
 ```python
 peers = client.list_peers_typed()
@@ -1459,16 +1467,15 @@ for sample in status.samples:
 print("RTT buckets:", status.rtt.buckets)
 ```
 
-Use these outputs when filing telemetry readiness notes or running the Connect automation
-notebook—the typed DTOs keep parity with the Rust roadmap references.
+Use these outputs when filing telemetry readiness notes or running the Connect
+automation notebook. The typed DTOs mirror the current Rust payloads.
 
 ### Capture a full node-admin snapshot
 
-Roadmap milestone **PY6-P5** often requires a single evidence bundle covering
-`/v1/configuration`, `/v1/peers`, `/v1/time/{now,status}`, `/v1/telemetry/peers-info`,
-and `/v1/node/capabilities`. The `capture_node_admin_snapshot()` helper records all
-of those surfaces with one call so runbooks and tests can store a deterministic
-payload:
+The `capture_node_admin_snapshot()` helper records `/v1/configuration`,
+`/v1/peers`, `/v1/time/{now,status}`, `/v1/telemetry/peers-info`, and
+`/v1/node/capabilities` with one call so runbooks and tests can store a
+deterministic evidence bundle:
 
 ```python
 from iroha_python import create_torii_client
@@ -1485,13 +1492,12 @@ if snapshot.telemetry_peers:
 
 Pass ``include_peer_telemetry=False`` when the deployment does not expose
 `/v1/telemetry/peers-info`; the helper still records the remaining endpoints for
-the roadmap audit trails.
+the audit trail.
 
 ## Kaigi relay inventory
 
-The Kaigi rollout (SNNet-12) requires operators to audit registered relays, inspect per-domain
-metrics, and capture health snapshots. The Torii client now exposes typed helpers so scripts can
-collect the evidence directly:
+Operators can audit registered Kaigi relays, inspect per-domain metrics, and
+capture health snapshots with typed Torii helpers:
 
 ```python
 from iroha_python import ToriiClient
@@ -1516,8 +1522,9 @@ for domain in health.domains:
     print(domain.domain, "registrations", domain.registrations_total)
 ```
 
-`KaigiRelaySummary`, `KaigiRelayDetail`, and `KaigiRelayHealthSnapshot` mirror the Rust payloads,
-so dashboards and readiness scripts can assert against the same DTOs tracked in the roadmap.
+`KaigiRelaySummary`, `KaigiRelayDetail`, and `KaigiRelayHealthSnapshot` mirror
+the current Rust payloads so dashboards and readiness scripts can validate the
+same DTOs.
 
 For configuration changes, the client now mirrors the `/v1/configuration` contract so
 admin scripts can stage updates without hand-editing JSON blobs. For example:
@@ -1536,8 +1543,8 @@ client.set_queue_capacity(capacity=512)
 ```
 
 Both helpers fetch the latest configuration, reuse unchanged sections for parity evidence,
-and raise `ValueError` when invalid parameters are supplied, keeping the PY6 admin-surface
-roadmap gate reproducible.
+and raise `ValueError` when invalid parameters are supplied, keeping
+admin-surface updates reproducible.
 
 Configuration snapshots also expose transport defaults so automation can pick up the
 streaming/SoraNet knobs without parsing raw JSON:
@@ -1551,11 +1558,12 @@ if transport and transport.streaming and transport.streaming.soranet:
     print("Provision queue cap:", soranet.provision_queue_capacity)
 ```
 
-## UAID portfolio & manifests (NX-16)
+## UAID portfolio and manifests
 
-The `NX-16` roadmap introduces UAID-level portfolio, bindings, and Space Directory manifest APIs.
-The Torii client exposes typed helpers so wallets and automation scripts can hit the endpoints
-without bespoke parsing, including optional `asset_id` filtering for portfolio reads:
+The Torii client exposes typed UAID-level portfolio, binding, and Space
+Directory manifest helpers so wallets and automation scripts can use the
+endpoints without bespoke parsing, including optional `asset_id` filtering for
+portfolio reads:
 
 ```python
 from iroha_python import ToriiClient
@@ -1876,16 +1884,6 @@ python3 scripts/release_manifest_signing.py verify \
     "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
 ```
 
-### Support policy & cadence (PY6-P3)
-
-- Critical security fixes ship within **48 hours** of confirmation; high-severity defects ship within **5 business days**; maintenance issues land in the next scheduled release (≤30 days).
-- Maintain at least **18 months** of overlapping LTS branches and regenerate SBOM/provenance bundles for every supported train.
-- Release packets must include the smoke transcript, immutable package checksums,
-  and the externally authenticated aggregate-manifest tuple; the smoke harness
-  itself contributes no signature or signing key.
-- Publish changelog entries and release notes alongside the roadmap pointers to keep parity with Rust/Android/JS/Swift cadence expectations.
-
-
 ## Testing
 
 Run the Python lint/type-check/test suite with:
@@ -1893,14 +1891,13 @@ Run the Python lint/type-check/test suite with:
 ```bash
 ./python/iroha_python/scripts/run_checks.sh
 ```
-`make python-checks` is a convenience wrapper around the same script.
 
-This command runs `ruff`, `mypy`, `pytest`, and the fixture parity check so the SDK stays in sync with the canonical Norito artifacts.
-extras first (`pip install -e python/iroha_python[dev]`) to pull in the required
-
-This command runs `ruff`, `mypy`, `pytest`, the fixture parity check, and (optionally) the release smoke test so the SDK stays in sync with the canonical Norito artifacts.
-Install the dev extras first (`pip install -e python/iroha_python[dev]`) to pull in the required tools. Set `SKIP_LINT=1`, `SKIP_TESTS=1`, or `SKIP_FIXTURES=1` to skip individual phases while iterating locally.
-iterating locally.
+`make python-checks` is a convenience wrapper around the same script. Install
+the development extras first with
+`pip install -e python/iroha_python[dev]`. The command runs `ruff`, `mypy`,
+`pytest`, and the fixture parity check so the SDK stays aligned with the
+canonical Norito artifacts. Set `SKIP_LINT=1`, `SKIP_TESTS=1`, or
+`SKIP_FIXTURES=1` to skip an individual phase while iterating locally.
 
 Run the Rust unit tests for the bindings with:
 
@@ -2061,9 +2058,9 @@ no environment variables need to be exported.
 - Extend the Torii client with governance helpers (proposal deployment, ballot
   submission, referendum status) so clients can orchestrate governance flows
   without hand-crafted HTTP requests.
-- Include configuration helpers (`get_confidential_gas_schedule`,
-  `set_confidential_gas_schedule`) so operators can inspect or update the
-  confidential verification gas schedule without manually building DTO payloads.
+- Include `get_confidential_gas_schedule` so operators can inspect the
+  confidential verification gas schedule. The schedule is startup configuration
+  committed into the ZK policy hash and is not mutable through the runtime API.
 - Expose administrative helpers for configuration updates, peer discovery
   (typed `PeerInfo` via `list_peers_typed`), network time introspection
   (`NetworkTimeSnapshot`/`NetworkTimeStatus`), and runtime metadata
@@ -2122,14 +2119,3 @@ no environment variables need to be exported.
   ZK verifying-key helpers round out the Torii surface needed by PoC operators.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.
-
-## Next steps
-
-- Expand the transaction builder with ergonomic instruction builders and account
-  helpers so Python code can compose manifests without raw JSON payloads.
-- Offer high-level APIs for transaction submission, queries, and event
-  streaming.
-- Extend the Norito RPC helper once the Nexus RPC services stabilise and add
-  end-to-end fixtures for the Connect flows.
-
-Contributions and feedback are welcome while the package is taking shape.

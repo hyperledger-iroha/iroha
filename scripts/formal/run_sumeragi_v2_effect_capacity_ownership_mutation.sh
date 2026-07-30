@@ -108,70 +108,83 @@ run_case timeout-sign-retained-and-protected "$OWNERSHIP_MODULE" \
   "depth of the complete state graph search is 5"
 
 readonly CERTIFIED_REQUEST_MODULE="SumeragiV2CertifiedRequestCapacityMutation.tla"
-run_case certified-request-capacity-lost "$CERTIFIED_REQUEST_MODULE" \
+run_case certified-request-retained-owner-drop "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_lost_bug.cfg 12 \
   "TLC2 Version 2.19" \
-  "Invariant CapacityBlockedFetchBRemainsMissing is violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
-  "retainedFetchB = FALSE" \
-  "missingFetchB = FALSE" \
-  "fatal = FALSE" \
-  "3 states generated, 3 distinct states found, 1 states left on queue."
+  "Invariant RetainedFetchBIsNotDropped is violated." \
+  "State 2: <RetainCapacityBlockedFetchB" \
+  "retainedEffects = <<>>"
+
+run_case certified-request-retained-owner-substitution "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_substitute_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBHasExactAuthorityAndTask is violated." \
+  "State 2: <RetainCapacityBlockedFetchB"
+
+run_case certified-request-retained-owner-duplication "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_duplicate_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBHasOneOwner is violated." \
+  "State 2: <RetainCapacityBlockedFetchB"
+
+run_case certified-request-retained-owner-overtake "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_overtake_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant RetainedFetchBRemainsFifoHead is violated." \
+  "State 2: <RetainCapacityBlockedFetchB"
 
 run_case certified-request-capacity-fatal "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_fatal_bug.cfg 12 \
   "TLC2 Version 2.19" \
   "Invariant CertifiedRequestPressureIsNonfatal is violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
-  "retainedFetchB = FALSE" \
-  "missingFetchB = TRUE" \
-  "fatal = TRUE" \
-  "3 states generated, 3 distinct states found, 1 states left on queue."
+  "State 2: <RetainCapacityBlockedFetchB" \
+  "fatal = TRUE"
 
 run_case certified-response-count-reserve-missing "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_response_count_reserve_bug.cfg 13 \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
+  "State 2: <RetainCapacityBlockedFetchB" \
   "outerGenericCountOwned = TRUE" \
   "responseAAdmitted = FALSE" \
-  "State 3: Stuttering" \
-  "4 states generated, 4 distinct states found, 0 states left on queue."
+  "State 3: Stuttering"
 
 run_case certified-response-byte-reserve-missing "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_response_byte_reserve_bug.cfg 13 \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
+  "State 2: <RetainCapacityBlockedFetchB" \
   "outerGenericBytesOwned = TRUE" \
   "responseAAdmitted = FALSE" \
-  "State 3: Stuttering" \
-  "4 states generated, 4 distinct states found, 0 states left on queue."
+  "State 3: Stuttering"
 
 run_case certified-response-blocked-by-unrelated-retained-debt "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_response_blocked_bug.cfg 13 \
   "TLC2 Version 2.19" \
   "Temporal properties were violated." \
-  "State 2: <EmitHigherAuthorityFetchB" \
-  "retainedFetchB = FALSE" \
+  "State 2: <RetainCapacityBlockedFetchB" \
   "unrelatedRetainedT = TRUE" \
   "fatal = FALSE" \
   "State 3: <AdmitOuterTransportResponseA" \
   "responseAQueued = TRUE" \
-  "State 4: Stuttering" \
-  "6 states generated, 6 distinct states found, 0 states left on queue."
+  "State 4: Stuttering"
 
-run_case certified-request-capacity-released-and-retransmitted "$CERTIFIED_REQUEST_MODULE" \
+run_case certified-request-partial-pq-drain "$CERTIFIED_REQUEST_MODULE" \
+  effect_capacity_certified_request_partial_pq_bug.cfg 12 \
+  "TLC2 Version 2.19" \
+  "Invariant DrainRetainedFetchBIsAtomic is violated." \
+  "<DrainRetainedFetchB"
+
+run_case certified-request-retained-owner-drains-atomically "$CERTIFIED_REQUEST_MODULE" \
   effect_capacity_certified_request_fixed.cfg 0 \
   "TLC2 Version 2.19" \
-  "Finished computing initial states: 2 distinct states generated" \
+  "Finished computing initial states: 3 distinct states generated" \
   "Model checking completed. No error has been found." \
-  "<EmitHigherAuthorityFetchB" \
+  "<RetainCapacityBlockedFetchB" \
   "<AdmitOuterTransportResponseA" \
   "<ConsumeTransportOnlyResponseA" \
-  "<RetransmitMissingFetchB" \
-  "10 states generated, 10 distinct states found, 0 states left on queue." \
-  "depth of the complete state graph search is 5"
+  "<ReleaseOrdinaryWorkCapacityA" \
+  "<DrainRetainedFetchB"
 
 readonly OUTER_TRANSPORT_MODULE="SumeragiV2EffectCapacityOuterTransportMutation.tla"
 run_case outer-certified-response-classification-missing "$OUTER_TRANSPORT_MODULE" \

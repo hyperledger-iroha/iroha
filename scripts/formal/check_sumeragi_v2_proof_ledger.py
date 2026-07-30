@@ -20,7 +20,7 @@ from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-FORMAL_DIR = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+FORMAL_DIR = ROOT_DIR / "formal" / "sumeragi_v2"
 LEDGER_PATH = FORMAL_DIR / "proof_coverage.json"
 VERUS_SOURCE_DIR = ROOT_DIR / "crates" / "iroha_sumeragi_core" / "src"
 TLAPM_COMMIT = "3ab43c7ff31db4ced850619d4746fa4c841a7681"
@@ -778,9 +778,13 @@ EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS = (
     "effect_batch_partial_fifo_reverse_bug.cfg",
     "effect_batch_second_accepted_bug.cfg",
     "effect_batch_second_rejected_fixed.cfg",
+    "effect_capacity_certified_request_duplicate_bug.cfg",
     "effect_capacity_certified_request_fatal_bug.cfg",
     "effect_capacity_certified_request_fixed.cfg",
     "effect_capacity_certified_request_lost_bug.cfg",
+    "effect_capacity_certified_request_overtake_bug.cfg",
+    "effect_capacity_certified_request_partial_pq_bug.cfg",
+    "effect_capacity_certified_request_substitute_bug.cfg",
     "effect_capacity_certified_response_blocked_bug.cfg",
     "effect_capacity_certified_response_byte_reserve_bug.cfg",
     "effect_capacity_certified_response_count_reserve_bug.cfg",
@@ -804,7 +808,7 @@ EFFECT_CAPACITY_MUTATION_RUNNER = (
 )
 EFFECT_CAPACITY_MUTATION_SHA256 = {
     "SumeragiV2CertifiedRequestCapacityMutation.tla": (
-        "b1ee5cb369860881b40c53a9802881fbb18919b65d857f8a0d7bdcf11b398251"
+        "2544bbf64cbf065c521c5fb4d72c6b141711994ddb712a6609a5d0f043df3a3d"
     ),
     "SumeragiV2EffectCapacityOwnershipMutation.tla": (
         "de3b89fc0946f138f3ed9d62505f8aab592b907fd8e97b13f3056086edf051d9"
@@ -845,23 +849,35 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
     "effect_batch_second_rejected_fixed.cfg": (
         "463cc383fe9230f44c7f8d78c13acaa1d31994a797d33a37890167a834bc600e"
     ),
+    "effect_capacity_certified_request_duplicate_bug.cfg": (
+        "65f5e9f5ea6e7aebaa295948630edfeed0f83abce1c28c08589b1b339095419e"
+    ),
     "effect_capacity_certified_request_fatal_bug.cfg": (
-        "f94364d791efbd786808764f86af09ff02340c568367a54cea693c4b9f27209c"
+        "8e3c58d61972c8dab86a453543adcad9271c03e4caebbe8fa748bc255a6c5b8b"
     ),
     "effect_capacity_certified_request_fixed.cfg": (
-        "8795617fc8854501ffa629b88d1db236636817ab7e0bffb750e41e4c0b39864a"
+        "c84dcd6d45e8814d742a13f4b912bda2c33f393fa59efee1fef31815e904aca2"
     ),
     "effect_capacity_certified_request_lost_bug.cfg": (
-        "9c2b7b6b11a6a3cffd5a792e9eb3dd15164ac4bd3b1dedcf7772b85327c1f066"
+        "271a09aefa7988a7773e5517a5ba1d71bd7d97da32c325a3dd5aa5ddc84e6048"
+    ),
+    "effect_capacity_certified_request_overtake_bug.cfg": (
+        "1b0dc2a7fe49f70775b56aa9f175d5b41d9174198bb0b099bad01bc03994ffb3"
+    ),
+    "effect_capacity_certified_request_partial_pq_bug.cfg": (
+        "f750e4462ebe390003b0f208c81447ce33ef6e0384c42313ff7b38ed6fdb0260"
+    ),
+    "effect_capacity_certified_request_substitute_bug.cfg": (
+        "2f439cf603afa6bf2d53f3f1d62bac9987bcd8a0f2de942c80d4cf7617f2c875"
     ),
     "effect_capacity_certified_response_blocked_bug.cfg": (
-        "8335391327ffcb099a3bd7cef86e1d21bd61bce71b93e1e4bbe2d6d5a8a16db2"
+        "efa49fe595b673da31f8d20ee4d264121bddc5756de9ba1d1751a3909ba747bc"
     ),
     "effect_capacity_certified_response_byte_reserve_bug.cfg": (
-        "7322bc6395d64346e463d8c1295d8d9385748d7f78f1f15f8a2aeab8524dd520"
+        "8fe029ff770a637b3c858e155fbefe1ebd553133828a3e51be2b4ce988147c38"
     ),
     "effect_capacity_certified_response_count_reserve_bug.cfg": (
-        "388c751955d0aeb4d14517f682b3d591359cd5528dfab7654082cb58e3663d24"
+        "075ec11417edc3ece66d64f794b7aaddb0f24c93140ac32a0c46e7b46fc41f95"
     ),
     "effect_capacity_decided_retirement_fixed.cfg": (
         "5a340c3f1bfe9b2f626781994e2b449117f02f3f70ef08a42cb132dfa960de8e"
@@ -906,7 +922,7 @@ EFFECT_CAPACITY_MUTATION_SHA256 = {
         "15cded2fae4c33a3276314718793e9a46b1f59571c8f2501f49eae114cc67524"
     ),
     EFFECT_CAPACITY_MUTATION_RUNNER: (
-        "e627a84ab35e719670c67a31396c09735886d771b63279c204211255aaba7072"
+        "6a33ab18e232bd1f390e2103de85bd46f436a4b6f940cb8eaea001695cd3d91c"
     ),
 }
 EFFECT_CAPACITY_MUTATION_FORMAL_GLOBS = (
@@ -3885,49 +3901,53 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/status.rs",
                         item="begin_v2_successor_activation",
                         item_token_sha256=(
-                            "75a97fea11fa80934f6ac549867de2be2392e5636229a57f342edaa73bf30f62"
+                            "f95cef32673e4198e82e345d2c65013bfbd4ce2b805d23577c1a1d4e095f8c2a"
                         ),
                         projection="lifecycle",
                         required_expression="""
-                            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
-                                lifecycle
-                            ) {
+                            let Some(checked_lifecycle) =
+                                check_production_successor_startup_lifecycle_transition(lifecycle)
+                            else {
                                 return Err(V2SuccessorActivationError::RefinementRejected);
-                            }
+                            };
+                            let _authorized_lifecycle = checked_lifecycle.into_projection();
                         """,
                     ),
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/status.rs",
                         item="mark_v2_restart_required",
                         item_token_sha256=(
-                            "42ecf2fdaa311da9e1052c8816e0fc234d99539b906d59a462c3b48e13bb54b7"
+                            "9b5397ef6ec9c1ec10afcd09f165cca3b490745fa5116bbcc987195d8f665164"
                         ),
                         projection="lifecycle",
                         required_expression="""
-                            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
-                                lifecycle
-                            ) {
+                            let Some(checked_lifecycle) =
+                                check_production_successor_startup_lifecycle_transition(lifecycle)
+                            else {
                                 iroha_logger::error!(
                                     height = status.height,
-                                    "Sumeragi v2 Running successor failure projection was rejected; latching restart-required fail-closed"
+                                    "Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"
                                 );
-                            }
+                                return;
+                            };
+                            let _authorized_lifecycle = checked_lifecycle.into_projection();
                         """,
                     ),
                     CrossToolProductionCallContract(
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="recovered",
                         item_token_sha256=(
-                            "005f6527ef96edc19bde4148278fba7e2c8c7d128657388e7fe2454f915a4921"
+                            "6891e48b93cba8622846afda4f0f08fb5efaa7fb98f5d58d5cfb791ce64cc203"
                         ),
                         brace_context=(("impl", "PendingSuccessorActivation"),),
                         projection="lifecycle",
                         required_expression="""
-                            if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
-                                lifecycle
-                            ) {
+                            let Some(checked_lifecycle) =
+                                check_production_successor_startup_lifecycle_transition(lifecycle)
+                            else {
                                 return Err(V2RunnerError::SuccessorRefinementRejected);
-                            }
+                            };
+                            let _authorized_lifecycle = checked_lifecycle.into_projection();
                         """,
                     ),
                 ),
@@ -17457,7 +17477,7 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 738
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f"
+    "328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
@@ -39813,6 +39833,10 @@ def _effect_capacity_mutation_runner_errors(
                 "effect_capacity_certified_request_fatal_bug.cfg",
                 "effect_capacity_certified_request_fixed.cfg",
                 "effect_capacity_certified_request_lost_bug.cfg",
+                "effect_capacity_certified_request_duplicate_bug.cfg",
+                "effect_capacity_certified_request_overtake_bug.cfg",
+                "effect_capacity_certified_request_partial_pq_bug.cfg",
+                "effect_capacity_certified_request_substitute_bug.cfg",
                 "effect_capacity_certified_response_blocked_bug.cfg",
                 "effect_capacity_certified_response_byte_reserve_bug.cfg",
                 "effect_capacity_certified_response_count_reserve_bug.cfg",
@@ -39864,7 +39888,7 @@ def _effect_capacity_mutation_runner_errors(
     if set(expected_model_by_config) != expected_configs:
         errors.append(
             f"{path}: semantic config/model inventory differs from the sealed "
-            "twenty-eight-config corpus"
+            "thirty-two-config corpus"
         )
     if {model for model, _ in config_groups} != expected_models:
         errors.append(
@@ -39959,12 +39983,12 @@ def _effect_capacity_mutation_runner_errors(
         if observed_configs.count(config) != 1
     )
     if (
-        len(cases) != 28
+        len(cases) != 32
         or observed_config_set != expected_configs
         or duplicate_configs
     ):
         errors.append(
-            f"{path}: runner must execute each of the twenty-eight sealed "
+            f"{path}: runner must execute each of the thirty-two sealed "
             "configurations exactly once; "
             f"cases={len(cases)}, missing={sorted(expected_configs - observed_config_set)}, "
             f"extra={sorted(observed_config_set - expected_configs)}, "
@@ -39973,9 +39997,9 @@ def _effect_capacity_mutation_runner_errors(
 
     repaired_count = sum(case["status"] == 0 for case in cases)
     mutant_count = sum(case["status"] != 0 for case in cases)
-    if repaired_count != 10 or mutant_count != 18:
+    if repaired_count != 10 or mutant_count != 22:
         errors.append(
-            f"{path}: runner must contain exactly 10 repaired cases and 18 "
+            f"{path}: runner must contain exactly 10 repaired cases and 22 "
             f"mutant cases; found repaired={repaired_count}, mutants={mutant_count}"
         )
 
@@ -39993,6 +40017,17 @@ def _effect_capacity_mutation_runner_errors(
             for marker in case["markers"]
             if (match := state_marker.fullmatch(marker)) is not None
         ]
+        if (
+            case["model"]
+            == "SumeragiV2CertifiedRequestCapacityMutation.tla"
+        ):
+            if matches:
+                errors.append(
+                    f"{path}: {case['label']} must not pin unreviewed "
+                    "generated/distinct-state totals for the revised "
+                    "certified-request model"
+                )
+            continue
         if len(matches) != 1:
             errors.append(
                 f"{path}: {case['label']} must pin exactly one complete "
@@ -40003,13 +40038,13 @@ def _effect_capacity_mutation_runner_errors(
         generated_total += int(matches[0].group("generated"))
         distinct_total += int(matches[0].group("distinct"))
     if (
-        parsed_state_cases != 28
-        or generated_total != 161
-        or distinct_total != 160
+        parsed_state_cases != 22
+        or generated_total != 131
+        or distinct_total != 130
     ):
         errors.append(
-            f"{path}: runner must report exactly 161 generated states and "
-            "160 distinct states across 28 cases; found "
+            f"{path}: runner must report exactly 131 generated states and "
+            "130 distinct states across the 22 unchanged cases; found "
             f"generated={generated_total}, distinct={distinct_total}, "
             f"parsed_cases={parsed_state_cases}"
         )
@@ -40039,13 +40074,36 @@ def _effect_capacity_mutation_runner_errors(
 
     certified_roles = {
         "effect_capacity_certified_request_lost_bug.cfg": (
-            "certified-request-capacity-lost",
+            "certified-request-retained-owner-drop",
             12,
             (
-                "Invariant CapacityBlockedFetchBRemainsMissing is violated.",
-                "retainedFetchB = FALSE",
-                "missingFetchB = FALSE",
-                "fatal = FALSE",
+                "Invariant RetainedFetchBIsNotDropped is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+                "retainedEffects = <<>>",
+            ),
+        ),
+        "effect_capacity_certified_request_substitute_bug.cfg": (
+            "certified-request-retained-owner-substitution",
+            12,
+            (
+                "Invariant RetainedFetchBHasExactAuthorityAndTask is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+            ),
+        ),
+        "effect_capacity_certified_request_duplicate_bug.cfg": (
+            "certified-request-retained-owner-duplication",
+            12,
+            (
+                "Invariant RetainedFetchBHasOneOwner is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
+            ),
+        ),
+        "effect_capacity_certified_request_overtake_bug.cfg": (
+            "certified-request-retained-owner-overtake",
+            12,
+            (
+                "Invariant RetainedFetchBRemainsFifoHead is violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
             ),
         ),
         "effect_capacity_certified_request_fatal_bug.cfg": (
@@ -40053,8 +40111,7 @@ def _effect_capacity_mutation_runner_errors(
             12,
             (
                 "Invariant CertifiedRequestPressureIsNonfatal is violated.",
-                "retainedFetchB = FALSE",
-                "missingFetchB = TRUE",
+                "State 2: <RetainCapacityBlockedFetchB",
                 "fatal = TRUE",
             ),
         ),
@@ -40063,7 +40120,7 @@ def _effect_capacity_mutation_runner_errors(
             13,
             (
                 "Temporal properties were violated.",
-                "retainedFetchB = FALSE",
+                "State 2: <RetainCapacityBlockedFetchB",
                 "unrelatedRetainedT = TRUE",
                 "fatal = FALSE",
                 "State 3: <AdmitOuterTransportResponseA",
@@ -40076,6 +40133,7 @@ def _effect_capacity_mutation_runner_errors(
             13,
             (
                 "Temporal properties were violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
                 "outerGenericCountOwned = TRUE",
                 "responseAAdmitted = FALSE",
                 "State 3: Stuttering",
@@ -40086,21 +40144,31 @@ def _effect_capacity_mutation_runner_errors(
             13,
             (
                 "Temporal properties were violated.",
+                "State 2: <RetainCapacityBlockedFetchB",
                 "outerGenericBytesOwned = TRUE",
                 "responseAAdmitted = FALSE",
                 "State 3: Stuttering",
             ),
         ),
+        "effect_capacity_certified_request_partial_pq_bug.cfg": (
+            "certified-request-partial-pq-drain",
+            12,
+            (
+                "Invariant DrainRetainedFetchBIsAtomic is violated.",
+                "<DrainRetainedFetchB",
+            ),
+        ),
         "effect_capacity_certified_request_fixed.cfg": (
-            "certified-request-capacity-released-and-retransmitted",
+            "certified-request-retained-owner-drains-atomically",
             0,
             (
-                "Finished computing initial states: 2 distinct states generated",
+                "Finished computing initial states: 3 distinct states generated",
                 "Model checking completed. No error has been found.",
-                "<EmitHigherAuthorityFetchB",
+                "<RetainCapacityBlockedFetchB",
                 "<AdmitOuterTransportResponseA",
                 "<ConsumeTransportOnlyResponseA",
-                "<RetransmitMissingFetchB",
+                "<ReleaseOrdinaryWorkCapacityA",
+                "<DrainRetainedFetchB",
             ),
         ),
     }
@@ -40400,7 +40468,8 @@ services
             if retained_count != 0:
                 errors.append(
                     f"{effects_path}:{begin_fetch.line}: Q-capacity deferrals "
-                    "must leave no retained effect suffix; "
+                    "must not mutate the outer executor's exact retained FIFO "
+                    "owner inside begin_fetch; "
                     f"found {retained_count} occurrence(s) of {forbidden_source}"
                 )
 
@@ -48990,20 +49059,20 @@ def _effect_capacity_mutation_source_fidelity_errors(
     model_count = sum(name.endswith(".tla") for name in expected_formal)
     config_count = sum(name.endswith(".cfg") for name in expected_formal)
     if (
-        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 34
+        len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) != 38
         or model_count != 6
-        or config_count != 28
+        or config_count != 32
     ):
         errors.append(
             "effect-capacity mutation source seal must name exactly six models "
-            "and twenty-eight configurations; found "
+            "and thirty-two configurations; found "
             f"models={model_count}, configurations={config_count}, "
             f"total={len(EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS)}"
         )
     if digest_names != expected_all:
         errors.append(
             "effect-capacity mutation digest inventory must equal the exact "
-            f"35-artifact corpus; missing={sorted(expected_all - digest_names)}, "
+            f"39-artifact corpus; missing={sorted(expected_all - digest_names)}, "
             f"extra={sorted(digest_names - expected_all)}"
         )
 
@@ -74182,7 +74251,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "RecoveredSuccessorActivationAuthority::SnapshotBootstrap(authority)",
                 "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
                 "stage_before: SUCCESSOR_STAGE_NONE, stage_after: SUCCESSOR_STAGE_NONE, published_height_before: published_height, published_height_after: published_height, restart_required_before: false, restart_required_after: false,",
-                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "check_production_successor_startup_lifecycle_transition(lifecycle)",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection();",
                 "super::status::activate_v2_successor_height( expected_predecessor, authority, successor, )?;",
                 "super::status::activate_recovered_v2_successor_height(authority, successor)?;",
                 "super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
@@ -74196,7 +74266,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "match &authority",
                 "let published_height = super::status::v2_status()",
                 "ProductionSuccessorStartupLifecycleProjection",
-                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "check_production_successor_startup_lifecycle_transition(lifecycle)",
+                "checked_lifecycle.into_projection()",
                 "Ok(match authority",
             ),
         )
@@ -74291,7 +74362,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "let height = predecessor.height();",
                 "validate_v2_predecessor_status(&status, height, SumeragiV2LocalWorkStage::Queued)?;",
                 "stage_before: successor_stage_projection(status.liveness.work.successor_height), stage_after: SUCCESSOR_STAGE_RUNNING, published_height_before: status.height, published_height_after: status.height, restart_required_before: status.restart_required, restart_required_after: status.restart_required,",
-                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "check_production_successor_startup_lifecycle_transition(lifecycle)",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection();",
                 "update_v2_successor_work_stage_at( height, SumeragiV2LocalWorkStage::Queued, SumeragiV2LocalWorkStage::Running, Instant::now(), )",
             ),
         )
@@ -74302,7 +74374,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             (
                 "validate_v2_predecessor_status(",
                 "ProductionSuccessorStartupLifecycleProjection",
-                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "check_production_successor_startup_lifecycle_transition(lifecycle)",
+                "checked_lifecycle.into_projection()",
                 "update_v2_successor_work_stage_at(",
             ),
         )
@@ -74453,7 +74526,9 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             restart,
             (
                 "stage_before: successor_stage_projection(status.liveness.work.successor_height), stage_after: successor_stage_projection(status.liveness.work.successor_height), published_height_before: status.height, published_height_after: status.height, restart_required_before: status.restart_required, restart_required_after: true,",
-                "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "check_production_successor_startup_lifecycle_transition(lifecycle)",
+                "preserving the unchecked status",
+                "let _authorized_lifecycle = checked_lifecycle.into_projection();",
                 "status.restart_required = true;",
             ),
         )
@@ -74462,7 +74537,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "mark_v2_restart_required",
             restart,
             "return;",
-            1,
+            2,
         )
         require_order(
             status_path,
@@ -74470,7 +74545,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             restart,
             (
                 "ProductionSuccessorStartupLifecycleProjection",
-                "production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle)",
+                "check_production_successor_startup_lifecycle_transition(lifecycle)",
+                "checked_lifecycle.into_projection()",
                 "status.restart_required = true",
             ),
         )
@@ -74906,11 +74982,14 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "persisted.context() != &artifact.height_context",
                 "authenticate_certified_body_request(",
                 "verify_persisted_quorum_certificate(",
-                "binary_search(&responder)",
+                "let Some(responder_position)",
+                ".position(|entry| entry.validator == responder_peer)",
+                "return Ok(None);",
                 "kura\n        .get_block(block_height)",
                 "block.hash() != request.subject.block_hash",
                 "block.canonical_resultless_proposal()",
                 "encode_payload(",
+                "Signature::new(responder_key.private_key(), &response.signature_preimage())",
                 "response.validate_against(",
             ),
         )
@@ -74964,7 +75043,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         for test in (
             "sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue",
             "sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts",
-            "sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_only_a_certified_signer_can_serve",
+            "sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_a_non_signer_archive_can_serve",
             "sumeragi::v2_runtime::tests::successor_activation_snapshot_requires_armed_live_clocks",
             "sumeragi::v2_runner::tests::successor_activation_is_published_only_after_ingress_is_open",
             "sumeragi::v2_runner::tests::complete_tip_recovery_uses_the_same_live_successor_boundary",
@@ -80466,21 +80545,21 @@ def _production_liveness_release_inventory_errors(
         )
 
     documentation_claims = {
-        repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
+        repo_root / "formal" / "sumeragi_v2" / "README.md": (
             "current inventory therefore contains 738 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
-        repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
+        repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
             "738-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
-        repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
+        repo_root / "specs" / "sumeragi_v2_liveness.md": (
             "current source-bound inventory therefore contains 738 exact tests "
             "across\n38 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",

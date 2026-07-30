@@ -25,11 +25,9 @@ RETIRED_SCHEMAS = (
     "SorafsEconomicsHedgingReferenceResponse",
 )
 OPENAPI_COPIES = (
-    REPO_ROOT / "docs" / "portal" / "static" / "openapi" / "torii.json",
+    REPO_ROOT / "artifacts" / "openapi" / "torii.json",
     REPO_ROOT
-    / "docs"
-    / "portal"
-    / "static"
+    / "artifacts"
     / "openapi"
     / "versions"
     / "current"
@@ -125,9 +123,9 @@ def test_checked_openapi_copies_exclude_retired_routes_and_schemas() -> None:
 
 def test_canonical_docs_require_discard_and_reseed() -> None:
     hedging = (
-        REPO_ROOT / "docs" / "source" / "sorafs_hedging_plan.md"
+        REPO_ROOT / "specs" / "sorafs_hedging_plan.md"
     ).read_text(encoding="utf-8")
-    pricing = (REPO_ROOT / "docs" / "source" / "sorafs_pricing.md").read_text(
+    pricing = (REPO_ROOT / "specs" / "sorafs_pricing.md").read_text(
         encoding="utf-8"
     )
     combined = " ".join(f"{hedging}\n{pricing}".split())

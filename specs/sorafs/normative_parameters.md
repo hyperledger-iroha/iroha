@@ -140,4 +140,4 @@ auditors share a single source of truth.
 **Maintenance:** update this snapshot whenever chunking, proof, or transport
 parameters change. Include the commit hash, dashboard UID, or CLI command
 needed to reproduce each value so governance can tie roadmap reviews to a
-static artefact. Mirror significant edits into the portal copy if one is added.
+static artefact. Coordinate significant public-facing edits in `iroha-docs`.

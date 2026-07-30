@@ -44,51 +44,51 @@ records that as the primary finding and models the same class of failure in TLA+
 
 Audited code evidence:
 
-- [../../crates/iroha_data_model/src/zk.rs](../../crates/iroha_data_model/src/zk.rs):
+- [../crates/iroha_data_model/src/zk.rs](../crates/iroha_data_model/src/zk.rs):
   `OpenVerifyEnvelope`, generic STARK wrapper payloads,
   `ZkAcePrivacyPublicInputsV1`, replay-nullifier derivation, and canonical
   public-input hashing.
-- [../../crates/iroha_data_model/src/privacy.rs](../../crates/iroha_data_model/src/privacy.rs):
+- [../crates/iroha_data_model/src/privacy.rs](../crates/iroha_data_model/src/privacy.rs):
   the closed privacy protocol registry, compiled-artifact bindings, governed
   ZK-ACE policy records, typed statements, and proof envelopes.
-- [../../crates/iroha_data_model/src/proof.rs](../../crates/iroha_data_model/src/proof.rs):
+- [../crates/iroha_data_model/src/proof.rs](../crates/iroha_data_model/src/proof.rs):
   `ProofBox`, `ProofAttachment`, `VerifyingKeyBox`, `VerifyingKeyRecord`, key status,
   and backend/commitment serialization policy.
-- [../../crates/iroha_core/src/zk.rs](../../crates/iroha_core/src/zk.rs): verifier
+- [../crates/iroha_core/src/zk.rs](../crates/iroha_core/src/zk.rs): verifier
   dispatch, preverify/dedup, backend-label guardrails, envelope metadata checks,
   STARK/Halo2 entry points, and timing/size guardrails.
-- [../../crates/iroha_core/src/zk_stark.rs](../../crates/iroha_core/src/zk_stark.rs):
+- [../crates/iroha_core/src/zk_stark.rs](../crates/iroha_core/src/zk_stark.rs):
   generic native Goldilocks STARK/FRI verifier and AIR bindings; the generic
   boundary explicitly rejects the retired ZK-ACE relation.
-- [../../crates/iroha_core/src/privacy_engines/zk_ace.rs](../../crates/iroha_core/src/privacy_engines/zk_ace.rs)
+- [../crates/iroha_core/src/privacy_engines/zk_ace.rs](../crates/iroha_core/src/privacy_engines/zk_ace.rs)
   and
-  [../../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs](../../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs):
+  [../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs](../crates/iroha_core/src/privacy_engines/zk_ace_stark.rs):
   the private zeroizing witness, compiled profile, dedicated masked AIR,
   theorem-bound DEEP/FRI prover, and native verifier.
-- [../../crates/iroha_zkp_halo2/src/lib.rs](../../crates/iroha_zkp_halo2/src/lib.rs):
+- [../crates/iroha_zkp_halo2/src/lib.rs](../crates/iroha_zkp_halo2/src/lib.rs):
   IPA verifier wrapper, generator derivation, envelope decoding, limits, and batch
   verification API.
-- [../../crates/zk_ace_prover/src/lib.rs](../../crates/zk_ace_prover/src/lib.rs):
+- [../crates/zk_ace_prover/src/lib.rs](../crates/zk_ace_prover/src/lib.rs):
   governed transfer construction, typed proof-envelope assembly, exact
   transaction-intent binding, and signed `SubmitPrivacyProofV1` creation.
-- [../../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../../crates/iroha_core/src/smartcontracts/isi/privacy.rs):
+- [../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../crates/iroha_core/src/smartcontracts/isi/privacy.rs):
   privacy activation and ZK-ACE policy governance, typed proof verification,
   atomic transfer effects, and replay-nullifier consumption.
-- [../../crates/iroha_core/src/smartcontracts/isi/world.rs](../../crates/iroha_core/src/smartcontracts/isi/world.rs):
+- [../crates/iroha_core/src/smartcontracts/isi/world.rs](../crates/iroha_core/src/smartcontracts/isi/world.rs):
   generic verifying-key registry policy, `VerifyProof`, governance proof
   checks, and FASTPQ lane relay admission.
-- [../../crates/iroha_core/src/smartcontracts/ivm/host.rs](../../crates/iroha_core/src/smartcontracts/ivm/host.rs):
+- [../crates/iroha_core/src/smartcontracts/ivm/host.rs](../crates/iroha_core/src/smartcontracts/ivm/host.rs):
   IVM VK loading, envelope enforcement, verifier syscalls, and batch verification.
-- [../../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs](../../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs):
+- [../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs](../crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs):
   Kaigi privacy proof metadata and roster-root verification.
-- [../../crates/iroha_torii/src/lib.rs](../../crates/iroha_torii/src/lib.rs),
-  [../../crates/iroha_torii/src/zk_attachments.rs](../../crates/iroha_torii/src/zk_attachments.rs),
-  and [../../crates/iroha_torii/src/zk_prover.rs](../../crates/iroha_torii/src/zk_prover.rs):
+- [../crates/iroha_torii/src/lib.rs](../crates/iroha_torii/src/lib.rs),
+  [../crates/iroha_torii/src/zk_attachments.rs](../crates/iroha_torii/src/zk_attachments.rs),
+  and [../crates/iroha_torii/src/zk_prover.rs](../crates/iroha_torii/src/zk_prover.rs):
   app-facing proof submission, verification, storage, and non-consensus worker
   boundaries.
-- [../../crates/fastpq_prover/src/proof.rs](../../crates/fastpq_prover/src/proof.rs),
-  [../../crates/fastpq_prover/src/axt_binding.rs](../../crates/fastpq_prover/src/axt_binding.rs),
-  and [../../crates/iroha_data_model/src/fastpq.rs](../../crates/iroha_data_model/src/fastpq.rs):
+- [../crates/fastpq_prover/src/proof.rs](../crates/fastpq_prover/src/proof.rs),
+  [../crates/fastpq_prover/src/axt_binding.rs](../crates/fastpq_prover/src/axt_binding.rs),
+  and [../crates/iroha_data_model/src/fastpq.rs](../crates/iroha_data_model/src/fastpq.rs):
   FASTPQ public I/O, transcript arithmetic, AIR/FRI verification, AXT packaging,
   lane claim binding, and transfer transcripts.
 
@@ -114,7 +114,7 @@ canonical `zk_ace_prover` path selects an active governed
 them in exactly one signed `SubmitPrivacyProofV1`, and does not expose a
 caller-selected backend, verifier key, proof attachment, or generic
 `OpenVerifyEnvelope`. `SubmitPrivacyProofV1` execution in
-[../../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../../crates/iroha_core/src/smartcontracts/isi/privacy.rs)
+[../crates/iroha_core/src/smartcontracts/isi/privacy.rs](../crates/iroha_core/src/smartcontracts/isi/privacy.rs)
 validates the signed transaction intent, compiled activation, governed policy,
 native proof, and replay state before committing the transfer effects. The
 native verifier does not consult committed-result trust.
@@ -312,7 +312,7 @@ recording a verified lane relay.
 ## Formal Model
 
 The audit adds a TLA+ control-plane model under [../formal/zk](../formal/zk) and a
-runner at [../../scripts/formal/zk_tlc.sh](../../scripts/formal/zk_tlc.sh). The model
+runner at [../scripts/formal/zk_tlc.sh](../scripts/formal/zk_tlc.sh). The model
 asserts active matching VK requirements, backend/circuit/schema/VK-hash/domain/public
 input non-swappability, disabled/trusted/developer/oversized/decode-only fail-closed
 behavior, diagnostic endpoint separation, ZK-ACE replay rejection, and FASTPQ claim

@@ -2556,6 +2556,7 @@ where
         )
     }
     .with_access_logging();
+    host.set_output_limits_from_parameters(state_ro.world().parameters().smart_contract());
     host.set_prepared_contract_cache(state_ro.prepared_contract_cache());
     host.hydrate_axt_state(state_ro)
         .map_err(|e| format!("ivm.axt_state: {e}"))?;

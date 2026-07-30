@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import shutil
 from pathlib import Path
@@ -91,61 +90,6 @@ def test_guard_rejects_fake_renewal_and_stale_docs(tmp_path: Path) -> None:
     failures = MODULE.check_contract(root)
     assert any(item.startswith("xtask:placeholder-renewal:") for item in failures)
     assert any(":stale-claim:" in item for item in failures)
-
-
-def test_guard_accepts_traceable_generated_translation_stub(tmp_path: Path) -> None:
-    root = tmp_path / "repo"
-    copy_contract_fixture(root)
-
-    canonical = root / "specs/sorafs_gateway_tls_automation.md"
-    source_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
-    localized = canonical.with_name("sorafs_gateway_tls_automation.ja.md")
-    localized.write_text(
-        "<!-- Auto-generated stub for Japanese (ja) translation. "
-        "Replace this content with the full translation. -->\n\n"
-        "---\n"
-        "lang: ja\n"
-        "direction: ltr\n"
-        "source: specs/sorafs_gateway_tls_automation.md\n"
-        "status: needs-translation\n"
-        "generator: scripts/sync_docs_i18n.py\n"
-        f"source_hash: {source_hash}\n"
-        'source_last_modified: "2026-07-25T00:00:00+00:00"\n'
-        "translation_last_reviewed: null\n"
-        "---\n\n"
-        "# Translation In Progress\n",
-        encoding="utf-8",
-    )
-
-    assert MODULE.check_contract(root) == []
-
-
-def test_guard_rejects_malformed_generated_translation_stub(tmp_path: Path) -> None:
-    root = tmp_path / "repo"
-    copy_contract_fixture(root)
-
-    canonical = root / "specs/sorafs_gateway_tls_automation.md"
-    source_hash = hashlib.sha256(canonical.read_bytes()).hexdigest()
-    localized = canonical.with_name("sorafs_gateway_tls_automation.ja.md")
-    localized.write_text(
-        "<!-- Auto-generated stub for Japanese (ja) translation. "
-        "Replace this content with the full translation. -->\n\n"
-        "---\n"
-        "lang: ja\n"
-        "direction: ltr\n"
-        "source: specs/wrong.md\n"
-        "status: needs-translation\n"
-        "generator: scripts/sync_docs_i18n.py\n"
-        f"source_hash: {source_hash}\n"
-        'source_last_modified: "2026-07-25T00:00:00+00:00"\n'
-        "translation_last_reviewed: null\n"
-        "---\n\n"
-        "# Translation In Progress\n",
-        encoding="utf-8",
-    )
-
-    failures = MODULE.check_contract(root)
-    assert any(item.endswith(":generated-stub-metadata") for item in failures)
 
 
 def test_guard_rejects_missing_daemon_runtime_forwarding(tmp_path: Path) -> None:

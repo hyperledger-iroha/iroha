@@ -269,7 +269,9 @@ Action items tracked under SM-5a/SM-4c.1 ensure that CI captures parity proofs f
 
 ### Operator Documentation & Evidence
 - Pair this architecture brief with the rollout checklist in `specs/crypto/sm_operator_rollout.md` and the compliance filing guide in `specs/crypto/sm_compliance_brief.md`.
-- Keep the genesis/operator quickstart in sync across `docs/genesis.md`, `docs/genesis.he.md`, and `docs/genesis.ja.md`; the SM2/SM3 CLI workflow there is the operator-facing source of truth for seeding `crypto` manifests.
+- Keep the source-adjacent genesis notes in `docs/genesis.md` aligned with the
+  current implementation. Maintain the public operator quickstart and its
+  translations in the sibling `iroha-docs` repository.
 - Archive OpenSSL/Tongsuo provenance, `scripts/sm_openssl_smoke.sh` output, and `scripts/sm_interop_matrix.sh` parity logs with every release bundle so compliance and audit partners have deterministic artefacts.
 - Update `status.md` whenever compliance scope changes (new jurisdictions, filing completions, or export decisions) to keep programme state discoverable.
 - Follow the staged readiness reviews (`SM-RR1`–`SM-RR3`) captured in `specs/release_dual_track_runbook.md`; promotion between verify-only, pilot, and GA signing phases requires the artefacts enumerated there.
@@ -330,7 +332,8 @@ summary below tracks the headline items surfaced to release engineering.
 ## Compliance Appendix (State Commercial Cryptography)
 
 - **Classification:** SM2/SM3/SM4 ship under China’s *state commercial cryptography* regime (PRC Cryptography Law, Art. 3). Shipping these algorithms in Iroha software does **not** place the project in the core/common (state-secret) tiers, but operators using them in PRC deployments must follow commercial-crypto filing and MLPS obligations.【specs/crypto/sm_chinese_crypto_law_brief.md:14】
-- **Standards lineage:** Align public documentation with the official GB/T conversions of the GM/T specs:
+- **Standards lineage:** Align public documentation in the sibling `iroha-docs`
+  repository with the official GB/T conversions of the GM/T specs:
 
 | Algorithm | GB/T reference | GM/T origin | Notes |
 |-----------|----------------|-------------|-------|

@@ -181,7 +181,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--report-root",
         default=DEFAULT_REPORT_ROOT,
-        help=f"Directory containing localized annex reports (default: {DEFAULT_REPORT_ROOT})",
+        help=f"Directory containing canonical annex reports (default: {DEFAULT_REPORT_ROOT})",
     )
     parser.add_argument(
         "--base-dir",

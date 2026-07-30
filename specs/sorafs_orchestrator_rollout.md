@@ -28,7 +28,11 @@ on by default across binaries/SDKs and to gate releases when a regression forces
 1. **Transport stages:** `soranet-first` is now the default across every surface. Forcing `direct-only` (or pinning `max_peers=1`) requires an explicit override and a matching incident/reference to the SNNet blocker; `soranet-strict` remains reserved for PQ-only pilots (`crates/iroha_cli/src/commands/sorafs.rs:224`). Record overrides in the incident log and remove them within 24 h.
 2. **Anonymity stages:** SDKs honour `stage-*` labels (e.g., `anon-guard-pq`). Use the override knobs only when instructed by governance or compliance policy (`crates/sorafs_orchestrator/src/compliance.rs:23`).
 3. **Provider limits:** `--max-peers` and `--retry-budget` flags (CLI) or the SDK equivalents give SREs a deterministic way to dampen concurrency during brownouts.
-4. **Direct-mode fallback:** The direct-mode pack (`docs/portal/docs/sorafs/direct-mode-pack.md`, `fixtures/documentation/sorafs_direct_mode_smoke.sh`) remains the canonical procedure when regulators require Torii-only transport. Record the reason in the incident ticket before invoking the override.
+4. **Direct-mode fallback:** The repository-local
+   `fixtures/documentation/sorafs_direct_mode_smoke.sh` exercise remains the
+   code-adjacent validation path when regulators require Torii-only transport.
+   Record the reason in the incident ticket before invoking the override;
+   public operator guidance belongs in `iroha-docs`.
 
 ## 3.1 Downgrade remediation & proxy toggle workflow
 

@@ -1106,6 +1106,7 @@ mod tests {
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
 
+        #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
             "6b0e25a3b82013a68c900bf8b27f415f313c32cbeabce7c45ac8b55bd8d3c410";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =

@@ -4,7 +4,7 @@
   "category": "signature",
   "message": "OrderRequestV1 validation failed: orderbook signature verification failed: signature R is small-order (weak); rejected: Signature verification failed",
   "action": "Regenerate the orderbook payload from canonical orderbook or settlement state and retry validation.",
-  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "docs_url": "https://docs.iroha.tech/",
   "telemetry_tags": [
     "sorafs.reference.orderbook",
     "sorafs.reference.orderbook.order_request",

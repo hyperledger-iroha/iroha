@@ -6,7 +6,8 @@ summary: Dashboards, pricing cheatsheets, and registrar tooling required by road
 # Sora Name Service Metrics & Onboarding Kit
 
 **Roadmap reference:** SN-8 “Metrics & Onboarding” (see `roadmap.md:432`).  
-**Related assets:** `dashboards/grafana/sns_suffix_analytics.json`, `docs/portal/docs/sns/kpi-dashboard.md`.
+**Related asset:** `dashboards/grafana/sns_suffix_analytics.json`. Public SNS
+guidance is published from the sibling `iroha-docs` repository.
 
 This guide bundles the analytics package and registrar onboarding collateral
 for explicitly selected live SNS policies. It ties together the Grafana
@@ -15,7 +16,7 @@ governance has deterministic evidence when approving registrars or suffixes.
 
 ## 1. Metric bundle
 
-### 1.1 Grafana dashboard & portal mirror
+### 1.1 Grafana dashboard
 
 The checked-in `dashboards/grafana/sns_suffix_analytics.json` still contains
 pre-clean-break bulk-settlement series. Do not import it or treat it as
@@ -24,11 +25,8 @@ plans and committed transaction receipts. A read-only reporting adapter may
 export those records to Grafana; it must never create payment evidence or
 participate in consensus.
 
-- The portal page at `docs/portal/docs/sns/kpi-dashboard.md` defines the safe
-  data contract. Do not embed the legacy dashboard there until its queries
-  satisfy that contract.
-- `ci/check_docs_portal.sh` already exercises the embed; run it after updating
-  the dashboard JSON to catch stale hashes before publishing.
+- Do not publish or present the legacy dashboard as current until its queries
+  satisfy the safe-source contract in this section.
 
 ### 1.2 Panels & signals
 
@@ -40,8 +38,8 @@ participate in consensus.
 | Disputes & freezes | `guardian_freeze_active`, `sns_governance_activation_total`, `sns_dispute_outcome_total` | Shows open freezes, arbitration cadence, dispute backlog. |
 | Lifecycle operations | Verified renewal/auto-renew plans and transaction receipts | CAS failures, suspensions, retries, and successful renewals. |
 
-Export PDF or CSV snapshots from Grafana (or the portal embed) during the
-monthly review and attach them to the annex entry under
+Export PDF or CSV snapshots from Grafana during the monthly review and attach
+them to the annex entry under
 `specs/sns/regulatory/<suffix>/YYYY-MM.md`. The `specs/sns/reports/`
 directory captures quarterly summaries (for example,
 `specs/sns/reports/steward_scorecard_2026q1.md`); include dashboard SHA-256
@@ -59,8 +57,7 @@ cargo xtask sns-annex \
   --dashboard dashboards/grafana/sns_suffix_analytics.json \
   --dashboard-artifact artifacts/sns/regulatory/.example/2026-03/sns_suffix_analytics.json \
   --output specs/sns/reports/.example/2026-03.md \
-  --regulatory-entry specs/sns/regulatory/eu-dsa/2026-03.md \
-  --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
+  --regulatory-entry specs/sns/regulatory/eu-dsa/2026-03.md
 ```
 
 - The command hashes the exported JSON, records the dashboard metadata, and
@@ -76,29 +73,26 @@ cargo xtask sns-annex \
   `<!-- sns-annex:... -->` markers) with the annex path, dashboard artefact
   location, digest, and timestamp so auditors can diff memos without manual
   edits.
-- Pass `--portal-entry` with the matching `docs/portal/docs/sns/regulatory/*.md`
-  page so the public portal mirrors receive the same annex block.
-- If you omit `--regulatory-entry`/`--portal-entry`, you can still attach the
-  generated file to the memos manually, but the automated blocks keep evidence in
-  sync across repeated re-generations. Upload the JSON bundle to artefact
-  storage for auditors either way.
+- If you omit `--regulatory-entry`, attach the generated file to the governing
+  memo manually. Upload the JSON bundle to artefact storage for auditors either
+  way.
 - For recurring reviews, add each suffix/cycle pair to
   `specs/sns/regulatory/annex_jobs.json` and run
   `python3 scripts/run_sns_annex_jobs.py --verbose` (optionally with
   `--dry-run`) so the helper iterates over every entry, copies the dashboard
-  export, and updates the corresponding regulatory (and portal, when present)
-  memos with the annex block in one pass. The script defaults to
+  export, and updates the corresponding regulatory memos with the annex block
+  in one pass. The script defaults to
   `dashboards/grafana/sns_suffix_analytics.json` when a job omits `dashboard`.
-- Run `python3 scripts/check_sns_annex_schedule.py --jobs specs/sns/regulatory/annex_jobs.json --regulatory-root specs/sns/regulatory --report-root specs/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, every memo carries a matching `sns-annex` marker, and each annex stub exists. The helper emits `artifacts/sns/annex_schedule_summary.json` alongside the locale and hash summaries so governance packets can cite a single evidence bundle.
+- Run `python3 scripts/check_sns_annex_schedule.py --jobs specs/sns/regulatory/annex_jobs.json --regulatory-root specs/sns/regulatory --report-root specs/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, every memo carries a matching `sns-annex` marker, and each canonical annex report exists. The helper emits `artifacts/sns/annex_schedule_summary.json` alongside the hash summary so governance packets can cite a single evidence bundle.
 This automation replaces ad-hoc copy/paste steps and ensures every annex entry
-captures the dashboard UID, tags, panel count, export digest, and schedule/locale
+captures the dashboard UID, tags, panel count, export digest, and schedule
 coverage required by SN-8.
 
 #### 1.3.1 Annex job runbook & cadence
 
 - Keep the annex job list in sync with the governance calendar. The schedule
   check (`scripts/check_sns_annex_schedule.py`) fails if a memo marker lacks a
-  job entry or a stub is missing, forcing upcoming cycles to be booked before
+  job entry or a canonical report is missing, forcing upcoming cycles to be booked before
   exports land.
 - Follow {doc}`sns/regulatory/annex_job_runbook` when adding new cycles: create
   the regulatory memo skeleton (`specs/sns/regulatory/<jurisdiction>/<cycle>.md`),
@@ -186,7 +180,7 @@ onboarding ticket.
 | Step | Owner | Command / Artefact |
 |------|-------|--------------------|
 | Validate reporting source | Product Analytics | Query review plus a sample joining exact plan quotes to committed transaction debits; the legacy dashboard is not imported. |
-| Publish portal page | Docs/DevRel | `npm run build` inside `docs/portal`, ensure `sns/kpi-dashboard` renders. |
+| Publish public guidance | Docs/DevRel | Coordinate the current SNS guidance and deployment checks in `iroha-docs`. |
 | Generate onboarding kit | DevRel | Copy this file, fill registrar-specific deltas, attach to ticket. |
 | DNS rehearsal | Networking/Ops | `scripts/sns_zonefile_skeleton.py` + `specs/sorafs_gateway_dns_owner_runbook.md` steps. |
 | Registrar automation dry run | Registrar eng | `python3 scripts/sns_bulk_onboard.py setup.json --plan-file setup.plan.json` |

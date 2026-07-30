@@ -2306,11 +2306,6 @@ fn minimal_config_snapshot() {
                 panic_on_duplicate_metrics: false,
             },
             pipeline: Pipeline {
-                ivm_proved: IvmProvedExecution {
-                    enabled: false,
-                    skip_replay: false,
-                    allowed_circuits: [],
-                },
                 dynamic_prepass: true,
                 access_set_cache_enabled: true,
                 parallel_overlay: true,
@@ -3096,12 +3091,6 @@ fn minimal_config_snapshot() {
                 ],
             },
             settlement: Settlement {
-                repo: Repo {
-                    default_haircut_bps: 1500,
-                    margin_frequency_secs: 86400,
-                    eligible_collateral: [],
-                    collateral_substitution_matrix: {},
-                },
                 offline: Offline {
                     enabled: true,
                     escrow_required: true,

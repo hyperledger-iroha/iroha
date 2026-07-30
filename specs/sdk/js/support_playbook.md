@@ -30,7 +30,7 @@ handling incidents or rehearsing rollback drills.
 | Release Engineering | Operates `.github/workflows/javascript-sdk*.yml`, provenance capture, npm promotion. | Archives artefacts under `artifacts/js-sdk-provenance/` and `artifacts/js-sdk-release-matrix/`. |
 | Support Engineering Lead | Runs the PagerDuty rota, triages Sev 1/2 incidents, keeps partner distro lists. | Publishes digest entries through the shared SDK status exporter (`status.md`). |
 | Observability/SRE | Maintains dashboards/alerts for JS parity, npm telemetry, and CI success signals. | Tracks `javascript_sdk_publish_success_total`, verification SLA, and queue depth telemetry. |
-| Docs & Enablement | Keeps README/portal entries fresh, mirrors governance notices, localises urgent updates. | Coordinates translations during the Docs/DevRel monthly sync. |
+| Docs & Enablement | Keeps repository-local guidance current and coordinates governance notices. | Coordinates public documentation changes in `iroha-docs`. |
 
 ### 2.1 On-call Signals
 
@@ -86,9 +86,9 @@ Before distributing artefacts outside engineering:
    report that is uploaded with the release bundle, and
    `npm run release:verify -- --version <version>` captures the published
    tarball hashes inside `artifacts/js/verification/v<version>_<timestamp>/`.
-6. **Docs & status:** Update `specs/sdk/js/publishing.md`,
-   `docs/portal/docs/sdks/javascript.md`, and `status.md` with release notes,
-   fixture cadence, and support window reminders.
+6. **Docs & status:** Update `specs/sdk/js/publishing.md` and `status.md` with
+   code-adjacent release facts, and coordinate public release guidance in the
+   sibling `iroha-docs` repository.
 
 CI workflows (`javascript-sdk.yml`, `javascript-sdk-rc-matrix.yml`,
 `javascript-sdk-publish.yml`) must succeed before notifying partners.
@@ -113,13 +113,12 @@ CI workflows (`javascript-sdk.yml`, `javascript-sdk-rc-matrix.yml`,
    `status.md`. Archive Grafana screenshots + logs alongside the incident folder
    so governance reviewers can replay the evidence.
 
-## 6. Partner Communication & Localization
+## 6. Partner communication and public documentation
 
 - Share release calendars ≥60 days in advance, flagging blackout windows and
   dependency on Torii/Connect milestones.
-- Translate critical notices (JP + HE) within two weeks using the Docs/DevRel
-  rota; track completion in the localization log referenced from
-  `specs/sdk/js/index.md`.
+- Coordinate public guides and translations in the sibling `iroha-docs`
+  repository, published at <https://docs.iroha.tech/>.
 - Attach this playbook, the publishing guide, fixture cadence charter, and the
   current SLA summary to partner enablement packets.
 

@@ -1,8 +1,6 @@
 use std::{
     any::Any,
     collections::HashMap,
-    ffi::OsStr,
-    fs,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -30,33 +28,31 @@ fn repository_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn snippets_dir() -> PathBuf {
-    repository_root().join("docs/portal/static/norito-snippets")
-}
-
-fn snippet_paths() -> Vec<PathBuf> {
-    let dir = snippets_dir();
-    assert!(
-        dir.is_dir(),
-        "expected snippets directory at {}",
-        dir.display()
-    );
-
-    let mut files = Vec::new();
-    for entry in fs::read_dir(&dir).expect("read norito-snippets dir") {
-        let entry = entry.expect("directory entry");
-        let path = entry.path();
-        if path.extension() == Some(OsStr::new("ko")) {
-            files.push(path);
-        }
-    }
-    assert!(
-        !files.is_empty(),
-        "expected at least one .ko snippet in {}",
-        dir.display()
-    );
-    files.sort();
-    files
+fn documentation_examples() -> Vec<(&'static str, PathBuf)> {
+    let root = repository_root();
+    vec![
+        (
+            "hajimari-entrypoint",
+            root.join("crates/ivm/docs/examples/01_hajimari.ko"),
+        ),
+        (
+            "call-transfer-asset",
+            root.join("crates/ivm/docs/examples/08_call_transfer_asset.ko"),
+        ),
+        (
+            "nft-flow",
+            root.join("crates/ivm/docs/examples/12_nft_flow.ko"),
+        ),
+        (
+            "register-and-mint",
+            root.join("crates/ivm/docs/examples/13_register_and_mint.ko"),
+        ),
+        (
+            "threshold-escrow",
+            root.join("crates/kotodama_lang/src/samples/threshold_escrow.ko"),
+        ),
+        ("transfer-asset", root.join("examples/transfer/transfer.ko")),
+    ]
 }
 
 fn kotodama_compiler() -> KotodamaCompiler {
@@ -64,9 +60,9 @@ fn kotodama_compiler() -> KotodamaCompiler {
 }
 
 #[test]
-fn developer_portal_norito_snippets_compile() {
+fn kotodama_documentation_examples_compile() {
     let compiler = kotodama_compiler();
-    for path in snippet_paths() {
+    for (_, path) in documentation_examples() {
         let artifact = compiler
             .compile_file(&path)
             .unwrap_or_else(|err| panic!("failed to compile {}: {err}", path.display()));
@@ -79,16 +75,11 @@ fn developer_portal_norito_snippets_compile() {
 }
 
 #[test]
-fn developer_portal_norito_snippets_run() {
+fn kotodama_documentation_examples_run() {
     let compiler = kotodama_compiler();
-    for path in snippet_paths() {
-        let stem = path
-            .file_stem()
-            .and_then(std::ffi::OsStr::to_str)
-            .unwrap_or_default()
-            .to_string();
-        eprintln!("running snippet {stem}");
-        match stem.as_str() {
+    for (name, path) in documentation_examples() {
+        eprintln!("running documentation example {name}");
+        match name {
             "hajimari-entrypoint" => run_hajimari_snippet(&compiler, &path),
             "call-transfer-asset" => run_call_transfer_asset_snippet(&compiler, &path),
             "register-and-mint" => run_register_and_mint_snippet(&compiler, &path),
@@ -113,10 +104,10 @@ where
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(bytecode)
-        .unwrap_or_else(|err| panic!("load developer portal snippet {label}: {err:?}"));
+        .unwrap_or_else(|err| panic!("load documentation example {label}: {err:?}"));
     common::select_kotodama_entrypoint(&mut vm, bytecode, entrypoint);
     if let Err(err) = vm.run() {
-        panic!("run developer portal snippet {label}: {err:?}");
+        panic!("run documentation example {label}: {err:?}");
     }
 
     let host_any = vm
@@ -124,7 +115,7 @@ where
         .expect("host must remain attached to the VM");
     let host_ref = host_any
         .downcast_mut::<WsvHost>()
-        .expect("developer snippets use WsvHost");
+        .expect("documentation examples use WsvHost");
     check(host_ref);
 }
 
@@ -136,7 +127,7 @@ fn account(domain: &str, public_key: &str) -> AccountId {
 
 const ACCOUNT_A_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
 const ACCOUNT_B_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
-const PORTAL_CALLER_PUBLIC_KEY: &str =
+const DOCUMENTATION_CALLER_PUBLIC_KEY: &str =
     "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
 const TEST_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
@@ -223,7 +214,7 @@ fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller = account("default", PORTAL_CALLER_PUBLIC_KEY);
+    let caller = account("default", DOCUMENTATION_CALLER_PUBLIC_KEY);
     let mut wsv = setup_base_world(&caller);
 
     let asset_id = parse_asset_definition_literal(TEST_ASSET_DEFINITION_LITERAL);
@@ -309,7 +300,7 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
 fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let program = compile_snippet(compiler, path);
-    let caller = account("default", PORTAL_CALLER_PUBLIC_KEY);
+    let caller = account("default", DOCUMENTATION_CALLER_PUBLIC_KEY);
     let mut wsv = setup_base_world(&caller);
 
     let alice = parse_account_literal(ACCOUNT_A_LITERAL);
@@ -382,7 +373,7 @@ fn run_nft_flow_snippet(compiler: &KotodamaCompiler, path: &Path) {
         HashMap::new(),
     ));
     vm.load_program(&program)
-        .expect("load developer portal snippet nft-flow");
+        .expect("load documentation example nft-flow");
     common::select_kotodama_entrypoint(&mut vm, &program, "nft_issue_and_transfer");
     if let Err(err) = vm.run() {
         let host_any = vm

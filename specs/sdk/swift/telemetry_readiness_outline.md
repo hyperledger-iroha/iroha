@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: Swift Telemetry Redaction Readiness
+summary: Curriculum and evidence contract for Swift telemetry governance review.
+---
+
 # Swift Telemetry Redaction Readiness Outline (IOS7/IOS8)
 
 This outline fulfils the roadmap mitigation for the **“Telemetry redaction &

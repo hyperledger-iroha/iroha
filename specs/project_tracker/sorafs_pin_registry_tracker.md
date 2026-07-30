@@ -16,5 +16,5 @@ canonical manifest digest flow and governance envelopes.
 ## References
 
 - [`specs/sorafs_architecture_rfc.md`](../sorafs_architecture_rfc.md)
-- [`fixtures/sorafs_chunker/manifest_signatures.json`](../../../fixtures/sorafs_chunker/manifest_signatures.json)
-- [`ci/check_sorafs_fixtures.sh`](../../../ci/check_sorafs_fixtures.sh)
+- [`fixtures/sorafs_chunker/manifest_signatures.json`](../../fixtures/sorafs_chunker/manifest_signatures.json)
+- [`ci/check_sorafs_fixtures.sh`](../../ci/check_sorafs_fixtures.sh)

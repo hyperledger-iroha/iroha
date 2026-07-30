@@ -3,8 +3,8 @@ title: Deployment Notes
 summary: Checklist for promoting the SoraFS pipeline from CI to production.
 ---
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/developer-deployment.md`.
-> Update both versions to keep reviewers aligned.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 # Deployment Notes
 

@@ -638,7 +638,7 @@ public sealed class SoraFsReputationClientTests
         uint leafCount = 1,
         string siblings = "[]",
         string flags = "[]") =>
-        $$"""{"snapshot_id_hex":"{{SnapshotId}}","generated_at_unix":42,"merkle_root_hex":"{{MerkleRootHex}}","provider":{{ProviderJson(providerId, flags)}},"proof":{"provider_id":"{{providerId}}","leaf_index":0,"leaf_count":{{leafCount}},"siblings_hex":{{siblings}}}}""";
+        $$$"""{"snapshot_id_hex":"{{{SnapshotId}}}","generated_at_unix":42,"merkle_root_hex":"{{{MerkleRootHex}}}","provider":{{{ProviderJson(providerId, flags)}}},"proof":{"provider_id":"{{{providerId}}}","leaf_index":0,"leaf_count":{{{leafCount}}},"siblings_hex":{{{siblings}}}}}""";
 
     private static string WeightsResponseJson(int repairBreachBps = 1_000) =>
         $$"""{"snapshot_id_hex":"{{SnapshotId}}","generated_at_unix":42,"alpha_bps":8500,"current_score_weight_bps":7000,"weights":{{WeightsJson(repairBreachBps)}}}""";

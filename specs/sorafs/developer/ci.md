@@ -3,8 +3,8 @@ title: CI Recipes
 summary: Use the SoraFS CLI in CI and hand release artifacts to governed Ed25519 signing.
 ---
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/developer-ci.md`.
-> Update both copies to keep reviewers aligned.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 # CI Recipes
 

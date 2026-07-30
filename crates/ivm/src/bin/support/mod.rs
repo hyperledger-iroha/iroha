@@ -7,12 +7,6 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-#[allow(dead_code)]
-pub(crate) const EXPECTED_DOC_LOCALES: &[&str] = &[
-    "am", "ar", "az", "ba", "dz", "es", "fr", "he", "hy", "ja", "ka", "kk", "mn", "my", "pt", "ru",
-    "ur", "uz", "zh-hans", "zh-hant",
-];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GenerationMode {
     Write,
@@ -332,137 +326,6 @@ fn sync_directory(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-pub(crate) fn exact_localized_markdown_paths(
-    directory: &Path,
-    stem: &str,
-    include_canonical: bool,
-    expected_locales: &[&str],
-) -> Result<Vec<PathBuf>, String> {
-    let canonical_name = format!("{stem}.md");
-    let localized_prefix = format!("{stem}.");
-    let mut expected_names = expected_locales
-        .iter()
-        .map(|locale| format!("{stem}.{locale}.md"))
-        .collect::<BTreeSet<_>>();
-    if include_canonical {
-        expected_names.insert(canonical_name.clone());
-    }
-
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("read {}: {error}", directory.display()))?;
-    let mut actual_names = BTreeSet::new();
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("read entry in {}: {error}", directory.display()))?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| format!("non-UTF-8 entry in {}", directory.display()))?;
-        let is_candidate = name == canonical_name
-            || name
-                .strip_prefix(&localized_prefix)
-                .and_then(|suffix| suffix.strip_suffix(".md"))
-                .is_some_and(|locale| !locale.is_empty());
-        if !is_candidate {
-            continue;
-        }
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
-        if !file_type.is_file() {
-            return Err(format!(
-                "expected regular generated document, found non-file {}",
-                entry.path().display()
-            ));
-        }
-        actual_names.insert(name);
-    }
-
-    ensure_exact_inventory(
-        directory,
-        &format!("{stem} locale documents"),
-        &expected_names,
-        &actual_names,
-    )?;
-    Ok(expected_names
-        .into_iter()
-        .map(|name| directory.join(name))
-        .collect())
-}
-
-#[allow(dead_code)]
-pub(crate) fn exact_locale_child_paths(
-    localized_root: &Path,
-    child_name: &str,
-    expected_locales: &[&str],
-) -> Result<Vec<PathBuf>, String> {
-    let expected_names = expected_locales
-        .iter()
-        .map(|locale| (*locale).to_owned())
-        .collect::<BTreeSet<_>>();
-    let entries = fs::read_dir(localized_root)
-        .map_err(|error| format!("read {}: {error}", localized_root.display()))?;
-    let mut actual_names = BTreeSet::new();
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("read entry in {}: {error}", localized_root.display()))?;
-        let locale = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| format!("non-UTF-8 locale entry in {}", localized_root.display()))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
-        if !file_type.is_dir() {
-            return Err(format!(
-                "expected real locale directory, found non-directory {}",
-                entry.path().display()
-            ));
-        }
-        actual_names.insert(locale);
-    }
-
-    ensure_exact_inventory(
-        localized_root,
-        &format!("locale directories containing {child_name}"),
-        &expected_names,
-        &actual_names,
-    )?;
-    expected_names
-        .into_iter()
-        .map(|locale| {
-            let child = localized_root.join(locale).join(child_name);
-            let metadata = fs::symlink_metadata(&child)
-                .map_err(|error| format!("inspect {}: {error}", child.display()))?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() {
-                return Err(format!(
-                    "expected regular generated document, found non-file {}",
-                    child.display()
-                ));
-            }
-            Ok(child)
-        })
-        .collect()
-}
-
-fn ensure_exact_inventory(
-    root: &Path,
-    inventory_name: &str,
-    expected: &BTreeSet<String>,
-    actual: &BTreeSet<String>,
-) -> Result<(), String> {
-    if expected == actual {
-        return Ok(());
-    }
-    let missing = expected.difference(actual).cloned().collect::<Vec<_>>();
-    let unexpected = actual.difference(expected).cloned().collect::<Vec<_>>();
-    Err(format!(
-        "{inventory_name} under {} do not match the fixed release inventory; missing={missing:?}, unexpected={unexpected:?}",
-        root.display()
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -470,10 +333,7 @@ mod tests {
         sync::atomic::{AtomicU64, Ordering},
     };
 
-    use super::{
-        EXPECTED_DOC_LOCALES, GeneratedOutput, GenerationMode, exact_locale_child_paths,
-        exact_localized_markdown_paths, parse_generation_mode, sync_generated_outputs,
-    };
+    use super::{GeneratedOutput, GenerationMode, parse_generation_mode, sync_generated_outputs};
 
     static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
@@ -499,16 +359,6 @@ mod tests {
         assert!(parse_generation_mode(["--check".to_owned(), "--write".to_owned()]).is_err());
         assert!(parse_generation_mode(["--write".to_owned(), "--write".to_owned()]).is_err());
         assert!(parse_generation_mode(["--unknown".to_owned()]).is_err());
-    }
-
-    #[test]
-    fn release_locale_inventory_is_sorted_unique_and_complete() {
-        assert_eq!(EXPECTED_DOC_LOCALES.len(), 20);
-        assert!(
-            EXPECTED_DOC_LOCALES
-                .windows(2)
-                .all(|window| window[0] < window[1])
-        );
     }
 
     #[test]
@@ -644,78 +494,5 @@ mod tests {
         );
 
         fs::remove_dir_all(directory).expect("remove test directory");
-    }
-
-    #[test]
-    fn flat_locale_inventory_rejects_missing_and_unexpected_documents() {
-        let directory = temp_directory("flat");
-        fs::create_dir_all(&directory).expect("create test directory");
-        for name in ["ivm_header.md", "ivm_header.am.md", "ivm_header.zh-hant.md"] {
-            fs::write(directory.join(name), "fixture").expect("write fixture");
-        }
-
-        let paths =
-            exact_localized_markdown_paths(&directory, "ivm_header", true, &["am", "zh-hant"])
-                .expect("exact inventory");
-        assert_eq!(
-            paths,
-            [
-                directory.join("ivm_header.am.md"),
-                directory.join("ivm_header.md"),
-                directory.join("ivm_header.zh-hant.md"),
-            ]
-        );
-
-        fs::remove_file(directory.join("ivm_header.am.md")).expect("remove expected fixture");
-        assert!(
-            exact_localized_markdown_paths(&directory, "ivm_header", true, &["am", "zh-hant"])
-                .is_err()
-        );
-        fs::write(directory.join("ivm_header.am.md"), "fixture").expect("restore fixture");
-        fs::write(directory.join("ivm_header.es.md"), "fixture").expect("write unexpected fixture");
-        assert!(
-            exact_localized_markdown_paths(&directory, "ivm_header", true, &["am", "zh-hant"])
-                .is_err()
-        );
-
-        fs::remove_dir_all(directory).expect("remove test directory");
-    }
-
-    #[test]
-    fn nested_locale_inventory_rejects_missing_and_unexpected_documents() {
-        let root = temp_directory("nested");
-        for locale in ["am", "zh-hant"] {
-            let directory = root.join(locale);
-            fs::create_dir_all(&directory).expect("create locale directory");
-            fs::write(directory.join("ivm.md"), "fixture").expect("write fixture");
-        }
-
-        let paths =
-            exact_locale_child_paths(&root, "ivm.md", &["am", "zh-hant"]).expect("exact inventory");
-        assert_eq!(paths, [root.join("am/ivm.md"), root.join("zh-hant/ivm.md")]);
-
-        fs::remove_file(root.join("am/ivm.md")).expect("remove expected fixture");
-        assert!(exact_locale_child_paths(&root, "ivm.md", &["am", "zh-hant"]).is_err());
-        fs::write(root.join("am/ivm.md"), "fixture").expect("restore fixture");
-        fs::create_dir_all(root.join("es")).expect("create unexpected locale directory");
-        assert!(exact_locale_child_paths(&root, "ivm.md", &["am", "zh-hant"]).is_err());
-
-        fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn locale_inventory_rejects_symlinked_documents() {
-        use std::os::unix::fs::symlink;
-
-        let root = temp_directory("symlink");
-        let directory = root.join("am");
-        fs::create_dir_all(&directory).expect("create locale directory");
-        let target = directory.join("target.md");
-        fs::write(&target, "fixture").expect("write symlink target");
-        symlink(&target, directory.join("ivm.md")).expect("create symlink");
-
-        assert!(exact_locale_child_paths(&root, "ivm.md", &["am"]).is_err());
-        fs::remove_dir_all(root).expect("remove test directory");
     }
 }

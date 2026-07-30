@@ -2,6 +2,8 @@
 # Point the evidence directory at the reviewed artifact root. Review only
 # payload-free release summaries. Keep release signing keys, bearer tokens, raw
 # archives, and operator secrets in runtime-only locations.
+# Replace the supply-chain source root and public provenance trust tuple with
+# values reviewed for the same deployment context.
 --evidence-dir /var/tmp/sorafs/reference-sdk-release
 --summary-out /var/tmp/sorafs/reference-sdk-release/release-summary.json
 --require-kind release_archive,signed_manifest,supply_chain,downstream_bindings,cookbook_smoke,ffi_header_contract,governance_approval
@@ -10,4 +12,8 @@
 --min-release-targets 5
 --min-downstream-packages 6
 --max-smoke-duration-secs 1800
+--supply-chain-source-root /var/tmp/sorafs/reference-sdk-supply-chain-source
+--provenance-certificate-identity https://github.com/hyperledger/iroha/.github/workflows/sorafs-cli-release.yml@refs/tags/sorafs-cli-v1.0.0
+--provenance-oidc-issuer https://token.actions.githubusercontent.com
+--provenance-verification-public-key-hex 1111111111111111111111111111111111111111111111111111111111111111
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json

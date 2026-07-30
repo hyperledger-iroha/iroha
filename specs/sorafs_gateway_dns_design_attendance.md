@@ -38,7 +38,7 @@ Roadmap item **Decentralized DNS & Gateway** calls for named automation owners a
 | Scope | Primary Owner | Backup | Responsibilities |
 |-------|---------------|--------|------------------|
 | SoraDNS zonefile automation & GAR pinning | Ops Lead (`ops.lead@soranet`) | Networking TL (`networking.tl@soranet`) | Maintain the `tools/soradns-resolver/` automation, publish the signed zonefile skeletons documented in `specs/sns/governance_playbook.md`, and rotate SPKI/GAR data before every cutover. |
-| Gateway alias & SoraFS cutover metadata | Tooling WG Rep (`tooling.wg@sorafs`) | Docs/DevRel (`docs.devrel@sora`) | Operate `docs/portal/scripts/sorafs-pin-release.sh` + `docs/portal/scripts/generate-dns-cutover-plan.mjs` (and its tests under `docs/portal/scripts/__tests__/dns-cutover-plan.test.mjs`), attach the generated manifests to `docs/portal/docs/devportal/deploy-guide.md`, and broadcast alias changes to the pin registry. |
+| Gateway alias & SoraFS cutover metadata | Tooling WG Rep (`tooling.wg@sorafs`) | Property release owner | Validate externally produced signed manifests with the repository-local SoraDNS binding tools, attach the resulting GAR/binding evidence to the change ticket, and broadcast alias changes to the pin registry. Public Iroha documentation releases are owned by the sibling `iroha-docs` repository. |
 | Telemetry snapshots & rollback automation | QA Guild Lead (`qa.guild@sorafs`) | Security Engineering (`security@soranet`) | Collect and archive GAR metrics (`specs/sorafs_gateway_dns_design_gar_telemetry.md`, `specs/sorafs_gateway_dns_design_metrics_*.prom`), ensure alert hooks stay wired into the kickoff dashboard, and rehearse the rollback flow alongside the security observer ahead of GA. |
 
 ## Follow-up Actions

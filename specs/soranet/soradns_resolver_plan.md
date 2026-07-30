@@ -88,7 +88,7 @@ stage-gate review.
   by the SoraFS publisher so governance can compare resolver output and the
   on-chain anchor.
 - Lightweight authoritative instances handle:
-  - `*.sora.link` gateway aliases and `docs-preview` vanity names.
+  - `*.sora.link` gateway aliases and `property-preview` vanity names.
   - Automated HTTPS/SVCB/ECH records: the admin API accepts a `tls_profile`
     descriptor (ALPN list, ECH config, fallback endpoints) and renders the
     corresponding record set.
@@ -132,13 +132,13 @@ endpoints so operators can automate rollouts without shelling into the PoP.
 ```json
 POST /v1/zones
 {
-  "zone": "docs-preview.sora.link.",
+  "zone": "property-preview.sora.link.",
   "ttl_seconds": 300,
   "dnssec_mode": "managed",
   "qname_minimisation": "default",
   "records": [
-    {"type": "A", "name": "docs-preview", "value": "203.0.113.10"},
-    {"type": "HTTPS", "name": "docs-preview", "priority": 1,
+    {"type": "A", "name": "property-preview", "value": "203.0.113.10"},
+    {"type": "HTTPS", "name": "property-preview", "priority": 1,
      "target": ".", "alpn": ["h2","h3"], "ech_config_id": "alpha-2026-02"}
   ]
 }

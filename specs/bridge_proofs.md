@@ -830,8 +830,8 @@ negative tests for at least:
 
 Positive smoke tests never replace these adversarial admission tests.
 
-[`SccpNetworkV1`]: ../../crates/iroha_data_model/src/bridge/sccp.rs
-[`SccpLaneIdV1`]: ../../crates/iroha_data_model/src/bridge/sccp.rs
-[`SccpRegistryV1`]: ../../crates/iroha_data_model/src/bridge/sccp_registry.rs
-[`SccpGovernedRouteV1`]: ../../crates/iroha_data_model/src/bridge/sccp_registry.rs
-[`SccpNativeTrustAnchorV1`]: ../../crates/iroha_data_model/src/bridge/sccp.rs
+[`SccpNetworkV1`]: ../crates/iroha_data_model/src/bridge/sccp.rs
+[`SccpLaneIdV1`]: ../crates/iroha_data_model/src/bridge/sccp.rs
+[`SccpRegistryV1`]: ../crates/iroha_data_model/src/bridge/sccp_registry.rs
+[`SccpGovernedRouteV1`]: ../crates/iroha_data_model/src/bridge/sccp_registry.rs
+[`SccpNativeTrustAnchorV1`]: ../crates/iroha_data_model/src/bridge/sccp.rs

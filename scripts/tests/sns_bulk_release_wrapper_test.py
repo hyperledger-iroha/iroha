@@ -8,13 +8,7 @@ import subprocess
 from pathlib import Path
 
 
-SCRIPT = (
-    Path(__file__).resolve().parents[2]
-    / "docs"
-    / "portal"
-    / "scripts"
-    / "sns_bulk_release.sh"
-)
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "sns_bulk_release.sh"
 
 
 def _run(*arguments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

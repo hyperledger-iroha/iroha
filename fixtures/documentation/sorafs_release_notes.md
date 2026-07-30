@@ -90,7 +90,7 @@
   release operator and governance approvers: `<identities>`.
 
 Follow the
-[`release-rollback-yank.md`](../portal/docs/sorafs/release-rollback-yank.md)
+[`release_rollback_yank.md`](../../specs/sorafs/runbooks/release_rollback_yank.md)
 runbook. Never delete or rewrite the affected signed tag, archive, checksums,
 SBOM, provenance, or signatures, and never reuse a withdrawn version.
 

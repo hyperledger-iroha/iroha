@@ -29,7 +29,7 @@ from the official X account and from project documentation or release notes.
 - GitHub issues and pull requests: <https://github.com/hyperledger-iroha/iroha>
 
 For security-sensitive reports, do not use public community channels. Follow
-the repository [`SECURITY.md`](../../SECURITY.md) instead.
+the repository [`SECURITY.md`](../SECURITY.md) instead.
 
 ## Contributor Growth
 

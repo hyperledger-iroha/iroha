@@ -33,7 +33,7 @@ def copy_formal_fixture(tmp_path: Path) -> Path:
 
     formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
     formal_dir.mkdir(parents=True)
-    source_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    source_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     for name in ("SumeragiV2Core.tla", "SumeragiV2AsyncNetwork.tla"):
         shutil.copyfile(source_dir / name, formal_dir / name)
     return formal_dir

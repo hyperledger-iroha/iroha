@@ -31613,38 +31613,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/gov/council/derive-vrf": {
-      "post": {
-        "description": "Derive VRF inputs for council selection.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Derive council VRF inputs.",
-        "tags": [
-          "Governance"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/gov/council/persist": {
       "post": {
         "description": "Persist a governance council roster for an epoch.",

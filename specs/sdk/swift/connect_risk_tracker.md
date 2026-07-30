@@ -1,3 +1,8 @@
+---
+title: Swift Connect Risk Tracker
+summary: Current Swift Connect implementation risks, evidence, and mitigations.
+---
+
 # Swift Connect Risk Tracker - Apr 25 2026
 
 The Swift SDK still treats several Connect subsystems as scaffolding. This tracker keeps the

@@ -33,6 +33,28 @@ GENERATED_AT = NOW_UNIX - 120
 SHA256 = "ab" * 32
 PREDECESSOR_CATALOG_SHA256 = "ac" * 32
 SNAPSHOT_ID = "cd" * 16
+REFERENCE_SDK_RELEASE_REHEARSAL_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-release-rehearsal"
+).hexdigest()
+REFERENCE_SDK_SBOM_INDEX_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-sbom-index"
+).hexdigest()
+REFERENCE_SDK_VULNERABILITY_REPORT_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-vulnerability-report"
+).hexdigest()
+REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256 = hashlib.sha256(
+    b"test-only-reference-sdk-provenance-bundle"
+).hexdigest()
+REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY = (
+    "https://github.com/hyperledger/iroha/"
+    ".github/workflows/sorafs-cli-release.yml@refs/heads/main"
+)
+REFERENCE_SDK_PROVENANCE_OIDC_ISSUER = (
+    "https://token.actions.githubusercontent.com"
+)
+REFERENCE_SDK_PROVENANCE_VERIFICATION_KEY_FINGERPRINT = hashlib.sha256(
+    b"test-only-reference-sdk-provenance-verification-key"
+).hexdigest()
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
 ENVIRONMENT = "production"
 FOUNDATIONAL_RELEASE_SEQUENCE = 7
@@ -100,6 +122,45 @@ RESILIENCE_QUALIFICATION = build_resilience_binding(
     RESILIENCE_QUALIFICATION_SUMMARY,
     RESILIENCE_QUALIFICATION_SUMMARY_BYTES,
 )
+
+
+def reference_sdk_supply_chain_fingerprint() -> dict[str, object]:
+    """Return the source-bound SF-11 fingerprint used by aggregate fixtures."""
+
+    source_digests = (
+        REFERENCE_SDK_RELEASE_REHEARSAL_SHA256,
+        REFERENCE_SDK_SBOM_INDEX_SHA256,
+        REFERENCE_SDK_VULNERABILITY_REPORT_SHA256,
+        REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
+    )
+    source_paths = (
+        "release-rehearsal.json",
+        "sbom-index.json",
+        "vulnerability-report.json",
+        "provenance-bundle.json",
+    )
+    return {
+        "source_artifacts": [
+            {
+                "kind": kind,
+                "artifact_path": artifact_path,
+                "sha256": digest,
+            }
+            for kind, artifact_path, digest in zip(
+                MODULE.REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS,
+                source_paths,
+                source_digests,
+                strict=True,
+            )
+        ],
+        "provenance_certificate_identity": (
+            REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY
+        ),
+        "provenance_oidc_issuer": REFERENCE_SDK_PROVENANCE_OIDC_ISSUER,
+        "provenance_verification_key_fingerprint_hex": (
+            REFERENCE_SDK_PROVENANCE_VERIFICATION_KEY_FINGERPRINT
+        ),
+    }
 
 
 def ed25519_public_key_from_seed(seed: bytes) -> bytes:
@@ -800,6 +861,7 @@ def default_gate_metadata(
         add_hex_list(
             "valid_provenance_bundle_digests",
             "provenance_bundle_digest_hex",
+            REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
         )
         add_hex_list(
             "valid_release_key_fingerprints",
@@ -810,11 +872,16 @@ def default_gate_metadata(
             "valid_release_manifest_reference_digests",
             "release_manifest_digest_hex",
         )
-        add_hex_list("valid_sbom_index_digests", "sbom_index_digest_hex")
+        add_hex_list(
+            "valid_sbom_index_digests",
+            "sbom_index_digest_hex",
+            REFERENCE_SDK_SBOM_INDEX_SHA256,
+        )
         add_hex_list("valid_smoke_output_digests", "smoke_output_digest_hex")
         add_hex_list(
             "valid_vulnerability_report_digests",
             "vulnerability_report_digest_hex",
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256,
         )
         fingerprints["signature_algorithm"] = "ed25519"
     elif gate_name == "repair":
@@ -978,6 +1045,15 @@ def gate_summary(
             artifact["fingerprint"].update(fingerprint_metadata)
     for artifact in payload["recognized_artifacts"]:
         artifact["fingerprint"].update(fingerprint_metadata)
+    if gate_name == "reference_sdk_release":
+        supply_chain_fingerprint = reference_sdk_supply_chain_fingerprint()
+        for artifact in payload["required"]["supply_chain"]["artifacts"]:
+            artifact["fingerprint"].update(copy.deepcopy(supply_chain_fingerprint))
+        for artifact in payload["recognized_artifacts"]:
+            if artifact.get("kind") == "supply_chain":
+                artifact["fingerprint"].update(
+                    copy.deepcopy(supply_chain_fingerprint)
+                )
     if raw_response:
         payload["response_body"] = "leaked"
     return payload
@@ -1348,6 +1424,13 @@ def write_complete_lane_fixture_summary(
     root: Path,
 ) -> tuple[dict, int]:
     fixture_module = load_lane_fixture_module(gate_name)
+    if gate_name == "reference_sdk_release":
+        # The source validator has its own end-to-end corpus. Dynamic imports
+        # do not activate the lane module's pytest autouse fixture, so install
+        # the same deterministic checker-layer stub explicitly here.
+        fixture_module.MODULE.validate_supply_chain_sources = (
+            fixture_module.deterministic_supply_chain_source_validation_stub
+        )
     evidence_root = root / gate_name
     evidence_root.mkdir()
     summary = root / f"{gate_name}.json"
@@ -3624,6 +3707,7 @@ def test_duplicate_explicit_evidence_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3660,6 +3744,7 @@ def test_explicit_and_directory_evidence_overlap_fails_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3698,6 +3783,7 @@ def test_overlapping_evidence_dirs_fail_closed_without_path_leak(
                 DEPLOYMENT_ID,
                 "--environment",
                 ENVIRONMENT,
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3759,6 +3845,7 @@ def test_evidence_source_conflicts_fail_closed_from_config(
                         DEPLOYMENT_ID,
                         "--environment",
                         ENVIRONMENT,
+                        *topology_cli_args(root),
                     ]
                 )
                 == 1
@@ -3851,6 +3938,7 @@ def test_explicit_unrequired_gate_summary_fails(tmp_path: Path) -> None:
                 ENVIRONMENT,
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -3996,6 +4084,7 @@ def test_duplicate_sensitive_json_key_load_error_does_not_echo(
                 ENVIRONMENT,
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5796,6 +5885,7 @@ def test_staging_environment_cannot_promote_production_readiness(tmp_path: Path)
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5829,6 +5919,7 @@ def test_unreviewed_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5868,6 +5959,7 @@ def test_staging_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5907,6 +5999,7 @@ def test_numbered_staging_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5946,6 +6039,7 @@ def test_compact_staging_deployment_id_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -5985,6 +6079,7 @@ def test_joined_nonproduction_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6024,6 +6119,7 @@ def test_prerelease_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6063,6 +6159,7 @@ def test_tokenized_prerelease_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6102,6 +6199,7 @@ def test_preview_prerelease_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6141,6 +6239,7 @@ def test_canary_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6180,6 +6279,7 @@ def test_stg_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6219,6 +6319,7 @@ def test_poc_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6258,6 +6359,7 @@ def test_smoke_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6297,6 +6399,7 @@ def test_stress_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6336,6 +6439,7 @@ def test_shadow_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -6375,6 +6479,7 @@ def test_cutover_alias_cannot_promote_production_readiness(
                 str(NOW_UNIX),
                 "--summary-out",
                 str(summary),
+                *topology_cli_args(tmp_path),
             ]
         )
         == 1
@@ -9156,13 +9261,17 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
     payload["valid_header_digests"] = [SHA256]
     payload["valid_package_index_digests"] = [SHA256]
     payload["valid_policy_digests"] = [SHA256]
-    payload["valid_provenance_bundle_digests"] = [SHA256]
+    payload["valid_provenance_bundle_digests"] = [
+        REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256
+    ]
     payload["valid_release_key_fingerprints"] = [SHA256]
     payload["valid_release_manifest_digests"] = [SHA256]
     payload["valid_release_manifest_reference_digests"] = [SHA256]
-    payload["valid_sbom_index_digests"] = [SHA256]
+    payload["valid_sbom_index_digests"] = [REFERENCE_SDK_SBOM_INDEX_SHA256]
     payload["valid_smoke_output_digests"] = [SHA256]
-    payload["valid_vulnerability_report_digests"] = [SHA256]
+    payload["valid_vulnerability_report_digests"] = [
+        REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+    ]
     add_fingerprint_metadata(
         payload,
         archive_index_digest_hex=SHA256,
@@ -9171,16 +9280,387 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
         manifest_digest_hex=SHA256,
         package_index_digest_hex=SHA256,
         policy_digest_hex=SHA256,
-        provenance_bundle_digest_hex=SHA256,
+        provenance_bundle_digest_hex=REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
         public_key_fingerprint_hex=SHA256,
         release_manifest_digest_hex=SHA256,
-        sbom_index_digest_hex=SHA256,
+        sbom_index_digest_hex=REFERENCE_SDK_SBOM_INDEX_SHA256,
         smoke_output_digest_hex=SHA256,
-        vulnerability_report_digest_hex=SHA256,
+        vulnerability_report_digest_hex=(
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+        ),
     )
     write_json(tmp_path / "reference_sdk_release.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "reference_sdk_release") == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        REFERENCE_SDK_PROVENANCE_CERTIFICATE_IDENTITY,
+        REFERENCE_SDK_PROVENANCE_OIDC_ISSUER,
+    ),
+)
+def test_reference_sdk_public_provenance_urls_are_canonical(value: str) -> None:
+    assert MODULE.canonical_public_provenance_url(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        None,
+        "",
+        "http://token.actions.githubusercontent.com",
+        "https://TOKEN.actions.githubusercontent.com",
+        "https://user@example.com/provenance",
+        "https://example.com/provenance?token=1",
+        "https://example.com/provenance#fragment",
+        "https:///missing-host",
+        "https://example.com/bad path",
+        "https://localhost/token",
+        "https://127.0.0.1/token",
+        "https://127.1/workflow",
+        "https://10.1/workflow",
+        "https://0x7f.0x0.0x0.0x1/workflow",
+        "https://[::1]/token",
+        "https://example.com:bad",
+        "https://example.com:",
+        "https://example.com/%74oken",
+        (
+            "https://example.com/"
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ."
+            "c2lnbmF0dXJlX3Rlc3Q"
+        ),
+        "https:\\\\example.com\\provenance",
+    ),
+)
+def test_reference_sdk_public_provenance_urls_reject_noncanonical_values(
+    value: object,
+) -> None:
+    assert MODULE.canonical_public_provenance_url(value) is None
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    (
+        ("missing", "source_artifacts must be an array"),
+        ("reordered", "kinds must match the exact canonical order"),
+        ("extra_field", "fields must match the exact source binding contract"),
+        ("path_escape", "artifact_path must be archive-relative and portable"),
+        ("duplicate_path", "source_artifacts paths must be unique"),
+        ("zero_digest", "source_artifacts[0].sha256 must not be zero"),
+        ("duplicate_digest", "source_artifacts SHA-256 digests must be unique"),
+        (
+            "sbom_mismatch",
+            "sbom_index source digest must match sbom_index_digest_hex",
+        ),
+        (
+            "vulnerability_mismatch",
+            "vulnerability_report source digest must match "
+            "vulnerability_report_digest_hex",
+        ),
+        (
+            "provenance_mismatch",
+            "provenance_bundle source digest must match "
+            "provenance_bundle_digest_hex",
+        ),
+    ),
+)
+def test_reference_sdk_supply_chain_source_fingerprint_fails_closed(
+    case: str,
+    expected_error: str,
+) -> None:
+    fingerprint = {
+        **reference_sdk_supply_chain_fingerprint(),
+        "sbom_index_digest_hex": REFERENCE_SDK_SBOM_INDEX_SHA256,
+        "vulnerability_report_digest_hex": (
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+        ),
+        "provenance_bundle_digest_hex": REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
+    }
+    source_artifacts = fingerprint["source_artifacts"]
+    assert isinstance(source_artifacts, list)
+    if case == "missing":
+        fingerprint.pop("source_artifacts")
+    elif case == "reordered":
+        source_artifacts[0], source_artifacts[1] = (
+            source_artifacts[1],
+            source_artifacts[0],
+        )
+    elif case == "extra_field":
+        source_artifacts[0]["size_bytes"] = 1
+    elif case == "path_escape":
+        source_artifacts[0]["artifact_path"] = "../release-rehearsal.json"
+    elif case == "duplicate_path":
+        source_artifacts[1]["artifact_path"] = source_artifacts[0][
+            "artifact_path"
+        ]
+    elif case == "zero_digest":
+        source_artifacts[0]["sha256"] = "0" * 64
+    elif case == "duplicate_digest":
+        source_artifacts[1]["sha256"] = source_artifacts[0]["sha256"]
+    elif case == "sbom_mismatch":
+        fingerprint["sbom_index_digest_hex"] = "b1" * 32
+    elif case == "vulnerability_mismatch":
+        fingerprint["vulnerability_report_digest_hex"] = "b2" * 32
+    elif case == "provenance_mismatch":
+        fingerprint["provenance_bundle_digest_hex"] = "b3" * 32
+    else:  # pragma: no cover - parameter table is closed above
+        raise AssertionError(f"unhandled test case: {case}")
+
+    errors: list[str] = []
+    MODULE.validate_reference_sdk_supply_chain_fingerprint(
+        fingerprint,
+        errors,
+        path="reference_sdk_release supply_chain fingerprint[0]",
+    )
+
+    assert expected_error in "\n".join(errors)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_error"),
+    (
+        (
+            "provenance_certificate_identity",
+            "http://github.com/hyperledger/iroha",
+            "provenance_certificate_identity must be a canonical public "
+            "HTTPS identity",
+        ),
+        (
+            "provenance_oidc_issuer",
+            "https://user@token.actions.githubusercontent.com",
+            "provenance_oidc_issuer must be a canonical public HTTPS issuer",
+        ),
+        (
+            "provenance_verification_key_fingerprint_hex",
+            "0" * 64,
+            "provenance_verification_key_fingerprint_hex must not be zero",
+        ),
+    ),
+)
+def test_reference_sdk_supply_chain_trust_fingerprint_fails_closed(
+    field: str,
+    value: str,
+    expected_error: str,
+) -> None:
+    fingerprint = {
+        **reference_sdk_supply_chain_fingerprint(),
+        "sbom_index_digest_hex": REFERENCE_SDK_SBOM_INDEX_SHA256,
+        "vulnerability_report_digest_hex": (
+            REFERENCE_SDK_VULNERABILITY_REPORT_SHA256
+        ),
+        "provenance_bundle_digest_hex": REFERENCE_SDK_PROVENANCE_BUNDLE_SHA256,
+    }
+    fingerprint[field] = value
+    errors: list[str] = []
+
+    MODULE.validate_reference_sdk_supply_chain_fingerprint(
+        fingerprint,
+        errors,
+        path="reference_sdk_release supply_chain fingerprint[0]",
+    )
+
+    assert expected_error in "\n".join(errors)
+
+
+def test_reference_sdk_public_provenance_mask_keeps_private_keys_rejected(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    secret_value = "runtime-only-reference-sdk-private-key-material"
+    add_fingerprint_metadata(
+        payload,
+        kind_name="supply_chain",
+        private_key=secret_value,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.<sensitive-key> must not be present" in errors
+    assert "private_key" not in errors
+    assert secret_value not in errors
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_error"),
+    (
+        (
+            "reordered_source",
+            "source_artifacts kinds must match the exact canonical order",
+        ),
+        (
+            "source_digest_mismatch",
+            "sbom_index source digest must match sbom_index_digest_hex",
+        ),
+        (
+            "private_host",
+            "provenance_certificate_identity must be a canonical public "
+            "HTTPS identity",
+        ),
+        (
+            "secret_bearing_url",
+            "must not contain secret-looking values",
+        ),
+    ),
+)
+def test_reference_sdk_supply_chain_fingerprint_negatives_reach_gate_validation(
+    tmp_path: Path,
+    case: str,
+    expected_error: str,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    secret_token = (
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ."
+        "c2lnbmF0dXJlX3Rlc3Q"
+    )
+    fingerprints = [
+        artifact["fingerprint"]
+        for artifact in payload["required"]["supply_chain"]["artifacts"]
+    ]
+    for fingerprint in fingerprints:
+        if case == "reordered_source":
+            source_artifacts = fingerprint["source_artifacts"]
+            source_artifacts[0], source_artifacts[1] = (
+                source_artifacts[1],
+                source_artifacts[0],
+            )
+        elif case == "source_digest_mismatch":
+            fingerprint["sbom_index_digest_hex"] = "b1" * 32
+        elif case == "private_host":
+            fingerprint["provenance_certificate_identity"] = (
+                "https://127.0.0.1/workflow"
+            )
+        elif case == "secret_bearing_url":
+            fingerprint["provenance_certificate_identity"] = (
+                f"https://example.com/{secret_token}"
+            )
+        else:  # pragma: no cover - parameter table is closed above
+            raise AssertionError(f"unhandled test case: {case}")
+
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert expected_error in errors
+    assert secret_token not in errors
+
+
+@pytest.mark.parametrize(
+    "legacy_host_url",
+    (
+        "https://127.1/workflow",
+        "https://10.1/workflow",
+        "https://0x7f.0x0.0x0.0x1/workflow",
+    ),
+)
+def test_reference_sdk_legacy_ipv4_hosts_block_full_seventeen_lane_promotion(
+    tmp_path: Path,
+    legacy_host_url: str,
+) -> None:
+    write_all_gates(tmp_path)
+    reference_summary = tmp_path / "reference_sdk_release.json"
+    payload = json.loads(reference_summary.read_text(encoding="utf-8"))
+    add_fingerprint_metadata(
+        payload,
+        kind_name="supply_chain",
+        provenance_certificate_identity=legacy_host_url,
+    )
+    write_json(reference_summary, payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert result["status"] == "blocked"
+    assert result["recognized_summary_count"] == 17
+    assert result["required"]["reference_sdk_release"]["valid"] is False
+    assert (
+        "provenance_certificate_identity must be a canonical public HTTPS "
+        "identity"
+    ) in errors
+    assert legacy_host_url not in errors
+
+
+def test_reference_sdk_supply_chain_artifacts_share_trust_and_digest_inventory(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    required_row = payload["required"]["supply_chain"]
+    second = copy.deepcopy(required_row["artifacts"][0])
+    second["path"] = "artifacts/reference_sdk_release/supply-chain-2.json"
+    second["sha256"] = "c1" * 32
+    fingerprint = second["fingerprint"]
+    second_source_digests = ("c2" * 32, "c3" * 32, "c4" * 32, "c5" * 32)
+    for source, digest in zip(
+        fingerprint["source_artifacts"],
+        second_source_digests,
+        strict=True,
+    ):
+        source["artifact_path"] = f"second/{source['artifact_path']}"
+        source["sha256"] = digest
+    fingerprint["sbom_index_digest_hex"] = second_source_digests[1]
+    fingerprint["vulnerability_report_digest_hex"] = second_source_digests[2]
+    fingerprint["provenance_bundle_digest_hex"] = second_source_digests[3]
+    fingerprint["provenance_certificate_identity"] = (
+        "https://github.com/hyperledger/iroha/"
+        ".github/workflows/other-release.yml@refs/heads/main"
+    )
+    fingerprint["provenance_oidc_issuer"] = "https://issuer.example.com"
+    fingerprint["provenance_verification_key_fingerprint_hex"] = "c6" * 32
+
+    required_row["artifacts"].append(second)
+    required_row["artifact_count"] = 2
+    recognized_second = copy.deepcopy(second)
+    recognized_second["kind"] = "supply_chain"
+    payload["recognized_artifacts"].append(recognized_second)
+    payload["evidence_file_count"] += 1
+    payload["recognized_artifact_count"] += 1
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reference_sdk_release supply-chain SBOM index fingerprints must match "
+        "valid_sbom_index_digests"
+    ) in errors
+    assert (
+        "reference_sdk_release supply-chain fingerprints must share one "
+        "operator provenance trust tuple"
+    ) in errors
 
 
 def test_reference_sdk_release_manifest_bound_artifacts_must_match_signed_manifest(

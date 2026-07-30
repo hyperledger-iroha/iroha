@@ -402,7 +402,7 @@ certificate round.
   schema V2 in `LaneExecutablePayloadV1`, QueuePlan journal V4, reservation
   journal V5, the 4096 entry ceiling, exact queue durability order, and Kura
   execution-input persistence/recovery to
-  `SumeragiV2InFlightFirstRelease.tla` and its nine mutation controls. That
+  `SumeragiV2InFlightFirstRelease.tla` and its twenty mutation controls. That
   structural contract detects layout drift but does not claim a total Rust
   transition-refinement theorem. The release receipt requires the four
   refinement rows plus a separately named fifth
@@ -430,7 +430,7 @@ certificate round.
   | Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |
   | autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |
   | QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |
-  | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 10 |
+  | in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |
 
   Twelve runner-contract negative controls reject tool-version or checksum
   drift, source-binding bypass, reduced autoscale or QueuePlan bounds, mutation
@@ -438,7 +438,7 @@ certificate round.
   in-flight mutation substitution, a weakened success marker, and a length
   override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  thirty-seven exact refinement-kernel TLC mutation witnesses and the nine
+  thirty-seven exact refinement-kernel TLC mutation witnesses and the twenty
   exact in-flight layout mutation witnesses. Apalache does not run those
   mutations: their named-counterexample contract is owned by the deterministic
   TLC runners, while the Apalache leg accepts positive `NoError` only.
@@ -872,7 +872,13 @@ pipeline, and the authenticated terminal Apply boundary before successor
 construction. The sixth kernel proves exact context, receipt, artifact, block,
 and durable-predecessor identity with no pending successor activation. It has
 no production `MaxHeight` input; `MaxHeight` remains only a finite-horizon
-projection. Those booleans are
+projection. The startup-failure production seam distinguishes a valid checked
+Running failure, which mutates the local snapshot, from an invalid projection,
+which preserves local state while the independently prelatched process output
+guard remains authoritative in public status. Historical body serving is
+authorized by frozen-roster membership rather than historical QC
+participation; the QC authenticates the subject and the archive signs the
+response. Those booleans are
 unassigned: source-order checks, adversarial Rust tests, stale-token mutations,
 and source-manifest binding constrain the corresponding traces but do not
 prove refinement. The theorem therefore has no proof body and remains
@@ -1235,7 +1241,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f`.
+`328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

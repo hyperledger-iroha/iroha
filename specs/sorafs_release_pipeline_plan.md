@@ -363,10 +363,11 @@ external-evidence requirement.
   Java Android, Swift, and C# packages from one release-bound workflow. Boolean
   canary builders and source-tree parity tests do not substitute for those
   package-consumer records.
-- Existing repository patterns to reuse include `scripts/js_sbom_provenance.sh`,
-  `scripts/android_sbom_provenance.sh`, and the docs portal `syft` packaging
-  path. Keep generated SBOMs and the aggregate-manifest signature tuple beside
-  the release hashes in the governance ticket.
+- Existing repository patterns to reuse include
+  `scripts/js_sbom_provenance.sh` and
+  `scripts/android_sbom_provenance.sh`. Keep generated SBOMs and the
+  aggregate-manifest signature tuple beside the release hashes in the
+  governance ticket.
 - If release scanning needs central exceptions, add
   `security/vuln-exceptions.yaml` with expiry and approval fields in the same
   change that enforces the scanner. Do not reference exception files that are
@@ -382,7 +383,7 @@ external-evidence requirement.
   tuple, and the completed rollback/yank record hash-addressed in the release
   ticket. The operational procedure for Cargo, npm, PyPI, NuGet, JVM/Android,
   Swift, and GitHub artifacts is
-  `docs/portal/docs/sorafs/release-rollback-yank.md`.
+  `specs/sorafs/runbooks/release_rollback_yank.md`.
 - Every deterministic CLI archive carries the checked root `CHANGELOG.md` and
   `LICENSE`. The version-specific release-notes template remains
   `fixtures/documentation/sorafs_release_notes.md`; operators must fill and review it,

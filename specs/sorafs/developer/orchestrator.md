@@ -3,8 +3,8 @@ title: SoraFS Orchestrator Configuration
 summary: Configure the multi-source fetch orchestrator, interpret failures, and debug telemetry output.
 ---
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/orchestrator-config.md`.
-> Update both copies to keep reviewers aligned.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 # Multi-Source Fetch Orchestrator Guide
 

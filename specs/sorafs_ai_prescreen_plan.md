@@ -454,7 +454,7 @@ Implemented locally:
   `fixtures/documentation/ai_moderation_perceptual_registry_202602.json` provide the
   committed calibration and registry fixtures.
 - `specs/sorafs/reports/ai_moderation_calibration_202602.md` records the
-  calibration report, with localized mirrors.
+  canonical calibration report.
 - Gateway Authorization Records support moderation directives and slugs through
   `GarModerationDirectiveV1`, `GarModerationAction`, GAR v2 policy parsing, and
   Torii gateway policy checks.

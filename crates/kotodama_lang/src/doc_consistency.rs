@@ -13,12 +13,11 @@ mod tests {
         session::{CompileRequest, CompilerSession},
     };
 
-    fn docs_roots() -> [PathBuf; 3] {
+    fn docs_roots() -> [PathBuf; 2] {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         [
             manifest_dir.join("../../specs"),
             manifest_dir.join("../ivm/docs"),
-            manifest_dir.join("../../docs/portal/docs/norito"),
         ]
     }
 

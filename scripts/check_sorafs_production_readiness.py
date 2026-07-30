@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -175,6 +176,7 @@ from check_sorafs_reference_sdk_release_evidence import (  # noqa: E402
     KIND_BY_NAME as REFERENCE_SDK_KIND_BY_NAME,
     POLICY_BOUND_KINDS as REFERENCE_SDK_POLICY_BOUND_KINDS,
     RELEASE_MANIFEST_BOUND_KINDS as REFERENCE_SDK_RELEASE_MANIFEST_BOUND_KINDS,
+    SOURCE_ARTIFACT_KINDS as REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS,
 )
 from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_REQUIRED_KINDS as REPAIR_REQUIRED_KINDS,
@@ -446,6 +448,37 @@ LOWER_HEX_DIGITS = set("0123456789abcdef")
 PRODUCTION_READY_ENVIRONMENTS = frozenset({"prod", "production"})
 FORBIDDEN_PRODUCTION_DEPLOYMENT_MARKERS = frozenset({"stage", "staging"})
 SUCCESS_ARTIFACT_STATUSES = frozenset({"passed", "verified"})
+REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS = frozenset(
+    {"kind", "artifact_path", "sha256"}
+)
+REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_DIGEST_BINDINGS = (
+    ("sbom_index", "sbom_index_digest_hex"),
+    ("vulnerability_report", "vulnerability_report_digest_hex"),
+    ("provenance_bundle", "provenance_bundle_digest_hex"),
+)
+REFERENCE_SDK_PUBLIC_PROVENANCE_FINGERPRINT_FIELDS = (
+    "provenance_certificate_identity",
+    "provenance_oidc_issuer",
+)
+REFERENCE_SDK_PUBLIC_PROVENANCE_PATH_COMPONENT_RE = re.compile(
+    r"^[A-Za-z0-9._~!$&'()*+,;=:@-]+\Z"
+)
+REFERENCE_SDK_JWT_LIKE_PATH_COMPONENT_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])"
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    r"(?![A-Za-z0-9_-])"
+)
+REFERENCE_SDK_RESERVED_PUBLIC_HOST_SUFFIXES = (
+    ".internal",
+    ".invalid",
+    ".local",
+    ".localhost",
+    ".onion",
+    ".test",
+)
+REFERENCE_SDK_LEGACY_IPV4_COMPONENT_RE = re.compile(
+    r"(?:0x[0-9a-f]+|[0-9]+)\Z"
+)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -1423,6 +1456,165 @@ def canonical_string(value: Any) -> str | None:
     """Return a non-empty canonical string, or None."""
 
     return value if diagnostic_text_is_canonical(value) else None
+
+
+def canonical_public_provenance_url(value: Any) -> str | None:
+    """Return one credential-free canonical public HTTPS provenance URL."""
+
+    label = canonical_string(value)
+    if (
+        label is None
+        or not label.isascii()
+        or any(character.isspace() for character in label)
+    ):
+        return None
+    try:
+        parsed = urlsplit(label)
+        parsed_port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or "\\" in label
+        or parsed.netloc != parsed.netloc.lower()
+        or parsed_port is not None
+    ):
+        return None
+    hostname = parsed.hostname
+    try:
+        host_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        host_ip = None
+    if host_ip is not None:
+        if not host_ip.is_global:
+            return None
+        canonical_netloc = (
+            f"[{host_ip.compressed}]" if host_ip.version == 6 else host_ip.compressed
+        )
+    else:
+        if (
+            hostname != hostname.lower()
+            or hostname.endswith(".")
+            or "." not in hostname
+            or hostname in {"localhost", "local", "internal"}
+            or hostname.endswith(REFERENCE_SDK_RESERVED_PUBLIC_HOST_SUFFIXES)
+        ):
+            return None
+        labels = hostname.split(".")
+        if len(labels) <= 4 and all(
+            REFERENCE_SDK_LEGACY_IPV4_COMPONENT_RE.fullmatch(component)
+            is not None
+            for component in labels
+        ):
+            return None
+        if any(
+            re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+                component,
+            )
+            is None
+            for component in labels
+        ):
+            return None
+        canonical_netloc = hostname
+    if parsed.netloc != canonical_netloc:
+        return None
+
+    path_components = parsed.path.split("/")
+    if path_components and path_components[0] == "":
+        path_components = path_components[1:]
+    if any(component == "" for component in path_components):
+        return None
+    for component in path_components:
+        if (
+            REFERENCE_SDK_PUBLIC_PROVENANCE_PATH_COMPONENT_RE.fullmatch(component)
+            is None
+        ):
+            return None
+        for variant in decoded_text_variants(component):
+            if (
+                variant in {".", ".."}
+                or "/" in variant
+                or "\\" in variant
+                or path_component_has_sensitive_label(variant)
+                or REFERENCE_SDK_JWT_LIKE_PATH_COMPONENT_RE.search(variant)
+                is not None
+            ):
+                return None
+    return label
+
+
+def sanitize_reference_sdk_supply_chain_artifact_for_sensitivity(
+    artifact: Any,
+    *,
+    supply_chain_kind_known: bool,
+) -> Any:
+    """Mask only validated public provenance URLs in a supply-chain artifact."""
+
+    if not isinstance(artifact, dict):
+        return artifact
+    if (
+        not supply_chain_kind_known
+        and artifact.get("kind") != "supply_chain"
+    ):
+        return artifact
+    fingerprint = artifact.get("fingerprint")
+    if not isinstance(fingerprint, dict):
+        return artifact
+    sanitized_fingerprint = dict(fingerprint)
+    changed = False
+    for field in REFERENCE_SDK_PUBLIC_PROVENANCE_FINGERPRINT_FIELDS:
+        if canonical_public_provenance_url(fingerprint.get(field)) is not None:
+            sanitized_fingerprint[field] = "<public-provenance-metadata>"
+            changed = True
+    if not changed:
+        return artifact
+    sanitized_artifact = dict(artifact)
+    sanitized_artifact["fingerprint"] = sanitized_fingerprint
+    return sanitized_artifact
+
+
+def reference_sdk_release_sensitivity_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a lane-local view that retains all non-public secret scanning."""
+
+    candidate = dict(payload)
+    recognized = payload.get("recognized_artifacts")
+    if isinstance(recognized, list):
+        candidate["recognized_artifacts"] = [
+            sanitize_reference_sdk_supply_chain_artifact_for_sensitivity(
+                artifact,
+                supply_chain_kind_known=False,
+            )
+            for artifact in recognized
+        ]
+
+    required = payload.get("required")
+    if not isinstance(required, dict):
+        return candidate
+    supply_chain = required.get("supply_chain")
+    if not isinstance(supply_chain, dict):
+        return candidate
+    artifacts = supply_chain.get("artifacts")
+    if not isinstance(artifacts, list):
+        return candidate
+    required_copy = dict(required)
+    supply_chain_copy = dict(supply_chain)
+    supply_chain_copy["artifacts"] = [
+        sanitize_reference_sdk_supply_chain_artifact_for_sensitivity(
+            artifact,
+            supply_chain_kind_known=True,
+        )
+        for artifact in artifacts
+    ]
+    required_copy["supply_chain"] = supply_chain_copy
+    candidate["required"] = required_copy
+    return candidate
 
 
 def is_production_ready_environment(value: Any) -> bool:
@@ -5234,6 +5426,190 @@ def validate_reference_sdk_release_bound_artifact_metadata(
         ),
         errors=errors,
     )
+    for metadata_field, fingerprint_field, diagnostic in (
+        (
+            "valid_sbom_index_digests",
+            "sbom_index_digest_hex",
+            "SBOM index",
+        ),
+        (
+            "valid_vulnerability_report_digests",
+            "vulnerability_report_digest_hex",
+            "vulnerability report",
+        ),
+        (
+            "valid_provenance_bundle_digests",
+            "provenance_bundle_digest_hex",
+            "provenance bundle",
+        ),
+    ):
+        bound_artifact_fingerprints_match_hex_list_metadata(
+            payload,
+            kind_names=("supply_chain",),
+            metadata_field=metadata_field,
+            fingerprint_field=fingerprint_field,
+            error=(
+                "reference_sdk_release supply-chain "
+                f"{diagnostic} fingerprints must match {metadata_field}"
+            ),
+            errors=errors,
+        )
+    supply_chain_fingerprints = payload_free_summary_artifact_fingerprints(
+        payload,
+        kind_name="supply_chain",
+    )
+    trust_tuples: set[tuple[str, str, str]] = set()
+    for index, fingerprint in enumerate(supply_chain_fingerprints):
+        validate_reference_sdk_supply_chain_fingerprint(
+            fingerprint,
+            errors,
+            path=(
+                "reference_sdk_release supply_chain "
+                f"fingerprint[{index}]"
+            ),
+        )
+        certificate_identity = canonical_public_provenance_url(
+            fingerprint.get("provenance_certificate_identity")
+        )
+        oidc_issuer = canonical_public_provenance_url(
+            fingerprint.get("provenance_oidc_issuer")
+        )
+        verification_key_fingerprint = canonical_lower_hex(
+            fingerprint.get("provenance_verification_key_fingerprint_hex"),
+            64,
+        )
+        if (
+            certificate_identity is not None
+            and oidc_issuer is not None
+            and verification_key_fingerprint is not None
+            and any(
+                character != "0"
+                for character in verification_key_fingerprint
+            )
+        ):
+            trust_tuples.add(
+                (
+                    certificate_identity,
+                    oidc_issuer,
+                    verification_key_fingerprint,
+                )
+            )
+    if len(trust_tuples) > 1:
+        errors.append(
+            "reference_sdk_release supply-chain fingerprints must share one "
+            "operator provenance trust tuple"
+        )
+
+
+def validate_reference_sdk_supply_chain_fingerprint(
+    fingerprint: dict[str, Any],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Require the source-bound, public SF-11 supply-chain fingerprint."""
+
+    source_artifacts = fingerprint.get("source_artifacts")
+    if not isinstance(source_artifacts, list):
+        errors.append(f"{path}.source_artifacts must be an array")
+        source_artifacts = []
+    expected_kinds = REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_KINDS
+    if len(source_artifacts) != len(expected_kinds):
+        errors.append(
+            f"{path}.source_artifacts must contain exactly four bindings"
+        )
+
+    observed_kinds: list[str] = []
+    artifact_paths: list[str] = []
+    artifact_digests: list[str] = []
+    source_digests: dict[str, str] = {}
+    for index, value in enumerate(source_artifacts):
+        row_path = f"{path}.source_artifacts[{index}]"
+        if not isinstance(value, dict):
+            errors.append(f"{row_path} must be an object")
+            continue
+        if set(value) != REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_ARTIFACT_FIELDS:
+            errors.append(
+                f"{row_path} fields must match the exact source binding contract"
+            )
+        kind = canonical_string(value.get("kind"))
+        if kind is None:
+            errors.append(f"{row_path}.kind must be canonical")
+        else:
+            observed_kinds.append(kind)
+        artifact_path = canonical_string(value.get("artifact_path"))
+        if (
+            artifact_path is None
+            or not is_archive_portable_artifact_path(artifact_path)
+        ):
+            errors.append(
+                f"{row_path}.artifact_path must be archive-relative and portable"
+            )
+        else:
+            artifact_paths.append(artifact_path)
+        digest = _nonzero_sha256(
+            value.get("sha256"),
+            path=f"{row_path}.sha256",
+            errors=errors,
+        )
+        if digest is not None:
+            artifact_digests.append(digest)
+            if kind in expected_kinds and kind not in source_digests:
+                source_digests[kind] = digest
+
+    if observed_kinds != list(expected_kinds):
+        errors.append(
+            f"{path}.source_artifacts kinds must match the exact canonical order"
+        )
+    if len(artifact_paths) != len(set(artifact_paths)):
+        errors.append(f"{path}.source_artifacts paths must be unique")
+    if len(artifact_digests) != len(set(artifact_digests)):
+        errors.append(f"{path}.source_artifacts SHA-256 digests must be unique")
+
+    for source_kind, fingerprint_field in (
+        REFERENCE_SDK_SUPPLY_CHAIN_SOURCE_DIGEST_BINDINGS
+    ):
+        fingerprint_digest = _nonzero_sha256(
+            fingerprint.get(fingerprint_field),
+            path=f"{path}.{fingerprint_field}",
+            errors=errors,
+        )
+        source_digest = source_digests.get(source_kind)
+        if (
+            source_digest is not None
+            and fingerprint_digest is not None
+            and source_digest != fingerprint_digest
+        ):
+            errors.append(
+                f"{path}.{source_kind} source digest must match "
+                f"{fingerprint_field}"
+            )
+
+    if (
+        canonical_public_provenance_url(
+            fingerprint.get("provenance_certificate_identity")
+        )
+        is None
+    ):
+        errors.append(
+            f"{path}.provenance_certificate_identity must be a canonical "
+            "public HTTPS identity"
+        )
+    if (
+        canonical_public_provenance_url(
+            fingerprint.get("provenance_oidc_issuer")
+        )
+        is None
+    ):
+        errors.append(
+            f"{path}.provenance_oidc_issuer must be a canonical public "
+            "HTTPS issuer"
+        )
+    _nonzero_sha256(
+        fingerprint.get("provenance_verification_key_fingerprint_hex"),
+        path=f"{path}.provenance_verification_key_fingerprint_hex",
+        errors=errors,
+    )
 
 
 def validate_payload_free_cross_metadata_bindings(
@@ -6867,8 +7243,13 @@ def validate_gate_summary(
     """Validate one existing lane-gate summary."""
 
     errors: list[str] = []
+    sensitivity_payload = (
+        reference_sdk_release_sensitivity_view(payload)
+        if gate.name == "reference_sdk_release"
+        else payload
+    )
     visit_sensitive_fields(
-        payload,
+        sensitivity_payload,
         "",
         errors,
         sensitive_keys=SENSITIVE_KEYS,

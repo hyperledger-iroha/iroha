@@ -321,7 +321,7 @@ test('verifyOpenApiVersions requires explicit nullable entry metadata', async ()
     'signatureHex',
   ]) {
     const context = await setupFixture((manifest) => {
-      const historical = manifest.entries.find((entry) => entry.label === '2025-q4');
+      const historical = manifest.entries.find((entry) => entry.label === 'candidate');
       delete historical[field];
     });
     await assert.rejects(
@@ -492,7 +492,7 @@ async function setupFixture(manifestMutator) {
   const outputDir = join(root, 'static', 'openapi');
   const versionsDir = join(outputDir, 'versions');
   const currentDir = join(versionsDir, 'current');
-  const archivedDir = join(versionsDir, '2025-q4');
+  const archivedDir = join(versionsDir, 'candidate');
 
   await mkdir(currentDir, {recursive: true});
   await mkdir(archivedDir, {recursive: true});
@@ -521,7 +521,7 @@ async function setupFixture(manifestMutator) {
   });
 
   const versionsManifest = {
-    versions: ['2025-q4', 'current'],
+    versions: ['candidate', 'current'],
     generatedAt: timestamp,
     entries: [
       {
@@ -538,8 +538,8 @@ async function setupFixture(manifestMutator) {
         signatureHex: signature.signature_hex,
       },
       {
-        label: '2025-q4',
-        path: 'versions/2025-q4/torii.json',
+        label: 'candidate',
+        path: 'versions/candidate/torii.json',
         bytes: specBytes.length,
         sha256,
         blake3: null,

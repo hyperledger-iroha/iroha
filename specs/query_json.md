@@ -122,7 +122,7 @@ The optional `params` object configures pagination and sorting:
   ignored (TBD).
 
 All numeric limits must be non-zero when provided. The sort key is validated
-using the canonical [`Name`](../../crates/iroha_data_model/src/name.rs) rules.
+using the canonical [`Name`](../crates/iroha_data_model/src/name.rs) rules.
 
 ### Predicate mini DSL
 
@@ -157,5 +157,5 @@ JSON
 The response is printed using the configured output format. The same envelope
 can be converted into a signed frame programmatically via
 `QueryEnvelopeJson::into_signed_request`. See
-[`iroha_data_model::query::json`](../../crates/iroha_data_model/src/query/json)
+[`iroha_data_model::query::json`](../crates/iroha_data_model/src/query/json)
 for the full Rust API.

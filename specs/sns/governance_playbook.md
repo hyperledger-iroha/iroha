@@ -50,8 +50,9 @@ Use these sources together:
   settlement evidence.
 - [`arbitration_toolkit.md`](./arbitration_toolkit.md) defines an off-chain,
   evidence-only dispute packet.
-- the [portal operational evidence guide](../../portal/docs/sns/kpi-dashboard.md)
-  distinguishes canonical evidence from the quarantined legacy dashboard.
+- public operational guidance is maintained at
+  [docs.iroha.tech](https://docs.iroha.tech/); repository-local dashboards are
+  not canonical execution evidence.
 
 A dashboard or report may summarize canonical evidence, but it cannot prove an
 apply. Retain the canonical plan body, plan hash, ordered framed instructions,
@@ -192,9 +193,8 @@ unauthorized caller.
 - [ ] Post-commit readiness and authorized reads match the approved intent.
 - [ ] The evidence bundle is deterministic, redacted, and secret-free.
 
-## 10. Localization notice
+## 10. Public documentation
 
-Translated mirrors are generated from this file. A translation with a stale
-`source_hash` is reference material only and must not be used as an operational
-runbook until regenerated and reviewed. Route paths, CLI command names,
-diagnostic codes, and Norito type names must remain verbatim.
+Public governance guides and translations are maintained in the sibling
+`iroha-docs` repository and published at <https://docs.iroha.tech/>. Keep this
+file focused on the implementation-coupled governance contract.

@@ -10,9 +10,12 @@ Owners: Networking TL, Docs/DevRel, Storage/Ops
 Roadmap reference: **DG-3 — Gateway Content Binding & TLS Automation**
 
 This runbook stitches together the CLI helpers and artefact formats introduced
-for DG-3 so the docs portal (and any other SoraDNS property such as
-`docs.sora`) can be tied to a gateway manifest with deterministic evidence. It
-is meant to be read alongside:
+for DG-3 so any SoraDNS property can be tied to a gateway manifest with
+deterministic evidence. It is meant to be read alongside:
+
+The `docs.sora` names below are protocol examples, not the public Iroha
+documentation deployment. The public site is <https://docs.iroha.tech/> and is
+released from the sibling `iroha-docs` repository.
 
 - `specs/soradns/deterministic_hosts.md` (host derivation policy)
 - `specs/sorafs_gateway_tls_automation.md` (TLS/ECH automation)
@@ -23,7 +26,7 @@ is meant to be read alongside:
 | Requirement | Notes |
 |-------------|-------|
 | Cargo workspace + `xtask` helpers | Needed for `soradns-hosts`, `soradns-gar-template`, and `sorafs-gateway-probe`. |
-| Signed SoraFS manifest bundle | Produced by `docs/portal/scripts/sorafs-pin-release.sh` (see `docs/portal/docs/devportal/deploy-guide.md`). |
+| Signed SoraFS manifest bundle | Produced by the property owner's release system; public Iroha documentation releases are owned by the sibling `iroha-docs` repository. |
 | Governance ticket & alias approval | Ticket must list the registered FQDN, GAR version, and DNS cutover window. |
 | Access to GAR signing key + Sigstore tooling | The GAR template emitted below becomes the payload for the signature workflow. |
 | Probe target | Either a staging gateway (`https://docs.sora.link`) or captured headers under `artifacts/sorafs_gateway_probe/`. |
@@ -112,23 +115,10 @@ manifest metadata drifts, or when required telemetry labels are absent. Store
 the JSON summary next to the GAR artefact so governance can reference the
 verification evidence without replaying CLI output.
 
-### Step 3 — Pin the portal release and capture binding metadata
+### Step 3 — Capture binding metadata
 
-Run the packaging script documented in the portal deploy guide; the example
-below shows the minimum flags for a dry run:
-
-```bash
-npm ci && npm run build
-./docs/portal/scripts/sorafs-pin-release.sh \
-  --alias-hint docs.sora.link \
-  --dns-change-ticket OPS-XXXX \
-  --dns-cutover-window 2025-03-03T16:00Z/2025-03-03T16:30Z \
-  --gateway-manifest-envelope artifacts/sorafs/portal.gateway.binding.json \
-  --metadata alias_label=docs.sora.link
-```
-
-To regenerate the binding outside the portal release script (or to diff changes
-locally), call the new xtask helper directly:
+Obtain the signed manifest from the property owner's release system, then
+generate the binding with the repository-local helper:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -290,8 +280,8 @@ cutover artefact bucket.
 ## 4. Automation Hooks
 
 - Add `cargo xtask soradns-hosts --verify-host-patterns` and
-  `cargo xtask soradns-gar-template --json-out` to the docs portal release
-  workflow (`ci/check_docs_portal.sh`) so GAR drift blocks CI.
+  `cargo xtask soradns-gar-template --json-out` to the property owner's release
+  workflow so GAR drift blocks promotion.
 - Run `cargo xtask soradns-verify-gar` and `cargo xtask soradns-verify-binding`
   in the same workflow to pin GAR and header templates before artefacts are
   published; retain `cargo xtask soradns-route-plan` output as the promotion

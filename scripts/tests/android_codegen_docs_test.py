@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 MODULE_PATH = (Path(__file__).resolve().parents[1] / "android_codegen_docs.py")
@@ -176,3 +177,41 @@ def test_codegen_metadata_is_generated_from_descriptors(tmp_path: Path) -> None:
     assert metadata["builder_index"]["entry_count"] == 1
     assert "generated_at" not in metadata["instruction_manifest"]
     assert "generated_at" not in metadata["builder_index"]
+
+
+def test_main_generates_only_canonical_english_outputs(
+    tmp_path: Path, monkeypatch
+) -> None:
+    manifest_path = tmp_path / "instruction_manifest.json"
+    builders_path = tmp_path / "builder_index.json"
+    output_dir = tmp_path / "generated"
+    manifest_path.write_text(
+        json.dumps({"version": 1, "instructions": []}),
+        encoding="utf-8",
+    )
+    builders_path.write_text(
+        json.dumps({"builders": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(MODULE_PATH),
+            "--manifest",
+            str(manifest_path),
+            "--builders",
+            str(builders_path),
+            "--out",
+            str(output_dir),
+        ],
+    )
+
+    docs_mod.main()
+
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "builders.md",
+        "codegen_manifest_metadata.json",
+        "instructions.md",
+        "manifest_catalog.md",
+    ]

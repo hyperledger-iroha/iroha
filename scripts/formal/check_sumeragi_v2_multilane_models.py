@@ -123,38 +123,81 @@ INFLIGHT_LAYOUT_REQUIRED_INVARIANTS = (
     "FirstReleaseTypeInvariant",
     "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
     "MLValidatorCarrierOwnership",
-    "MLPutBatchV4BeforeReservationV5",
+    "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5",
     "MLReservationV5BeforeKuraActive",
     "MLKuraActiveBeforeExecutionInput",
-    "MLExecutionInputBeforeReady",
-    "MLCrashPrefixLossFree",
+    "MLExecutionInputBeforeReadyAuthorization",
+    "MLReadyAuthorizationBeforeLocalSignature",
+    "MLLocalSignaturesBeforeDurableReadyQc",
+    "MLCrashDurableFactsRecoverable",
+    "MLVolatileSessionLostOnCrash",
     "MLCommitAndReleaseRetainExactScope",
+    "MLLaneCommitBeforeAtomicWsvCarrierApplication",
     "MLExactlyOnceCarrierApplication",
-    "MLQueuePlanV4PutBatchBound4096",
+    "MLPostCarrierCommitCleanupOrder",
+    "MLReleasePrefixesRecoverable",
+    "MLReleaseStageOrder",
+    "MLQueuePlanV4SelectedConjunctionBound4096",
+)
+INFLIGHT_LAYOUT_REQUIRED_ACTIONS = (
+    "SelectQueuePlanV4Conjunction",
+    "FsyncReservationV5",
+    "ActivateKura",
+    "PersistExecutionInput",
+    "AuthorizeReady",
+    "SignReady",
+    "PersistReadyQc",
+    "Crash",
+    "Recover",
+    "LaneCommit",
+    "ApplyCarrier",
+    "PersistReservationCommitted",
+    "PersistPlanTombstone",
+    "ForgetReservationCommit",
+    "PersistKuraRetirement",
+    "AdvanceReleasePendingPrefix",
+    "PrepareReservationRelease",
+    "AdvanceReleasedPrefix",
+    "CompleteReservationRelease",
+    "RestoreReleasedFifo",
+    "ForgetReservationRelease",
+    "RepairPostCarrierEvidence",
 )
 INFLIGHT_LAYOUT_MUTATIONS = (
     (
-        "inflight_first_release_reservation_before_put_batch_bug.cfg",
-        "MLPutBatchV4BeforeReservationV5",
+        "inflight_first_release_reservation_before_selected_queue_plan_bug.cfg",
+        "MLSelectedQueuePlanV4ConjunctionBeforeReservationV5",
     ),
     (
         "inflight_first_release_kura_before_reservation_bug.cfg",
         "MLReservationV5BeforeKuraActive",
     ),
     (
-        "inflight_first_release_ready_before_input_bug.cfg",
-        "MLExecutionInputBeforeReady",
+        "inflight_first_release_ready_authorization_before_input_bug.cfg",
+        "MLExecutionInputBeforeReadyAuthorization",
+    ),
+    (
+        "inflight_first_release_ready_signature_before_authorization_bug.cfg",
+        "MLReadyAuthorizationBeforeLocalSignature",
+    ),
+    (
+        "inflight_first_release_ready_qc_before_signatures_bug.cfg",
+        "MLLocalSignaturesBeforeDurableReadyQc",
     ),
     (
         "inflight_first_release_crash_drops_durable_bug.cfg",
-        "MLCrashPrefixLossFree",
+        "MLCrashDurableFactsRecoverable",
+    ),
+    (
+        "inflight_first_release_crash_retains_volatile_body_bug.cfg",
+        "MLVolatileSessionLostOnCrash",
     ),
     (
         "inflight_first_release_payload_conflict_bug.cfg",
         "MLPayloadSchemaV2CarriesExactAdmissionPreimage",
     ),
     (
-        "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "inflight_first_release_lane_commit_scope_conflict_bug.cfg",
         "MLCommitAndReleaseRetainExactScope",
     ),
     (
@@ -166,12 +209,47 @@ INFLIGHT_LAYOUT_MUTATIONS = (
         "MLExactlyOnceCarrierApplication",
     ),
     (
-        "inflight_first_release_oversize_put_batch_bug.cfg",
-        "MLQueuePlanV4PutBatchBound4096",
+        "inflight_first_release_reservation_commit_before_carrier_bug.cfg",
+        "MLPostCarrierCommitCleanupOrder",
+    ),
+    (
+        "inflight_first_release_plan_tombstone_before_reservation_commit_bug.cfg",
+        "MLPostCarrierCommitCleanupOrder",
+    ),
+    (
+        "inflight_first_release_forget_commit_before_plan_tombstone_bug.cfg",
+        "MLPostCarrierCommitCleanupOrder",
+    ),
+    (
+        "inflight_first_release_release_pending_before_retirement_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_release_prepare_before_pending_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_released_claims_before_prepare_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_release_complete_before_released_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_forget_release_before_fifo_bug.cfg",
+        "MLReleaseStageOrder",
+    ),
+    (
+        "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
+        "MLQueuePlanV4SelectedConjunctionBound4096",
     ),
 )
 INFLIGHT_LAYOUT_FORBIDDEN_TOKENS = (
     "LaneExecutablePayloadV3",
+    "PutBatchV4",
+    "MLPutBatchV4BeforeReservationV5",
+    "MLQueuePlanV4PutBatchBound4096",
     "QueuePlanV5",
     "QueuePlan V5",
     "queuePlanV5",
@@ -407,6 +485,7 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
             '"inflight-first-release-layout"',
             '"SumeragiV2InFlightFirstRelease"',
             '"inflight_first_release_fixed.cfg"',
+            '"inflight_first_release_fixed.cfg",\n        "18",',
             "*_APALACHE_REFINEMENT_RESULTS",
             "*_APALACHE_LAYOUT_ONLY_RESULTS",
         ),
@@ -415,6 +494,7 @@ INFLIGHT_LAYOUT_SOURCE_CHECKS = (
         "pytests/scripts/sumeragi_v2_release_receipt_test.py",
         (
             'canonical.replace("result_count\\t5", "result_count\\t4", 1)',
+            '"inflight_first_release_fixed.cfg\\t18\\tNoError\\t"',
             '"result\\tinflight-first-release-refinement\\t"',
             '"is not exact source-bound NoError evidence"',
         ),
@@ -580,6 +660,7 @@ EXPECTED_RELEASE_INVARIANT_SOURCE_PATHS = {
     "ML-MUT-API-01": (
         "crates/iroha_core/src/state.rs",
         "crates/iroha_torii/src/routing.rs",
+        "crates/iroha_torii/src/tests/routing.rs",
     ),
     "ML-MUT-API-02": (
         "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
@@ -1132,8 +1213,8 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   inflight-first-release-layout \\
   "$INFLIGHT_FIRST_RELEASE_MODULE" \\
   inflight_first_release_fixed.cfg \\
-  10 \\
-  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLPutBatchV4BeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReady, MLCrashPrefixLossFree, MLCommitAndReleaseRetainExactScope, MLExactlyOnceCarrierApplication, MLQueuePlanV4PutBatchBound4096\"""",
+  18 \\
+  "FirstReleaseTypeInvariant, MLPayloadSchemaV2CarriesExactAdmissionPreimage, MLValidatorCarrierOwnership, MLSelectedQueuePlanV4ConjunctionBeforeReservationV5, MLReservationV5BeforeKuraActive, MLKuraActiveBeforeExecutionInput, MLExecutionInputBeforeReadyAuthorization, MLReadyAuthorizationBeforeLocalSignature, MLLocalSignaturesBeforeDurableReadyQc, MLCrashDurableFactsRecoverable, MLVolatileSessionLostOnCrash, MLCommitAndReleaseRetainExactScope, MLLaneCommitBeforeAtomicWsvCarrierApplication, MLExactlyOnceCarrierApplication, MLPostCarrierCommitCleanupOrder, MLReleasePrefixesRecoverable, MLReleaseStageOrder, MLQueuePlanV4SelectedConjunctionBound4096\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -1182,15 +1263,26 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_queue_plan_guard_drop_deletes_durable_owner_bug.cfg",
         "multilane_queue_plan_execution_without_exact_binding_bug.cfg",
         "multilane_queue_plan_duplicate_execution_bug.cfg",
-        "inflight_first_release_reservation_before_put_batch_bug.cfg",
+        "inflight_first_release_reservation_before_selected_queue_plan_bug.cfg",
         "inflight_first_release_kura_before_reservation_bug.cfg",
-        "inflight_first_release_ready_before_input_bug.cfg",
+        "inflight_first_release_ready_authorization_before_input_bug.cfg",
+        "inflight_first_release_ready_signature_before_authorization_bug.cfg",
+        "inflight_first_release_ready_qc_before_signatures_bug.cfg",
         "inflight_first_release_crash_drops_durable_bug.cfg",
+        "inflight_first_release_crash_retains_volatile_body_bug.cfg",
         "inflight_first_release_payload_conflict_bug.cfg",
-        "inflight_first_release_commit_scope_conflict_bug.cfg",
+        "inflight_first_release_lane_commit_scope_conflict_bug.cfg",
         "inflight_first_release_release_scope_conflict_bug.cfg",
         "inflight_first_release_duplicate_apply_bug.cfg",
-        "inflight_first_release_oversize_put_batch_bug.cfg",
+        "inflight_first_release_reservation_commit_before_carrier_bug.cfg",
+        "inflight_first_release_plan_tombstone_before_reservation_commit_bug.cfg",
+        "inflight_first_release_forget_commit_before_plan_tombstone_bug.cfg",
+        "inflight_first_release_release_pending_before_retirement_bug.cfg",
+        "inflight_first_release_release_prepare_before_pending_bug.cfg",
+        "inflight_first_release_released_claims_before_prepare_bug.cfg",
+        "inflight_first_release_release_complete_before_released_bug.cfg",
+        "inflight_first_release_forget_release_before_fifo_bug.cfg",
+        "inflight_first_release_oversize_selected_queue_plan_bug.cfg",
     ):
         if forbidden in source:
             errors.append(
@@ -1269,7 +1361,7 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "| Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |",
             "| autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |",
             "| QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |",
-            "| in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 10 |",
+            "| in-flight carrier (layout-only) | `inflight_first_release_fixed.cfg` | 18 |",
             "not independent ledger rows, TLAPS evidence",
             "cross-tool proof evidence",
             "changes no proof-ledger status",
@@ -1587,6 +1679,7 @@ def _validate_inflight_layout_contract(
         "positive_config",
         "runner",
         "evidence",
+        "required_actions",
         "required_invariants",
         "mutations",
         "production_symbols",
@@ -1597,9 +1690,9 @@ def _validate_inflight_layout_contract(
     if not isinstance(contract, dict) or set(contract) != expected_keys:
         errors.append(
             "in-flight layout contract must contain exactly claim, module, "
-            "positive_config, runner, evidence, required_invariants, mutations, "
-            "production_symbols, ordered_source_checks, source_checks, and "
-            "forbidden_tokens"
+            "positive_config, runner, evidence, required_actions, "
+            "required_invariants, mutations, production_symbols, "
+            "ordered_source_checks, source_checks, and forbidden_tokens"
         )
         return
     expected_scalars = {
@@ -1614,6 +1707,16 @@ def _validate_inflight_layout_contract(
             errors.append(
                 f"in-flight layout contract {field} must equal {expected!r}"
             )
+
+    required_actions = contract.get("required_actions")
+    if (
+        not isinstance(required_actions, list)
+        or tuple(required_actions) != INFLIGHT_LAYOUT_REQUIRED_ACTIONS
+    ):
+        errors.append(
+            "in-flight layout contract actions differ from the exact reviewed "
+            "current-semantics inventory"
+        )
 
     required_invariants = contract.get("required_invariants")
     if (
@@ -1649,7 +1752,7 @@ def _validate_inflight_layout_contract(
     if tuple(actual_mutations) != INFLIGHT_LAYOUT_MUTATIONS:
         errors.append(
             "in-flight layout mutation mapping differs from the exact reviewed "
-            "nine-control corpus"
+            "twenty-control corpus"
         )
 
     production_symbols = contract.get("production_symbols")
@@ -1789,6 +1892,16 @@ def _validate_inflight_layout_contract(
                 f"{module_path}: layout-only kernel must not declare a production "
                 "refinement obligation"
             )
+        for action in INFLIGHT_LAYOUT_REQUIRED_ACTIONS:
+            declaration_re = re.compile(
+                TLA_DECLARATION_TEMPLATE.format(symbol=re.escape(action))
+            )
+            count = len(tuple(declaration_re.finditer(module_source)))
+            if count != 1:
+                errors.append(
+                    f"{module_path}: current-semantics action {action} must be "
+                    f"declared exactly once, found {count}"
+                )
         for invariant in INFLIGHT_LAYOUT_REQUIRED_INVARIANTS:
             declaration_re = re.compile(
                 TLA_DECLARATION_TEMPLATE.format(symbol=re.escape(invariant))
@@ -1856,7 +1969,7 @@ def _validate_inflight_layout_contract(
         if runner_calls != INFLIGHT_LAYOUT_MUTATIONS:
             errors.append(
                 f"{runner_path}: mutation calls differ from the exact reviewed "
-                "nine-control corpus"
+                "twenty-control corpus"
             )
         for token in (
             "\nrun_positive\n",
@@ -1882,6 +1995,11 @@ def _validate_inflight_layout_contract(
             "`LANE_EXECUTABLE_PAYLOAD_VERSION_V2`",
             "QueuePlan journal V4",
             "reservation journal V5",
+            "selected-batch conjunction",
+            "READY signature",
+            "atomic WSV carrier application",
+            "four-stage release",
+            "twenty `_bug.cfg`",
             "`layout_only_no_transition_refinement`",
             "production-refinement theorem",
             "total projection theorem",
@@ -1902,6 +2020,10 @@ def _validate_inflight_layout_contract(
             "`LaneExecutablePayloadV1`",
             "QueuePlan journal V4",
             "reservation journal V5",
+            "selected-batch",
+            "READY authorization/signature/QC",
+            "post-carrier",
+            "four-stage",
             "`layout_only_no_transition_refinement`",
             "total transition projection is not implemented",
         ):

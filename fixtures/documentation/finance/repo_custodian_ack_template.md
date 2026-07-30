@@ -4,13 +4,15 @@
 
 # Repo Custodian Acknowledgement Template
 
-Use this template when a repo (bilateral or tri-party) references a custodian
-via `RepoAgreement::custodian`. The goal is to record the custody SLA, routing
-accounts, and drill contacts before assets move. Copy the template into your
+Use this supplementary operations template when a tri-party repo references a
+custodian via `RepoAgreement::custodian`. Ledger authorization comes only from
+the custodian's owner-signed exact maturity `CanExecuteSettlement` Grant; this
+document cannot replace it. The template records the custody SLA, exact balance
+scope, and contacts before assets move. Copy the template into your
 evidence directory (for example
 `artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), fill the
-placeholders, and hash the file as part of the governance packet described in
-`specs/finance/repo_ops.md` §2.8.
+placeholders, and hash the file as supplementary evidence for
+`specs/finance/repo_ops.md`.
 
 ## 1. Metadata
 
@@ -25,6 +27,9 @@ placeholders, and hash the file as part of the governance packet described in
 ## 2. Custody Scope
 
 - **Collateral definitions received:** `<list of asset definition ids>`
+- **Exact collateral custody AssetId:** `<definition + custodian + dataspace scope>`
+- **Maturity consent intent hash:** `<RepoIsi::maturity_intent_hash()>`
+- **Grant transaction / finality receipt:** `<paths + hashes>`
 - **Cash leg currency / settlement rail:** `<xor#sora / other>`
 - **Custody window:** `<start/end timestamps or SLA summary>`
 - **Standing instructions:** `<hash + path to standing instruction document>`
@@ -44,9 +49,10 @@ placeholders, and hash the file as part of the governance packet described in
 1. *Custody readiness:* “We reviewed the staged `repo initiate` payload with the
    identifiers above and are prepared to accept collateral under the SLA listed
    in §2.”
-2. *Rollback commitment:* “We will execute the rollback playbook named above if
-   directed by the incident commander, and will provide CLI logs plus hashes in
-   `governance/drills/<timestamp>.log`.”
+2. *Maturity release:* “We issued the exact owner-signed maturity permission
+   recorded above and will preserve the consent-selected collateral scope until
+   the immutable agreement settles. We understand that early unwind and
+   caller-selected substitution are not protocol operations.”
 3. *Evidence retention:* “We will keep the acknowledgement, standing
    instructions, and CLI logs for at least `<duration>` and provide them to the
    finance council upon request.”

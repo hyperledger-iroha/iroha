@@ -1,7 +1,5 @@
 # Torii Endpoints — Operator Aids (Quick Reference)
 
-日本語の概要は [`operator_aids.ja.md`](./operator_aids.ja.md) を参照してください。
-
 This page lists non-consensus, operator-facing endpoints that help with visibility and troubleshooting. Responses are JSON unless noted.
 
 Consensus (Sumeragi)

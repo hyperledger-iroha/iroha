@@ -106,9 +106,10 @@ cargo xtask soranet-constant-rate-profile --profile core --format json
 cargo xtask soranet-constant-rate-profile --profile null
 ```
 
-When `--format markdown` is supplied the command emits GitHub-flavoured Markdown tables for both
-the preset summary and the optional tick cheat sheet, making it easy to paste deterministic tables
-into this document or the portal mirror.
+When `--format markdown` is supplied the command emits GitHub-flavoured
+Markdown tables for both the preset summary and the optional tick cheat sheet,
+making it easy to update this source-adjacent document or coordinate current
+public guidance in `iroha-docs`.
 
 Passing `--json-out -` writes the prettified JSON to stdout so scripts can capture the same
 structure without re-running the command. The JSON payload mirrors the preset table fields and

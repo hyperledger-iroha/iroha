@@ -21,11 +21,9 @@ FIXTURE_PATH = (
     REPO_ROOT / "fixtures" / "sumeragi_v2" / "native_amx_v2_grouped.json"
 )
 OPENAPI_PATHS = (
-    REPO_ROOT / "docs" / "portal" / "static" / "openapi" / "torii.json",
+    REPO_ROOT / "artifacts" / "openapi" / "torii.json",
     REPO_ROOT
-    / "docs"
-    / "portal"
-    / "static"
+    / "artifacts"
     / "openapi"
     / "versions"
     / "current"

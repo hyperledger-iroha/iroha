@@ -37,6 +37,7 @@ from iroha_python._privacy_backends import (
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
 from iroha_python.repo import (
     RepoAgreementListPage,
+    RepoAgreementRecord,
     RepoCashLeg,
     RepoCollateralLeg,
 )
@@ -53,6 +54,10 @@ FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 
 def test_data_model_version_matches_current_wire_contract() -> None:
     assert DATA_MODEL_VERSION == 4
+
+
+def test_confidential_gas_schedule_has_no_runtime_setter() -> None:
+    assert not hasattr(ToriiClient, "set_confidential_gas_schedule")
 
 
 class FakeSession:
@@ -964,12 +969,16 @@ def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() 
                 "counterparty": "bob@is",
                 "custodian": None,
                 "cash_leg": {"asset_definition_id": "cash#is", "quantity": "100"},
+                "cash_source": "cash#is::bob@is",
                 "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+                "collateral_custody_asset": "bond#is::bob@is",
                 "rate_bps": 250,
                 "maturity_timestamp_ms": 2_000,
                 "initiated_timestamp_ms": 1_000,
                 "last_margin_check_timestamp_ms": 1_000,
                 "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+                "settlement_timestamp_ms": None,
+                "status": "active",
             }
         ],
         "has_more": True,
@@ -987,11 +996,20 @@ def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() 
     assert page.indexed_height == 11
     assert page.indexed_block_hash == "cd" * 32
     assert page.query_source == "live"
+    assert page.items[0].cash_source == "cash#is::bob@is"
+    assert page.items[0].collateral_custody_asset == "bond#is::bob@is"
+    assert page.items[0].settlement_timestamp_ms is None
+    assert page.items[0].status == "active"
 
     bad = dict(payload)
     bad["has_more"] = "true"
     with pytest.raises(TypeError, match="has_more"):
         RepoAgreementListPage.from_payload(bad)
+
+    inconsistent = dict(payload["items"][0])
+    inconsistent["status"] = "settled"
+    with pytest.raises(ValueError, match="status must agree"):
+        RepoAgreementRecord.from_payload(inconsistent)
 
 
 @pytest.mark.parametrize("quantity", ["1.0", "01", "+1", "-1", 1, 1.0, None])
@@ -1004,15 +1022,19 @@ def test_repo_agreement_readback_rejects_noncanonical_quantities(quantity: objec
                 "counterparty": "bob@is",
                 "custodian": None,
                 "cash_leg": {"asset_definition_id": "cash#is", "quantity": quantity},
+                "cash_source": "cash#is::bob@is",
                 "collateral_leg": {
                     "asset_definition_id": "bond#is",
                     "quantity": "120",
                 },
+                "collateral_custody_asset": "bond#is::bob@is",
                 "rate_bps": 250,
                 "maturity_timestamp_ms": 2_000,
                 "initiated_timestamp_ms": 1_000,
                 "last_margin_check_timestamp_ms": 1_000,
                 "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+                "settlement_timestamp_ms": None,
+                "status": "active",
             }
         ]
     }
@@ -1028,12 +1050,16 @@ def test_repo_agreement_readback_requires_quantity_fields() -> None:
         "counterparty": "bob@is",
         "custodian": None,
         "cash_leg": {"asset_definition_id": "cash#is"},
+        "cash_source": "cash#is::bob@is",
         "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+        "collateral_custody_asset": "bond#is::bob@is",
         "rate_bps": 250,
         "maturity_timestamp_ms": 2_000,
         "initiated_timestamp_ms": 1_000,
         "last_margin_check_timestamp_ms": 1_000,
         "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+        "settlement_timestamp_ms": None,
+        "status": "active",
     }
 
     with pytest.raises(KeyError, match="quantity"):

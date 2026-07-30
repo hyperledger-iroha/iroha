@@ -1,8 +1,4 @@
-<!--
-Roadmap reference for Swift dashboard metrics. Keep translations in sync:
-specs/references/ios_metrics.ja.md
-specs/references/ios_metrics.he.md
--->
+<!-- Public translations belong in the sibling iroha-docs repository. -->
 
 # Swift Dashboard Metrics (Parity & CI)
 

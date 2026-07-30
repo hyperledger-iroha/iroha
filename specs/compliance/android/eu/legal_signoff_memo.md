@@ -22,7 +22,7 @@ alongside the immutable artefacts referenced in the memo.
 | Artefact | SHA-256 | Location / Link | Notes |
 |----------|---------|-----------------|-------|
 | `security_target.md` | `<hash>` | `specs/compliance/android/eu/security_target.md` + governance archive | Confirm release identifiers & threat model adjustments. |
-| `gdpr_dpia_summary.md` | `<hash>` | Same directory / localization mirrors | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
+| `gdpr_dpia_summary.md` | `<hash>` | Same directory / canonical evidence bundle | Ensure redaction policy references match `sdk/android/telemetry_redaction.md`. |
 | `sbom_attestation.md` | `<hash>` | Same directory + cosign bundle in evidence bucket | Verify CycloneDX + provenance signatures. |
 | Evidence log row | `<hash>` | `specs/compliance/android/evidence_log.csv` | Row number `<n>` |
 | Device-lab contingency bundle | `<hash>` | `artifacts/android/device_lab_contingency/<YYYYMMDD>/*.tgz` | Confirms failover rehearsal tied to this release. |

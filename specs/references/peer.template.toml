@@ -36,7 +36,12 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # and transaction.max_decompressed_bytes. Adjust those values inside
 # the genesis file when tightening admission limits.
 # public_key =
+# Local startup trusts this exact signed artifact and needs no separate hash pin.
 # file =
+# Remote-only alternative: set both values. Unpinned remote bootstrap is rejected
+# as a startup configuration error before the node sends a request.
+# expected_hash = "<exact signed genesis block hash>"
+# bootstrap_enabled = true
 
 [network]
 # address =

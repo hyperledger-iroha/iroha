@@ -6,9 +6,6 @@ use base64::Engine as _;
 use clap::Subcommand;
 use eyre::{Context, Result};
 use hex::encode as hex_encode;
-use iroha_config::client_api::{
-    ConfidentialGas as ConfidentialGasDTO, ConfigUpdateDTO, Logger as LoggerDTO,
-};
 use iroha_crypto::{ConfidentialKeyset, derive_keyset_from_slice};
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use zeroize::Zeroizing;
@@ -20,7 +17,7 @@ use crate::{Run, RunContext};
 pub enum Command {
     /// Derive confidential key hierarchy (nk/ivk/ovk/fvk) from a spend key.
     CreateKeys(CreateKeysArgs),
-    /// Inspect or update the confidential gas schedule.
+    /// Inspect the confidential gas schedule.
     #[command(subcommand)]
     Gas(GasCommand),
 }
@@ -99,8 +96,6 @@ impl Run for CreateKeysArgs {
 pub enum GasCommand {
     /// Fetch the current confidential gas schedule.
     Get,
-    /// Update the confidential gas schedule.
-    Set(GasSetArgs),
 }
 
 impl Run for GasCommand {
@@ -118,54 +113,7 @@ impl Run for GasCommand {
                 context.println(format!("per_commitment: {}", schedule.per_commitment))?;
                 Ok(())
             }
-            GasCommand::Set(args) => args.run(context),
         }
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct GasSetArgs {
-    #[arg(long, value_name = "UNITS")]
-    proof_base: u64,
-    #[arg(long, value_name = "UNITS")]
-    per_public_input: u64,
-    #[arg(long, value_name = "UNITS")]
-    per_proof_byte: u64,
-    #[arg(long, value_name = "UNITS")]
-    per_nullifier: u64,
-    #[arg(long, value_name = "UNITS")]
-    per_commitment: u64,
-}
-
-impl GasSetArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
-        let config = client
-            .get_config()
-            .wrap_err("failed to fetch configuration for update")?;
-        let update = ConfigUpdateDTO {
-            logger: LoggerDTO {
-                level: config.logger.level,
-                filter: config.logger.filter.clone(),
-            },
-            network_acl: None,
-            network: None,
-            confidential_gas: Some(ConfidentialGasDTO {
-                proof_base: self.proof_base,
-                per_public_input: self.per_public_input,
-                per_proof_byte: self.per_proof_byte,
-                per_nullifier: self.per_nullifier,
-                per_commitment: self.per_commitment,
-            }),
-            soranet_handshake: None,
-            transport: None,
-            compute_pricing: None,
-        };
-        client
-            .set_config(&update)
-            .wrap_err("failed to submit confidential gas update")?;
-        context.println("Confidential gas schedule updated.")?;
-        Ok(())
     }
 }
 

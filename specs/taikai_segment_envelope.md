@@ -412,7 +412,7 @@ every routing window. Operators should:
    already contains the `lineage_hint` object) and store it alongside the spool
    files.
 3. Hash each artefact and record it in the
-   [`taikai_anchor_lineage_packet.md`](../examples/taikai_anchor_lineage_packet.md)
+   [`taikai_anchor_lineage_packet.md`](../fixtures/documentation/taikai_anchor_lineage_packet.md)
    template so governance packets can assert which manifest window superseded
    the previous one. The template mirrors the repo evidence workflow, so you
    can reuse `scripts/repo_evidence_manifest.py` to produce a manifest covering

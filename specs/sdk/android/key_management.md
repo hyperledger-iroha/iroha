@@ -12,7 +12,6 @@ flows before enabling StrongBox-backed signing in production.
 
 > **Sample walkthroughs:**  
 > - [Operator console walkthrough](samples/operator_console.md#9-step-by-step-walkthrough) – Step 1 shows how StrongBox enrolment, alias policies, and attestation exports map to Sections 2–5 of this guide.  
-> - [Retail wallet design notes](samples/retail_wallet.md#2-feature-breakdown) – the secure-storage/recovery rows demonstrate how consumer flows reuse deterministic exports, rotation playbooks, and POS policy hooks documented below.
 
 ## 1. Architecture Overview
 

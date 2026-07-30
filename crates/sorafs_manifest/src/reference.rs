@@ -60,7 +60,7 @@ use crate::{
 pub const VALIDATION_OUTCOME_VERSION_V1: u8 = 1;
 
 /// Error-catalogue document referenced by emitted outcomes.
-pub const REFERENCE_SDK_ERRORS_DOC_URL: &str = "docs/portal/docs/sorafs/reference-sdk/errors.md";
+pub const REFERENCE_SDK_ERRORS_DOC_URL: &str = "https://docs.iroha.tech/";
 
 const STATUS_OK: &str = "Ok";
 const STATUS_ERROR: &str = "Error";

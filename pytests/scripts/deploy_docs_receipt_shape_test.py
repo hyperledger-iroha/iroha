@@ -18,8 +18,6 @@ def _target_docs() -> list[Path]:
     patterns = (
         "specs/governance_api*.md",
         "specs/contract_deployment*.md",
-        "docs/portal/docs/governance/api*.md",
-        "docs/portal/i18n/*/docusaurus-plugin-content-docs/current/governance/api*.md",
     )
     files: list[Path] = []
     for pattern in patterns:

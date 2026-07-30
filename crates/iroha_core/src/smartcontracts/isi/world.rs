@@ -20114,41 +20114,6 @@ pub mod isi {
                     )
                     .into());
                 }
-                if state_transaction
-                    .settlement
-                    .repo
-                    .eligible_collateral
-                    .iter()
-                    .any(|definition_id| definition_id == asset_definition_id)
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured as settlement repo eligible collateral (`settlement.repo.eligible_collateral`); update settlement config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                if let Some((base_definition_id, _)) = state_transaction
-                    .settlement
-                    .repo
-                    .collateral_substitution_matrix
-                    .iter()
-                    .find(|(base_definition_id, substitutes)| {
-                        *base_definition_id == asset_definition_id
-                            || substitutes
-                                .iter()
-                                .any(|definition_id| definition_id == asset_definition_id)
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} is configured in settlement repo collateral substitution matrix (`settlement.repo.collateral_substitution_matrix`, base {base_definition_id}); update settlement config first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
                 if let Some((agreement_id, _)) = state_transaction
                     .world
                     .repo_agreements
@@ -20757,10 +20722,14 @@ pub mod isi {
                 SmartContract(smart_contract.fuel) => SmartContractParameter::Fuel,
                 SmartContract(smart_contract.memory) => SmartContractParameter::Memory,
                 SmartContract(smart_contract.execution_depth) => SmartContractParameter::ExecutionDepth,
+                SmartContract(smart_contract.max_output_items) => SmartContractParameter::MaxOutputItems,
+                SmartContract(smart_contract.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
 
                 Executor(executor.fuel) => SmartContractParameter::Fuel,
                 Executor(executor.memory) => SmartContractParameter::Memory,
                 Executor(executor.execution_depth) => SmartContractParameter::ExecutionDepth,
+                Executor(executor.max_output_items) => SmartContractParameter::MaxOutputItems,
+                Executor(executor.max_output_bytes) => SmartContractParameter::MaxOutputBytes,
             );
 
             Ok(())
@@ -28309,16 +28278,18 @@ seiyaku GovernanceLifecycle {
             stx.world
                 .insert_repo_agreement_entry(iroha_data_model::repo::RepoAgreement::new(
                     repo_id,
-                    initiator,
-                    counterparty,
+                    initiator.clone(),
+                    counterparty.clone(),
                     iroha_data_model::repo::RepoCashLeg {
                         asset_definition_id: cash_def.clone(),
                         quantity: Quantity::from(10_u32),
                     },
+                    AssetId::new(cash_def.clone(), counterparty.clone()),
                     iroha_data_model::repo::RepoCollateralLeg::new(
-                        collateral_def,
+                        collateral_def.clone(),
                         Quantity::from(12_u32),
                     ),
+                    AssetId::new(collateral_def, counterparty),
                     250,
                     1_000,
                     1,
@@ -28705,117 +28676,6 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn unregister_domain_rejects_when_domain_asset_definition_is_settlement_repo_eligible_collateral()
-         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            Register::domain(Domain::new(domain_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup domain");
-
-            let collateral_def =
-                AssetDefinitionId::new(domain_id.clone(), "collateral".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = collateral_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register cleanup-domain asset definition");
-            stx.settlement.repo.eligible_collateral = vec![collateral_def.clone()];
-
-            let err = Unregister::domain(domain_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err(
-                    "domain unregister must reject settlement repo eligible collateral removal",
-                );
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("settlement repo eligible collateral"),
-                "error should explain settlement repo eligible-collateral conflict: {err_string}"
-            );
-            assert!(
-                stx.world.domains.get(&domain_id).is_some(),
-                "cleanup domain should remain after rejected unregister"
-            );
-            assert!(
-                stx.world.asset_definitions.get(&collateral_def).is_some(),
-                "asset definition should remain after rejected unregister"
-            );
-        }
-
-        #[test]
-        fn unregister_domain_rejects_when_domain_asset_definition_is_settlement_repo_substitution_entry()
-         {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let domain_id: DomainId =
-                DomainId::try_new("cleanup", "world").expect("domain id parses");
-            let foreign_domain: DomainId =
-                DomainId::try_new("foreign", "world").expect("domain id parses");
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            Register::domain(Domain::new(domain_id.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register cleanup domain");
-            Register::domain(Domain::new(foreign_domain.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register foreign domain");
-
-            let base_def = AssetDefinitionId::new(foreign_domain, "base".parse().unwrap());
-            let substitute_def = AssetDefinitionId::new(domain_id.clone(), "sub".parse().unwrap());
-            Register::asset_definition({
-                let __asset_definition_id = base_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register foreign base asset definition");
-            Register::asset_definition({
-                let __asset_definition_id = substitute_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register cleanup substitute asset definition");
-            stx.settlement
-                .repo
-                .collateral_substitution_matrix
-                .insert(base_def, vec![substitute_def.clone()]);
-
-            let err = Unregister::domain(domain_id.clone())
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("domain unregister must reject settlement repo substitution removal");
-            let err_string = err.to_string();
-            assert!(
-                err_string.contains("collateral substitution matrix"),
-                "error should explain settlement repo substitution conflict: {err_string}"
-            );
-            assert!(
-                stx.world.domains.get(&domain_id).is_some(),
-                "cleanup domain should remain after rejected unregister"
-            );
-            assert!(
-                stx.world.asset_definitions.get(&substitute_def).is_some(),
-                "asset definition should remain after rejected unregister"
-            );
-        }
-
-        #[test]
         fn unregister_domain_removes_offline_escrow_mappings_for_domain_asset_definitions() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -28942,13 +28802,15 @@ seiyaku GovernanceLifecycle {
                 account_id.clone(),
                 ALICE_ID.clone(),
                 iroha_data_model::repo::RepoCashLeg {
-                    asset_definition_id: cash_def,
+                    asset_definition_id: cash_def.clone(),
                     quantity: Quantity::from(10_u32),
                 },
+                AssetId::new(cash_def, ALICE_ID.clone()),
                 iroha_data_model::repo::RepoCollateralLeg::new(
-                    collateral_def,
+                    collateral_def.clone(),
                     Quantity::from(12_u32),
                 ),
+                AssetId::new(collateral_def, ALICE_ID.clone()),
                 250,
                 1_000,
                 1,
@@ -29032,7 +28894,7 @@ seiyaku GovernanceLifecycle {
                 iroha_data_model::nexus::PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: account_id.clone(),
-                    peer_id: PeerId::from(account_id.signatory().clone()),
+                    peer_id: PeerId::from(account_id.expect_single_signatory().clone()),
                     stake_account: account_id.clone(),
                     total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                     self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
@@ -29274,7 +29136,7 @@ seiyaku GovernanceLifecycle {
             stx.world.lane_relay_emergency_validators.insert(
                 LaneId::new(0),
                 iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(account_id.signatory().clone())],
+                    peers: vec![PeerId::from(account_id.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -36421,6 +36283,54 @@ seiyaku GovernanceLifecycle {
             assert_eq!(
                 stx.world.parameters.get().executor().memory().get(),
                 ivm::Memory::HEAP_MAX_SIZE
+            );
+        }
+
+        #[test]
+        fn set_parameter_updates_host_output_limits() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let max_items = NonZeroU64::new(19).expect("non-zero item limit");
+            let max_bytes = NonZeroU64::new(65_536).expect("non-zero byte limit");
+
+            for parameter in [
+                Parameter::SmartContract(SmartContractParameter::MaxOutputItems(max_items)),
+                Parameter::SmartContract(SmartContractParameter::MaxOutputBytes(max_bytes)),
+                Parameter::Executor(SmartContractParameter::MaxOutputItems(max_items)),
+                Parameter::Executor(SmartContractParameter::MaxOutputBytes(max_bytes)),
+            ] {
+                SetParameter::new(parameter)
+                    .execute(&ALICE_ID, &mut stx)
+                    .expect("host output limits are governed parameters");
+            }
+
+            assert_eq!(
+                stx.world
+                    .parameters
+                    .get()
+                    .smart_contract()
+                    .max_output_items(),
+                max_items
+            );
+            assert_eq!(
+                stx.world
+                    .parameters
+                    .get()
+                    .smart_contract()
+                    .max_output_bytes(),
+                max_bytes
+            );
+            assert_eq!(
+                stx.world.parameters.get().executor().max_output_items(),
+                max_items
+            );
+            assert_eq!(
+                stx.world.parameters.get().executor().max_output_bytes(),
+                max_bytes
             );
         }
 

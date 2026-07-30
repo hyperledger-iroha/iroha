@@ -1655,12 +1655,16 @@ export interface ToriiRepoAgreement {
   counterparty: string;
   custodian: string | null;
   cashLeg: RepoLegDto;
+  cashSource: string;
   collateralLeg: RepoLegDto;
+  collateralCustodyAsset: string;
   rateBps: number;
   maturityTimestampMs: number;
   initiatedTimestampMs: number;
   lastMarginCheckTimestampMs: number;
   governance: RepoGovernanceDto;
+  settlementTimestampMs: number | null;
+  status: "active" | "settled";
 }
 
 export interface RepoAgreementListResponse {
@@ -3341,7 +3345,7 @@ export type SorafsValidationCategory =
 export interface SorafsValidationOutcomeFields {
   code: string;
   message: string;
-  docs_url: "docs/portal/docs/sorafs/reference-sdk/errors.md";
+  docs_url: "https://docs.iroha.tech/";
   telemetry_tags: ReadonlyArray<string>;
   context: ReadonlyArray<SorafsValidationContextField>;
   inputs: ReadonlyArray<SorafsValidationInput>;

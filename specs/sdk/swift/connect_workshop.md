@@ -1,3 +1,8 @@
+---
+title: Swift Connect Workshop
+summary: Agenda, decisions, and evidence expectations for the Swift Connect workshop.
+---
+
 //! Swift Connect workshop agenda and facilitation guide.
 
 # Swift Connect Workshop (IOS3)

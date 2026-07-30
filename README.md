@@ -4,18 +4,26 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/960/badge)](https://www.bestpractices.dev/projects/960)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/hyperledger/iroha/badge)](https://scorecard.dev/viewer/?uri=github.com/hyperledger/iroha)
 
-Hyperledger Iroha is a deterministic blockchain platform for permissioned and consortium deployments. It provides account/asset management, on-chain permissions, and smart contracts through the Iroha Virtual Machine (IVM).
+Hyperledger Iroha 3 is a deterministic blockchain platform for public,
+permissioned, and consortium deployments. It provides account and asset
+management, on-chain permissions, and smart contracts through the Iroha
+Virtual Machine (IVM).
 
 > Workspace status and recent changes are tracked in [`status.md`](./status.md).
 
-## Release Tracks
+## First-release Build Lines
 
-This repository ships two deployment tracks from the same codebase:
+Iroha 3 is the default build line for the first release. The workspace also
+retains an explicitly selected Iroha 2 compatibility build line for
+self-hosted, single-lane deployments:
 
-- **Iroha 2**: self-hosted permissioned/consortium networks.
-- **Iroha 3 (SORA Nexus)**: the Nexus-oriented deployment track using the same core crates.
+- **Iroha 3 (default)**: Nexus-aware deployments, including SORA Nexus.
+- **Iroha 2 compatibility build line**: self-hosted permissioned or consortium
+  networks without Nexus or SORA features.
 
-Both tracks share the same core components, including Norito serialization, Sumeragi consensus, and the Kotodama -> IVM toolchain.
+Both build lines share Norito serialization, Sumeragi consensus, and the
+Kotodama → IVM toolchain. Public and in-depth documentation describes Iroha 3;
+code-adjacent compatibility notes remain with the source.
 
 ## Repository Layout
 
@@ -31,7 +39,7 @@ Both tracks share the same core components, including Norito serialization, Sume
 
 ### Prerequisites
 
-- [Rust stable](https://www.rust-lang.org/tools/install)
+- Rust 1.93.1, pinned by [`rust-toolchain.toml`](./rust-toolchain.toml)
 - Optional: Docker + Docker Compose for local multi-peer runs
 
 ### Build and Test (Workspace)

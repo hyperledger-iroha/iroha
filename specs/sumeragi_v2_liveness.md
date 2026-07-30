@@ -917,9 +917,14 @@ with `SuccessorHeightActivated` bound to the successor's own height,
 generation, context, and view. The one-shot activation token also carries the
 exact verified successor `HeightContextId`; a same-height snapshot for another
 chain/roster/quorum/seed context is rejected without mutating the applied
-predecessor. A constructor or startup failure therefore
-leaves `Running` visible at the finalized height, retains that snapshot with
-`restart_required`, and exits fail-closed without claiming activation. The
+predecessor. A constructor or startup failure therefore leaves `Running`
+visible at the finalized height. For a valid checked Running-to-failure
+projection, the local snapshot latches `restart_required` before the runner
+exits without claiming activation. If a corrupted local snapshot makes that
+projection invalid, the checked gate rejects it without mutation; the runner
+has already latched the process-wide output guard, and the public status
+overlay still reports `restart_required` while preserving the rejected local
+evidence for diagnosis. The
 predecessor progress clock retains its owner-bound watchdog deadline while the
 successor effect executor is being built. An aged `Running` handoff therefore
 remains classified as `application_pending`; successor-owned effect,
@@ -1098,7 +1103,7 @@ singular future-slot barrier.
 The current source-bound inventory therefore contains 738 exact tests across
 38 modules and 81 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`667de672926523b356e785a3d11ca1a31875b4cbb7057a0a03c5943a3867bb1f`.
+`328352eac7b03ac4453475fe62d4c0545ee90fd2dfdeaf36731a13f86f32cd17`.
 Nine of those legs execute the separate 277-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `dc6e4c3eece63441e9ba5ffdf6b603665e21cf6086a3a6a1307b45829a678510`.
@@ -1556,7 +1561,9 @@ leg also realizes the complete
 retires old-view TimeoutVote delivery records, and exercises non-poisoning
 same-owner retry across TC installation. The block-sync leg pins
 reducer-enqueue ownership, strictly sequential context catch-up, and canonical
-Kura body service by a certified historical signer. Nine tests pin the
+Kura body service by a frozen-roster archive. The archive need not have signed
+the historical QC: the QC authenticates the exact subject, the archive signs
+the response, and outside-roster or forged evidence still fails closed. Nine tests pin the
 completion-ownership seam described above. It then inventories and executes the exact Rust
 positive/negative cross-SDK wire-fixture tests and
 the maintained JavaScript and Python authoritative-status parser tests. The

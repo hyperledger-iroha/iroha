@@ -50,8 +50,8 @@ readonly source_paths=(
   java/iroha_android/gradlew
   java/iroha_android/gradle/wrapper/gradle-wrapper.jar
   java/iroha_android/gradle/wrapper/gradle-wrapper.properties
-  docs/portal/static/openapi/torii.json
-  docs/portal/static/openapi/versions/current/torii.json
+  artifacts/openapi/torii.json
+  artifacts/openapi/versions/current/torii.json
 )
 
 usage() {
@@ -270,6 +270,7 @@ case "$surface" in
     run_and_capture \
       env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
       "$python_bin" -m pytest -q -p no:cacheprovider \
+      --basetemp="${temporary_root}/pytest" \
       "${repo_root}/pytests/scripts/native_amx_v2_grouped_fixture_test.py"
     assert_pytest_count "$observed_test_count"
     ;;
@@ -277,10 +278,16 @@ case "$surface" in
     observed_test_count=56
     "$python_bin" -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
+    if [[ "${IROHA_PYTHON_TEST_INSTALLED_PACKAGE:-}" == "1" ]]; then
+      readonly python_parity_path=""
+    else
+      readonly python_parity_path="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}"
+    fi
     run_and_capture \
-      env PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
-      PYTHONPATH="${repo_root}/python/iroha_python/src:${repo_root}/python/norito_py/src:${repo_root}/python/iroha_torii_client:${repo_root}/python${PYTHONPATH:+:${PYTHONPATH}}" \
+      env PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
+      PYTHONPATH="$python_parity_path" \
       "$python_bin" -m pytest -q -p no:cacheprovider \
+      --basetemp="${temporary_root}/pytest" \
       "${repo_root}/python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py"
     assert_pytest_count "$observed_test_count"
     ;;

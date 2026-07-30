@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: Swift Hardware Matrix
+summary: Secure Enclave, simulator, and Catalyst coverage for Swift SDK validation.
+---
+
 # Swift Hardware Matrix (IOS4 Pre-read)
 
 This matrix summarizes the Secure Enclave, simulator, and macOS Catalyst

@@ -1,5 +1,5 @@
 <!--
-Swift Norito fixture triage runbook. Keep translations in sync once localized.
+Swift Norito fixture triage runbook.
 -->
 
 # Swift Norito Parity Triage Runbook

@@ -42,7 +42,8 @@ Flags:
 ### 4. Monitoring & Outstanding Work
 
 - Status reporting: this document is linked from `status.md` and the roadmap so weekly reviews can verify fixture health.
-- Developer portal summary: see **Reference → Account address compliance** in the docs portal (`docs/portal/docs/reference/account-address-status.md`) for the externally-facing synopsis.
+- Public and in-depth account-address guidance is maintained in the sibling
+  `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 - Prometheus and dashboards: whenever you verify an SDK copy, run the helper with `--metrics-out` (and optionally `--metrics-label`) so the Prometheus textfile collector can ingest `account_address_fixture_check_status{target=…}`. Grafana dashboard **Account Address Fixture Status** (`dashboards/grafana/account_address_fixture_status.json`) renders pass/fail counts per surface and surfaces the canonical SHA-256 digest for audit evidence. Alert when any target reports `0`.
 - Torii metrics: monitor canonical i105 parse success/failure counters and
   alias-resolution counters together so SRE reviews can prove that account-id

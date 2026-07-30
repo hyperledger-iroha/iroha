@@ -119,6 +119,7 @@ test('generator input inventory is exact and binds every release surface', async
     'java/iroha_android',
     'java/norito_java',
     'csharp',
+    'artifacts/openapi/allowed_signers.json',
     OPENAPI_CARGO_LOCK_PIN_PATH,
     'release/version-map.toml',
     'specs/sdk/android/generated/codegen_hash_tree.json',
@@ -233,7 +234,7 @@ test('generator input-tree V2 digest matches the fixed cross-language vector', a
       treeBytes: Buffer.from('tree-fixture-v1\0'),
       ignoredInputBytes: Buffer.from('lock-fixture-v1\n'),
     }),
-    'd46a10a45a97a731c8c20330f435f6ca2ab143dfc38b9ca7949c2ab5010fb9f1',
+    '6f93a76e9e1490ce1ff577bbd6d0c32760f0a9656920e122000608cc6bbc0e41',
   );
 });
 

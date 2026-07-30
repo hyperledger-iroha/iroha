@@ -161,12 +161,16 @@ class RepoAgreementRecord:
     counterparty: str
     custodian: Optional[str]
     cash_leg: RepoCashLeg
+    cash_source: str
     collateral_leg: RepoCollateralLeg
+    collateral_custody_asset: str
     rate_bps: int
     maturity_timestamp_ms: int
     initiated_timestamp_ms: int
     last_margin_check_timestamp_ms: int
     governance: RepoGovernance
+    settlement_timestamp_ms: Optional[int]
+    status: str
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RepoAgreementRecord":
@@ -239,18 +243,42 @@ class RepoAgreementRecord:
             )
         if last_margin_check_timestamp_ms < initiated_timestamp_ms:
             last_margin_check_timestamp_ms = initiated_timestamp_ms
+        settlement_literal = require("settlement_timestamp_ms")
+        settlement_timestamp_ms = (
+            None
+            if settlement_literal is None
+            else _coerce_int_field(
+                settlement_literal,
+                "repo settlement_timestamp_ms",
+                allow_zero=True,
+            )
+        )
+        status = _require_non_empty_string(require("status"), "repo status")
+        expected_status = "active" if settlement_timestamp_ms is None else "settled"
+        if status != expected_status:
+            raise ValueError(
+                "repo status must agree with settlement_timestamp_ms "
+                f"(expected {expected_status!r})"
+            )
         return cls(
             agreement_id=_require_non_empty_string(require("id"), "repo agreement id"),
             initiator=_require_non_empty_string(require("initiator"), "repo agreement initiator"),
             counterparty=_require_non_empty_string(require("counterparty"), "repo agreement counterparty"),
             custodian=custodian,
             cash_leg=cash_leg,
+            cash_source=_require_non_empty_string(require("cash_source"), "repo cash_source"),
             collateral_leg=collateral_leg,
+            collateral_custody_asset=_require_non_empty_string(
+                require("collateral_custody_asset"),
+                "repo collateral_custody_asset",
+            ),
             rate_bps=_coerce_int_field(require("rate_bps"), "repo rate_bps", allow_zero=True),
             maturity_timestamp_ms=maturity_timestamp_ms,
             initiated_timestamp_ms=initiated_timestamp_ms,
             last_margin_check_timestamp_ms=last_margin_check_timestamp_ms,
             governance=governance,
+            settlement_timestamp_ms=settlement_timestamp_ms,
+            status=status,
         )
 
     def next_margin_check_after(self, after_timestamp_ms: int) -> Optional[int]:
@@ -284,12 +312,16 @@ class RepoAgreementRecord:
             "counterparty": self.counterparty,
             "custodian": self.custodian,
             "cash_leg": self.cash_leg.to_payload(),
+            "cash_source": self.cash_source,
             "collateral_leg": self.collateral_leg.to_payload(),
+            "collateral_custody_asset": self.collateral_custody_asset,
             "rate_bps": int(self.rate_bps),
             "maturity_timestamp_ms": int(self.maturity_timestamp_ms),
             "initiated_timestamp_ms": int(self.initiated_timestamp_ms),
             "last_margin_check_timestamp_ms": int(self.last_margin_check_timestamp_ms),
             "governance": self.governance.to_payload(),
+            "settlement_timestamp_ms": self.settlement_timestamp_ms,
+            "status": self.status,
         }
         return payload
 

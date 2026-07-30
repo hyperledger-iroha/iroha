@@ -318,6 +318,8 @@ async fn network_create() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -918,6 +920,8 @@ async fn two_networks() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1061,6 +1065,8 @@ async fn two_networks() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1294,6 +1300,8 @@ async fn update_peers_triggers_immediate_connect() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1435,6 +1443,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1621,6 +1631,8 @@ async fn happy_eyeballs_parallel_dials() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1763,6 +1775,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -1973,6 +1987,8 @@ async fn low_topics_do_not_starve_each_other() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -2115,6 +2131,8 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -2355,6 +2373,8 @@ async fn relay_hub_routes_consensus_between_spokes() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -2627,6 +2647,8 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
                 require_sm_handshake_match: true,
                 require_sm_openssl_preview_match: true,
                 idle_timeout,
+                reply_writer_flush_timeout:
+                    iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
                 connect_startup_delay:
                     iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
                 dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
@@ -2973,6 +2995,8 @@ async fn start_network(
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -3195,6 +3219,8 @@ async fn tls_inbound_listener_smoke() {
         require_sm_handshake_match: true,
         require_sm_openssl_preview_match: true,
         idle_timeout,
+        reply_writer_flush_timeout:
+            iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
         connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
         dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(
@@ -3350,6 +3376,8 @@ async fn tls_inbound_listener_smoke() {
             require_sm_handshake_match: true,
             require_sm_openssl_preview_match: true,
             idle_timeout,
+            reply_writer_flush_timeout:
+                iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
             dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
         deferred_send_ttl: std::time::Duration::from_millis(

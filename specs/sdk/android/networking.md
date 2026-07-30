@@ -14,7 +14,6 @@ guides when preparing operator playbooks.
 
 > **Sample walkthroughs:**  
 > - [Operator console walkthrough](samples/operator_console.md#9-step-by-step-walkthrough) – Step 3 covers `/v1/pipeline` submissions, queue drain, and telemetry reconciliation using the `ClientConfig` + retry stack documented below.  
-> - [Retail wallet design notes](samples/retail_wallet.md#5-telemetry--observability) – the offline sync + telemetry sections show how consumer apps reuse the Norito RPC helpers, queue diagnostics, and OTEL hooks described in this guide.
 
 ## 1. `ClientConfig` and manifest ingestion
 

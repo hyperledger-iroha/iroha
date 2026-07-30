@@ -94,6 +94,8 @@ iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], defaul
 iroha_p2p = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10.9"
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
+rand_core_06 = { workspace = true }
 
 mint_rose_trigger_data_model = { path = "../data_model/samples/mint_rose_trigger_data_model" }
 executor_custom_data_model = { path = "../data_model/samples/executor_custom_data_model" }

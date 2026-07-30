@@ -46,8 +46,10 @@ tracks rather than as a request for a future meeting.
   fixtures (SF-1b), and admission policy tooling (SF-2b/2c) remain the
   canonical data sources for gateway policy and deterministic naming.
 - **Downstream consumers:** `sorafs-node`, SDK orchestrators (SF-6b), gateway
-  operator tooling, and the Docusaurus portal (`docs/portal/`) consume the
-  resulting host plans, GAR artifacts, proof headers, and self-cert bundles.
+  operator tooling, and property-specific release systems consume the resulting
+  host plans, GAR artifacts, proof headers, and self-cert bundles. Public Iroha
+  documentation is released independently from the sibling `iroha-docs`
+  repository.
 - **Policy alignment:** GAR manifests and telemetry envelopes wire through
   `sorafs_manifest::gateway` and `iroha_torii`; DNS automation and gateway
   deployments must ingest those artifacts rather than inventing per-operator

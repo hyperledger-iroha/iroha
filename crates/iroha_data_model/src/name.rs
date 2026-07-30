@@ -98,8 +98,11 @@ impl Name {
     /// Return a canonical form of the input string according to the Name normalization policy.
     ///
     /// Applies ICU-backed NFC composition so canonically equivalent sequences share the same
-    /// representation (for example, `e\u{0301}` becomes `é`) on every platform. See
-    /// `roadmap.md` ("Names/IDs").
+    /// representation (for example, `e\u{0301}` becomes `é`) on every platform.
+    ///
+    /// The manifest pins both `icu_normalizer` and its baked data package to the same exact
+    /// release because this output is consensus-visible. Any intentional data upgrade must also
+    /// update the normalization regression corpus below.
     fn normalize(candidate: &str) -> Cow<'_, str> {
         // Use ICU compiled data to apply NFC normalization deterministically
         // across platforms. This preserves compatibility forms but composes
@@ -530,13 +533,26 @@ mod tests {
     }
 
     #[test]
-    fn nfc_normalization_applies() {
-        // "e" + combining acute accent
-        let decomposed = "e\u{0301}";
-        let composed = "é";
-        let name1 = Name::from_str(decomposed).expect("valid");
-        let name2 = Name::from_str(composed).expect("valid");
-        assert_eq!(name1, name2);
-        assert_eq!(name1.as_ref(), composed);
+    fn nfc_normalization_matches_pinned_regression_corpus() {
+        // This corpus exercises canonical decomposition, composition, combining
+        // mark ordering, Hangul composition, and canonical singleton mappings.
+        // Changes are protocol changes and must be reviewed with the exact ICU
+        // algorithm/data pins in Cargo.toml.
+        let cases = [
+            ("e\u{0301}", "\u{00E9}"),
+            ("\u{212B}", "\u{00C5}"),
+            ("\u{2126}", "\u{03A9}"),
+            ("\u{212A}", "K"),
+            ("\u{1100}\u{1161}\u{11A8}", "\u{AC01}"),
+            ("a\u{0315}\u{0300}", "\u{00E0}\u{0315}"),
+            ("\u{1E0A}\u{0323}", "\u{1E0C}\u{0307}"),
+        ];
+
+        for (input, expected) in cases {
+            let normalized = Name::from_str(input).expect("normalization corpus input is valid");
+            let canonical = Name::from_str(expected).expect("normalization corpus output is valid");
+            assert_eq!(normalized, canonical, "NFC mismatch for {input:?}");
+            assert_eq!(normalized.as_ref(), expected, "NFC output for {input:?}");
+        }
     }
 }

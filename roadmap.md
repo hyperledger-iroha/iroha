@@ -18674,10 +18674,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   rejection shims. The first-release HTTP surface contains only typed
   readiness, top-up, redeem, and operation-status resources under
   `/v1/offline`; it has no nested route version or whole-payload wrapper.
-  Governance council
-	  persist/replace/derive-vrf mutation helpers are no longer advertised in
-	  default Torii builds unless `gov_vrf` is compiled, avoiding mounted
-	  not-implemented fallbacks in the production route/tool surface. The shared
+  Governance council selection now uses only the canonical on-chain
+  bonded-citizen sortition path; the unshipped `gov_vrf` derivation prototype
+  and its HTTP/MCP surface are removed. The shared
 	  Offline V2 interop fixture now uses the chain-admissible key-certificate
 	  version directly, and Swift, Kotlin/JVM, and Java Android SDK constructors
 	  mirror that version for wallet-side fixture parity.

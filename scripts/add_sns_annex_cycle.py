@@ -15,7 +15,6 @@ from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ANNEX_JOBS_PATH = REPO_ROOT / "specs" / "sns" / "regulatory" / "annex_jobs.json"
-PORTAL_REGULATORY_DIR = REPO_ROOT / "docs" / "portal" / "docs" / "sns" / "regulatory"
 SUFFIX_LITERAL_RE = re.compile(r"\.[a-z0-9]{1,64}")
 
 
@@ -356,67 +355,6 @@ def ensure_memo_stub(
     return created
 
 
-def ensure_portal_stub(
-    cycle: str,
-    suffixes: Sequence[str],
-    *,
-    dry_run: bool,
-) -> bool:
-    PORTAL_REGULATORY_DIR.mkdir(parents=True, exist_ok=True)
-    english_path = PORTAL_REGULATORY_DIR / f"eu-dsa-{cycle}.md"
-    rel_english = english_path.relative_to(REPO_ROOT)
-    canonical = f"specs/sns/regulatory/eu-dsa/{cycle}.md"
-    annex_section = build_annex_section(cycle, suffixes)
-    if english_path.exists():
-        created = False
-    else:
-        suffix_scope = "\n".join(f"  - {suffix}" for suffix in suffixes)
-        content = dedent(
-            f"""
-            ---
-            id: regulatory-eu-dsa-{cycle}
-            title: EU DSA KPI Annex Intake Memo
-            sidebar_label: EU DSA ({cycle})
-            description: Portal copy for the EU DSA SNS KPI annex ({cycle}).
-            jurisdiction: EU
-            regulation: Digital Services Act (EU) – KPI annex program
-            suffix_scope:
-{suffix_scope}
-            owners:
-              guardian: guardian-board
-              rapporteur: gov-council-seat-4
-              steward_ack: sora-foundation-suffix-ops
-            status: scheduled
-            cycle: {cycle}
-            ---
-
-            :::note Canonical Source
-            This page mirrors `{canonical}`. Update both copies once annex artefacts are captured.
-            :::
-
-            ## 1. Intake Summary
-
-            Pending — populate once the governance bulletin lands for cycle {cycle}.
-
-            ## 2. Impact Mapping
-
-            Draft impact mapping mirrors the canonical memo. Keep this section in sync with the source.
-
-            ## 3. Attachments
-
-            Attach annex artefacts, bulletin digests, and KPI patches here once available.
-
-            {annex_section}
-            """
-        ).strip() + "\n"
-        print(f"[portal-memo] create {rel_english.as_posix()}")
-        if not dry_run:
-            english_path.write_text(content, encoding="utf-8")
-        created = True
-
-    return created
-
-
 def main() -> None:
     ctx = parse_args()
 
@@ -425,7 +363,6 @@ def main() -> None:
     for suffix in ctx.suffixes:
         changed |= ensure_annex_stub(ctx.cycle, suffix, dry_run=ctx.dry_run)
     changed |= ensure_memo_stub(ctx.cycle, ctx.suffixes, dry_run=ctx.dry_run)
-    changed |= ensure_portal_stub(ctx.cycle, ctx.suffixes, dry_run=ctx.dry_run)
 
     if ctx.dry_run:
         print("Done (dry-run)")

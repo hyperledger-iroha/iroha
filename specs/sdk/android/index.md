@@ -282,10 +282,8 @@ attestation, and integration hooks, read the
 the AND2/AND5 requirements, sample app expectations, and compliance links
 highlighted in the roadmap.
 
-Need end-to-end instructions for offline workflows? See the companion
-[`Android Offline Signing & Envelope Guide`](offline_signing.md) for envelope
-format details, queue integration, attestation pairing, and operational
-checklists referenced by AND5 deliverables.
+End-to-end application guidance for offline workflows is maintained at
+[docs.iroha.tech](https://docs.iroha.tech/).
 
 Need deeper coverage of Torii HTTP configuration, Norito RPC, retry policies,
 and telemetry observers? The

@@ -23,7 +23,9 @@ test('OpenAPI CI replays complete bundles from independent clean sources', async
   assert.doesNotMatch(gate, /EXPECTED_GENERATOR_COMMIT/);
   assert.equal(
     Array.from(
-      gate.matchAll(/node docs\/portal\/scripts\/verify-openapi-release-inputs\.mjs/g),
+      gate.matchAll(
+        /node tools\/openapi\/scripts\/verify-openapi-release-inputs\.mjs/g,
+      ),
     ).length,
     2,
   );
@@ -152,7 +154,7 @@ test('OpenAPI workflow actions and tooling tests are pinned', async () => {
     'ci/check_android_codegen.sh',
     'csharp/**',
     'data_model/**',
-    'docs/i18n/**',
+    'artifacts/openapi/**',
     'specs/sdk/android/generated/**',
     'fixtures/**',
     'integration_tests/**',

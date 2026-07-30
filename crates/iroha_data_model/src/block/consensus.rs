@@ -397,17 +397,17 @@ impl IntoSchema for CertPhase {
         let variants = vec![
             EnumVariant {
                 tag: "Prepare".to_owned(),
-                discriminant: CertPhase::Prepare as u8,
+                discriminant: CertPhase::Prepare as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "Commit".to_owned(),
-                discriminant: CertPhase::Commit as u8,
+                discriminant: CertPhase::Commit as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "NewView".to_owned(),
-                discriminant: CertPhase::NewView as u8,
+                discriminant: CertPhase::NewView as u32,
                 ty: None,
             },
         ];
@@ -694,32 +694,32 @@ impl IntoSchema for EvidenceKind {
         let variants = vec![
             EnumVariant {
                 tag: "DoublePrepare".to_owned(),
-                discriminant: EvidenceKind::DoublePrepare as u8,
+                discriminant: EvidenceKind::DoublePrepare as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "DoubleCommit".to_owned(),
-                discriminant: EvidenceKind::DoubleCommit as u8,
+                discriminant: EvidenceKind::DoubleCommit as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "InvalidQc".to_owned(),
-                discriminant: EvidenceKind::InvalidQc as u8,
+                discriminant: EvidenceKind::InvalidQc as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "InvalidProposal".to_owned(),
-                discriminant: EvidenceKind::InvalidProposal as u8,
+                discriminant: EvidenceKind::InvalidProposal as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "Censorship".to_owned(),
-                discriminant: EvidenceKind::Censorship as u8,
+                discriminant: EvidenceKind::Censorship as u32,
                 ty: None,
             },
             EnumVariant {
                 tag: "SumeragiV2Equivocation".to_owned(),
-                discriminant: EvidenceKind::SumeragiV2Equivocation as u8,
+                discriminant: EvidenceKind::SumeragiV2Equivocation as u32,
                 ty: None,
             },
         ];
@@ -5281,6 +5281,42 @@ mod tests {
 
     fn roster_hash(roster: &[PeerId]) -> Hash {
         Hash::new(roster.to_vec().encode())
+    }
+
+    #[test]
+    fn cert_phase_schema_matches_canonical_wire_discriminants() {
+        use iroha_schema::{IntoSchema as _, Metadata};
+        use norito::codec::{DecodeAll as _, Encode as _};
+
+        let cases = [
+            (CertPhase::Prepare, 1_u32),
+            (CertPhase::Commit, 2),
+            (CertPhase::NewView, 3),
+        ];
+        for (phase, expected) in cases {
+            let encoded = phase.encode();
+            assert_eq!(
+                u32::from_le_bytes(encoded[..4].try_into().expect("phase tag")),
+                expected
+            );
+            assert_eq!(
+                CertPhase::decode_all(&mut encoded.as_slice()).expect("phase roundtrip"),
+                phase
+            );
+        }
+
+        let schema = CertPhase::schema();
+        let Metadata::Enum(metadata) = schema.get::<CertPhase>().expect("phase schema") else {
+            panic!("CertPhase schema must be an enum");
+        };
+        assert_eq!(
+            metadata
+                .variants
+                .iter()
+                .map(|variant| variant.discriminant)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
     }
 
     fn sample_qc_ref() -> QcRef {

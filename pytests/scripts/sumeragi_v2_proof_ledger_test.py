@@ -7081,7 +7081,7 @@ def test_reply_route_ownership_mutation_runner_fails_closed(
 
 
 def copy_effect_capacity_mutation_fixture(tmp_path: Path, module) -> tuple[Path, Path]:
-    """Copy the exact 35-file effect-capacity corpus and production seam."""
+    """Copy the exact 39-file effect-capacity corpus and production seam."""
 
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
@@ -7106,7 +7106,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
     module = load_checker()
     repo_root, formal_dir = copy_effect_capacity_mutation_fixture(tmp_path, module)
 
-    assert len(module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) == 34
+    assert len(module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS) == 38
     assert (
         sum(
             name.endswith(".tla")
@@ -7119,9 +7119,9 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.EFFECT_CAPACITY_MUTATION_FORMAL_ARTIFACTS
         )
-        == 28
+        == 32
     )
-    assert len(module.EFFECT_CAPACITY_MUTATION_SHA256) == 35
+    assert len(module.EFFECT_CAPACITY_MUTATION_SHA256) == 39
     assert module._effect_capacity_mutation_source_fidelity_errors(
         formal_dir, repo_root
     ) == []
@@ -7147,7 +7147,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             "effect_capacity_timeout_sign_fixed.cfg 12 \\",
             1,
         ),
-        "found repaired=9, mutants=19",
+        "found repaired=9, mutants=23",
     )
     assert_runner_mutation_rejected(
         runner_source.replace(
@@ -7155,7 +7155,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             "effect_capacity_timeout_sign_lost_bug.cfg 0 \\",
             1,
         ),
-        "found repaired=11, mutants=17",
+        "found repaired=11, mutants=21",
     )
     assert_runner_mutation_rejected(
         runner_source.replace(
@@ -7163,7 +7163,7 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             "37 states generated, 36 distinct states found",
             1,
         ),
-        "found generated=162, distinct=160, parsed_cases=28",
+        "found generated=132, distinct=130, parsed_cases=22",
     )
     assert_runner_mutation_rejected(
         runner_source.replace(
@@ -7171,15 +7171,15 @@ def test_effect_capacity_mutation_source_seal_covers_exact_corpus(
             "36 states generated, 35 distinct states found",
             1,
         ),
-        "found generated=161, distinct=159, parsed_cases=28",
+        "found generated=131, distinct=129, parsed_cases=22",
     )
     role_mutation = runner_source.replace(
-        "certified-request-capacity-lost",
+        "certified-request-retained-owner-drop",
         "certified-request-capacity-role-swap",
         1,
     ).replace(
         "certified-request-capacity-fatal",
-        "certified-request-capacity-lost",
+        "certified-request-retained-owner-drop",
         1,
     ).replace(
         "certified-request-capacity-role-swap",
@@ -9881,9 +9881,12 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         (
             "crates/iroha_core/src/sumeragi/status.rs",
             "pub(crate) fn mark_v2_restart_required()",
-            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) {",
-            "if !production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(lifecycle) { return;",
-            "mark_v2_restart_required must contain 'return;' exactly 1 time(s)",
+            '"Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"\n'
+            "                );\n"
+            "                return;",
+            '"Sumeragi v2 Running successor failure projection was rejected; preserving the unchecked status"\n'
+            "                );",
+            "mark_v2_restart_required must contain 'return;' exactly 2 time(s)",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -31983,7 +31986,7 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "depth of the complete state graph search is 3" in runner
     assert "Model checking completed. No error has been found." in runner
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     mutation = (formal_dir / "SumeragiV2ServiceRankMutation.tla").read_text(
         encoding="utf-8"
     )
@@ -33206,7 +33209,7 @@ def test_tlc_configs_keep_an_externally_invalid_subject(tmp_path: Path) -> None:
 
 
 def test_candidate_restart_mutations_are_pinned_and_expected_to_fail() -> None:
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     runner = (
         ROOT_DIR
         / "scripts"
@@ -34121,7 +34124,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ROOT_DIR / "crates" / "iroha_core" / "src" / "kura" / "lane_geometry.rs"
     ).read_text(encoding="utf-8")
     liveness_doc = (
-        ROOT_DIR / "docs" / "source" / "sumeragi_v2_liveness.md"
+        ROOT_DIR / "specs" / "sumeragi_v2_liveness.md"
     ).read_text(encoding="utf-8")
 
     fidelity_root = tmp_path / "kura-application-receipt-source-fidelity"
@@ -34338,7 +34341,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "config.role == NodeRole::Validator" in runner_gate
     for side_effect in (
         "output_guard\n        .begin_fail_stop_operation()",
-        "recover_active_height(",
+        "recover_active_height_with_plan(",
         "let wal_path =",
         "SumeragiV2Adapter::open",
         "ProductionV2Services::start",
@@ -34685,17 +34688,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
         (
             "sumeragi::v2_effects::tests::",
-                "certified_request_pressure_leaves_higher_authority_upgrade_for_retransmission",
+            "certified_request_pressure_retains_higher_authority_upgrade_under_one_owner",
             effects_source,
         ),
         (
             "sumeragi::v2_effects::tests::",
-                "reconstructible_new_certified_fetch_acquires_ownership_after_retransmission",
+            "reconstructible_new_certified_fetch_acquires_ownership_from_retained_admission",
             effects_source,
         ),
         (
             "sumeragi::v2_effects::tests::",
-                "production_capacity_saturation_admits_response_and_reconstructible_fetch",
+            "production_capacity_saturation_admits_response_and_reconstructible_fetch",
             effects_source,
         ),
         (
@@ -36160,25 +36163,21 @@ def test_tlapm_corridor_uses_one_pinned_identity() -> None:
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
         ROOT_DIR / ".github" / "workflows" / "nightly_sumeragi_formal.yml",
         ROOT_DIR / ".github" / "workflows" / "pr.yml",
-        ROOT_DIR / "docs" / "formal" / "sumeragi_v2" / "README.md",
-        ROOT_DIR
-        / "docs"
-        / "formal"
-        / "sumeragi_v2"
-        / "CROSS_TOOL_EVIDENCE.md",
+        ROOT_DIR / "formal" / "sumeragi_v2" / "README.md",
+        ROOT_DIR / "formal" / "sumeragi_v2" / "CROSS_TOOL_EVIDENCE.md",
     )
     for path in exact_identity_paths:
         assert commit in path.read_text(encoding="utf-8"), path
 
     proof_source = (
-        ROOT_DIR / "docs" / "formal" / "sumeragi_v2" / "PROOF.md"
+        ROOT_DIR / "formal" / "sumeragi_v2" / "PROOF.md"
     ).read_text(encoding="utf-8")
     assert commit[:7] in proof_source
 
 
 def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None:
     source = (
-        ROOT_DIR / "docs" / "formal" / "sumeragi_v2" / "liveness.cfg"
+        ROOT_DIR / "formal" / "sumeragi_v2" / "liveness.cfg"
     ).read_text(encoding="utf-8")
 
     def natural(name: str) -> int:
@@ -39574,7 +39573,7 @@ def test_productive_liveness_mutations_are_pinned() -> None:
     assert "productive_deadlock_bare_rejected.cfg" in runner
     assert "productive_deadlock_fixed.cfg" in runner
 
-    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    formal_dir = ROOT_DIR / "formal" / "sumeragi_v2"
     normal_mutation = (
         formal_dir / "SumeragiV2NormalProtectedMutation.tla"
     ).read_text(encoding="utf-8")

@@ -82,9 +82,9 @@ static ZK_GAS_PER_COMMITMENT: AtomicU64 = AtomicU64::new(DEFAULT_ZK_GAS_PER_COMM
 #[cfg(test)]
 static CONFIDENTIAL_GAS_TEST_LOCK: ReentrantMutex<()> = ReentrantMutex::new(());
 
-/// Tunable gas schedule for confidential verification.
+/// Consensus gas schedule installed from startup configuration or committed ZK policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConfidentialGasSchedule {
+pub(crate) struct ConfidentialGasSchedule {
     /// Base gas charged before applying any per-element multipliers.
     pub base_verify: u64,
     /// Gas multiplier applied per public input exposed by the proof.
@@ -121,8 +121,8 @@ impl From<ActualConfidentialGas> for ConfidentialGasSchedule {
     }
 }
 
-/// Update the global confidential verification gas schedule.
-pub fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
+/// Install the confidential verification gas schedule at a consensus policy boundary.
+pub(crate) fn configure_confidential_gas(schedule: ConfidentialGasSchedule) {
     #[cfg(test)]
     let _test_guard = CONFIDENTIAL_GAS_TEST_LOCK.lock();
     ZK_GAS_BASE_VERIFY.store(schedule.base_verify, Ordering::Relaxed);

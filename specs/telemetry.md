@@ -1,7 +1,5 @@
 # Telemetry & Metrics Overview
 
-日本語の概要は [`telemetry.ja.md`](./telemetry.ja.md) を参照してください。
-
 Iroha exports Prometheus-format metrics and a JSON status summary. This page lists key metrics and example PromQL queries you can use to build dashboards.
 
 Endpoints
@@ -145,9 +143,7 @@ need to brief operators or confirm governance readiness:
 |----------|---------|
 | [`sdk/android/telemetry_redaction.md`](./sdk/android/telemetry_redaction.md) | Canonical policy covering hashed authorities, device buckets, retention, and override governance. |
 | [`android_runbook.md`](./android_runbook.md#2-telemetry--redaction) | Step-by-step operational workflow (config threading, exporter checks, override handling). |
-| [`sdk/android/readiness/signal_inventory_worksheet.md`](./sdk/android/readiness/signal_inventory_worksheet.md) | Owner matrix for every Android span/event/metric plus validation evidence. |
 | [`sdk/android/telemetry_chaos_checklist.md`](./sdk/android/telemetry_chaos_checklist.md) | Quarterly rehearsal scenarios referenced by SRE governance. |
-| [`sdk/android/readiness/and7_operator_enablement.md`](./sdk/android/readiness/and7_operator_enablement.md) | Curriculum outline and knowledge-check plan for support/on-call enablement. |
 
 **Key guardrails**
 
@@ -183,8 +179,8 @@ need to brief operators or confirm governance readiness:
   - `clamp_min(rate(android.telemetry.redaction.override_total[1h]), 0)` feeds
     the monthly override audit.
 
-Refer to [`android_support_playbook.md`](./android_support_playbook.md#8-telemetry-redaction--observability-and7)
-for the escalation tree that ties these metrics back to pager rotations.
+Public operator guidance and escalation procedures are maintained at
+[docs.iroha.tech](https://docs.iroha.tech/).
 
 ## Governance telemetry
 

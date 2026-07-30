@@ -5,9 +5,8 @@ a staging Torii deployment before promoting the change to production. It
 assumes the SoraFS governance charter has been ratified and the canonical
 fixtures are available in the repository.
 
-> **Portal:** This content is mirrored in the Docusaurus portal at
-> `docs/portal/docs/sorafs/staging-manifest-playbook.md`. Update both copies
-> to keep the SoraFS rollout guidance aligned across doc sets.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ## 1. Prerequisites
 

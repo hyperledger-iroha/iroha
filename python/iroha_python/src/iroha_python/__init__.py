@@ -1,4 +1,4 @@
-"""Python SDK helpers for interacting with Hyperledger Iroha v2 nodes.
+"""Python SDK helpers for interacting with Hyperledger Iroha 3 nodes.
 
 The package currently focuses on re-exporting stable building blocks—most
 notably the Norito codec and Torii HTTP client—so applications can start

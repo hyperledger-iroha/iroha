@@ -4,7 +4,8 @@ Status: Published 2026-03-22
 Owners: SDK Program Lead, Android Networking TL, Swift Lead, JS Lead, Python Maintainer  
 Related roadmap item: NRPC-4 — Cross-SDK adoption schedule
 
-> For the portal-facing summary that SDK teams share with external reviewers, see `docs/portal/docs/devportal/norito-rpc-adoption.md`. Keep the high-level messaging in sync with this canonical schedule.
+> Public, in-depth Norito-RPC guidance is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 ### 1. Objectives
 - Align Rust/CLI, Python, JavaScript, Android, and Swift transports on the binary Norito-RPC interface ahead of the AND4 production toggle.
@@ -26,8 +27,8 @@ Related roadmap item: NRPC-4 — Cross-SDK adoption schedule
 | **Python SDK** | Default `NoritoRpcClient` usage in the release smoke (`python/iroha_python/scripts/release_smoke.sh`), keep `run_norito_rpc_smoke.sh` as the canonical CI entrypoint, and document parity handling in `python/iroha_python/README.md`. | `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh` wired to `ci/python_norito_rpc_smoke.yml`; release smoke archives Norito JSON for `status.md`. | Fixtures from `fixtures/norito_rpc/`, NRPC-2 telemetry readiness, Torii dual-stack availability. |
 | **JavaScript SDK** | Ship and stabilise `NoritoRpcClient` (already published), add governance/query wrappers that default to Norito when `toriiClientConfig.transport.preferred === "norito_rpc"`, and capture end-to-end samples in `javascript/iroha_js/recipes/`. | `npm test` (unit) + future `npm run test:norito-rpc` (dockerised integration) must pass before publish; provenance attaches Norito smoke output under `javascript/iroha_js/artifacts/`. | Shared fixture cadence, NRPC-2 telemetry, JS GA plan (JS-09/10). |
 | **Android SDK (AND4)** | Keep Norito helpers in `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/NoritoRpcClient.java`, wire mock harness into AND4 preview lane, expose retry/backoff knobs through `ClientConfig`, and emit telemetry hooking into AND4 dashboards. | `./gradlew test` exercises Norito unit tests; AND4 preview lane replays mock harness flows nightly; chaos suite seeds failure cases once AND4 enters beta. | NRPC-2 staging pools, AND4 workshop outputs, telemetry dashboard readiness. |
-| **Swift SDK (IOS2)** | Add Norito transport bindings via NoritoBridge (`IrohaSwift/Sources/IrohaSwift/NoritoRpcClient.swift`), reuse pipeline retry helpers, and add CI coverage inside `IrohaSwift/Tests/IrohaSwiftTests/NoritoRpcClientTests.swift`. Publish parity instructions in `specs/sdk/swift/quickstart.md`. | `xcodebuild test -scheme IrohaSwift-Package -destination "platform=iOS Simulator,name=iPhone 15"` run in Buildkite; parity metrics exported via `scripts/swift_status_export.py`. | `/v1/pipeline` adoption, NoritoBridge enhancements, localization staffing (IOS5) for docs. |
-| **Docs & Portal** | Add binary transport samples + troubleshooting steps to `docs/portal/docs/devportal/torii-rpc-overview.md` and Try-It console once staging Norito gateway is reachable. | `docs/portal` preview build, netlify smoke for Try-It proxy, checksum enforcement via `build/checksums.sha256`. | DOCS-SORA workstream, NRPC-2 telemetry. |
+| **Swift SDK (IOS2)** | Add Norito transport bindings via NoritoBridge (`IrohaSwift/Sources/IrohaSwift/NoritoRpcClient.swift`), reuse pipeline retry helpers, and add CI coverage inside `IrohaSwift/Tests/IrohaSwiftTests/NoritoRpcClientTests.swift`. Publish parity instructions in `specs/sdk/swift/quickstart.md`. | `xcodebuild test -scheme IrohaSwift-Package -destination "platform=iOS Simulator,name=iPhone 15"` run in Buildkite; parity metrics exported via `scripts/swift_status_export.py`. | `/v1/pipeline` adoption and NoritoBridge enhancements. |
+| **Public docs** | Maintain binary transport samples and troubleshooting guidance in `iroha-docs`. | Use the documentation repository's own validation and deployment workflow. | DOCS-SORA workstream, NRPC-2 telemetry. |
 
 ### 4. Fixture & Automation Plan
 1. **Fixture bundle (`NRPC-4F1`).** Generate canonical Norito-RPC request/response pairs for transactions, queries, and error paths using devnet data; store under `fixtures/norito_rpc/{lab,staging}/`. Provenance manifest mirrors the OpenAPI signing flow (SHA-256, BLAKE3, Ed25519 signature), and the schema table (`fixtures/norito_rpc/schema_hashes.json`) records the 16-byte hash for every DTO referenced in the spec.
@@ -41,7 +42,11 @@ Related roadmap item: NRPC-4 — Cross-SDK adoption schedule
 
 ### 5. Telemetry, Docs, and Reporting Hooks
 - **Telemetry:** follow `specs/torii/norito_rpc_telemetry.md` for metric names (`torii_request_duration_seconds{scheme="norito_rpc"}`, `torii_norito_decode_failures_total`, etc.). SDK owners must ensure client logs redacted tokens and propagate `X-Iroha-Trace-Id` so staging comparisons stay deterministic.
-- **Runbooks & Docs:** operator-facing steps live in `specs/torii/norito_rpc_rollout_plan.md` + `specs/runbooks/torii_norito_rpc_canary.md`. Developer-facing instructions are mirrored into the portal (`docs/portal/docs/devportal/torii-rpc-overview.md`) once Norito reaches P2. This schedule is now the canonical reference for cross-SDK deadlines.
+- **Runbooks & Docs:** operator-facing steps live in
+  `specs/torii/norito_rpc_rollout_plan.md` and
+  `specs/runbooks/torii_norito_rpc_canary.md`. Developer-facing instructions
+  belong in `iroha-docs`. This schedule remains the repository-local reference
+  for cross-SDK deadlines.
 - **Tracker:** NRPC-4 row added to `specs/torii/norito_rpc_tracker.md` with checklist items: fixture bundle, CI gating, SDK doc updates, and GA evidence. Owners update status weekly during the Torii platform sync.
 - **Reporting cadence:**  
   - Weekly: share SDK parity deltas + outstanding blockers in Torii/SDK sync notes.  
@@ -69,5 +74,7 @@ With this schedule in place, NRPC-4’s acceptance criteria are met: every SDK h
 ### 8. Stage Evidence & Reporting Checklist
 - **Tracker hygiene.** Every stage transition adds a dated row to `specs/torii/norito_rpc_tracker.md` with the stage (`lab`, `staging_canary`, `production`), DRIs, telemetry artefact links, and references to the relevant `status.md` entry.
 - **Release bundles.** Bundle `cargo xtask norito-rpc-verify`, `python/iroha_python/scripts/run_norito_rpc_smoke.sh`, `javascript/iroha_js/scripts/run-norito-rpc-e2e.mjs`, Android AND4 replay logs, and the Swift parity suite under `artifacts/norito_rpc/<sdk>/<stamp>/` with SHA256 digests noted in `status.md`.
-- **Portal + operator comms.** Update this file and `docs/portal/docs/devportal/norito-rpc-adoption.md` in the same PR when stages change, and include links to the announcement/FAQ so Support teams can reuse the messaging.
+- **Public docs + operator comms.** Coordinate affected public guidance in
+  `iroha-docs` when stages change, and include links to the announcement or FAQ
+  so Support teams can reuse the messaging.
 - **Telemetry exports.** Store AlertManager self-test bundles, Grafana exports, and the executed `specs/runbooks/torii_norito_rpc_canary.md` log in `artifacts/norito_rpc/telemetry/<stamp>/` and link them from the tracker to satisfy NRPC-2 gating.

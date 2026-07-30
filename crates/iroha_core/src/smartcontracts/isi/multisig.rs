@@ -5678,7 +5678,9 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: valid_lane,
                 validator: old_account.clone(),
-                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                peer_id: iroha_data_model::peer::PeerId::from(
+                    old_account.expect_single_signatory().clone(),
+                ),
                 stake_account: old_account.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_u32),
@@ -5694,7 +5696,9 @@ mod tests {
             iroha_data_model::nexus::PublicLaneValidatorRecord {
                 lane_id: malformed_lane,
                 validator: old_account.clone(),
-                peer_id: iroha_data_model::peer::PeerId::from(old_account.signatory().clone()),
+                peer_id: iroha_data_model::peer::PeerId::from(
+                    old_account.expect_single_signatory().clone(),
+                ),
                 stake_account: old_account.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(2_u32),

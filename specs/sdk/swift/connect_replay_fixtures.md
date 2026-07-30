@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: Connect WebSocket Replay Fixtures
+summary: Capture and replay contract for Swift Connect WebSocket evidence.
+---
+
 //! Capture and replay Connect WebSocket fixtures for IOS3 readiness work.
 
 # Connect WebSocket Replay Fixtures (IOS3)

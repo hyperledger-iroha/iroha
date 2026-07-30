@@ -25,7 +25,7 @@ summary remains in `specs/sorafs_gateway_dns_design_pre_read.md`.
 | Tooling WG Rep | `tooling.wg@sorafs` | Conformance harness maintenance, CLI/tooling changes. |
 | Governance Liaison | `governance@sora` | GAR policy alignment, escalation routing, artefact archival. |
 | QA Guild Lead | `qa.guild@sorafs` | Test coverage plan, load suite resources, regression ownership. |
-| Docs/DevRel Observer | `docs.devrel@sora` | Operator runbooks, Docusaurus updates, public comms. |
+| Docs/DevRel Observer | `docs.devrel@sora` | Repository-local operator records, `iroha-docs` coordination, public comms. |
 | Torii Platform Rep | `torii.platform@soranet` | API integration, telemetry pipelines, config surfaces. |
 | Security Engineering Observer | `security@soranet` | GAR enforcement threat modelling, audit trail requirements. |
 
@@ -79,7 +79,8 @@ summary remains in `specs/sorafs_gateway_dns_design_pre_read.md`.
 ## 6. Dependencies & Roadmap Alignment (50–55 min)
 - Map decisions to roadmap items (SF-4, SF-4a, SF-5, SF-5a).
 - Identify blockers from SF-2/SF-3 deliverables.
-- Confirm required updates to `status.md` and Docusaurus portal.
+- Confirm required repository status updates and any coordinated `iroha-docs`
+  changes.
 
 ## 7. Action Register & Next Steps (55–60 min)
 - Summarise decisions and outstanding actions.

@@ -7,10 +7,7 @@ use std::path::{Path, PathBuf};
 
 mod support;
 
-use support::{
-    EXPECTED_DOC_LOCALES, GeneratedOutput, GenerationMode, exact_localized_markdown_paths,
-    parse_generation_mode, sync_generated_outputs,
-};
+use support::{GeneratedOutput, GenerationMode, parse_generation_mode, sync_generated_outputs};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED ABI HASHES -->";
 const END: &str = "<!-- END GENERATED ABI HASHES -->";
@@ -39,14 +36,12 @@ fn gas_schedule_golden_path() -> PathBuf {
     workspace_root().join("crates/ivm/tests/gas_schedule_hash.rs")
 }
 
-fn header_paths() -> Result<Vec<PathBuf>, String> {
-    let source_dir = source_dir();
-    exact_localized_markdown_paths(&source_dir, "ivm_header", true, EXPECTED_DOC_LOCALES)
+fn header_paths() -> Vec<PathBuf> {
+    vec![source_dir().join("ivm_header.md")]
 }
 
-fn runtime_sample_paths() -> Result<Vec<PathBuf>, String> {
-    let sample_dir = source_dir().join("samples");
-    exact_localized_markdown_paths(&sample_dir, "runtime_abi_hash", true, EXPECTED_DOC_LOCALES)
+fn runtime_sample_paths() -> Vec<PathBuf> {
+    vec![source_dir().join("samples/runtime_abi_hash.md")]
 }
 
 fn render_generated_hash_section(text: &str, expected: &str) -> Result<String, String> {
@@ -122,11 +117,9 @@ fn main() {
     let table = ivm::syscalls::render_abi_hashes_markdown_table();
     let expected = format!("{BEGIN}\n{table}{END}");
 
-    let header_paths =
-        header_paths().unwrap_or_else(|error| panic!("discover IVM header documents: {error}"));
+    let header_paths = header_paths();
     let runtime_hash = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-    let runtime_sample_paths = runtime_sample_paths()
-        .unwrap_or_else(|error| panic!("discover runtime ABI hash samples: {error}"));
+    let runtime_sample_paths = runtime_sample_paths();
     let gas_hash = hex::encode(ivm::gas::schedule_hash().as_ref());
     let outputs = prepare_outputs(
         &header_paths,

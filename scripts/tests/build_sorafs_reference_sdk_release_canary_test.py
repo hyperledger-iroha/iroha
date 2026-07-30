@@ -34,6 +34,11 @@ sys.modules[CHECKER_SPEC.name] = CHECKER
 CHECKER_SPEC.loader.exec_module(CHECKER)
 
 from sorafs_topology_qualification import CANONICAL_READINESS_LANES  # noqa: E402
+from sorafs_reference_sdk_supply_chain import (  # noqa: E402
+    SourceArtifactBinding,
+    SupplyChainSourceResult,
+    SupplyChainTargetResult,
+)
 
 
 NOW_UNIX = 1_800_700_000
@@ -49,6 +54,107 @@ PUBLIC_KEY_DIGEST = "2" * 64
 SBOM_DIGEST = "3" * 64
 VULNERABILITY_DIGEST = "4" * 64
 PROVENANCE_DIGEST = "5" * 64
+RELEASE_REHEARSAL_DIGEST = "6" * 64
+PROVENANCE_CERTIFICATE_IDENTITY = (
+    "https://github.com/hyperledger/iroha/"
+    ".github/workflows/sorafs-cli-release.yml@refs/tags/sorafs-cli-v1.0.0"
+)
+PROVENANCE_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX = (
+    "d75a980182b10ab7d54bfed3c964073a"
+    "0ee172f3daa62325af021a68f707511a"
+)
+PROVENANCE_VERIFICATION_KEY_FINGERPRINT = hashlib.sha256(
+    bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
+).hexdigest()
+PROVENANCE_VERIFICATION_SIGNATURE = bytes.fromhex(
+    "e5564300c360ac729086e2cc806e828a"
+    "84877f1eb8e5d974d873e06522490155"
+    "5fb8821590a33bacc61e39701cf9b46b"
+    "d25bf5f0595bbe24655141438e7a100b"
+)
+
+
+def supply_chain_result(
+    *,
+    generated_at_unix: int = GENERATED_AT,
+) -> SupplyChainSourceResult:
+    target_results = tuple(
+        SupplyChainTargetResult(
+            target=target,
+            binary_smoke_passed=True,
+            deterministic_archive_replay_passed=True,
+            installation_verified=True,
+            rollback_verified=True,
+            yank_verified=True,
+            sbom_generated=True,
+            critical_vulnerability_count=0,
+            high_vulnerability_count=0,
+            oidc_identity_verified=True,
+            cosign_provenance_verified=True,
+        )
+        for target in MODULE.REQUIRED_RELEASE_TARGETS
+    )
+    return SupplyChainSourceResult(
+        generated_at_unix=generated_at_unix,
+        deployment_id="reference-sdk-release-20260701",
+        environment="production",
+        release_manifest_digest_hex=MANIFEST_DIGEST,
+        source_artifacts=(
+            SourceArtifactBinding(
+                "release_rehearsal",
+                "release-rehearsal.json",
+                RELEASE_REHEARSAL_DIGEST,
+            ),
+            SourceArtifactBinding("sbom_index", "sbom-index.json", SBOM_DIGEST),
+            SourceArtifactBinding(
+                "vulnerability_report",
+                "vulnerability-report.json",
+                VULNERABILITY_DIGEST,
+            ),
+            SourceArtifactBinding(
+                "provenance_bundle",
+                "provenance-bundle.json",
+                PROVENANCE_DIGEST,
+            ),
+        ),
+        target_results=target_results,
+        sbom_index_digest_hex=SBOM_DIGEST,
+        vulnerability_report_digest_hex=VULNERABILITY_DIGEST,
+        provenance_bundle_digest_hex=PROVENANCE_DIGEST,
+    )
+
+
+@pytest.fixture(autouse=True)
+def mock_supply_chain_source_validator(monkeypatch: pytest.MonkeyPatch) -> None:
+    def validate(_source_root: Path, **kwargs):
+        assert kwargs["expected_certificate_identity"] == (
+            PROVENANCE_CERTIFICATE_IDENTITY
+        )
+        assert kwargs["expected_oidc_issuer"] == PROVENANCE_OIDC_ISSUER
+        assert kwargs["release_rehearsal_path"] == "release-rehearsal.json"
+        assert kwargs["sbom_index_path"] == "sbom-index.json"
+        assert kwargs["vulnerability_report_path"] == (
+            "vulnerability-report.json"
+        )
+        assert kwargs["provenance_bundle_path"] == "provenance-bundle.json"
+        fingerprint = kwargs["expected_verification_key_fingerprint_hex"]
+        authenticator = kwargs["verification_receipt_authenticator"]
+        if not authenticator(
+            fingerprint,
+            b"",
+            PROVENANCE_VERIFICATION_SIGNATURE,
+        ):
+            return None, ["trusted provenance receipt signature is invalid"]
+        return supply_chain_result(), []
+
+    monkeypatch.setattr(MODULE, "validate_supply_chain_sources", validate)
+    monkeypatch.setitem(
+        MODULE.validate_evidence_payload.__globals__,
+        "validate_supply_chain_sources",
+        validate,
+    )
+    monkeypatch.setattr(CHECKER, "validate_supply_chain_sources", validate)
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -94,16 +200,16 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "supply_chain":
         args.extend(
             [
-                "--sbom-index-digest-hex",
-                SBOM_DIGEST,
-                "--vulnerability-report-digest-hex",
-                VULNERABILITY_DIGEST,
-                "--provenance-bundle-digest-hex",
-                PROVENANCE_DIGEST,
+                "--supply-chain-source-root",
+                str(tmp_path / "supply-chain-sources"),
+                "--provenance-certificate-identity",
+                PROVENANCE_CERTIFICATE_IDENTITY,
+                "--provenance-oidc-issuer",
+                PROVENANCE_OIDC_ISSUER,
+                "--provenance-verification-public-key-hex",
+                PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX,
             ]
         )
-        for target in MODULE.REQUIRED_RELEASE_TARGETS:
-            args.extend(["--target", target])
     elif kind == "downstream_bindings":
         args.extend(["--package-index-digest-hex", PACKAGE_DIGEST])
         for package in MODULE.REQUIRED_DOWNSTREAM_PACKAGES:
@@ -207,6 +313,14 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
         str(NOW_UNIX),
         "--topology-qualification-summary",
         str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+        "--supply-chain-source-root",
+        str(tmp_path / "supply-chain-sources"),
+        "--provenance-certificate-identity",
+        PROVENANCE_CERTIFICATE_IDENTITY,
+        "--provenance-oidc-issuer",
+        PROVENANCE_OIDC_ISSUER,
+        "--provenance-verification-public-key-hex",
+        PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX,
     ]
     for path in evidence_paths:
         command.extend(["--evidence", str(path)])
@@ -259,6 +373,213 @@ def test_builds_complete_supply_chain_canary(tmp_path: Path) -> None:
     assert all(row["high_vulnerability_count"] == 0 for row in payload["target_results"])
     assert all(row["cosign_provenance_verified"] for row in payload["target_results"])
     assert payload["sbom_index_digest_hex"] == SBOM_DIGEST
+    assert payload["vulnerability_report_digest_hex"] == VULNERABILITY_DIGEST
+    assert payload["provenance_bundle_digest_hex"] == PROVENANCE_DIGEST
+    assert payload["source_artifacts"] == [
+        {
+            "kind": "release_rehearsal",
+            "artifact_path": "release-rehearsal.json",
+            "sha256": RELEASE_REHEARSAL_DIGEST,
+        },
+        {
+            "kind": "sbom_index",
+            "artifact_path": "sbom-index.json",
+            "sha256": SBOM_DIGEST,
+        },
+        {
+            "kind": "vulnerability_report",
+            "artifact_path": "vulnerability-report.json",
+            "sha256": VULNERABILITY_DIGEST,
+        },
+        {
+            "kind": "provenance_bundle",
+            "artifact_path": "provenance-bundle.json",
+            "sha256": PROVENANCE_DIGEST,
+        },
+    ]
+    assert (
+        payload["provenance_certificate_identity"]
+        == PROVENANCE_CERTIFICATE_IDENTITY
+    )
+    assert payload["provenance_oidc_issuer"] == PROVENANCE_OIDC_ISSUER
+    assert (
+        payload["provenance_verification_key_fingerprint_hex"]
+        == PROVENANCE_VERIFICATION_KEY_FINGERPRINT
+    )
+    assert set(payload) == {
+        "schema",
+        "status",
+        "generated_at_unix",
+        "deployment_id",
+        "environment",
+        "deployment_context_reviewed",
+        "target_count",
+        "target_results",
+        "source_artifacts",
+        "release_manifest_digest_hex",
+        "sbom_index_digest_hex",
+        "vulnerability_report_digest_hex",
+        "provenance_bundle_digest_hex",
+        "provenance_certificate_identity",
+        "provenance_oidc_issuer",
+        "provenance_verification_key_fingerprint_hex",
+        "raw_sboms_included",
+        "raw_vulnerability_reports_included",
+        "raw_provenance_included",
+    }
+
+
+def test_supply_chain_source_errors_fail_before_write(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "validate_supply_chain_sources",
+        lambda _source_root, **_kwargs: (None, ["SBOM index is stale"]),
+    )
+
+    assert MODULE.main(args_for("supply_chain", tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert "supply-chain source: SBOM index is stale" in captured.err
+    assert not canary_path(tmp_path, "supply_chain").exists()
+
+
+@pytest.mark.parametrize(
+    "required_option",
+    (
+        "--supply-chain-source-root",
+        "--provenance-certificate-identity",
+        "--provenance-oidc-issuer",
+        "--provenance-verification-public-key-hex",
+    ),
+)
+def test_supply_chain_requires_source_and_trust_inputs(
+    required_option: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("supply_chain", tmp_path)
+    index = args.index(required_option)
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert f"{required_option} is required for supply_chain" in captured.err
+    assert not canary_path(tmp_path, "supply_chain").exists()
+
+
+def test_supply_chain_timestamp_must_equal_oldest_source(
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "validate_supply_chain_sources",
+        lambda _source_root, **_kwargs: (
+            supply_chain_result(generated_at_unix=GENERATED_AT - 1),
+            [],
+        ),
+    )
+
+    assert MODULE.main(args_for("supply_chain", tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--generated-at-unix must equal the oldest validated "
+        "supply-chain source timestamp"
+    ) in captured.err
+    assert not canary_path(tmp_path, "supply_chain").exists()
+
+
+def test_supply_chain_authenticator_binds_ed25519_key_and_fingerprint() -> None:
+    public_key = bytes.fromhex(PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX)
+    fingerprint, authenticate = MODULE.provenance_receipt_authenticator(public_key)
+
+    assert fingerprint == PROVENANCE_VERIFICATION_KEY_FINGERPRINT
+    assert authenticate(
+        fingerprint,
+        b"",
+        PROVENANCE_VERIFICATION_SIGNATURE,
+    )
+    assert not authenticate(
+        "f" * 64,
+        b"",
+        PROVENANCE_VERIFICATION_SIGNATURE,
+    )
+    assert not authenticate(
+        fingerprint,
+        b"tampered",
+        PROVENANCE_VERIFICATION_SIGNATURE,
+    )
+
+
+def test_supply_chain_default_source_paths_are_exact_v1_names(
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(args_for("supply_chain", tmp_path))
+
+    assert args.release_rehearsal_path == "release-rehearsal.json"
+    assert args.sbom_index_path == "sbom-index.json"
+    assert args.vulnerability_report_path == "vulnerability-report.json"
+    assert args.provenance_bundle_path == "provenance-bundle.json"
+
+
+def test_supply_chain_rejects_wrong_verification_public_key(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("supply_chain", tmp_path)
+    index = args.index("--provenance-verification-public-key-hex")
+    args[index + 1] = "01" * 32
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "trusted provenance receipt signature is invalid" in captured.err
+    assert not canary_path(tmp_path, "supply_chain").exists()
+
+
+def test_supply_chain_rejects_manual_target(tmp_path: Path, capsys) -> None:
+    args = args_for("supply_chain", tmp_path)
+    args.extend(["--target", MODULE.REQUIRED_RELEASE_TARGETS[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--target is retired for supply_chain; targets are source-derived"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "supply_chain").exists()
+
+
+@pytest.mark.parametrize(
+    "retired_flag",
+    (
+        "--sbom-index-digest-hex",
+        "--vulnerability-report-digest-hex",
+        "--provenance-bundle-digest-hex",
+    ),
+)
+def test_supply_chain_rejects_retired_manual_digest_flags(
+    retired_flag: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("supply_chain", tmp_path)
+    args.extend([retired_flag, "a" * 64])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "unrecognized arguments" in captured.err
+    assert retired_flag in captured.err
+    assert not canary_path(tmp_path, "supply_chain").exists()
 
 
 def test_policy_digest_kind_inventory_matches_generated_payloads(tmp_path: Path) -> None:
@@ -466,12 +787,6 @@ def test_unknown_downstream_package_coverage_fails_closed(
     (
         (
             "release_archive",
-            "--target",
-            MODULE.REQUIRED_RELEASE_TARGETS[0],
-            "shadow-release-target",
-        ),
-        (
-            "supply_chain",
             "--target",
             MODULE.REQUIRED_RELEASE_TARGETS[0],
             "shadow-release-target",

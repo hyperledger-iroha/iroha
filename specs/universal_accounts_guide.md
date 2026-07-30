@@ -4,11 +4,6 @@
 
 # Universal Account Guide
 
-> **Localization safety:** localized copies of this guide are generated from
-> this English source. A copy whose `source_hash` is stale is reference material
-> only and must not be used as an onboarding runbook until regenerated and
-> reviewed.
-
 This guide distils the UAID (Universal Account ID) rollout requirements from
 the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
 It covers UAID derivation, portfolio/manifest inspection, regulator templates,

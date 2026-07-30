@@ -348,7 +348,7 @@ pub struct RoutePlanStep {
     pub notes: Option<String>,
 }
 
-/// JSON shape emitted by docs portal tooling (camelCase + snake_case).
+/// Accepted cutover-plan JSON shape (camelCase + snake_case).
 #[derive(Debug, Deserialize)]
 struct GatewayBindingRecord {
     #[serde(default)]

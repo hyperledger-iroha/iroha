@@ -15719,7 +15719,7 @@ mod tests {
                 )
                 .expect("encode bundle payload");
                 ManifestProvenance {
-                    signer: ALICE_ID.signatory().clone(),
+                    signer: ALICE_ID.expect_single_signatory().clone(),
                     signature: checked_test_signature(
                         iroha_test_samples::ALICE_KEYPAIR.private_key(),
                         &payload,
@@ -15746,7 +15746,7 @@ mod tests {
                     .as_ref()
                     .expect("latest revision")
                     .signed_by,
-                ALICE_ID.signatory().to_string()
+                ALICE_ID.expect_single_signatory().to_string()
             );
             assert_eq!(
                 snapshot.services[0]
@@ -21386,7 +21386,7 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
                 authority: ALICE_ID.clone(),
-                request_signer: ALICE_ID.signatory().clone(),
+                request_signer: ALICE_ID.expect_single_signatory().clone(),
             };
 
             let instruction = ensure_hf_generated_service_instruction(
@@ -21585,7 +21585,7 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
                 authority: ALICE_ID.clone(),
-                request_signer: ALICE_ID.signatory().clone(),
+                request_signer: ALICE_ID.expect_single_signatory().clone(),
             };
 
             let error = ensure_hf_generated_service_instruction(
@@ -21666,7 +21666,7 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
                 authority: ALICE_ID.clone(),
-                request_signer: ALICE_ID.signatory().clone(),
+                request_signer: ALICE_ID.expect_single_signatory().clone(),
             };
 
             let instruction = ensure_hf_generated_agent_instruction(&app, &signer, &manifest, None)

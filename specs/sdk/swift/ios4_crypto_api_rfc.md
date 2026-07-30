@@ -2,6 +2,11 @@
   SPDX-License-Identifier: Apache-2.0
 -->
 
+---
+title: IOS4 Swift Crypto API RFC
+summary: Swift multi-algorithm signing and deterministic fallback API contract.
+---
+
 # IOS4 Swift Crypto API RFC
 
 This RFC fulfils the IOS4 roadmap action “Draft crypto API proposal” by

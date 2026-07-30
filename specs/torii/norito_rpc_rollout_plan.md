@@ -139,7 +139,8 @@ and the validation steps required before closing an incident.
 - **NetOps**: confirm ingress + mTLS artefacts replicated across regions before promoting from staging.  
 - **Observability**: sign off on dashboard screenshots and alert test outputs.  
 - **SDK Program**: notify partners when Norito is available in staging so SDK parity tests can switch to binary transport.  
-- **Docs/DevRel**: update the developer portal once GA completes, embedding CLI examples that set Norito headers.
+- **Docs/DevRel**: coordinate current public CLI examples and Norito header
+  guidance in the sibling `iroha-docs` repository.
 
 ### 8. Ownership & Tracker Alignment
 - NRPC-2A completes when ingress cookbook, config knobs, and tests merge (update `specs/torii/norito_rpc_tracker.md` status to 🈴).  

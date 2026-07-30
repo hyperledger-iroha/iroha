@@ -3,8 +3,8 @@ title: SoraFS Developer Guides
 summary: Entry point for SoraFS CLI, SDK, CI, and deployment guidance.
 ---
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/developer-index.md`.
-> Update both copies to keep reviewers aligned.
+> Public and in-depth documentation is maintained in the sibling
+> `iroha-docs` repository and published at <https://docs.iroha.tech/>.
 
 # SoraFS Developer Guides
 

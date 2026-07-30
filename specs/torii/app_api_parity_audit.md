@@ -147,4 +147,5 @@ val headers = CanonicalRequestSigner.buildHeaders(
   required.
 
 ### Open Actions
-- ✅ Developer portal mirror published at `docs/portal/docs/reference/torii-app-api-parity.md`; keep both files in sync when routes change.
+- Public, in-depth API guidance is maintained in `iroha-docs`; coordinate route
+  changes there while keeping this repository-local audit source accurate.

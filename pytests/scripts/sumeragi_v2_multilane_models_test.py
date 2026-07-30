@@ -18,7 +18,6 @@ CHECKER = (
 )
 BINDINGS = (
     ROOT_DIR
-    / "docs"
     / "formal"
     / "sumeragi_v2"
     / "multilane_source_bindings.json"
@@ -106,6 +105,14 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
             "LaneExecutablePayloadV3",
         ),
         (
+            Path(
+                "formal/sumeragi_v2/"
+                "SumeragiV2InFlightFirstRelease.tla"
+            ),
+            "SelectQueuePlanV4Conjunction ==\n",
+            "SelectQueuePlanV4Snapshot ==\n",
+        ),
+        (
             Path("crates/iroha_core/src/lane_consensus.rs"),
             "LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 2",
             "LANE_EXECUTABLE_PAYLOAD_VERSION_V2: u8 = 3",
@@ -144,8 +151,13 @@ def test_inflight_layout_contract_accepts_current_production(tmp_path: Path) -> 
             "MLPayloadV3CarriesExactAdmissionPreimage",
         ),
         (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '"inflight_first_release_fixed.cfg",\n        "18",',
+            '"inflight_first_release_fixed.cfg",\n        "17",',
+        ),
+        (
             Path("formal/sumeragi_v2/inflight_first_release_fixed.cfg"),
-            "INVARIANT MLQueuePlanV4PutBatchBound4096\n",
+            "INVARIANT MLQueuePlanV4SelectedConjunctionBound4096\n",
             "",
         ),
     ),
@@ -193,6 +205,17 @@ def test_inflight_layout_contract_rejects_ledger_weakening(
     assert any("whole-file source checks differ" in error for error in errors)
 
 
+def test_inflight_layout_contract_rejects_action_inventory_weakening(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    contract = canonical_contract()
+    contract["required_actions"].remove("PersistPlanTombstone")
+    copy_layout_fixture(tmp_path, module, canonical_contract())
+    errors = validate_fixture(tmp_path, module, contract)
+    assert any("actions differ" in error for error in errors)
+
+
 def test_inflight_layout_contract_rejects_refinement_claim_inflation(
     tmp_path: Path,
 ) -> None:
@@ -201,7 +224,6 @@ def test_inflight_layout_contract_rejects_refinement_claim_inflation(
     copy_layout_fixture(tmp_path, module, contract)
     module_path = (
         tmp_path
-        / "docs"
         / "formal"
         / "sumeragi_v2"
         / "SumeragiV2InFlightFirstRelease.tla"

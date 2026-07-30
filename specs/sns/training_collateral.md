@@ -1,6 +1,6 @@
 ---
 title: SNS Training Collateral
-summary: Instructor scripts, localization hooks, and release-safe evidence capture for alias provisioning.
+summary: Instructor scripts and release-safe evidence capture for alias provisioning.
 ---
 
 # Sora Name Service training collateral
@@ -19,8 +19,8 @@ The canonical references are:
 - [`registry_schema.md`](./registry_schema.md) for the persisted SNS read model;
 - [`governance_playbook.md`](./governance_playbook.md) for approval and evidence
   boundaries;
-- the [portal evidence guide](../../portal/docs/sns/kpi-dashboard.md) for the
-  accepted operational evidence sources; and
+- the public operational guidance at
+  [docs.iroha.tech](https://docs.iroha.tech/) for accepted evidence sources; and
 - `fixtures/norito_rpc/alias_setup_v1/` for cross-SDK canonical fixtures.
 
 ## 1. Curriculum overview
@@ -30,9 +30,9 @@ The canonical references are:
 | Track | Objectives | Required pre-reads |
 |-------|------------|--------------------|
 | Registrar operations | Resolve textual names, review `NoOp`/`Repair`/`Create` dispositions, verify a plan, and submit its exact frames as one transaction. | `registrar_api.md`, `onboarding_kit.md`. |
-| Node and gateway operations | Validate onboarding configuration, distinguish `Ready`/`Pending`/`Blocked`, and diagnose visibility without existence leakage. | `registrar_api.md`, portal evidence guide. |
+| Node and gateway operations | Validate onboarding configuration, distinguish `Ready`/`Pending`/`Blocked`, and diagnose visibility without existence leakage. | `registrar_api.md`, public operational guidance. |
 | Governance and compliance | Approve intent, recognize drift conflicts, and retain a replayable evidence packet without secrets. | `governance_playbook.md`, `registry_schema.md`. |
-| Finance and analytics | Reconcile exact planner quotes and committed ledger debits; distinguish the charged amount from the caller's cap. | `payment_settlement_plan.md`, portal evidence guide. |
+| Finance and analytics | Reconcile exact planner quotes and committed ledger debits; distinguish the charged amount from the caller's cap. | `payment_settlement_plan.md`, public operational guidance. |
 
 ### 1.2 Module sequence
 
@@ -108,13 +108,11 @@ Archive only secret-free material:
 For a rejection, retain the structured error and prove that no earlier resource,
 binding, index, permission, or balance mutation escaped the transaction.
 
-## 3. Localization workflow
+## 3. Public documentation
 
-Localized handouts live beside this file as
-`training_collateral.<lang>.md`. Regenerate or review translations after the
-English source changes; a translation carrying an older `source_hash` is not an
-operational runbook. Keep command names, route paths, diagnostic codes, and
-Norito type names unchanged during translation.
+Public training material and translations are maintained in the sibling
+`iroha-docs` repository and published at <https://docs.iroha.tech/>. This file
+retains only the implementation-coupled curriculum and evidence contract.
 
 ## 4. Instructor checklist
 

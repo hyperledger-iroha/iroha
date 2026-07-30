@@ -19,9 +19,9 @@ governance sign-off.
 2. Use
    `scripts/add_sns_annex_cycle.py <cycle> --suffix .<name>` to append entries
    to `specs/sns/regulatory/annex_jobs.json`, create the annex/memo
-   placeholders, and seed the localization stubs. At least one `--suffix` is
-   required; repeat the option to select more than one active policy. The
-   helper has no built-in suffix catalog and never expands an omitted option.
+   placeholders. At least one `--suffix` is required; repeat the option to
+   select more than one active policy. The helper has no built-in suffix
+   catalog and never expands an omitted option.
 3. If you prefer a manual edit, append entries to
    `specs/sns/regulatory/annex_jobs.json` with the same fields described
    above (`suffix`, `cycle`, `jurisdiction`, optional overrides) and create the
@@ -47,7 +47,7 @@ python3 scripts/run_sns_annex_jobs.py \
   path recorded in the job (or the toolkit default). Pass `--runner` to point
   at a different command when testing.
 - Use `--dry-run` when you only need to verify the planned commands or confirm
-  that the regulatory/portal entries exist.
+  that the regulatory entries exist.
 - Use `--check-only` to validate previously recorded annex blocks without
   regenerating the dashboard export—handy for CI jobs that lint documentation.
 
@@ -60,7 +60,6 @@ Each run should yield:
 | Dashboard export | `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json` |
 | Annex markdown | `specs/sns/reports/<suffix>/<cycle>.md` |
 | Regulatory memo block | `specs/sns/regulatory/<jurisdiction>/<cycle>.md` |
-| Portal memo block (when present) | `docs/portal/docs/sns/regulatory/<jurisdiction>-<cycle>.md` |
 
 Before merging:
 
@@ -74,8 +73,8 @@ Before merging:
 
 - Missing dashboard export ⇒ regenerate `dashboards/grafana/sns_suffix_analytics.json`
   or provide an explicit `dashboard` path in the job entry.
-- Missing regulatory memo ⇒ create the file (plus localization stubs) before
-  rerunning the helper.
+- Missing regulatory memo ⇒ create the canonical memo before rerunning the
+  helper.
 - Digest mismatch ⇒ rerun the Grafana export and delete the stale artefact to
   avoid referencing an inconsistent snapshot.
 
@@ -84,5 +83,5 @@ Before merging:
 Read `annex_jobs.json` for the current schedule. Existing entries may preserve
 historical reporting cohorts; they are not defaults for new cycles. Run this
 checklist whenever an explicitly selected suffix/cycle pair is added so SN-8
-evidence stays reproducible and localized copies remain in sync with the latest
-intake memos.
+evidence stays reproducible. Coordinate user-facing explanations in the sibling
+`iroha-docs` repository, which publishes to <https://docs.iroha.tech/>.

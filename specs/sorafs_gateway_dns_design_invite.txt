@@ -16,7 +16,7 @@ Objectives
 1. Finalise deterministic DNS scope (namespace rules, alias proof TTL, automation stack).
 2. Lock GAR enforcement integration plans for the trustless gateway service.
 3. Validate SF-5a conformance harness coverage, resourcing, and CI touchpoints.
-4. Align on downstream documentation and rollout deliverables (runbooks, Docusaurus portal).
+4. Align on downstream documentation and rollout deliverables (repository runbooks and `iroha-docs`).
 
 Pre-read package
 ----------------

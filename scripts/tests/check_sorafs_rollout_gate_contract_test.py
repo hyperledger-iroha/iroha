@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import inspect
 import importlib.util
 import json
@@ -17,11 +16,10 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPTS_DIR.parent
-DOCS_SOURCE_DIR = REPO_ROOT / "docs" / "source"
+DOCS_SOURCE_DIR = REPO_ROOT / "specs"
 XTASK_MAIN_RS = REPO_ROOT / "xtask" / "src" / "main.rs"
 SORAFS_NODE_PLAN = DOCS_SOURCE_DIR / "sorafs" / "sorafs_node_plan.md"
 SORAFS_NODE_STORAGE = DOCS_SOURCE_DIR / "sorafs" / "sorafs_node_storage.md"
-SORAFS_NODE_PORTAL_DIR = REPO_ROOT / "docs" / "portal" / "docs" / "sorafs"
 SORAFS_AI_PRESCREEN_PLAN = DOCS_SOURCE_DIR / "sorafs_ai_prescreen_plan.md"
 SORAFS_APPEAL_PRICING_PLAN = DOCS_SOURCE_DIR / "sorafs_appeal_pricing_plan.md"
 SORAFS_CLI_DOC = DOCS_SOURCE_DIR / "sorafs_cli.md"
@@ -431,7 +429,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "ReplicationOrderInstructionValidation.java",
     REPO_ROOT / "ci" / "check_agents_guardrails.sh",
     REPO_ROOT / "ci" / "check_connect_norito_bridge_header.sh",
-    REPO_ROOT / "ci" / "check_docs_portal.sh",
     REPO_ROOT / "ci" / "check_soranet_privacy_guard.sh",
     REPO_ROOT / "configs" / "soranexus" / "taira" / "check_sorafs_rollout.sh",
     REPO_ROOT
@@ -838,47 +835,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-GENERATED_I18N_STUB_HEADER_RE = re.compile(
-    r"<!-- Auto-generated stub for [^<>\r\n]+ "
-    r"\((?P<lang>[a-z0-9-]+)\) translation\. "
-    r"Replace this content with the full translation\. -->\n\n"
-)
-
-
-def parse_localized_markdown_front_matter(
-    source: str,
-) -> tuple[dict[str, str], str, str | None]:
-    """Parse the single shallow front-matter block used by localized docs."""
-
-    delimiters = list(re.finditer(r"(?m)^---$", source))
-    if len(delimiters) != 2:
-        return {}, "", f"expected 2 front-matter delimiters, found {len(delimiters)}"
-
-    start, end = delimiters
-    prefix = source[: start.start()]
-    if start.end() >= len(source) or source[start.end()] != "\n":
-        return {}, prefix, "opening front-matter delimiter is not newline terminated"
-    if end.end() >= len(source) or source[end.end()] != "\n":
-        return {}, prefix, "closing front-matter delimiter is not newline terminated"
-
-    metadata: dict[str, str] = {}
-    metadata_text = source[start.end() + 1 : end.start()]
-    for line in metadata_text.splitlines():
-        if not line or line.lstrip().startswith("#"):
-            continue
-        if ":" not in line:
-            return {}, prefix, f"malformed front-matter line {line!r}"
-        key, value = line.split(":", 1)
-        key = key.strip()
-        if not key or key in metadata:
-            return {}, prefix, f"duplicate or empty front-matter key {key!r}"
-        metadata[key] = value.strip().strip('"').strip("'")
-
-    if not source[end.end() + 1 :].lstrip():
-        return {}, prefix, "localized document body is empty"
-    return metadata, prefix, None
 
 
 def function_source(path: Path, function_name: str) -> str:
@@ -1813,7 +1769,6 @@ def test_active_sorafs_todo_scan_covers_ci_gate_entrypoints() -> None:
     required = {
         Path("ci/check_agents_guardrails.sh"),
         Path("ci/check_connect_norito_bridge_header.sh"),
-        Path("ci/check_docs_portal.sh"),
         Path("ci/check_soranet_privacy_guard.sh"),
     }
 
@@ -2118,7 +2073,6 @@ def test_sorafs_chunker_fixture_export_has_no_unsigned_bypass() -> None:
     canonical_docs = [
         *sorted((DOCS_SOURCE_DIR / "sorafs").rglob("*.md")),
         *sorted(DOCS_SOURCE_DIR.glob("sorafs_*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.rglob("*.md")),
     ]
     docs_with_unsigned_escape = [
         str(path.relative_to(REPO_ROOT))
@@ -2145,10 +2099,7 @@ def test_sorafs_chunker_fixture_export_has_no_unsigned_bypass() -> None:
         DOCS_SOURCE_DIR / "sorafs" / "chunker_conformance.md"
     )
     assert "--signing-key=<ed25519-private-key-hex>" in read(
-        SORAFS_NODE_PORTAL_DIR / "quickstart.md"
-    )
-    assert "--council-signature=<signerhex>:<signaturehex>" in read(
-        SORAFS_NODE_PORTAL_DIR / "quickstart.md"
+        DOCS_SOURCE_DIR / "sorafs" / "chunker_conformance.md"
     )
     assert docs_with_unsigned_escape == []
 
@@ -2188,7 +2139,6 @@ def test_sorafs_fetch_integrity_verification_is_mandatory() -> None:
         for path in [
             *sorted((DOCS_SOURCE_DIR / "sorafs" / "developer").glob("orchestrator_tuning*.md")),
             *sorted(DOCS_SOURCE_DIR.glob("sorafs_orchestrator_plan*.md")),
-            *sorted(SORAFS_NODE_PORTAL_DIR.glob("orchestrator-tuning*.md")),
         ]
         if "isolated fuzzing" in read(path)
     ]
@@ -4618,41 +4568,6 @@ def test_lane_collection_runners_pin_their_bundled_verifier(
 
     assert len(RUNNERS) == 17
     assert failures == {}
-
-
-def test_top_level_sorafs_plan_localized_hashes_match_source() -> None:
-    mismatches: dict[str, str | None] = {}
-    checked_sources = 0
-    checked_localized = 0
-    for source in sorted(DOCS_SOURCE_DIR.glob("sorafs*plan.md")):
-        localized_paths = sorted(DOCS_SOURCE_DIR.glob(f"{source.stem}.*.md"))
-        if not localized_paths:
-            continue
-        checked_sources += 1
-        expected = hashlib.sha256(source.read_bytes()).hexdigest()
-        for path in localized_paths:
-            checked_localized += 1
-            metadata, _, parse_error = parse_localized_markdown_front_matter(read(path))
-            relative_path = str(path.relative_to(REPO_ROOT))
-            if parse_error is not None:
-                mismatches[relative_path] = parse_error
-                continue
-            if metadata.get("source") != str(source.relative_to(REPO_ROOT)):
-                mismatches[relative_path] = "wrong-source"
-                continue
-
-            status = metadata.get("status")
-            actual = metadata.get("source_hash")
-            if status in {"complete", "needs-translation"} and actual != expected:
-                mismatches[relative_path] = actual
-            elif status == "needs-review" and actual == expected:
-                mismatches[relative_path] = "needs-review-current"
-            elif status not in {"complete", "needs-review", "needs-translation"}:
-                mismatches[relative_path] = status
-
-    assert checked_sources
-    assert checked_localized
-    assert mismatches == {}
 
 
 def test_rollout_evidence_gates_export_dry_run_field_contracts() -> None:
@@ -7213,13 +7128,8 @@ def test_sorafs_hedging_docs_do_not_reopen_generated_fixture_work() -> None:
     stale: dict[str, list[str]] = {}
     missing_current: list[str] = []
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_hedging_plan*.md")):
+    for path in (SORAFS_HEDGING_PLAN,):
         source = read(path)
-        if path != SORAFS_HEDGING_PLAN:
-            metadata, _, parse_error = parse_localized_markdown_front_matter(source)
-            assert parse_error is None, f"{path}: {parse_error}"
-            if metadata.get("status") == "needs-translation":
-                continue
         normalized = re.sub(r"\s+", " ", source)
         matched = [phrase for phrase in stale_phrases if phrase in normalized]
         if matched:
@@ -8584,63 +8494,6 @@ def test_sorafs_pin_register_sdk_guards_use_no_follow_source_reads() -> None:
     assert "return read_text_no_follow(root / path)" in swift_guard
 
 
-def test_sorafs_docs_portal_package_summary_uses_no_follow_read() -> None:
-    packager = read(REPO_ROOT / "ci" / "package_docs_portal_sorafs.sh")
-
-    assert "def read_open_flags() -> int" in packager
-    assert "def read_summary_lines_no_follow" in packager
-    assert 'getattr(os, "O_NOFOLLOW", 0)' in packager
-    assert "os.path.islink(path)" in packager
-    assert "os.lstat(path)" in packager
-    assert "stat.S_ISREG(path_stat.st_mode)" in packager
-    assert "os.open(path, read_open_flags())" in packager
-    assert "os.fstat(fd)" in packager
-    assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in packager
-    assert "for raw in read_summary_lines_no_follow(summary_path)" in packager
-    assert "with open(summary_path" not in packager
-    assert re.search(r"\bmanifest\s+sign(?:\s|$)", packager) is None
-    assert "manifest verify-signature" not in packager
-    assert "--identity-token" not in packager
-    assert "--sigstore-" not in packager
-    assert "manifest.bundle.json" not in packager
-    assert "sign the aggregate release manifest" in packager
-
-
-def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
-    pin_release = read(REPO_ROOT / "docs" / "portal" / "scripts" / "sorafs-pin-release.sh")
-
-    assert "def read_open_flags() -> int" in pin_release
-    assert "def write_open_flags() -> int" in pin_release
-    assert "def validate_descriptor_path" in pin_release
-    assert "def read_descriptor" in pin_release
-    assert "def write_descriptor" in pin_release
-    assert "def write_all(fd: int, chunk: bytes) -> None" in pin_release
-    assert "def sync_output_parent(" in pin_release
-    assert 'getattr(os, "O_NOFOLLOW", 0)' in pin_release
-    assert "path.lstat()" in pin_release
-    assert "stat.S_ISREG(path_stat.st_mode)" in pin_release
-    assert "os.open(path, read_open_flags())" in pin_release
-    assert "os.open(path, write_open_flags(), 0o666)" in pin_release
-    assert "os.fstat(fd)" in pin_release
-    assert "json.load(handle)" in pin_release
-    assert "json.dumps(payload, indent=2, allow_nan=False)" in pin_release
-    assert "written = os.write(fd, view)" in pin_release
-    assert "write_all(fd, rendered)" in pin_release
-    assert "os.fsync(fd)" in pin_release
-    assert "sync_output_parent(path)" in pin_release
-    assert "target.read_text" not in pin_release
-    assert "target.write_text" not in pin_release
-    assert ".read_text(" not in pin_release
-    assert ".write_text(" not in pin_release
-    assert "manifest verify-signature" not in pin_release
-    assert "manifest sign" not in pin_release
-    assert "--identity-token" not in pin_release
-    assert "--include-token" not in pin_release
-    assert "manifest.bundle.json" not in pin_release
-    assert "external-aggregate-release-manifest" in pin_release
-    assert "scripts/release_sorafs_cli.sh" in pin_release
-
-
 def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     release_cli = read(SCRIPTS_DIR / "release_sorafs_cli.sh")
     python_release_smoke_path = (
@@ -8713,7 +8566,6 @@ def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     release_script_roots = (
         REPO_ROOT / "ci",
         REPO_ROOT / "deploy",
-        REPO_ROOT / "docs" / "portal" / "scripts",
         REPO_ROOT / "python",
         SCRIPTS_DIR,
     )
@@ -15213,15 +15065,14 @@ def test_sorafs_hedging_rollout_runner_preflights_verifier_and_outputs() -> None
 
 
 def sorafs_rollout_gate_plan_scan_paths() -> list[Path]:
-    return sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan*.md"))
+    return sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.md"))
 
 
-def test_sorafs_rollout_gate_plan_scan_covers_localized_mirrors() -> None:
+def test_sorafs_rollout_gate_plan_scan_covers_canonical_plans() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in sorafs_rollout_gate_plan_scan_paths()}
 
     assert Path("specs/sorafs_pdp_plan.md") in scanned
-    assert Path("specs/sorafs_pdp_plan.ja.md") in scanned
-    assert Path("specs/sorafs_transparency_plan.zh-hans.md") in scanned
+    assert Path("specs/sorafs_transparency_plan.md") in scanned
 
 
 def test_sorafs_plan_docs_do_not_reopen_shipped_rollout_gates() -> None:
@@ -15290,7 +15141,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/por-verdict",
         "--features sorafs-storage",
     )
-    docs = (SORAFS_NODE_PLAN, SORAFS_NODE_PORTAL_DIR / "node-plan.md")
+    docs = (SORAFS_NODE_PLAN,)
     missing_routes: dict[str, list[str]] = {}
     stale: dict[str, list[str]] = {}
     unsupported: dict[str, list[str]] = {}
@@ -15441,13 +15292,7 @@ def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
         "/v1/sorafs/storage/manifest/{manifest_id_hex}",
         "/v1/sorafs/storage/plan/{manifest_id_hex}",
     )
-    # Localized files marked `needs-translation` are traceable stubs. Their
-    # freshness is enforced by the source-hash tests below; implementation
-    # route assertions belong to the two canonical English documents.
-    docs = (
-        SORAFS_NODE_STORAGE,
-        SORAFS_NODE_PORTAL_DIR / "node-storage.md",
-    )
+    docs = (SORAFS_NODE_STORAGE,)
     missing_routes: dict[str, list[str]] = {}
     stale: dict[str, list[str]] = {}
     openapi = read(TORII_OPENAPI_RS)
@@ -15494,31 +15339,18 @@ def unshipped_doc_command_matches(
 def sorafs_doc_command_scan_paths() -> list[Path]:
     paths: set[Path] = set(DOCS_SOURCE_DIR.glob("sorafs*.md"))
     nested_source = DOCS_SOURCE_DIR / "sorafs"
-    portal_i18n_root = REPO_ROOT / "docs" / "portal" / "i18n"
 
     if nested_source.exists():
         paths.update(nested_source.rglob("*.md"))
-    if SORAFS_NODE_PORTAL_DIR.exists():
-        paths.update(SORAFS_NODE_PORTAL_DIR.rglob("*.md"))
-    if portal_i18n_root.exists():
-        paths.update(
-            path
-            for path in portal_i18n_root.rglob("*.md")
-            if "sorafs" in path.parts
-        )
 
     return sorted(paths)
 
 
-def test_unshipped_doc_command_scan_covers_nested_and_portal_sorafs_docs() -> None:
+def test_unshipped_doc_command_scan_covers_canonical_sorafs_docs() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in sorafs_doc_command_scan_paths()}
 
     assert Path("specs/sorafs/pin_registry_plan.md") in scanned
-    assert Path("docs/portal/docs/sorafs/node-plan.md") in scanned
-    assert any(
-        path.parts[:3] == ("docs", "portal", "i18n") and "sorafs" in path.parts
-        for path in scanned
-    )
+    assert Path("specs/sorafs/sorafs_node_plan.md") in scanned
 
 
 def test_unshipped_doc_command_matcher_has_adversarial_negative_controls() -> None:
@@ -16577,15 +16409,11 @@ def test_unshipped_public_route_matcher_has_negative_controls() -> None:
     )
 
 
-def test_unshipped_public_route_doc_scan_covers_nested_and_portal_sorafs_docs() -> None:
+def test_unshipped_public_route_doc_scan_covers_canonical_sorafs_docs() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in sorafs_doc_command_scan_paths()}
 
     assert Path("specs/sorafs/pin_registry_plan.md") in scanned
-    assert Path("docs/portal/docs/sorafs/node-plan.md") in scanned
-    assert any(
-        path.parts[:3] == ("docs", "portal", "i18n") and "sorafs" in path.parts
-        for path in scanned
-    )
+    assert Path("specs/sorafs/sorafs_node_plan.md") in scanned
 
 
 def test_unshipped_public_routes_stay_warning_only() -> None:
@@ -17362,10 +17190,8 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_moderation_panel_plan*.md")):
+    for path in (SORAFS_MODERATION_PANEL_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
-        if "status: needs-translation" in normalized:
-            continue
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
@@ -18417,18 +18243,8 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reputation_plan*.md")):
+    for path in (SORAFS_REPUTATION_PLAN,):
         source = read(path)
-        if path != SORAFS_REPUTATION_PLAN:
-            metadata, _, parse_error = parse_localized_markdown_front_matter(source)
-            if parse_error is not None:
-                missing_current[str(path.relative_to(REPO_ROOT))] = [parse_error]
-                continue
-            if metadata.get("status") == "needs-translation":
-                # Regenerated localization stubs intentionally contain no
-                # canonical English rollout prose. Their source hashes are
-                # checked by the localization-contract tests below.
-                continue
         normalized = re.sub(r"\s+", " ", source)
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -19182,9 +18998,6 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    # Semantic rollout assertions belong to the canonical source. Localized
-    # mirrors may be traceable `needs-translation` stubs after that source
-    # changes; the metadata guards separately reject stale completed mirrors.
     for path in (SORAFS_POR_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
@@ -19504,11 +19317,9 @@ def test_retired_por_mutation_surface_is_absent_from_production_sources_and_docs
         SCRIPTS_DIR / "check_sorafs_por_rollout_evidence.py",
         SCRIPTS_DIR / "build_sorafs_por_canary.py",
         SCRIPTS_DIR / "examples" / "sorafs_por_scheduler_runtime_canary.args.example",
-        REPO_ROOT / "docs" / "portal" / "static" / "openapi" / "torii.json",
+        REPO_ROOT / "artifacts" / "openapi" / "torii.json",
         REPO_ROOT
-        / "docs"
-        / "portal"
-        / "static"
+        / "artifacts"
         / "openapi"
         / "versions"
         / "current"
@@ -19521,8 +19332,6 @@ def test_retired_por_mutation_surface_is_absent_from_production_sources_and_docs
         *sorted(DOCS_SOURCE_DIR.glob("sorafs_por_validator_plan*.md")),
         *sorted((DOCS_SOURCE_DIR / "sorafs").glob("sorafs_node_plan*.md")),
         *sorted((DOCS_SOURCE_DIR / "sorafs").glob("storage_capacity_marketplace*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.glob("node-plan*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.glob("storage-capacity-marketplace*.md")),
         REPO_ROOT / "javascript" / "iroha_js" / "README.md",
         REPO_ROOT / "python" / "iroha_python" / "README.md",
     )
@@ -19827,19 +19636,7 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_potr_plan*.md")):
-        if path != SORAFS_POTR_PLAN:
-            metadata, _, parse_error = parse_localized_markdown_front_matter(
-                read(path)
-            )
-            if parse_error is not None:
-                missing_current[str(path.relative_to(REPO_ROOT))] = [parse_error]
-                continue
-            if metadata.get("status") == "needs-translation":
-                # A freshly regenerated localization stub deliberately contains
-                # no canonical English rollout prose. Its generated header,
-                # metadata, and current source hash are checked below.
-                continue
+    for path in (SORAFS_POTR_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path).replace("> ", ""))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -21290,19 +21087,7 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_pdp_plan*.md")):
-        if path != SORAFS_PDP_PLAN:
-            metadata, _, parse_error = parse_localized_markdown_front_matter(
-                read(path)
-            )
-            if parse_error is not None:
-                missing_current[str(path.relative_to(REPO_ROOT))] = [parse_error]
-                continue
-            if metadata.get("status") == "needs-translation":
-                # A freshly regenerated localization stub deliberately contains
-                # no canonical English rollout prose. Its generated header,
-                # metadata, and current source hash are checked below.
-                continue
+    for path in (SORAFS_PDP_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -21810,10 +21595,8 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_governance_dag_plan*.md")):
+    for path in (SORAFS_GOVERNANCE_DAG_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
-        if "status: needs-translation" in normalized:
-            continue
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
@@ -22268,10 +22051,6 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    # Localized mirrors can intentionally be traceable `needs-translation`
-    # stubs after the canonical contract changes. Semantic contract assertions
-    # belong to the authoritative source; metadata tests below prevent stale
-    # completed translations from masquerading as current.
     for path in (SORAFS_ORDERBOOK_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
@@ -23013,13 +22792,8 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_hedging_plan*.md")):
+    for path in (SORAFS_HEDGING_PLAN,):
         source = read(path)
-        if path != SORAFS_HEDGING_PLAN:
-            metadata, _, parse_error = parse_localized_markdown_front_matter(source)
-            assert parse_error is None, f"{path}: {parse_error}"
-            if metadata.get("status") == "needs-translation":
-                continue
         normalized = re.sub(r"\s+", " ", source)
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -23730,11 +23504,9 @@ def test_shipped_hedging_billing_service_surface_is_exact_and_authenticated() ->
 
     expected_routes = dict(SHIPPED_HEDGING_BILLING_ROUTES)
     for spec_path in (
-        REPO_ROOT / "docs" / "portal" / "static" / "openapi" / "torii.json",
+        REPO_ROOT / "artifacts" / "openapi" / "torii.json",
         REPO_ROOT
-        / "docs"
-        / "portal"
-        / "static"
+        / "artifacts"
         / "openapi"
         / "versions"
         / "current"
@@ -24068,7 +23840,7 @@ def test_commit_reveal_docs_do_not_reopen_process_local_ballot_authority() -> No
     stale: dict[str, list[str]] = {}
     missing: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_commit_reveal_plan*.md")):
+    for path in (SORAFS_COMMIT_REVEAL_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
         missing_current = [
@@ -24760,10 +24532,8 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     stale: dict[str, list[str]] = {}
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_appeal_pricing_plan*.md")):
+    for path in (SORAFS_APPEAL_PRICING_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
-        if "status: needs-translation" in normalized:
-            continue
         matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
         missing = [phrase for phrase in current_phrases if phrase not in normalized]
         if matched_stale:
@@ -25997,10 +25767,8 @@ def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -
     stale: dict[str, list[str]] = {}
     missing: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_gateway_compliance_plan*.md")):
+    for path in (SORAFS_GATEWAY_COMPLIANCE_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
-        if "status: needs-translation" in normalized:
-            continue
         matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
         missing_current = [
             phrase for phrase in required_current if phrase not in normalized
@@ -26035,10 +25803,8 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_gateway_compliance_plan*.md")):
+    for path in (SORAFS_GATEWAY_COMPLIANCE_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
-        if "status: needs-translation" in normalized:
-            continue
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
@@ -29331,84 +29097,6 @@ def test_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections() -> N
 
     assert "`proof_kind=pdp` is reserved for future SF-13 work" not in openapi
     assert "rejected as an unsupported proof kind" not in openapi
-
-
-def test_sorafs_localized_plan_mirrors_have_single_front_matter_block() -> None:
-    malformed: dict[str, str] = {}
-    localized_plan = re.compile(r"^sorafs_.+_plan\.[^.]+\.md$")
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.*.md")):
-        if localized_plan.match(path.name) is None:
-            continue
-        relative_path = str(path.relative_to(REPO_ROOT))
-        metadata, prefix, parse_error = parse_localized_markdown_front_matter(
-            read(path)
-        )
-        if parse_error is not None:
-            malformed[relative_path] = parse_error
-            continue
-
-        status = metadata.get("status")
-        if status == "needs-translation":
-            header_match = GENERATED_I18N_STUB_HEADER_RE.fullmatch(prefix)
-            if header_match is None:
-                malformed[relative_path] = "missing canonical generated-stub header"
-            elif header_match.group("lang") != metadata.get("lang"):
-                malformed[relative_path] = "generated-stub header language mismatch"
-            elif metadata.get("generator") != "scripts/sync_docs_i18n.py":
-                malformed[relative_path] = "unexpected generated-stub generator"
-            elif metadata.get("translation_last_reviewed") != "null":
-                malformed[relative_path] = (
-                    "generated stub must not claim translation review"
-                )
-        elif status in {"complete", "needs-review"}:
-            if prefix:
-                malformed[relative_path] = (
-                    "translated mirror retains generated-stub header"
-                )
-        else:
-            malformed[relative_path] = f"unsupported translation status {status}"
-
-    assert malformed == {}
-
-
-def test_sorafs_localized_plan_mirrors_match_source_hashes() -> None:
-    mismatches: dict[str, str] = {}
-    localized_plan = re.compile(r"^sorafs_.+_plan\.[^.]+\.md$")
-    hash_re = re.compile(r"[0-9a-f]{64}")
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.*.md")):
-        if localized_plan.match(path.name) is None:
-            continue
-        relative_path = str(path.relative_to(REPO_ROOT))
-        metadata, _, parse_error = parse_localized_markdown_front_matter(read(path))
-        if parse_error is not None:
-            mismatches[relative_path] = parse_error
-            continue
-        source_value = metadata.get("source")
-        recorded_hash = metadata.get("source_hash")
-        status = metadata.get("status")
-        if (
-            source_value is None
-            or recorded_hash is None
-            or status is None
-            or hash_re.fullmatch(recorded_hash) is None
-        ):
-            mismatches[relative_path] = "missing or malformed source metadata"
-            continue
-        source_path = REPO_ROOT / source_value
-        if not source_path.is_file():
-            mismatches[relative_path] = "source file missing"
-            continue
-        source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
-        if status in {"complete", "needs-translation"}:
-            if recorded_hash != source_hash:
-                mismatches[relative_path] = f"stale {status} mirror"
-        elif status == "needs-review":
-            if recorded_hash == source_hash:
-                mismatches[relative_path] = "needs-review mirror is not stale"
-        else:
-            mismatches[relative_path] = f"unsupported translation status {status}"
-
-    assert mismatches == {}
 
 
 def test_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection() -> None:

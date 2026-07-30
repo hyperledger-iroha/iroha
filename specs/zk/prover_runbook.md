@@ -134,6 +134,6 @@ source UID if necessary.
 
 - [ZK App API](../zk_app_api.md)
 - [ZK lifecycle (VK/proof flows)](lifecycle.md)
-- [Torii CLI smoke tests](../../../crates/iroha_cli/tests/cli_smoke.rs)
+- [Torii CLI smoke tests](../../crates/iroha_cli/tests/cli_smoke.rs)
 - [Telemetry overview](../telemetry.md)
-- [Roadmap – Milestone 4](../../../roadmap.md)
+- [Roadmap – Milestone 4](../../roadmap.md)

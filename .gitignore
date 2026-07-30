@@ -15,6 +15,18 @@ build_torii_shared.log
 build_integration.log
 build_all.log
 artifacts/*
+!artifacts/openapi/
+artifacts/openapi/*
+!artifacts/openapi/allowed_signers.json
+!artifacts/openapi/manifest.json
+!artifacts/openapi/torii.json
+!artifacts/openapi/versions.json
+!artifacts/openapi/versions/
+artifacts/openapi/versions/*
+!artifacts/openapi/versions/current/
+artifacts/openapi/versions/current/*
+!artifacts/openapi/versions/current/manifest.json
+!artifacts/openapi/versions/current/torii.json
 !artifacts/poseidon/
 !artifacts/poseidon/constants.ron
 !artifacts/sccp-bsc/
@@ -56,8 +68,6 @@ artifacts/android/attestation/*.srl
 !artifacts/offline_poseidon/**
 !artifacts/sorafs_gateway_dns/
 !artifacts/sorafs_gateway_dns/**
-!artifacts/docs_portal_preview/
-!artifacts/docs_portal_preview/**
 !artifacts/council_minutes/
 !artifacts/council_minutes/**
 traces/*
@@ -101,9 +111,7 @@ IrohaSwift/.swift-cache*
 IrohaSwift/.build*
 IrohaSwift/build/
 IrohaSwift/.codex-build/
-docs/portal/node_modules/
-docs/portal/build/
-docs/portal/.docusaurus/
+tools/openapi/node_modules/
 specs/da/_generated/threat_model_report.json
 
 # Developer-local caches and sandboxes

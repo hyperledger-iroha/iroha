@@ -2255,9 +2255,13 @@ pub fn v2_status_with_restart_required(restart_required: bool) -> Option<Sumerag
     })
 }
 
-/// Retain the current diagnostic snapshot while marking the runner terminally
-/// fail-closed. The snapshot is deliberately kept until an explicit restart
-/// clears and reconstructs the registry.
+/// Mark a valid current reducer snapshot as restart-required.
+///
+/// The process-wide output guard is activated by the runner before this local
+/// projection is attempted and remains authoritative for admission and public
+/// status. A malformed local projection is rejected without mutating the
+/// snapshot; readers still observe the already-latched process guard through
+/// [`v2_status_with_restart_required`].
 pub(crate) fn mark_v2_restart_required() {
     #[cfg(test)]
     let _guard = rbc_status_test_guard();
@@ -2369,7 +2373,7 @@ mod v2_liveness_watchdog_tests {
         begin_v2_successor_activation, classify_v2_liveness_blocker, clear_v2_status,
         mark_v2_restart_required, overlay_v2_effect_status, set_v2_effect_completion_observer,
         set_v2_effect_status, set_v2_network_ingress, set_v2_status_at,
-        update_v2_successor_work_stage_at, v2_status_at,
+        update_v2_successor_work_stage_at, v2_status_at, v2_status_with_restart_required,
     };
     use crate::sumeragi::{
         BlockMessage, FairV2Ingress, InboundBlockMessage,
@@ -3302,6 +3306,17 @@ mod v2_liveness_watchdog_tests {
             failed.liveness.work.successor_height,
             SumeragiV2LocalWorkStage::Running,
             "failure cannot fabricate successor completion"
+        );
+        let public = v2_status_with_restart_required(true)
+            .expect("process output guard must overlay the preserved local status");
+        assert!(
+            public.restart_required,
+            "the prelatched process output guard remains authoritative"
+        );
+        let local = v2_status_at(started_at).expect("local status remains visible");
+        assert!(
+            !local.restart_required,
+            "serving the process overlay must not rewrite rejected local state"
         );
         clear_v2_status();
     }

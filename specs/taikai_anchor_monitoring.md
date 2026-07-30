@@ -179,17 +179,16 @@ and sentinel file so governance reviewers can diff the packet quickly.
 
 ## Dashboard mirroring & drill cadence
 
-The SN13-C readiness gate requires two recurring actions: mirroring the Taikai
-viewer/cache dashboards into the operator portal and exercising the evidence
-drill on a predictable cadence.
+The SN13-C readiness gate requires two recurring actions: keeping public Taikai
+operator guidance current in `iroha-docs` and exercising the evidence drill on
+a predictable cadence.
 
-1. **Portal mirroring.** After each dashboard JSON update
+1. **Public documentation.** After each dashboard JSON update
    (`dashboards/grafana/taikai_viewer.json` and
-   `dashboards/grafana/taikai_cache.json`), publish the highlights to the portal
-   copy (`docs/portal/docs/sorafs/taikai-monitoring-dashboards.md`). Include the
-   SHA-256 digest of the JSON bundle in the portal PR description and call out
-   any new panels/thresholds so governance reviewers can diff the managed Grafana
-   folder against the repo version.
+   `dashboards/grafana/taikai_cache.json`), coordinate the public highlights in
+   the sibling `iroha-docs` repository. Include the SHA-256 digest of the JSON
+   bundle in that PR and call out any new panels or thresholds so governance
+   reviewers can diff the managed Grafana folder against the repository version.
 2. **Monthly drill cadence.**
    - Schedule the drill for the first Tuesday of every month at 15:00 UTC so it
      lands before the SN13 governance sync.

@@ -848,5 +848,5 @@ For cadence details and escalation procedures see:
 Operational expectations, SLAs, release evidence, and partner communication
 flows now live in `specs/sdk/swift/support_playbook.md`. Review that
 playbook before sharing pilot/GA builds so parity dashboards, telemetry
-redaction policy, reproducibility proofs, and localized docs stay aligned with
+redaction policy, reproducibility proofs, and public documentation stay aligned with
 `roadmap.md` (IOS8) and the weekly updates captured in `status.md`.

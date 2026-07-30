@@ -540,7 +540,7 @@ fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) ->
         .iter()
         .map(|validator| ManifestValidatorBinding {
             validator: validator.clone(),
-            peer_id: PeerId::from(validator.signatory().clone()),
+            peer_id: PeerId::from(validator.expect_single_signatory().clone()),
             torii_url: None,
         })
         .collect();

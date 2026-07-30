@@ -30,10 +30,16 @@ RELEASE_TARGET_RUNNERS: tuple[tuple[str, str], ...] = (
     ("macos-14", "aarch64-apple-darwin"),
     ("windows-latest", "x86_64-pc-windows-msvc"),
 )
+SUPPLY_CHAIN_SOURCE_TARGETS: tuple[str, ...] = (
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+)
 RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
-    "docs/portal/sidebars.js": ("'sorafs/release-rollback-yank'",),
-    "docs/portal/docs/sorafs/runbooks-index.md": (
-        "[`sorafs/release-rollback-yank`](./release-rollback-yank.md)",
+    "specs/sorafs/runbooks/index.md": (
+        "[Release rollback and yank](./release_rollback_yank.md)",
     ),
     "specs/sorafs_release_pipeline_plan.md": (
         "builds native Linux x86_64/aarch64",
@@ -42,12 +48,12 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "exactly the five expected target-triple checksum manifests",
         "The five-target CLI archive path is source-complete",
         "build, publish, and clean-install all six",
-        "`docs/portal/docs/sorafs/release-rollback-yank.md`",
+        "`specs/sorafs/runbooks/release_rollback_yank.md`",
         "`sorafs-release-authentication` environment",
         "`scripts/release_manifest_signing.py verify`",
         "never receives a private key or invokes a signer",
     ),
-    "docs/portal/docs/sorafs/release-rollback-yank.md": (
+    "specs/sorafs/runbooks/release_rollback_yank.md": (
         "# SoraFS Release Rollback and Yank",
         "`cargo yank --vers <version> <crate>`",
         "npm deprecate <package>@<version>",
@@ -59,10 +65,10 @@ RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
         "`withdrawn`, `not_published`, or `failed`",
         "Never reuse a withdrawn version",
     ),
-    "docs/portal/docs/sorafs/developer-releases.md": (
+    "specs/sorafs/developer/releases.md": (
         "sorafs-cli-vX.Y.Z",
         "all five native candidate archives",
-        "[SoraFS Release Rollback and Yank](./release-rollback-yank.md)",
+        "[SoraFS Release Rollback and Yank](../runbooks/release_rollback_yank.md)",
         "`SORAFS_RELEASE_MANIFEST_VERIFIER_PATH`",
         "No private key or HSM signing operation",
     ),
@@ -77,7 +83,7 @@ FORBIDDEN_RELEASE_DOCUMENT_CLAIMS: dict[str, tuple[str, ...]] = {
         "via cross",
         "exactly the three expected platform checksum manifests",
     ),
-    "docs/portal/docs/sorafs/developer-releases.md": (
+    "specs/sorafs/developer/releases.md": (
         "git tag -s sorafs-v",
         "invokes the script above",
     ),
@@ -165,10 +171,6 @@ RELEASE_AUTH_HISTORICAL_FINDINGS: dict[str, tuple[str, ...]] = {
         "The retired CLI path derived an ephemeral key from unverified OIDC token bytes",
         "Removed that CLI surface and all production callers",
     ),
-    "docs/portal/docs/sorafs/reports/sf6-security-review.md": (
-        "The retired CLI path derived an ephemeral key from unverified OIDC token bytes",
-        "Removed that CLI surface and all production callers",
-    ),
 }
 PACKAGE_RELEASE_SMOKE_SCRIPT = "python/iroha_python/scripts/release_smoke.sh"
 PACKAGE_RELEASE_SMOKE_REQUIRED_MARKERS: tuple[str, ...] = (
@@ -199,6 +201,41 @@ PACKAGE_RELEASE_SMOKE_FORBIDDEN_MARKERS: tuple[str, ...] = (
     "SHA256SUMS",
     "sign-blob",
 )
+REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS: dict[str, tuple[str, ...]] = {
+    "scripts/examples/sorafs_reference_sdk_release_supply_chain_canary.args.example": (
+        "--kind\nsupply_chain",
+        "--supply-chain-source-root",
+        "--provenance-certificate-identity",
+        "--provenance-oidc-issuer",
+        "--provenance-verification-public-key-hex",
+    ),
+    "scripts/examples/sorafs_reference_sdk_release_collection.args.example": (
+        "--require-kind release_archive,signed_manifest,supply_chain,"
+        "downstream_bindings,cookbook_smoke,ffi_header_contract,"
+        "governance_approval",
+        "--supply-chain-source-root",
+        "--provenance-certificate-identity",
+        "--provenance-oidc-issuer",
+        "--provenance-verification-public-key-hex",
+    ),
+    "scripts/examples/sorafs_reference_sdk_release_evidence.args.example": (
+        "--require-kind release_archive,signed_manifest,supply_chain,"
+        "downstream_bindings,cookbook_smoke,ffi_header_contract,"
+        "governance_approval",
+        "--supply-chain-source-root",
+        "--provenance-certificate-identity",
+        "--provenance-oidc-issuer",
+        "--provenance-verification-public-key-hex",
+    ),
+}
+REFERENCE_SDK_RELEASE_EXAMPLE_FORBIDDEN_MARKERS: dict[str, tuple[str, ...]] = {
+    "scripts/examples/sorafs_reference_sdk_release_supply_chain_canary.args.example": (
+        "--target",
+        "--sbom-index-digest-hex",
+        "--vulnerability-report-digest-hex",
+        "--provenance-bundle-digest-hex",
+    ),
+}
 GENERIC_OPENSSL_SIGNER_RE = re.compile(
     r"(?m)^[^\n]*\bopenssl[a-z0-9_]*\b(?:\.exe)?[^\n]*"
     r"(?:\bgenrsa\b|\bgenpkey\b|(?:^|\s)-sign(?:=|\s|$))[^\n]*$",
@@ -212,6 +249,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/check_sorafs_release_version_map.py",
         "scripts/check_sorafs_reference_sdk_release_evidence.py",
         "scripts/build_sorafs_reference_sdk_release_canary.py",
+        '- "scripts/build_sorafs_reference_sdk_supply_chain_sources.py"',
+        '- "scripts/sorafs_reference_sdk_supply_chain.py"',
         "scripts/run_sorafs_reference_sdk_release_evidence.py",
         "scripts/check_workflow_action_pins.py",
         '- "Dockerfile"',
@@ -236,6 +275,8 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "python3 -m pip install -r scripts/requirements.txt",
         "python3 scripts/check_workflow_action_pins.py",
         "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py",
+        '- "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py"',
+        '- "scripts/tests/sorafs_reference_sdk_supply_chain_test.py"',
         "run: bash ci/check_sorafs_cli_release.sh",
         "scripts/package_sorafs_validate_release.sh",
         "scripts/package_sorafs_cli_candidate.py",
@@ -261,7 +302,6 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "specs/release_dual_track_runbook*.md"',
         '- "specs/release_artifact_selection*.md"',
         '- "specs/sora_nexus_operator_onboarding*.md"',
-        '- "docs/portal/docs/nexus/nexus-operator-onboarding*.md"',
         '- "CHANGELOG.md"',
         '- "LICENSE"',
         "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
@@ -298,7 +338,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json",
         "name: Scan platform binary SBOM",
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}-vulnerabilities.sarif",
-        "docs/portal/docs/sorafs/release-rollback-yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md",
+        "specs/sorafs/runbooks/release_rollback_yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md",
         "cp CHANGELOG.md LICENSE artifacts/sorafs-cli/",
         "name: Rebuild deterministic platform archive and run clean-consumer smoke",
         "candidate-package-first.json",
@@ -339,6 +379,29 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sorafs-cli-release.yml@${GITHUB_REF}"',
         'certificate-oidc-issuer "https://token.actions.githubusercontent.com"',
         "id-token: write",
+        "name: Assemble and validate the canonical SF-11 source indexes",
+        "name: Build and gate source-derived SF-11 supply-chain evidence",
+        "expected one aggregate offline provenance bundle",
+        '"signed-input/github-attestations/${target}.json"',
+        'gh attestation verify "$provenance_file"',
+        "realpath -e --",
+        "SORAFS_TRUSTED_GH_CLI_SHA256: ${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
+        "name: Upload replay-complete SF-11 supply-chain evidence",
+        "sf11-source/",
+        "  reference-sdk-supply-chain-evidence:",
+        "needs: [release-gate, sign]",
+        "environment: sorafs-reference-sdk-evidence",
+        "SORAFS_REFERENCE_SDK_DEPLOYMENT_ID: ${{ vars.SORAFS_REFERENCE_SDK_DEPLOYMENT_ID }}",
+        "SORAFS_REFERENCE_SDK_RECEIPTS_ROOT: ${{ vars.SORAFS_REFERENCE_SDK_RECEIPTS_ROOT }}",
+        "SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX: ${{ vars.SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX }}",
+        "SORAFS_TRUSTED_GH_CLI_SHA256: ${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
+        "SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: ${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}",
+        "--external-receipts-root \"$SORAFS_REFERENCE_SDK_RECEIPTS_ROOT\"",
+        "--supply-chain-source-root sf11-source",
+        "--provenance-certificate-identity \"$certificate_identity\"",
+        "--provenance-oidc-issuer \"$oidc_issuer\"",
+        '"$SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX"',
+        "sf11-source/",
     ),
     ".github/workflows/sorafs-fixtures-nightly.yml": (
         'cron: "17 2 * * *"',
@@ -440,7 +503,10 @@ NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
 def _release_auth_document_paths(root: Path) -> tuple[str, ...]:
     """Return a bounded, no-follow release-auth document inventory."""
 
-    paths = list(RELEASE_AUTH_ROOT_DOCUMENTS)
+    paths = [
+        *RELEASE_AUTH_ROOT_DOCUMENTS,
+        *RELEASE_AUTH_HISTORICAL_FINDINGS,
+    ]
     docs_root = root / "docs"
     try:
         docs_metadata = docs_root.lstat()
@@ -609,6 +675,36 @@ def _validate_package_release_smoke(root: Path) -> list[str]:
             f"{PACKAGE_RELEASE_SMOKE_SCRIPT}: generic OpenSSL/RSA signing is "
             "forbidden in the smoke harness"
         )
+    return errors
+
+
+def _validate_reference_sdk_release_examples(root: Path) -> list[str]:
+    """Require source-bound SF-11 examples and reject retired manual inputs."""
+
+    errors: list[str] = []
+    for relative, markers in sorted(
+        REFERENCE_SDK_RELEASE_EXAMPLE_REQUIRED_MARKERS.items()
+    ):
+        path = _require_regular_repo_file(root, relative)
+        try:
+            source = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{relative}: reference-SDK release example must be UTF-8"
+            ) from error
+        for marker in markers:
+            if marker not in source:
+                errors.append(
+                    f"{relative}: missing source-bound example marker `{marker}`"
+                )
+        for marker in REFERENCE_SDK_RELEASE_EXAMPLE_FORBIDDEN_MARKERS.get(
+            relative,
+            (),
+        ):
+            if marker in source:
+                errors.append(
+                    f"{relative}: retired manual supply-chain marker `{marker}`"
+                )
     return errors
 
 
@@ -810,6 +906,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             "prepare-release-manifest",
             "verify-release-auth",
             "sign",
+            "reference-sdk-supply-chain-evidence",
         )
         if job_inventory != expected_job_inventory:
             errors.append(
@@ -845,6 +942,10 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
         prepare_job = _workflow_job(source, "prepare-release-manifest")
         auth_job = _workflow_job(source, "verify-release-auth")
         promotion_job = _workflow_job(source, "sign")
+        supply_chain_job = _workflow_job(
+            source,
+            "reference-sdk-supply-chain-evidence",
+        )
         promotion_guard = (
             "if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') "
             "|| inputs.sign_artifacts }}"
@@ -1014,6 +1115,257 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                     f"{relative}: release promotion must reconcile the downloaded "
                     "authenticated manifest with the exact candidate inventory"
                 )
+        if supply_chain_job is None:
+            errors.append(
+                f"{relative}: missing reference-SDK supply-chain evidence job"
+            )
+        else:
+            required_bindings = (
+                "SORAFS_REFERENCE_SDK_DEPLOYMENT_ID: "
+                "${{ vars.SORAFS_REFERENCE_SDK_DEPLOYMENT_ID }}",
+                "SORAFS_REFERENCE_SDK_RECEIPTS_ROOT: "
+                "${{ vars.SORAFS_REFERENCE_SDK_RECEIPTS_ROOT }}",
+                "SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX: "
+                "${{ vars.SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX }}",
+                "SORAFS_TRUSTED_GH_CLI_SHA256: "
+                "${{ vars.SORAFS_TRUSTED_GH_CLI_SHA256 }}",
+                "SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH: "
+                "${{ vars.SORAFS_L1_TOPOLOGY_QUALIFICATION_SUMMARY_PATH }}",
+            )
+            if promotion_guard not in supply_chain_job:
+                errors.append(
+                    f"{relative}: reference-SDK source evidence lacks the "
+                    "reviewed promotion trigger guard"
+                )
+            if "needs: [release-gate, sign]" not in supply_chain_job:
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must consume "
+                    "the authenticated signed release"
+                )
+            if "environment: sorafs-reference-sdk-evidence" not in supply_chain_job:
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must use its "
+                    "protected environment"
+                )
+            if (
+                "runs-on: [self-hosted, linux, x64, sorafs-release-auth]"
+                not in supply_chain_job
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must use the "
+                    "protected self-hosted release runner"
+                )
+            if any(binding not in supply_chain_job for binding in required_bindings):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence is missing an "
+                    "external receipt, topology, or public-key binding"
+                )
+            if "${{ secrets." in supply_chain_job:
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must not "
+                    "receive GitHub secrets"
+                )
+            if any(
+                marker in supply_chain_job
+                for marker in (
+                    "id-token:",
+                    "attestations:",
+                    "artifact-metadata:",
+                    "actions/attest@",
+                    "cosign sign-blob",
+                )
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must remain "
+                    "verification-only"
+                )
+            if any(
+                marker in supply_chain_job.lower()
+                for marker in (
+                    "private-key",
+                    "private_key",
+                    "--external-signer",
+                    "signing-seed",
+                    "signing_seed",
+                )
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must remain "
+                    "verification-only"
+                )
+            required_source_flags = (
+                "--supply-chain-source-root sf11-source",
+                "--provenance-certificate-identity \"$certificate_identity\"",
+                "--provenance-oidc-issuer \"$oidc_issuer\"",
+                "$SORAFS_PROVENANCE_VERIFICATION_PUBLIC_KEY_HEX",
+            )
+            if any(
+                marker not in supply_chain_job for marker in required_source_flags
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must pass the "
+                    "source root and exact public provenance trust tuple"
+                )
+            repeated_source_flags = (
+                '--provenance-certificate-identity "$certificate_identity"',
+                '--provenance-oidc-issuer "$oidc_issuer"',
+            )
+            if any(
+                supply_chain_job.count(marker) != 2
+                for marker in repeated_source_flags
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must pass the "
+                    "source root and exact public provenance trust tuple"
+                )
+            expected_commands = (
+                "python3 scripts/build_sorafs_reference_sdk_supply_chain_sources.py",
+                "python3 scripts/build_sorafs_reference_sdk_release_canary.py",
+                "python3 scripts/check_sorafs_reference_sdk_release_evidence.py",
+                'gh attestation verify "$provenance_file"',
+                "cosign verify-blob",
+                "sha256sum --check SHA256SUMS",
+            )
+            if any(
+                supply_chain_job.count(command) != 1
+                for command in expected_commands
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must assemble, "
+                    "build, verify, and provenance-check exactly once"
+                )
+            required_source_targets = re.search(
+                r"(?ms)^\s+required_targets=\(\n"
+                r"(?P<targets>.*?)^\s+\)$",
+                supply_chain_job,
+            )
+            if required_source_targets is None:
+                errors.append(
+                    f"{relative}: reference-SDK source evidence lacks the "
+                    "canonical five-target inventory"
+                )
+            else:
+                source_targets = tuple(
+                    line.strip()
+                    for line in required_source_targets.group("targets").splitlines()
+                    if line.strip()
+                )
+                if source_targets != SUPPLY_CHAIN_SOURCE_TARGETS:
+                    errors.append(
+                        f"{relative}: reference-SDK source evidence target "
+                        "inventory must match the canonical source order"
+                    )
+            required_provenance_files = re.search(
+                r"(?ms)^\s+provenance_files=\(\n"
+                r"(?P<files>.*?)^\s+\)$",
+                supply_chain_job,
+            )
+            expected_provenance_files = (
+                '"$archive"',
+                '"${candidate}/SHA256SUMS"',
+                '"${candidate}/sorafs-release.spdx.json"',
+                '"${candidate}/sorafs-release-vulnerabilities.sarif"',
+                '"${candidate}/sorafs-cli-${target}.spdx.json"',
+                '"${candidate}/sorafs-cli-${target}-vulnerabilities.sarif"',
+            )
+            if required_provenance_files is None:
+                errors.append(
+                    f"{relative}: reference-SDK source evidence lacks the "
+                    "exact six-file provenance inventory"
+                )
+            else:
+                provenance_files = tuple(
+                    line.strip()
+                    for line in required_provenance_files.group("files").splitlines()
+                    if line.strip()
+                )
+                if provenance_files != expected_provenance_files:
+                    errors.append(
+                        f"{relative}: reference-SDK source evidence provenance "
+                        "inventory must cover the exact checksum, archive, and "
+                        "scan files"
+                    )
+            for marker in (
+                "! -name '*.sigstore.json'",
+                "signed candidate SHA256SUMS contains duplicate entries",
+                "signed candidate SHA256SUMS does not cover the exact candidate file set",
+            ):
+                if supply_chain_job.count(marker) != 1:
+                    errors.append(
+                        f"{relative}: reference-SDK source evidence must "
+                        "reconcile the signed checksum manifest with the exact "
+                        "candidate inventory"
+                    )
+            if (
+                'actual_gh_sha256="$(sha256sum -- "$gh_path" | cut -d \' \' -f1)"'
+                not in supply_chain_job
+                or '[[ "$actual_gh_sha256" != "$SORAFS_TRUSTED_GH_CLI_SHA256" ]]'
+                not in supply_chain_job
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK source evidence must pin the "
+                    "GitHub attestation verifier by protected SHA-256"
+                )
+            if (
+                'workspace_real="$(realpath -e -- "$GITHUB_WORKSPACE")"'
+                not in supply_chain_job
+                or 'path_real="$(realpath -e -- "$path")"'
+                not in supply_chain_job
+                or '[[ "$path" != "$path_real" ]]'
+                not in supply_chain_job
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK external evidence paths must "
+                    "be canonicalized before workspace exclusion"
+                )
+            if (
+                "name: Upload replay-complete SF-11 supply-chain evidence"
+                not in supply_chain_job
+                or re.search(
+                    r"(?m)^\s{12}sf11-source/$",
+                    supply_chain_job,
+                )
+                is None
+            ):
+                errors.append(
+                    f"{relative}: reference-SDK evidence upload must retain "
+                    "the complete replay source tree"
+                )
+            try:
+                download_signed = supply_chain_job.index(
+                    "name: Download the authenticated signed release input"
+                )
+                require_external = supply_chain_job.index(
+                    "name: Require protected external source-evidence inputs"
+                )
+                verify_provenance = supply_chain_job.index(
+                    "name: Reverify exact target provenance before source assembly"
+                )
+                assemble_sources = supply_chain_job.index(
+                    "name: Assemble and validate the canonical SF-11 source indexes"
+                )
+                build_canary = supply_chain_job.index(
+                    "name: Build and gate source-derived SF-11 supply-chain evidence"
+                )
+                upload_evidence = supply_chain_job.index(
+                    "name: Upload replay-complete SF-11 supply-chain evidence"
+                )
+            except ValueError:
+                pass
+            else:
+                if not (
+                    download_signed
+                    < require_external
+                    < verify_provenance
+                    < assemble_sources
+                    < build_canary
+                    < upload_evidence
+                ):
+                    errors.append(
+                        f"{relative}: signed input, external trust, provenance "
+                        "verification, source assembly, gate, and upload are out "
+                        "of order"
+                    )
 
         package_matrix = re.search(
             r"(?ms)^  package:\n.*?^      matrix:\n"
@@ -1205,6 +1557,7 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
                 )
     errors.extend(_validate_release_auth_document_tree(root))
     errors.extend(_validate_package_release_smoke(root))
+    errors.extend(_validate_reference_sdk_release_examples(root))
     errors.extend(_validate_native_governance_sdk_contract(root))
     if errors:
         raise ValueError("; ".join(errors))

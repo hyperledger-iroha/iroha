@@ -27,7 +27,7 @@ each hash family contributes.
 3. **Policy snapshot (optional).** A lightweight manifest that lists every
    fingerprint already enforced by GAR/Ministry policy. The loader expects the
    schema shown below (see
-   [`fixtures/documentation/ministry/policy_snapshot_example.json`](../../examples/ministry/policy_snapshot_example.json)
+   [`fixtures/documentation/ministry/policy_snapshot_example.json`](../../fixtures/documentation/ministry/policy_snapshot_example.json)
    for a complete sample):
 
 ```json

@@ -5,7 +5,7 @@ summary: Governance and accountability framework for onboarding and operating SN
 
 # Sora Name Service Suffix Governance Charter
 
-> **Status:** Ratified by the council (Q2 2025) and enforced; localization is tracked separately, but registrar and dispute flows now follow this charter.
+> **Status:** Ratified by the council (Q2 2025) and enforced; registrar and dispute flows follow this charter.
 
 ## 1. Purpose & Scope
 
@@ -86,7 +86,8 @@ Non-compliance triggers corrective action plans; repeated misses allow guardians
 ## 10. Change Management
 
 - Charter revisions follow the same proposer thresholds unless explicitly categorized as “editorial”. Council maintains a backlog of requested clarifications in `specs/sns_suffix_governance_charter.md`.
-- Localized copies (he/ja) are regenerated once the English source stabilizes; translators must not alter semantics.
+- Public guides and translations are maintained in the sibling `iroha-docs`
+  repository and published at <https://docs.iroha.tech/>.
 
 ## 11. Regulatory Findings Integration
 

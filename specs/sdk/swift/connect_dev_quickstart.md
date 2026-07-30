@@ -1,5 +1,10 @@
 <!-- Keep this guide short and task-focused for iOS/macOS SDK developers. -->
 
+---
+title: IrohaSwift Connect Developer Quickstart
+summary: Source-coupled setup notes for Connect transport and offline queue flows.
+---
+
 # IrohaSwift developer quickstart (Connect + offline)
 
 This guide shows how to wire the Swift SDK into an iOS/macOS app, enable the Norito bridge, and cover offline queue/journal flows.
