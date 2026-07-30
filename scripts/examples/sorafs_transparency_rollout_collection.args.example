@@ -1,4 +1,5 @@
-# Example arguments for the SFM-4c transparency rollout evidence collection planner.
+# Example arguments for the production SFM-4c transparency rollout evidence
+# collection planner.
 # Run with:
 #   python3 scripts/run_sorafs_transparency_rollout_evidence.py \
 #     @scripts/examples/sorafs_transparency_rollout_collection.args.example \
@@ -7,22 +8,23 @@
 # Keep signing keys, bearer tokens, raw source-entry payloads, proof-token
 # frames, response bodies, and operator secrets in runtime-only files. This
 # example passes only the path to a runtime client config and payload-free
-# canary request files.
+# canary request files. The reserved .example origin is shape-only; use the
+# operator-reviewed production origin for a genuine collection.
 
 --iroha-bin
-target/debug/iroha
+iroha
 --iroha-arg=--config
---iroha-arg=/runtime/sorafs-transparency-client.toml
+--iroha-arg=/runtime/sorafs/production/transparency-client.toml
 --torii-url
-https://torii.example.invalid
+https://transparency.sorafs.example
 --deployment-id
-transparency-staging-a
+sorafs-mainnet-2026-07
 --environment
-staging
+production
 --out-dir
-artifacts/sorafs/transparency/staged
+artifacts/sorafs/transparency/production
 --summary-out
-artifacts/sorafs/transparency/staged/rollout-summary.json
+artifacts/sorafs/transparency/production/rollout-summary.json
 --now-unix
 1800400000
 --max-evidence-age-secs
@@ -32,25 +34,26 @@ artifacts/sorafs/transparency/staged/rollout-summary.json
 --timeout-secs
 30
 --source-entry
-gar-enforcement-receipt=/runtime/sft/gar.json
+gar-enforcement-receipt=/runtime/sorafs/production/transparency/gar.json
 --source-entry
-moderation-ballot-governance-event=/runtime/sft/moderation-ballot.json
+moderation-ballot-governance-event=/runtime/sorafs/production/transparency/moderation-ballot.json
 --source-entry
-appeal-finance-report=/runtime/sft/appeal-report.json
+appeal-finance-report=/runtime/sorafs/production/transparency/appeal-report.json
 --source-entry
-appeal-finance-settlement-receipt=/runtime/sft/appeal-settlement.json
+appeal-finance-settlement-receipt=/runtime/sorafs/production/transparency/appeal-settlement.json
 --source-entry
-legal-hold-notice=/runtime/sft/legal-hold.json
+legal-hold-notice=/runtime/sorafs/production/transparency/legal-hold.json
 --source-entry
-redaction-notice=/runtime/sft/redaction.json
+redaction-notice=/runtime/sorafs/production/transparency/redaction.json
 --source-entry
-evidence-access-summary=/runtime/sft/evidence-access.json
+evidence-access-summary=/runtime/sorafs/production/transparency/evidence-access.json
 --privacy-source-event
-/runtime/sft/privacy-source-event.json
+/runtime/sorafs/production/transparency/privacy-source-event.json
 --privacy-publish-due
-/runtime/sft/privacy-publish-due.json
+/runtime/sorafs/production/transparency/privacy-publish-due.json
 --proof-token-issuance
-/runtime/sft/proof-token-issuance.json
+/runtime/sorafs/production/transparency/proof-token-issuance.json
 --cycle-id
 4f1d2c3b5a69788796a5b4c3d2e1f0aa
---topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--topology-qualification-summary
+artifacts/sorafs/production-readiness/l1-topology-qualification.json

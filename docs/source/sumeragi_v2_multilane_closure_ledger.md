@@ -311,9 +311,12 @@ persistence and idempotent startup/replay repair in durability order. Pruned
 bodies remain verifiable through QC-authenticated manifest evidence; weaker
 hash-only evidence remains fail-closed. The Kura namespace contains one
 immutable versioned manifest file and one immutable versioned receipt file per
-participant height, followed by a descriptor-bound, replaceable exact-latest
-pointer. Publication uses create-new temporaries, no-clobber promotion, file
-and directory durability sync, and exact readback.
+participant height, followed by a version-2 route/incarnation- and
+application-identity-bound replaceable exact-latest pointer. The pointer binds
+the executed-wire, finality-artifact, and manifest-artifact hashes and startup
+accepts it only when the exact retained receipt or QC-authenticated manifest
+backs every field. Publication uses create-new temporaries, no-clobber
+promotion, file and directory durability sync, and exact readback.
 
 **Closure condition.** Persist finality plus the immutable per-height manifest
 first, then the matching immutable per-height receipt and exact-latest pointer,
@@ -356,10 +359,14 @@ application.
 **Evidence:** Open.
 
 **Production map.** Kura persists immutable versioned manifest and receipt
-files keyed by participant height. A separate route/incarnation-bound,
-descriptor-bound latest pointer is replaceable derived state used for bounded
-exact lookup and explicitly reconstructed through
+files keyed by participant height. A separate version-2 route/incarnation-,
+descriptor-, application-, executed-wire-, finality-, and manifest-bound latest
+pointer is replaceable derived state used for bounded exact lookup and
+explicitly reconstructed through
 `Kura::rebuild_native_amx_participant_receipt_latest_indexes_on_startup`.
+Startup rejects legacy V1 filenames and any current pointer not backed by its
+exact retained receipt or QC-authenticated manifest, including binding drift
+while the receipt is missing.
 `Kura::ensure_first_release_lane_retirement_admissible_locked` in
 `crates/iroha_core/src/kura/lane_geometry.rs` recognizes, accounts, validates,
 archives, and purges the per-height manifests and receipts plus the exact-latest
@@ -1092,8 +1099,8 @@ identical temporary), reservation duplication, base-state mismatch, bounded
 fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 277 exact, non-ignored multilane focus
-tests: 101 core multilane tests, 119 core queue-journal tests, seven
+The release runner now inventories 280 exact, non-ignored multilane focus
+tests: 104 core multilane tests, 119 core queue-journal tests, seven
 configuration tests, eight in `iroha_data_model`, 39 in Torii, one in
 Torii-shared, and two in the integration support library. That source
 inventory is not a passing test transcript; the full focused rerun and

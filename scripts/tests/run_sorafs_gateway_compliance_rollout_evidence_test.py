@@ -27,6 +27,10 @@ def load_module(name: str, path: Path):
 MODULE = load_module("gateway_compliance_runner", RUNNER_PATH)
 FIXTURES = load_module("gateway_compliance_runner_fixtures", FIXTURES_PATH)
 
+from sorafs_rollout_runner_test_support import (  # noqa: E402
+    write_topology_qualification,
+)
+
 
 def write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,6 +52,13 @@ def base_args(root: Path, *, dry_run: bool = False) -> list[str]:
         str(root / "output"),
         "--now-unix",
         str(FIXTURES.NOW),
+        "--topology-qualification-summary",
+        str(
+            write_topology_qualification(
+                root / "topology-qualification.json",
+                deployment_id="sorafs-gateway-release-42",
+            )
+        ),
         *evidence_args(root / "inputs"),
     ]
     if dry_run:

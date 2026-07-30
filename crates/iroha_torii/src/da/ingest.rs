@@ -290,8 +290,8 @@ pub async fn handler_post_da_ingest(
         manifest,
         enforced_retention,
         retention_mismatch,
-        taikai_ssm_payload: mut taikai_ssm_payload,
-        taikai_trm_payload: mut taikai_trm_payload,
+        mut taikai_ssm_payload,
+        mut taikai_trm_payload,
         queued_at_secs,
     } = computed;
 
@@ -365,8 +365,6 @@ pub async fn handler_post_da_ingest(
             let compute_telemetry = telemetry.clone();
             let (
                 request,
-                canonical,
-                chunk_store,
                 manifest,
                 pdp_commitment,
                 pdp_commitment_bytes,
@@ -401,8 +399,6 @@ pub async fn handler_post_da_ingest(
                 let pdp_header_value = pdp_commitment_header_value(&pdp_commitment_bytes)?;
                 Ok(Ok((
                     request,
-                    canonical,
-                    chunk_store,
                     manifest,
                     pdp_commitment,
                     pdp_commitment_bytes,

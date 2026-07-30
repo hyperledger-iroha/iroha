@@ -2,6 +2,8 @@
 # This checked-in example is intentionally non-runnable and contains no key.
 prepare
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--resilience-qualification-summary artifacts/sorafs/production-readiness/l1-resilience-qualification.json
+--resilience-qualification-signer-public-key-hex <TRUSTED-RESILIENCE-ED25519-PUBLIC-KEY-HEX>
 --deployment-id <REVIEWED-PRODUCTION-DEPLOYMENT-ID>
 --environment production
 --generated-at-unix <REVIEWED-ENVELOPE-UNIX>
@@ -12,15 +14,15 @@ prepare
 # For release sequences after 1, add:
 # --previous-envelope <EXACT-PREVIOUS-FINALIZED-ENVELOPE>
 --trusted-public-key-hex <TRUSTED-ED25519-PUBLIC-KEY-HEX>
---prerequisite SFM-1:<SFM-1-EVIDENCE-SHA256>:<SFM-1-EVIDENCE-UNIX>
---prerequisite SF-1:<SF-1-EVIDENCE-SHA256>:<SF-1-EVIDENCE-UNIX>
---prerequisite SF-2:<SF-2-EVIDENCE-SHA256>:<SF-2-EVIDENCE-UNIX>
---prerequisite SF-2c:<SF-2C-EVIDENCE-SHA256>:<SF-2C-EVIDENCE-UNIX>
---prerequisite SF-3:<SF-3-EVIDENCE-SHA256>:<SF-3-EVIDENCE-UNIX>
---prerequisite SF-4:<SF-4-EVIDENCE-SHA256>:<SF-4-EVIDENCE-UNIX>
---prerequisite SF-5b:<SF-5B-EVIDENCE-SHA256>:<SF-5B-EVIDENCE-UNIX>
---prerequisite SF-6:<SF-6-EVIDENCE-SHA256>:<SF-6-EVIDENCE-UNIX>
---prerequisite SF-8a:<SF-8A-EVIDENCE-SHA256>:<SF-8A-EVIDENCE-UNIX>
+--prerequisite SFM-1=<SFM-1-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-1=<SF-1-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-2=<SF-2-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-2c=<SF-2C-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-3=<SF-3-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-4=<SF-4-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-5b=<SF-5B-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-6=<SF-6-EVIDENCE-PACKAGE-MANIFEST-JSON>
+--prerequisite SF-8a=<SF-8A-EVIDENCE-PACKAGE-MANIFEST-JSON>
 --lane-summary ai_prescreen=<AI-PRESCREEN-READY-SUMMARY-JSON>
 --lane-summary appeal_finance=<APPEAL-FINANCE-READY-SUMMARY-JSON>
 --lane-summary gateway_compliance=<GATEWAY-COMPLIANCE-READY-SUMMARY-JSON>

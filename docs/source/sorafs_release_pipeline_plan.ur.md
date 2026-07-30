@@ -6,7 +6,7 @@ direction: rtl
 source: docs/source/sorafs_release_pipeline_plan.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 3cf97e7c532532c0ae9a6e1f5da066a481c3fe041d413f66d6297aeddbc0d27a
+source_hash: 4f976d198d56b1270a49d57a8a4adab425932bc17d1fa40d667bb28705e86379
 source_last_modified: "2026-07-25T16:37:50.761316+00:00"
 translation_last_reviewed: null
 ---

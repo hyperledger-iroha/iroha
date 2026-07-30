@@ -3524,6 +3524,7 @@ mod tests {
     };
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
+        account::{AccountDetails, AccountValue},
         domain::{Domain, DomainId},
         identifier::IdentifierPolicyId,
         isi::{Instruction, InstructionBox, Log, Register, ram_lfe::RegisterRamLfeProgramPolicy},
@@ -3568,6 +3569,15 @@ mod tests {
         .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         (signed, accepted)
+    }
+
+    fn world_with_alice() -> World {
+        let mut world = World::new();
+        world.accounts.insert(
+            (*ALICE_ID).clone(),
+            AccountValue::new(AccountDetails::default()),
+        );
+        world
     }
 
     fn install_active_single_lane_nexus(state: &State) {
@@ -4004,7 +4014,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         };
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -6564,7 +6574,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         };
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
 
         let first_dataspace = DataSpaceId::new(7);
         let second_dataspace = DataSpaceId::new(8);
@@ -6683,7 +6693,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             gossip_tick: 0,
             gossip_deferred: vec![

@@ -1,0 +1,7 @@
+# Copy this file to the reviewed runtime evidence directory.
+# The positive promotion argument file must be accepted by the pinned
+# run_sorafs_production_readiness.py runner and must not contain --dry-run.
+--promotion-args-file /runtime/evidence/sorafs-production-readiness-collection.args
+# The parent must already exist, be owned by the invoking user, and must not be
+# group- or world-writable. The destination itself must be new.
+--archive-out-dir /runtime/evidence/sorafs-negative-promotion-archive

@@ -940,9 +940,9 @@ def _validate_apalache_gate(root: Path, errors: list[str]) -> None:
             "| Native application evidence | `multilane_native_application_evidence_fixed.cfg` | 5 |",
             "| autonomous reservation/carrier | `multilane_autonomous_reservation_carrier_fixed.cfg` | 10 |",
             "| QueuePlan admission registry | `multilane_queue_plan_admission_registry_fixed.cfg` | 8 |",
-            "they are not TLAPS",
+            "not independent ledger rows, TLAPS evidence",
             "cross-tool proof evidence",
-            "do not change proof-ledger status",
+            "changes no proof-ledger status",
         ):
             if token not in readme_source:
                 errors.append(

@@ -10254,12 +10254,14 @@ where
 {
     use std::io::Cursor;
 
-    // Canonical frames are always uncompressed and use the fixed default
-    // layout. Reject either condition from the fixed-size header before a
-    // forged uncompressed-length field can reserve a decompression buffer or
-    // an alternate layout can influence reconstruction.
+    // Canonical frames are always uncompressed. Header flags are
+    // value-dependent because the encoder removes dynamic layout flags that
+    // the concrete value did not use, so validate the advertised combination
+    // here and let the exact re-encode comparison below enforce the canonical
+    // value-specific flag set.
     let header = core::Header::read(Cursor::new(bytes))?;
-    if header.compression != Compression::None || header.flags != core::default_encode_flags() {
+    if header.compression != Compression::None || core::validate_header_flags(header.flags).is_err()
+    {
         return Err(Error::NonCanonicalEncoding);
     }
 
@@ -10290,6 +10292,20 @@ where
 #[cfg(test)]
 mod canonical_codec_tests {
     use super::*;
+
+    #[test]
+    fn canonical_scalar_and_unit_roundtrip() {
+        let scalar = encode_canonical(&1_u8).expect("encode canonical scalar");
+        assert_eq!(
+            decode_canonical_with_limits::<u8>(&scalar, canonical_decode_limits(scalar.len()),)
+                .expect("decode canonical scalar"),
+            1
+        );
+
+        let unit = encode_canonical(&()).expect("encode canonical unit");
+        decode_canonical_with_limits::<()>(&unit, canonical_decode_limits(unit.len()))
+            .expect("decode canonical unit");
+    }
 
     #[test]
     fn generic_canonical_decode_rejects_forged_sequence_length() {

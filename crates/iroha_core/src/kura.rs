@@ -1207,9 +1207,9 @@ const NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE: &str =
     "native_amx_evidence_prune_intent_v1.norito.tmp";
 const NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT: usize = 10;
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE: &str =
-    "native_amx_participant_receipts.latest_v1.norito";
+    "native_amx_participant_receipts.latest_v2.norito";
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE: &str =
-    "native_amx_participant_receipts.latest_v1.norito.tmp";
+    "native_amx_participant_receipts.latest_v2.norito.tmp";
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES: usize = 4 * 1024;
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
@@ -27377,7 +27377,7 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
 /// avoid reverse history scans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
-struct NativeAmxParticipantReceiptLatestIndexV1 {
+struct NativeAmxParticipantReceiptLatestIndexV2 {
     version: u8,
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -27387,7 +27387,9 @@ struct NativeAmxParticipantReceiptLatestIndexV1 {
     participant_settlement_hash: HashOf<LaneBlockCommitment>,
     application_block_height: u64,
     application_block_hash: HashOf<BlockHeader>,
-    receipt_digest: Hash,
+    executed_block_wire_hash: Hash,
+    finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,
 }
 
 /// Startup-only classification for a retained Native AMX participant receipt.
@@ -27407,13 +27409,12 @@ enum NativeAmxParticipantReceiptStartupEvidence {
     PendingManifestRepair,
 }
 
-impl NativeAmxParticipantReceiptLatestIndexV1 {
-    const VERSION: u8 = 1;
+impl NativeAmxParticipantReceiptLatestIndexV2 {
+    const VERSION: u8 = 2;
 
-    fn from_receipt(receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> Result<Self> {
+    fn from_receipt(receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> Self {
         let descriptor = &receipt.participant_proposal.descriptor;
-        let bytes = receipt.encode_framed()?;
-        Ok(Self {
+        Self {
             version: Self::VERSION,
             lane_id: descriptor.lane_id,
             dataspace_id: descriptor.dataspace_id,
@@ -27423,15 +27424,32 @@ impl NativeAmxParticipantReceiptLatestIndexV1 {
             participant_settlement_hash: receipt.participant_settlement_hash,
             application_block_height: receipt.application_block_height,
             application_block_hash: receipt.application_block_hash,
-            receipt_digest: Hash::new(bytes),
-        })
+            executed_block_wire_hash: receipt.executed_block_wire_hash,
+            finality_artifact_hash: receipt.finality_artifact_hash,
+            manifest_artifact_hash: receipt.manifest_artifact_hash,
+        }
     }
 
     fn matches_receipt(&self, receipt: &NativeAmxParticipantApplicationReceiptArtifact) -> bool {
-        let Ok(expected) = Self::from_receipt(receipt) else {
-            return false;
-        };
-        *self == expected
+        *self == Self::from_receipt(receipt)
+    }
+
+    fn matches_manifest(
+        &self,
+        manifest: &NativeAmxParticipantApplicationManifestArtifactV1,
+    ) -> bool {
+        let leaf = &manifest.leaf;
+        self.lane_id == leaf.lane_id
+            && self.dataspace_id == leaf.dataspace_id
+            && self.lane_incarnation == leaf.lane_incarnation
+            && self.lane_block_height == leaf.participant_height
+            && self.participant_proposal_hash == leaf.proposal_hash
+            && self.participant_settlement_hash == leaf.settlement_hash
+            && self.application_block_height == leaf.application_block_height
+            && self.application_block_hash == leaf.application_block_hash
+            && self.executed_block_wire_hash == leaf.executed_block_wire_hash
+            && self.finality_artifact_hash == manifest.finality_artifact_hash
+            && self.manifest_artifact_hash == HashOf::new(manifest)
     }
 }
 
@@ -28709,9 +28727,9 @@ impl Kura {
     }
 
     fn validate_native_amx_participant_receipt_latest_index(
-        latest: &NativeAmxParticipantReceiptLatestIndexV1,
+        latest: &NativeAmxParticipantReceiptLatestIndexV2,
     ) -> std::result::Result<(), &'static str> {
-        if latest.version != NativeAmxParticipantReceiptLatestIndexV1::VERSION {
+        if latest.version != NativeAmxParticipantReceiptLatestIndexV2::VERSION {
             return Err("unsupported Native AMX participant latest-index version");
         }
         if latest.lane_block_height == 0 || latest.application_block_height == 0 {
@@ -28725,7 +28743,15 @@ impl Kura {
                 Hash::from(latest.application_block_hash),
                 "application block",
             ),
-            (latest.receipt_digest, "receipt digest"),
+            (latest.executed_block_wire_hash, "executed block wire"),
+            (
+                Hash::from(latest.finality_artifact_hash),
+                "finality artifact",
+            ),
+            (
+                Hash::from(latest.manifest_artifact_hash),
+                "manifest artifact",
+            ),
         ] {
             if hash.as_ref().iter().all(|byte| *byte == 0) {
                 return Err(match label {
@@ -28735,7 +28761,13 @@ impl Kura {
                     "application block" => {
                         "Native AMX participant latest index has zero application block hash"
                     }
-                    _ => "Native AMX participant latest index has zero receipt digest",
+                    "executed block wire" => {
+                        "Native AMX participant latest index has zero executed block wire hash"
+                    }
+                    "finality artifact" => {
+                        "Native AMX participant latest index has zero finality artifact hash"
+                    }
+                    _ => "Native AMX participant latest index has zero manifest artifact hash",
                 });
             }
         }
@@ -28754,7 +28786,7 @@ impl Kura {
         &self,
         entry: &LaneConfigEntry,
         path: &Path,
-    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV1>> {
+    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV2>> {
         self.decode_native_amx_participant_receipt_latest_index_for_route(
             entry.lane_id,
             entry.dataspace_id,
@@ -28767,7 +28799,7 @@ impl Kura {
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
         path: &Path,
-    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV1>> {
+    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV2>> {
         let Some(directory) = path.parent() else {
             return Err(Self::invalid_lane_artifact_error(
                 path.to_path_buf(),
@@ -28796,8 +28828,8 @@ impl Kura {
         dataspace_id: DataSpaceId,
         path: &Path,
         bytes: &[u8],
-    ) -> Result<NativeAmxParticipantReceiptLatestIndexV1> {
-        let latest = norito::decode_canonical::<NativeAmxParticipantReceiptLatestIndexV1>(bytes)
+    ) -> Result<NativeAmxParticipantReceiptLatestIndexV2> {
+        let latest = norito::decode_canonical::<NativeAmxParticipantReceiptLatestIndexV2>(bytes)
             .map_err(|error| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -28823,7 +28855,7 @@ impl Kura {
         entry: &LaneConfigEntry,
         path: &Path,
         namespace: &BoundProgressNamespace,
-    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV1>> {
+    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV2>> {
         let Some(bytes) = self.read_bound_regular_file_bytes_locked(
             namespace,
             path,
@@ -28948,7 +28980,7 @@ impl Kura {
         path: &Path,
         namespace: &BoundProgressNamespace,
     ) -> Result<()> {
-        let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(artifact)?;
+        let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(artifact);
         Self::validate_native_amx_participant_receipt_latest_index(&latest).map_err(|message| {
             Self::invalid_lane_artifact_error(path.to_path_buf(), message.to_owned())
         })?;
@@ -29064,9 +29096,9 @@ impl Kura {
             let manifest_len = u64::try_from(manifest_artifact.encode_framed()?.len())?;
             let receipt_len = u64::try_from(receipt.encode_framed()?.len())?;
             let latest_len = u64::try_from(
-                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV1::from_receipt(
+                norito::encode_canonical(&NativeAmxParticipantReceiptLatestIndexV2::from_receipt(
                     &receipt,
-                )?)?
+                ))?
                 .len(),
             )?;
             total = total
@@ -36835,6 +36867,7 @@ impl Kura {
             let manifest_payload_heights =
                 inventory.manifests.keys().copied().collect::<BTreeSet<_>>();
             let latest_height = receipt_payload_heights.last().copied();
+            let mut validated_manifests = BTreeMap::new();
             for manifest_height in &manifest_payload_heights {
                 let file = inventory
                     .manifests
@@ -36854,6 +36887,7 @@ impl Kura {
                         ),
                     ));
                 }
+                validated_manifests.insert(*manifest_height, manifest);
             }
 
             let mut validated_receipts = BTreeMap::new();
@@ -36926,14 +36960,13 @@ impl Kura {
             );
             let expected = expected_receipt
                 .as_ref()
-                .map(NativeAmxParticipantReceiptLatestIndexV1::from_receipt)
-                .transpose()?;
+                .map(NativeAmxParticipantReceiptLatestIndexV2::from_receipt);
             let current = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
                 &entry,
                 &latest_index_path,
                 &namespace,
             )?;
-            if let Some(current) = current {
+            let current_manifest_backed = if let Some(current) = current {
                 let canonical_height = usize::try_from(current.application_block_height)
                     .ok()
                     .and_then(NonZeroUsize::new);
@@ -36952,48 +36985,36 @@ impl Kura {
                         "Native AMX participant latest index targets a stale incarnation or non-canonical application block",
                     ));
                 }
-            }
+                let current_receipt_backed = validated_receipts
+                    .get(&current.lane_block_height)
+                    .is_some_and(|receipt| current.matches_receipt(receipt));
+                let current_manifest_backed = validated_manifests
+                    .get(&current.lane_block_height)
+                    .is_some_and(|manifest| current.matches_manifest(manifest));
+                if !current_receipt_backed && !current_manifest_backed {
+                    return Err(Self::invalid_lane_artifact_error(
+                        latest_index_path.clone(),
+                        "Native AMX participant latest index is not backed by its exact receipt or QC-authenticated manifest",
+                    ));
+                }
+                current_manifest_backed
+            } else {
+                false
+            };
 
             match (expected, current) {
                 (Some(expected), Some(current)) if current != expected => {
-                    if !receipt_payload_heights.contains(&current.lane_block_height) {
+                    if current.lane_block_height > expected.lane_block_height
+                        && current_manifest_backed
+                        && manifest_without_receipt.contains(&current.lane_block_height)
+                    {
                         iroha_logger::warn!(
                             lane = %entry.lane_id.as_u32(),
                             dataspace = entry.dataspace_id.as_u64(),
                             lane_block_height = current.lane_block_height,
                             "Native AMX derived latest pointer is awaiting authoritative receipt repair"
                         );
-                    } else {
-                        let current_file = inventory
-                            .receipts
-                            .get(&current.lane_block_height)
-                            .expect("retained current Native AMX receipt exists");
-                        let current_receipt = self.decode_native_amx_receipt_file_locked(
-                            &entry,
-                            &namespace,
-                            current_file,
-                        )?;
-                        if !current.matches_receipt(&current_receipt)
-                            || current.lane_block_height >= expected.lane_block_height
-                        {
-                            return Err(Self::invalid_lane_artifact_error(
-                                latest_index_path,
-                                "Native AMX participant latest index conflicts with exact durable application evidence",
-                            ));
-                        }
-                        self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
-                            &entry,
-                            &current_receipt,
-                            &namespace,
-                            &manifest_payload_heights,
-                            exact_durable_tip,
-                        )
-                        .map_err(|_| {
-                            Self::invalid_lane_artifact_error(
-                                latest_index_path.clone(),
-                                "Native AMX participant latest index conflicts with exact durable application evidence",
-                            )
-                        })?;
+                    } else if current.lane_block_height < expected.lane_block_height {
                         if expected_can_publish {
                             let receipt = expected_receipt.as_ref().ok_or_else(|| {
                                 Self::invalid_lane_artifact_error(
@@ -37008,7 +37029,19 @@ impl Kura {
                                 &namespace,
                             )?;
                             rebuilt = rebuilt.saturating_add(1);
+                        } else {
+                            iroha_logger::warn!(
+                                lane = %entry.lane_id.as_u32(),
+                                dataspace = entry.dataspace_id.as_u64(),
+                                lane_block_height = expected.lane_block_height,
+                                "newest Native AMX receipt is awaiting manifest repair before latest-pointer advancement"
+                            );
                         }
+                    } else {
+                        return Err(Self::invalid_lane_artifact_error(
+                            latest_index_path,
+                            "Native AMX participant latest index conflicts with exact durable application evidence",
+                        ));
                     }
                 }
                 (Some(expected), None) if expected_can_publish => {
@@ -59430,8 +59463,7 @@ mod tests {
                 HashOf::new(&manifest_artifact),
                 placeholder_finality_hash,
             );
-            let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(&receipt)
-                .expect("fixture latest index");
+            let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&receipt);
             exact_evidence_bytes = exact_evidence_bytes
                 .checked_add(
                     u64::try_from(
@@ -75573,6 +75605,35 @@ mod tests {
     }
 
     #[test]
+    fn native_amx_latest_index_startup_rejects_legacy_v1_filename() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let evidence_directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
+        let legacy_name = ["native_amx_participant_receipts.latest_v", "1", ".norito"].concat();
+        let legacy_path = evidence_directory.join(legacy_name);
+        fs::write(&legacy_path, [0xA5]).expect("stage unsupported legacy latest pointer");
+        drop(kura);
+
+        let error = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("startup must reject a legacy Native latest-index filename"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("unexpected or legacy"),
+            "unexpected legacy latest-index error: {error}"
+        );
+        assert!(
+            legacy_path.exists(),
+            "fail-closed startup must retain the legacy pointer for forensics"
+        );
+    }
+
+    #[test]
     fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning() {
         for artifact_kind in ["manifest", "receipt"] {
             let temp_dir = TempDir::new().expect("temporary Kura directory");
@@ -75866,8 +75927,7 @@ mod tests {
             let newest = receipts
                 .last()
                 .expect("newest Native prune-journal receipt");
-            let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(newest)
-                .expect("construct Native prune-journal latest pointer");
+            let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(newest);
             let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
                 &entry,
                 &kura.store_root,
@@ -76063,8 +76123,7 @@ mod tests {
             .expect("latest-protected Native prune lane entry");
         let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2]);
         let newest = receipts.last().expect("latest-protected Native receipt");
-        let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(newest)
-            .expect("construct latest-protected Native pointer");
+        let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(newest);
         let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &kura.store_root,
@@ -76403,6 +76462,128 @@ mod tests {
     }
 
     #[test]
+    fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect("publish exact V2 latest pointer");
+        let descriptor = &receipt.participant_proposal.descriptor;
+        let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &kura.store_root,
+            descriptor.lane_block_height,
+        );
+        let receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+            &entry,
+            &kura.store_root,
+            descriptor.lane_block_height,
+        );
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        fs::remove_file(&manifest_path).expect("remove latest Native manifest");
+        fs::remove_file(&receipt_path).expect("remove latest Native receipt");
+        sync_dir(Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root)).as_path())
+            .expect("sync fully unbacked Native evidence directory");
+        drop(kura);
+
+        let error = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("startup must reject a latest pointer with no evidence backing"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("not backed by its exact receipt or QC-authenticated manifest"),
+            "unexpected fully unbacked latest-pointer error: {error}"
+        );
+        assert!(
+            latest_path.exists(),
+            "fail-closed startup must retain the unbacked pointer for forensics"
+        );
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt() {
+        for drift_kind in ["executed wire", "finality", "manifest"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect("publish exact V2 latest pointer");
+            let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                &entry,
+                &kura.store_root,
+            );
+            let mut latest = kura
+                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_path)
+                .expect("decode V2 latest pointer")
+                .expect("V2 latest pointer exists");
+            match drift_kind {
+                "executed wire" => {
+                    latest.executed_block_wire_hash =
+                        Hash::new(b"forged latest-index executed wire")
+                }
+                "finality" => {
+                    latest.finality_artifact_hash = HashOf::from_untyped_unchecked(Hash::new(
+                        b"forged latest-index finality artifact",
+                    ))
+                }
+                "manifest" => {
+                    latest.manifest_artifact_hash = HashOf::from_untyped_unchecked(Hash::new(
+                        b"forged latest-index manifest artifact",
+                    ))
+                }
+                _ => unreachable!(),
+            }
+            fs::write(
+                &latest_path,
+                norito::encode_canonical(&latest).expect("encode drifted V2 latest pointer"),
+            )
+            .expect("persist drifted V2 latest pointer");
+            let descriptor = &receipt.participant_proposal.descriptor;
+            let receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+                &entry,
+                &kura.store_root,
+                descriptor.lane_block_height,
+            );
+            fs::remove_file(&receipt_path).expect("remove exact Native receipt");
+            sync_dir(Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root)).as_path())
+                .expect("sync manifest-backed Native evidence directory");
+            drop(kura);
+
+            let error = match Kura::new(&config, &lane_config) {
+                Ok(_) => {
+                    panic!("startup must reject {drift_kind} drift without an exact receipt")
+                }
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("not backed by its exact receipt or QC-authenticated manifest"),
+                "unexpected {drift_kind} latest-pointer error: {error}"
+            );
+            assert!(
+                latest_path.exists(),
+                "fail-closed startup must retain the drifted pointer for forensics"
+            );
+        }
+    }
+
+    #[test]
     fn native_amx_latest_index_startup_rejects_present_invalid_manifest_proof() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
@@ -76491,23 +76672,35 @@ mod tests {
             result_hashes: Vec::new(),
             results: Vec::new(),
         };
-        let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(&receipt)
-            .expect("construct exact latest index");
+        let latest = NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&receipt);
         assert!(
             latest.matches_receipt(&receipt),
-            "latest index must match the exact receipt bytes"
+            "latest index must match the exact authenticated receipt identity"
         );
+        assert_eq!(latest.version, 2);
         assert_eq!(latest.lane_id, proposal.descriptor.lane_id);
         assert_eq!(latest.dataspace_id, proposal.descriptor.dataspace_id);
         assert_eq!(
             latest.lane_incarnation,
             proposal.descriptor.lane_incarnation
         );
+        assert_eq!(
+            latest.executed_block_wire_hash,
+            receipt.executed_block_wire_hash
+        );
+        assert_eq!(
+            latest.finality_artifact_hash,
+            receipt.finality_artifact_hash
+        );
+        assert_eq!(
+            latest.manifest_artifact_hash,
+            receipt.manifest_artifact_hash
+        );
 
         receipt.application_block_height = receipt.application_block_height.saturating_add(1);
         assert!(
             !latest.matches_receipt(&receipt),
-            "application identity drift must change the exact receipt digest"
+            "application identity drift must change the authenticated pointer identity"
         );
     }
 
@@ -76935,8 +77128,7 @@ mod tests {
         conflicting.application_block_hash =
             HashOf::from_untyped_unchecked(Hash::new(b"conflicting application block"));
         let conflicting_latest =
-            NativeAmxParticipantReceiptLatestIndexV1::from_receipt(&conflicting)
-                .expect("construct structurally valid conflicting pointer");
+            NativeAmxParticipantReceiptLatestIndexV2::from_receipt(&conflicting);
         let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &kura.store_root,

@@ -50,10 +50,12 @@ Commit barriers against exact globally certified V4 journal bindings, and the
 journal-disabled startup path is retired. Full queue-hash/coordinator identity,
 semantic request-kernel validation, atomic constant-scan batch cleanup,
 mandatory first-release journaling, and successful backpressure refresh are
-now pinned across restart. Its twenty-one newly pinned regressions raise the
-pending G-UNIT execution inventory to 277 exact tests. The fresh 24-test
-queue/configuration slice is green; the complete 277-test archived execution
-receipt is still outstanding.
+now pinned across restart. Three additional Native latest-index regressions
+reject a legacy V1 pointer filename, a fully unbacked pointer, and
+receipt-absent executed-wire/finality/manifest binding drift. They raise the
+pending G-UNIT execution inventory to 280 exact tests. The fresh 24-test
+queue/configuration slice and 130-test Native AMX slice are green; the complete
+280-test archived execution receipt is still outstanding.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -90,7 +92,7 @@ The remaining work is evidence-driven and must stay in order:
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 277 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 280 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript

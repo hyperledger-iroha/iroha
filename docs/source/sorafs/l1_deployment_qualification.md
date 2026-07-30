@@ -16,6 +16,24 @@ python3 scripts/check_sorafs_l1_deployment_qualification.py \
   --summary-out artifacts/sorafs/l1-topology-qualification.json
 ```
 
+The repository also ships a schema-complete, non-secret production topology
+shape and matching response file:
+
+```bash
+python3 scripts/check_sorafs_l1_deployment_qualification.py \
+  @scripts/examples/sorafs_l1_deployment_qualification.args.example
+```
+
+The example manifest is
+`scripts/examples/sorafs_l1_deployment_qualification_manifest.json.example`.
+Its four validators, two independently operated storage providers, two
+regional gateways, two independently administered Governance DAG/Kubo
+instances, runtime handles, model digests, and ordered 17 lane slots exercise
+the complete closed schema. Its identifiers and digests are shape-only public
+values, not a claim of a live deployment or genuine qualification evidence.
+Operators must bind the checker to their reviewed production manifest and
+command-line deployment context before collecting any lane summary.
+
 The input uses schema `sorafs.l1.deployment_qualification.v1`. It is a
 schema-closed, payload-free plan containing:
 
@@ -82,6 +100,15 @@ qualification input, every present lane, the signed envelope, the aggregate
 deployment context, and deterministic replay. The qualification summary
 remains configuration-only evidence throughout this chain; passing it never
 increments `summary_file_count` or `recognized_summary_count`.
+
+The next local qualification attachment is the
+[L1 resilience and disaster-recovery qualification](l1_resilience_qualification.md).
+It binds partition, restart, rotation, failover, recovery, restore, rollback,
+and package-yank rehearsal artifacts to this exact topology. Its trusted
+summary digest and signer fingerprint are covered by the existing
+nine-prerequisite HSM envelope and independently reverified by the aggregate
+and replay runner. It remains outside both the 17-lane summary count and the
+fixed nine prerequisite IDs.
 
 ## Remaining L1 work
 

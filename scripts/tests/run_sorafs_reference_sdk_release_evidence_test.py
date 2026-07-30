@@ -57,6 +57,13 @@ def write_topology_qualification(path: Path) -> Path:
     return path
 
 
+def topology_args(tmp_path: Path) -> list[str]:
+    return [
+        "--topology-qualification-summary",
+        str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+    ]
+
+
 def complete_args(tmp_path: Path) -> list[str]:
     payload_dir = tmp_path / "payloads"
     payload_dir.mkdir()
@@ -73,8 +80,7 @@ def complete_args(tmp_path: Path) -> list[str]:
         "5",
         "--max-smoke-duration-secs",
         "1800",
-        "--topology-qualification-summary",
-        str(write_topology_qualification(tmp_path / "l1-topology.summary")),
+        *topology_args(tmp_path),
         "--release-archive-evidence",
         str(write_payload(payload_dir / "release-archive.json")),
         "--signed-manifest-evidence",
@@ -407,6 +413,7 @@ def test_plan_json_rejects_unrequired_external_evidence_and_contracts(
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800700000",
+            *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -531,6 +538,7 @@ def test_subset_gate_requires_only_selected_kind(tmp_path: Path, capsys) -> None
             str(tmp_path / "evidence"),
             "--now-unix",
             "1800700000",
+            *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -558,6 +566,7 @@ def test_subset_gate_rejects_evidence_for_unrequired_kind(
         [
             "--out-dir",
             str(tmp_path / "evidence"),
+            *topology_args(tmp_path),
             "--require-kind",
             "release_archive",
             "--release-archive-evidence",
@@ -582,6 +591,7 @@ def test_unknown_required_kind_fails_before_plan(tmp_path: Path, capsys) -> None
             [
                 "--out-dir",
                 str(tmp_path / "evidence"),
+                *topology_args(tmp_path),
                 "--require-kind",
                 "unknown",
                 "--dry-run",

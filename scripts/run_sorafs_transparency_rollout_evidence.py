@@ -16,6 +16,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+BUNDLED_VERIFIER = SCRIPT_DIR / "check_sorafs_transparency_rollout_evidence.py"
+
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_REQUIRED_KINDS,
@@ -127,7 +129,11 @@ def split_source_entry_spec(spec: str) -> tuple[str, Path]:
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
-    errors = validate_runner_preflight(args, summary_filename="rollout-summary.json")
+    errors = validate_runner_preflight(
+        args,
+        summary_filename="rollout-summary.json",
+        bundled_verifier=BUNDLED_VERIFIER,
+    )
     require_runner_passthrough_args(
         args,
         ("iroha_bin",),
@@ -185,7 +191,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
 def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
     out_dir = args.out_dir
-    verifier = args.verifier
+    verifier = BUNDLED_VERIFIER
     iroha_prefix = [args.iroha_bin, *args.iroha_arg]
     summary_out = args.summary_out or out_dir / "rollout-summary.json"
     source_entry_out = out_dir / "source-entry.json"
@@ -512,8 +518,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--verifier",
         type=Path,
-        default=SCRIPT_DIR / "check_sorafs_transparency_rollout_evidence.py",
-        help="Rollout evidence verifier script path.",
+        default=BUNDLED_VERIFIER,
+        help="Bundled rollout evidence verifier path; substitutions are rejected.",
     )
     parser.add_argument(
         "--torii-url",

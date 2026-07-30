@@ -3296,45 +3296,45 @@ pub mod sorafs {
         "sorafs.reputation_snapshot.latest",
         "/v1/sorafs/reputation/latest",
     )
-    .with_implicit_head(false);
+    .with_implicit_head(true);
     /// Read one historical reputation snapshot.
     pub const REPUTATION_SNAPSHOT: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_snapshot.read",
         "/v1/sorafs/reputation/snapshots/{snapshot_id_hex}",
     )
-    .with_implicit_head(false);
+    .with_implicit_head(true);
     /// Read one provider's reputation record and proof.
     pub const REPUTATION_PROVIDER: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_provider.read",
         "/v1/sorafs/reputation/providers/{provider_id}",
     )
-    .with_implicit_head(false);
+    .with_implicit_head(true);
     /// Read the active reputation weights.
     pub const REPUTATION_WEIGHTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_weight.read",
         "/v1/sorafs/reputation/weights",
     )
-    .with_implicit_head(false);
+    .with_implicit_head(true);
     /// Read a bounded reputation-event snapshot.
     pub const REPUTATION_EVENTS: RouteDescriptor = authenticated_documented_get(
         "sorafs.reputation_event.list",
         "/v1/sorafs/reputation/events",
     )
-    .with_implicit_head(false);
+    .with_implicit_head(true);
     /// Stream reputation events over SSE.
     pub const REPUTATION_EVENTS_STREAM: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_stream",
         "/v1/sorafs/reputation/events/stream",
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_implicit_head(false);
+    .with_implicit_head(true);
     /// Stream reputation events over WebSocket.
     pub const REPUTATION_EVENTS_WEBSOCKET: RouteDescriptor = stream_get(
         "protocol.sorafs.reputation_event_websocket",
         "/v1/sorafs/reputation/events/ws",
     )
     .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
-    .with_implicit_head(false);
+    .with_implicit_head(true);
 
     /// Read the `SoraFS` pin registry.
     pub const PIN_REGISTRY: RouteDescriptor = documented_get("sorafs.pin.list", "/v1/sorafs/pin");
@@ -6190,6 +6190,19 @@ mod tests {
             sorafs::REPUTATION_EVENTS_STREAM,
             sorafs::REPUTATION_EVENTS_WEBSOCKET,
         ];
+        assert_eq!(
+            routes.map(RouteDescriptor::stable_route_id),
+            [
+                "sorafs.reputation_snapshot.latest",
+                "sorafs.reputation_snapshot.read",
+                "sorafs.reputation_provider.read",
+                "sorafs.reputation_weight.read",
+                "sorafs.reputation_event.list",
+                "protocol.sorafs.reputation_event_stream",
+                "protocol.sorafs.reputation_event_websocket",
+            ]
+        );
+        assert_eq!(RouteCatalog::new(&routes).validate(), Ok(()));
         for route in routes {
             assert_eq!(route.method(), HttpMethod::Get);
             assert_eq!(
@@ -6197,8 +6210,8 @@ mod tests {
                 AuthenticationPolicy::CanonicalAccountSignature
             );
             assert!(
-                !route.implicit_head(),
-                "authenticated reputation GET routes must reject implicit HEAD"
+                route.implicit_head(),
+                "Axum GET routing provides authenticated framework HEAD handling"
             );
             assert_eq!(
                 CATALOGED_ROUTES

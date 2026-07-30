@@ -3,7 +3,7 @@ groups:
     interval: 1m
     rules:
       - alert: SoraFSGatewayAvailabilityBreached
-        expr: sum by (endpoint) (increase(sorafs_gateway_requests_total{result="success"}[10m])) / sum by (endpoint) (increase(sorafs_gateway_requests_total[10m])) < 0.999
+        expr: sum by (endpoint) (increase(sorafs_gateway_responses_total{result="success"}[10m])) / sum by (endpoint) (increase(sorafs_gateway_responses_total[10m])) < 0.999
         for: 5m
         labels:
           severity: critical
@@ -21,11 +21,11 @@ groups:
           description: |
             Endpoint {{ $labels.endpoint }} exceeded the TTFB SLO (P95 {{ printf "%.1f" $value }} ms over 5 minutes).
       - alert: SoraFSProofFailureSpike
-        expr: sum by (kind, provider_id) (increase(sorafs_gateway_proof_events_total{result!="success"}[10m])) > 5
+        expr: sum by (profile_version, error_code) (increase(sorafs_gateway_proof_verifications_total{result!="success"}[10m])) > 5
         for: 10m
         labels:
           severity: warning
         annotations:
           summary: "SoraFS proof failure spike"
           description: |
-            Provider {{ $labels.provider_id }} reported {{ printf "%.0f" $value }} {{ $labels.kind }} proof failures in the last 10 minutes.
+            Profile {{ $labels.profile_version }} reported {{ printf "%.0f" $value }} proof failures ({{ $labels.error_code }}) in the last 10 minutes.

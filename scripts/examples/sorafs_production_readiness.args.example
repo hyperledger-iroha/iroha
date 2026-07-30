@@ -12,3 +12,5 @@
 --summary-out artifacts/sorafs/production-readiness/sorafs-production-readiness-summary.json
 --require-gate ai_prescreen,appeal_finance,gateway_compliance,gateway_load,governance_dag,hedging_billing,moderation_panel,orderbook,pdp,pop_credentials,por,potr,reference_sdk_release,repair,reputation,reserve_rent,transparency
 --topology-qualification-summary artifacts/sorafs/production-readiness/l1-topology-qualification.json
+--resilience-qualification-summary artifacts/sorafs/production-readiness/l1-resilience-qualification.json
+--resilience-qualification-signer-public-key-hex <TRUSTED-RESILIENCE-ED25519-PUBLIC-KEY-HEX>

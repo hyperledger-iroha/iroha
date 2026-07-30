@@ -567,9 +567,9 @@ pub fn canonicalize_governance_dag_outbound_http_request_v1<'a>(
 /// Replay state is deliberately caller-owned, bounded, and borrowed for this
 /// receiver's lifetime. Deployments must retain one receiver/cache for the
 /// lifetime of the corresponding pinned policy.
-// TODO: Install this boundary in deployment-owned Kubo/head ingress and
-// replace process-local replay memory with sealed cross-replica state before
-// production qualification.
+// Production qualification remains blocked until deployment-owned Kubo/head
+// ingress installs this boundary and sealed cross-replica state replaces the
+// process-local replay memory.
 #[derive(Debug)]
 pub struct GovernanceDagHttpRequestReceiverV1<'a> {
     scope: GovernanceDagAuthenticationScope,

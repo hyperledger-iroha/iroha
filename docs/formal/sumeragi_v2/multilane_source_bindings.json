@@ -474,10 +474,19 @@
           "kind": "fn",
           "symbol": "merge_lane_execution_carries_lane",
           "required_tokens": [
-            "decode_from_bytes::<LaneQueueReservationKeyV2>",
+            "decode_canonical_merge_reservation_key",
             "reservation.validate",
             "receipt_shape_matches_coordinator_payload",
             "native_amx_receipt_carries_separate_participant_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "decode_canonical_merge_reservation_key",
+          "required_tokens": [
+            "norito::decode_canonical",
+            ".ok()"
           ]
         },
         {
@@ -1102,7 +1111,7 @@
         {
           "path": "crates/iroha_core/src/kura.rs",
           "kind": "struct",
-          "symbol": "NativeAmxParticipantReceiptLatestIndexV1",
+          "symbol": "NativeAmxParticipantReceiptLatestIndexV2",
           "required_tokens": [
             "version: u8",
             "lane_id: LaneId",
@@ -1113,7 +1122,9 @@
             "participant_settlement_hash: HashOf<LaneBlockCommitment>",
             "application_block_height: u64",
             "application_block_hash: HashOf<BlockHeader>",
-            "receipt_digest: Hash"
+            "executed_block_wire_hash: Hash",
+            "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+            "manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>"
           ]
         },
         {
@@ -1172,7 +1183,7 @@
             "MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES",
             "try_reserve_exact",
             "NativeAmxEvidencePruneIntentV1::VERSION",
-            "norito::to_bytes",
+            "norito::encode_canonical",
             "encoded_len > shared_budget"
           ]
         },
@@ -1268,6 +1279,9 @@
             "difference(&manifest_payload_heights)",
             "difference(&receipt_payload_heights)",
             "decode_bound_native_amx_participant_receipt_latest_index_locked",
+            "current.matches_receipt",
+            "current.matches_manifest",
+            "is not backed by its exact receipt or QC-authenticated manifest",
             "persist_native_amx_participant_receipt_latest_index_locked",
             "prune_native_amx_evidence_pairs_locked",
             "progress_mutation_namespace_unchanged",
@@ -1323,7 +1337,7 @@
             "NativeAmxApplicationManifestV1::from_result_bearing_block",
             "NativeAmxParticipantApplicationManifestArtifactV1",
             "NativeAmxParticipantApplicationReceiptArtifact::new",
-            "NativeAmxParticipantReceiptLatestIndexV1::from_receipt",
+            "NativeAmxParticipantReceiptLatestIndexV2::from_receipt",
             "native_prune_intent_routes.insert",
             "native_amx_evidence_prune_intent_max_bytes"
           ]
@@ -1536,7 +1550,8 @@
           "symbol": "release_lane_reservation",
           "required_tokens": [
             "fifo_with_released_reservations_locked",
-            "journal_mut()?.release",
+            "apply_lane_reservation_journal",
+            "journal.release(*key)",
             "replace_fifo_locked"
           ]
         },
@@ -1560,7 +1575,8 @@
           "required_tokens": [
             "ensure_release_no_conflict",
             "ordered_keys.iter().all",
-            "journal_mut()?.prepare_release",
+            "apply_lane_reservation_journal",
+            "journal.prepare_release(barrier.clone())",
             "release_barriers.push"
           ]
         },
@@ -1571,20 +1587,22 @@
           "required_tokens": [
             "release_barriers",
             "ordered_records",
-            "journal_mut()?.complete_release",
-            "finalize_one_completed_release_locked"
+            "journal.complete_release(completion.clone())",
+            "fifo_with_released_reservations_locked",
+            "journal.forget_release(completion.barrier.clone())",
+            "completed_releases.remove"
           ]
         },
         {
           "path": "crates/iroha_core/src/queue.rs",
           "kind": "fn",
-          "symbol": "finalize_one_completed_release_locked",
+          "symbol": "apply_lane_reservation_journal",
           "required_tokens": [
-            "ordered_records",
-            "fifo_with_released_reservations_locked",
-            "replace_fifo_locked",
-            "forget_release",
-            "completed_releases.remove"
+            "lane_reservation_journal.lock",
+            "JournalNotInstalled",
+            "operation(journal)",
+            "latch_lane_reservation_durability_fault_locked",
+            "publish_latched_lane_reservation_durability_fault"
           ]
         },
         {
@@ -1935,7 +1953,8 @@
           "kind": "fn",
           "symbol": "commit_lane_reservation",
           "required_tokens": [
-            "journal_mut()?.commit",
+            "journal.commit(*key)",
+            "journal.forget_commit(*key)",
             "commit_barriers",
             "remove_transaction_locked"
           ]
@@ -2144,7 +2163,7 @@
           "required_tokens": [
             "MAX_MERGE_EXECUTION_ENTRYPOINTS",
             "transaction_selection_durability_faulted",
-            "store.journal.is_none()",
+            "lane_reservation_journal.lock().is_none()",
             "live_by_hash",
             "commit_barriers",
             "release_barriers",
@@ -2570,7 +2589,34 @@
             "push_remove_lock",
             "global_admission_binding",
             "indexed_binding != binding",
-            "reject_conflicting_global_admission_locked"
+            "tombstone_conflicting_global_admission",
+            "finalize_conflicting_global_admission_locked"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "tombstone_conflicting_global_admission",
+          "required_tokens": [
+            "remove_exact_strict_durable",
+            "binding.entrypoint_hash.clone()",
+            "binding.routing_plan_digest",
+            "binding.journal_record_digest",
+            "QueuePlanJournalExactRemoveResult::Removed",
+            "mark_plan_journal_durability_fault"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "fn",
+          "symbol": "finalize_conflicting_global_admission_locked",
+          "required_tokens": [
+            "hash_as_entrypoint",
+            "routing_plan.digest",
+            "durable_plan_claims.remove",
+            "remove_hashes_from_fifo_locked",
+            "remove_transaction_locked",
+            "removed_hashes.insert"
           ]
         },
         {

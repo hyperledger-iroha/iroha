@@ -436,6 +436,44 @@ def test_runner_preflight_requires_reviewed_now_unix(tmp_path: Path) -> None:
     assert "--now-unix is required" in errors
 
 
+def test_runner_preflight_accepts_exact_bundled_verifier(tmp_path: Path) -> None:
+    bundled_verifier = tmp_path / "bundled-verifier.py"
+    bundled_verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=bundled_verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=None,
+        ),
+        summary_filename="rollout-summary.json",
+        bundled_verifier=bundled_verifier,
+    )
+
+    assert errors == []
+
+
+def test_runner_preflight_rejects_substituted_bundled_verifier(
+    tmp_path: Path,
+) -> None:
+    bundled_verifier = tmp_path / "bundled-verifier.py"
+    substituted_verifier = tmp_path / "substituted-verifier.py"
+    bundled_verifier.write_text("", encoding="utf-8")
+    substituted_verifier.write_text("", encoding="utf-8")
+
+    errors = validate_runner_preflight(
+        argparse.Namespace(
+            verifier=substituted_verifier,
+            out_dir=tmp_path / "evidence",
+            summary_out=None,
+        ),
+        summary_filename="rollout-summary.json",
+        bundled_verifier=bundled_verifier,
+    )
+
+    assert errors == ["--verifier must select this lane's bundled verifier"]
+
+
 def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/digest-summary.json"))
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/gateway_load_digest.json"))

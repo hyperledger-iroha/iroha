@@ -18,3 +18,7 @@ aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 1111111111111111111111111111111111111111111111111111111111111111
 --signature-algorithm
 ed25519
+--signing-provider
+external_ed25519_hsm
+--signing-provider-revision
+1

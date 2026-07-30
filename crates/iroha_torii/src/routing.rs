@@ -5177,9 +5177,10 @@ mod signed_query_verification_tests {
         let mut malformed = signed_find_abi_version(&signer);
         malformed.payload.authority = AccountId::new_multisig(policy);
 
-        let response = verify_signed_query_request(malformed)
-            .expect_err("directly signed multisig query authority must be rejected")
-            .into_response();
+        let response = match verify_signed_query_request(malformed) {
+            Ok(_) => panic!("directly signed multisig query authority must be rejected"),
+            Err(error) => error.into_response(),
+        };
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
         verify_signed_query_request(signed_find_abi_version(&signer))
@@ -64032,6 +64033,7 @@ pub struct AccountOnboardingResponseDto {
 
 #[cfg(all(test, feature = "app_api"))]
 mod sponsored_onboarding_dto_tests {
+    use iroha_crypto::{Algorithm, Hash, Signature};
     use iroha_data_model::{
         account::{AccountId, MultisigMember, MultisigPolicy},
         alias_setup::{AliasFramedInstructionV1, AliasPlanDispositionV1},
@@ -64039,7 +64041,8 @@ mod sponsored_onboarding_dto_tests {
 
     use super::{
         AccountOnboardingPlanRequestDto, account_onboarding_receipt_signature_is_valid,
-        onboarding_disposition_transition_allowed, onboarding_frames_are_ordered_subset,
+        checked_routing_fixture_keypair, onboarding_disposition_transition_allowed,
+        onboarding_frames_are_ordered_subset,
     };
 
     #[test]

@@ -2143,6 +2143,9 @@ mod protocol {
     const OPERATION_SORACLOUD_PROVENANCE_SIGN_V1: u16 = 100;
     const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1: u16 = 101;
     const OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1: u16 = 102;
+    // A real payload byte avoids relying on zero-sized archive reconstruction;
+    // the authenticated slot and operation provide the request-domain binding.
+    const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
 
     const STATUS_OK_V1: u8 = 0;
     const STATUS_REJECTED_V1: u8 = 1;
@@ -10797,10 +10800,13 @@ mod protocol {
             (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1)
                 if slot == reputation_checkpoint_slot =>
             {
-                decode_canonical::<()>(
+                let version = decode_canonical::<u8>(
                     &request.payload,
                     MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
                 )?;
+                if version != CHECKPOINT_LOAD_REQUEST_VERSION_V1 {
+                    return Err(BrokerError::Rejected);
+                }
             }
             (slot, OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1)
                 if slot == reputation_checkpoint_slot =>
@@ -11418,10 +11424,13 @@ mod protocol {
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1)
                 if slot == provider_ingest_checkpoint_slot =>
             {
-                decode_canonical::<()>(
+                let version = decode_canonical::<u8>(
                     &request.payload,
                     MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
                 )?;
+                if version != CHECKPOINT_LOAD_REQUEST_VERSION_V1 {
+                    return Err(BrokerError::Rejected);
+                }
             }
             (slot, OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1)
                 if slot == provider_ingest_checkpoint_slot =>
@@ -26010,7 +26019,10 @@ mod protocol {
                 &self,
             ) -> Result<Option<sorafs_node::ProviderIngestSealedCheckpointRecordV1>, BrokerError>
             {
-                let payload = encode_canonical(&(), MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1)?;
+                let payload = encode_canonical(
+                    &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
+                    MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                )?;
                 let result = self.session.call(
                     &self.binding,
                     self.metadata_digest,
@@ -26816,8 +26828,10 @@ mod protocol {
                 Option<sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1>,
                 BrokerError,
             > {
-                let payload =
-                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)?;
+                let payload = encode_canonical(
+                    &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                )?;
                 let result = self.provider.session.call(
                     &self.provider.binding,
                     self.provider.metadata_digest,
@@ -41323,9 +41337,15 @@ mod protocol {
                     validate_wire_binding(&wrong_profile),
                     Err(BrokerError::BindingMismatch)
                 );
-                let payload =
-                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
-                        .expect("encode checkpoint load request");
+                let payload = encode_canonical(
+                    &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
+                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                )
+                .expect("encode checkpoint load request");
+                assert_eq!(
+                    payload.len(),
+                    norito::core::Header::SIZE + core::mem::size_of::<u8>()
+                );
                 let request = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -41361,11 +41381,14 @@ mod protocol {
                     request.request_digest,
                     "checkpoint load request digest"
                 );
-                decode_canonical::<()>(
-                    &request.payload,
-                    MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
-                )
-                .expect("decode checkpoint load payload");
+                assert_eq!(
+                    decode_canonical::<u8>(
+                        &request.payload,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )
+                    .expect("decode checkpoint load payload"),
+                    CHECKPOINT_LOAD_REQUEST_VERSION_V1
+                );
                 validate_operation_payload(&request, None)
                     .expect("validate checkpoint load operation payload");
                 validate_operation_request(&request).expect("validate checkpoint load request");
@@ -41382,6 +41405,40 @@ mod protocol {
                 validate_operation_result(&request, STATUS_OK_V1, &result)
                     .expect("validate checkpoint load result");
 
+                let unsupported_version = CHECKPOINT_LOAD_REQUEST_VERSION_V1 ^ u8::MAX;
+                let alternate_version = make_operation_request(
+                    TEST_SESSION_ID,
+                    2,
+                    binding.clone(),
+                    state.observations[0].metadata_digest,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
+                    encode_canonical(
+                        &unsupported_version,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )
+                    .expect("encode alternate checkpoint load version"),
+                )
+                .expect("seal alternate checkpoint load version");
+                assert_eq!(
+                    validate_operation_request(&alternate_version),
+                    Err(BrokerError::Rejected)
+                );
+                let mut trailing_payload = request.payload.clone();
+                trailing_payload.push(0);
+                let trailing = make_operation_request(
+                    TEST_SESSION_ID,
+                    3,
+                    binding.clone(),
+                    state.observations[0].metadata_digest,
+                    OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
+                    trailing_payload,
+                )
+                .expect("seal trailing checkpoint load payload");
+                assert_eq!(
+                    validate_operation_request(&trailing),
+                    Err(BrokerError::Protocol)
+                );
+
                 let malformed_compare = encode_canonical(
                     &ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
                         expected_revision: Some([0; 32]),
@@ -41392,7 +41449,7 @@ mod protocol {
                 .expect("encode malformed checkpoint CAS");
                 let malformed_compare = make_operation_request(
                     TEST_SESSION_ID,
-                    2,
+                    4,
                     binding,
                     state.observations[0].metadata_digest,
                     OPERATION_REPUTATION_JOURNAL_CHECKPOINT_COMPARE_AND_SWAP_V1,
@@ -41420,12 +41477,15 @@ mod protocol {
                 );
                 let cross_slot = make_operation_request(
                     TEST_SESSION_ID,
-                    3,
+                    5,
                     journal_binding.clone(),
                     observation(&journal_binding).metadata_digest,
                     OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1,
-                    encode_canonical(&(), MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1)
-                        .expect("encode cross-slot checkpoint load"),
+                    encode_canonical(
+                        &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
+                        MAX_REPUTATION_JOURNAL_CHECKPOINT_FRAME_BYTES_V1,
+                    )
+                    .expect("encode cross-slot checkpoint load"),
                 )
                 .expect("seal cross-slot checkpoint load");
                 assert_eq!(
@@ -42451,14 +42511,23 @@ mod protocol {
                     evidence_viewer_archive_max_bytes: None,
                 };
                 assert_eq!(validate_wire_binding(&checkpoint), Ok(()));
-                let checkpoint_load_payload =
-                    encode_canonical(&(), MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1)
-                        .expect("encode provider-ingest checkpoint load");
-                decode_canonical::<()>(
-                    &checkpoint_load_payload,
+                let checkpoint_load_payload = encode_canonical(
+                    &CHECKPOINT_LOAD_REQUEST_VERSION_V1,
                     MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
                 )
-                .expect("decode provider-ingest checkpoint load");
+                .expect("encode provider-ingest checkpoint load");
+                assert_eq!(
+                    checkpoint_load_payload.len(),
+                    norito::core::Header::SIZE + core::mem::size_of::<u8>()
+                );
+                assert_eq!(
+                    decode_canonical::<u8>(
+                        &checkpoint_load_payload,
+                        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                    )
+                    .expect("decode provider-ingest checkpoint load"),
+                    CHECKPOINT_LOAD_REQUEST_VERSION_V1
+                );
                 let checkpoint_load = make_operation_request(
                     TEST_SESSION_ID,
                     3,
@@ -42469,9 +42538,42 @@ mod protocol {
                 )
                 .expect("seal provider-ingest checkpoint load");
                 assert_eq!(validate_operation_request(&checkpoint_load), Ok(()));
-                let cross_slot_checkpoint_load = make_operation_request(
+                let unsupported_version = CHECKPOINT_LOAD_REQUEST_VERSION_V1 ^ u8::MAX;
+                let alternate_checkpoint_load = make_operation_request(
                     TEST_SESSION_ID,
                     4,
+                    checkpoint.clone(),
+                    [0xC7; 32],
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    encode_canonical(
+                        &unsupported_version,
+                        MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
+                    )
+                    .expect("encode alternate provider-ingest checkpoint load version"),
+                )
+                .expect("seal alternate provider-ingest checkpoint load version");
+                assert_eq!(
+                    validate_operation_request(&alternate_checkpoint_load),
+                    Err(BrokerError::Rejected)
+                );
+                let mut trailing_checkpoint_load_payload = checkpoint_load_payload.clone();
+                trailing_checkpoint_load_payload.push(0);
+                let trailing_checkpoint_load = make_operation_request(
+                    TEST_SESSION_ID,
+                    5,
+                    checkpoint.clone(),
+                    [0xC7; 32],
+                    OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,
+                    trailing_checkpoint_load_payload,
+                )
+                .expect("seal trailing provider-ingest checkpoint load payload");
+                assert_eq!(
+                    validate_operation_request(&trailing_checkpoint_load),
+                    Err(BrokerError::Protocol)
+                );
+                let cross_slot_checkpoint_load = make_operation_request(
+                    TEST_SESSION_ID,
+                    6,
                     source.clone(),
                     [0xC8; 32],
                     OPERATION_PROVIDER_INGEST_CHECKPOINT_LOAD_V1,

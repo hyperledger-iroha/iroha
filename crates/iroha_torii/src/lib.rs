@@ -231,6 +231,7 @@ use iroha_config::{
 use iroha_core::state::StateBlock;
 #[cfg(feature = "telemetry")]
 use iroha_core::telemetry::Telemetry;
+use iroha_core::telemetry::{SorafsGatewayRequestMetricLabels, SorafsGatewayResponseMetricLabels};
 use iroha_core::{
     EventsSender,
     alias::{AliasAttester, AliasError, AliasMetricKind, AliasService},
@@ -6395,6 +6396,33 @@ fn response_representation_label(response: &Response) -> &'static str {
     }
 }
 
+fn sorafs_gateway_request_metric_labels<'a>(
+    metadata: &'a MatchedRouteMetadata,
+    method: &'a str,
+) -> Option<SorafsGatewayRequestMetricLabels<'a>> {
+    let (variant, chunker, profile) = match metadata.stable_route_id() {
+        route_id if route_id == route_catalog::sorafs::STORAGE_CAR.stable_route_id() => {
+            ("car", "unknown", "unknown")
+        }
+        route_id if route_id == route_catalog::sorafs::STORAGE_CHUNK.stable_route_id() => {
+            ("chunk", "unknown", "unknown")
+        }
+        route_id if route_id == route_catalog::sorafs::PROOF_STREAM.stable_route_id() => (
+            "proof_stream",
+            "none",
+            sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_PROFILE_VERSION,
+        ),
+        _ => return None,
+    };
+    Some(SorafsGatewayRequestMetricLabels {
+        endpoint: metadata.path_template(),
+        method,
+        variant,
+        chunker,
+        profile,
+    })
+}
+
 async fn record_http_metrics(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -6446,6 +6474,10 @@ async fn record_http_metrics(
     });
     let scheme_label = ConnScheme::from_request(&req).label();
     let telemetry = app.telemetry_handle();
+    let gateway_request = sorafs_gateway_request_metric_labels(&route_metadata, method.as_str());
+    if let Some(labels) = gateway_request {
+        telemetry.with_metrics(|tel| tel.start_sorafs_gateway_request(labels));
+    }
     let start = Instant::now();
     let response = next.run(req).await;
     let duration = start.elapsed();
@@ -6478,8 +6510,34 @@ async fn record_http_metrics(
             },
             utils::HttpErrorCode::as_str,
         );
+    let gateway_response = gateway_request.map(|request| {
+        let result = if status.is_success() || status.is_redirection() {
+            "success"
+        } else {
+            "error"
+        };
+        iroha_logger::telemetry!(
+            msg = "sorafs.gateway.request",
+            endpoint = request.endpoint,
+            method = request.method,
+            variant = request.variant,
+            result,
+            status = status.as_u16(),
+            error_code,
+            duration_ms = duration.as_secs_f64() * 1000.0
+        );
+        SorafsGatewayResponseMetricLabels {
+            request,
+            result,
+            status: status.as_u16(),
+            error_code,
+        }
+    });
 
     telemetry.with_metrics(|tel| {
+        if let Some(labels) = gateway_response {
+            tel.finish_sorafs_gateway_request(labels, duration);
+        }
         tel.observe_torii_http_request(
             route_metadata.stable_route_id(),
             route_metadata.path_template(),
@@ -6536,6 +6594,31 @@ mod matched_route_metadata_tests {
         assert_eq!(metadata.stable_route_id(), "test.item.read");
         assert_eq!(metadata.path_template(), "/v1/tests/items/{item_id}");
         StatusCode::NO_CONTENT.into_response()
+    }
+
+    #[test]
+    fn gateway_metrics_use_only_cataloged_bounded_labels() {
+        let car = MatchedRouteMetadata::from_descriptor(route_catalog::sorafs::STORAGE_CAR);
+        let labels =
+            sorafs_gateway_request_metric_labels(&car, "GET").expect("gateway metric route");
+        assert_eq!(labels.endpoint, route_catalog::sorafs::STORAGE_CAR.path());
+        assert_eq!(labels.method, "GET");
+        assert_eq!(labels.variant, "car");
+        assert_eq!(labels.chunker, "unknown");
+        assert_eq!(labels.profile, "unknown");
+
+        let proof = MatchedRouteMetadata::from_descriptor(route_catalog::sorafs::PROOF_STREAM);
+        let labels =
+            sorafs_gateway_request_metric_labels(&proof, "POST").expect("proof metric route");
+        assert_eq!(labels.variant, "proof_stream");
+        assert_eq!(labels.chunker, "none");
+        assert_eq!(
+            labels.profile,
+            sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_PROFILE_VERSION
+        );
+
+        let unrelated = MatchedRouteMetadata::from_descriptor(ITEM);
+        assert!(sorafs_gateway_request_metric_labels(&unrelated, "GET").is_none());
     }
 
     #[tokio::test]
@@ -65447,17 +65530,30 @@ pub(crate) mod tests_runtime_handlers {
             .expect("unique app state")
             .high_load_tx_threshold = usize::MAX;
         install_single_slot_transaction_queue(&mut app);
-        let keypair =
-            checked_transaction_batch_test_keypair(0xaf, iroha_crypto::Algorithm::Ed25519);
-        let transaction = signed_transaction_for_test_with_keypair(
-            (*app.chain_id).clone(),
-            &keypair,
-            "batch-queue-before-decode",
+        let keypair = checked_torii_test_keypair_from_seed_byte(
+            0xaf,
+            Algorithm::Ed25519,
+            "derive batch queue-capacity fixture key",
         );
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = TransactionBuilder::new(
+            (*app.chain_id).clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "batch-queue-before-decode".to_owned(),
+        )])
+        .sign(keypair.private_key());
         let accepted = super::handler_post_transactions_batch(
             State(app.clone()),
             HeaderMap::new(),
-            transaction_batch_body_for_test(vec![versioned_signed_transaction(&transaction)]),
+            transaction_batch_body_for_test(vec![
+                <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
+                    &transaction,
+                ),
+            ]),
         )
         .await
         .expect("fixture transaction should fill the queue");

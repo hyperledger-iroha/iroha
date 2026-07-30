@@ -237,6 +237,20 @@ FINGERPRINT_FIELD_ALLOWED_NAMES = frozenset(
         "replica_finalized_state_equal",
         "started_at_unix",
         "completed_at_unix",
+        # Schema-closed gateway-load fields with dedicated type, unit, bound,
+        # and reviewed-inventory validation in the lane checker.
+        "gateway_version",
+        "hardware_profile",
+        "cache_coverage",
+        "duration_seconds",
+        "streams",
+        "peak_concurrent_range_streams",
+        "providers",
+        "load_conditions",
+        "success_rate_bps",
+        "error_rate_bps",
+        "p95_latency_ms",
+        "p99_latency_ms",
     }
 )
 RUNNER_PLAN_CONSTANT_NAMES = (
@@ -4556,6 +4570,56 @@ def test_rollout_runner_contract_fixtures_cover_every_runner() -> None:
     assert len(runner_names()) == len(set(runner_names()))
 
 
+def test_lane_collection_runners_pin_their_bundled_verifier(
+    tmp_path: Path,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    substituted_verifier = tmp_path / "substituted-verifier.py"
+    substituted_verifier.write_text("", encoding="utf-8")
+
+    for path in RUNNERS:
+        module = load_script_module(path, f"{path.stem}_bundled_verifier_contract")
+        expected_verifier = SCRIPTS_DIR / path.name.replace("run_", "check_", 1)
+        validate_source = function_source(path, "validate_inputs")
+        build_source = function_source(path, "build_command_plan")
+        parse_source = function_source(path, "parse_args")
+        runner_failures: list[str] = []
+
+        if getattr(module, "BUNDLED_VERIFIER", None) != expected_verifier:
+            runner_failures.append("BUNDLED_VERIFIER")
+        if not expected_verifier.is_file():
+            runner_failures.append("missing bundled verifier")
+        if "bundled_verifier=BUNDLED_VERIFIER" not in validate_source:
+            runner_failures.append("preflight does not pin bundled verifier")
+        if "BUNDLED_VERIFIER" not in build_source:
+            runner_failures.append("command plan does not use bundled verifier")
+        if "args.verifier" in build_source:
+            runner_failures.append("command plan accepts substituted verifier")
+        if 'default=BUNDLED_VERIFIER' not in parse_source:
+            runner_failures.append("parser default is not bundled verifier")
+        if "substitutions are rejected" not in parse_source:
+            runner_failures.append("parser help omits hard-cut contract")
+        example = runner_collection_example(path)
+        args = module.parse_args(
+            [
+                f"@{example}",
+                "--verifier",
+                str(substituted_verifier),
+                "--dry-run",
+            ]
+        )
+        if (
+            "--verifier must select this lane's bundled verifier"
+            not in module.validate_inputs(args)
+        ):
+            runner_failures.append("substituted verifier is not rejected")
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert len(RUNNERS) == 17
+    assert failures == {}
+
+
 def test_top_level_sorafs_plan_localized_hashes_match_source() -> None:
     mismatches: dict[str, str | None] = {}
     checked_sources = 0
@@ -5347,6 +5411,26 @@ def test_rollout_runner_examples_show_dry_run_review() -> None:
             missing[path.name] = str(example.relative_to(SCRIPTS_DIR.parent))
 
     assert missing == {}
+
+
+def test_transparency_collection_example_is_production_bound() -> None:
+    runner = load_script_module(
+        SCRIPTS_DIR / "run_sorafs_transparency_rollout_evidence.py",
+        "sorafs_transparency_production_example_contract",
+    )
+    example = (
+        EXAMPLES_DIR / "sorafs_transparency_rollout_collection.args.example"
+    )
+    source = read(example)
+    args = runner.parse_args([f"@{example}", "--dry-run"])
+
+    assert args.deployment_id == "sorafs-mainnet-2026-07"
+    assert args.environment == "production"
+    assert args.torii_url == "https://transparency.sorafs.example"
+    assert Path(args.out_dir) == Path("artifacts/sorafs/transparency/production")
+    assert "staging" not in source.lower()
+    assert "/staged" not in source.lower()
+    assert "example.invalid" not in source
 
 
 def test_rollout_runner_examples_document_runtime_only_evidence() -> None:
@@ -15119,7 +15203,8 @@ def test_sorafs_hedging_rollout_runner_preflights_verifier_and_outputs() -> None
     runner_test = read(SCRIPTS_DIR / "tests" / "run_sorafs_hedging_rollout_evidence_test.py")
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
 
-    assert "validate_runner_preflight(args" in runner
+    assert "validate_runner_preflight(" in runner
+    assert "bundled_verifier=BUNDLED_VERIFIER" in runner
     assert "must be a directory when it exists" in helper
     assert "must not be a directory" in helper
     assert "test_missing_verifier_fails_before_plan" in runner_test
