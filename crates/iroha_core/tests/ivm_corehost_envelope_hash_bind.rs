@@ -1,5 +1,6 @@
 //! `CoreHost`: verify that the host binds the last verify envelope hash
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![cfg(feature = "iroha-core-tests")]
 //! to subsequently enqueued ZK ISIs via the vendor bridge.
 
 use std::sync::Arc;

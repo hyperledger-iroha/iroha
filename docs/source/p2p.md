@@ -247,7 +247,10 @@ canonical application payload. Hubs preserve that signature and may only
 decrement the unsigned hop-limit (`relay_ttl`). Receivers verify the signature
 against the origin peer key before forwarding or local delivery, so selecting a
 hub grants routing authority but never grants authority to impersonate another
-peer's semantic origin. Unsigned relay envelopes are not accepted.
+peer's semantic origin. Unsigned relay envelopes are not accepted. TTL is
+deliberately hop-local rather than cryptographically monotonic: the shipped
+forwarder only decrements it, while a Byzantine relay can still replay a valid
+envelope or replace its TTL without changing any signed semantic field.
 
 - Knobs (`[network]`):
   - `relay_mode` (string; `disabled` | `hub` | `spoke` | `assist`)

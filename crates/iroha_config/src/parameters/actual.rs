@@ -167,7 +167,7 @@ pub struct Root {
     pub confidential: Confidential,
     /// Cryptography feature toggles and defaults.
     pub crypto: Crypto,
-    /// Settlement configuration (repo and related agreements).
+    /// Settlement configuration for offline cash and conversion routing.
     pub settlement: Settlement,
     /// Streaming configuration (control-plane key material).
     pub streaming: Streaming,
@@ -2669,7 +2669,9 @@ pub struct Genesis {
     pub file: Option<WithOrigin<PathBuf>>,
     /// Optional path to genesis manifest JSON for validation at startup.
     pub manifest_json: Option<WithOrigin<PathBuf>>,
-    /// Optional expected genesis block hash used during bootstrap preflight.
+    /// Exact genesis block hash required for remote bootstrap.
+    ///
+    /// This may be omitted when a local signed genesis file is configured.
     pub expected_hash: Option<HashOf<BlockHeader>>,
     /// Optional peer allowlist permitted to serve genesis during bootstrap (falls back to trusted peers).
     pub bootstrap_allowlist: Vec<PeerId>,
@@ -2685,6 +2687,8 @@ pub struct Genesis {
     /// Enabled bootstrap continues across cycles until success or a permanent validation error.
     pub bootstrap_max_attempts: u32,
     /// Whether to attempt bootstrap when local genesis is missing.
+    ///
+    /// Enabling this without a local file requires [`Self::expected_hash`].
     pub bootstrap_enabled: bool,
 }
 
@@ -4564,8 +4568,6 @@ impl DaRotation {
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Pipeline {
-    /// Settings for admitting `Executable::IvmProved` (proof-carrying IVM overlays).
-    pub ivm_proved: IvmProvedExecution,
     /// Enable dynamic prepass for IVM access-set derivation.
     pub dynamic_prepass: bool,
     /// Cache derived access sets for IVM manifests (advisory only).
@@ -4647,11 +4649,6 @@ pub struct Pipeline {
 impl Default for Pipeline {
     fn default() -> Self {
         Self {
-            ivm_proved: IvmProvedExecution {
-                enabled: defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled: defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
             parallel_overlay: defaults::pipeline::PARALLEL_OVERLAY,
@@ -5163,17 +5160,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     );
 
     Hash::new(preimage)
-}
-
-/// Pipeline settings controlling admission and verification of `Executable::IvmProved`.
-#[derive(Debug, Clone)]
-pub struct IvmProvedExecution {
-    /// Master toggle for accepting `Executable::IvmProved`.
-    pub enabled: bool,
-    /// Skip deterministic replay for circuits that are known to prove full IVM execution semantics.
-    pub skip_replay: bool,
-    /// Allowlist of circuit IDs accepted for `Executable::IvmProved`.
-    pub allowed_circuits: Vec<String>,
 }
 
 /// Tiered state backend settings controlling hot/cold storage behaviour.
@@ -11506,39 +11492,13 @@ impl FromStr for StreamingSoranetAccessKind {
     }
 }
 
-/// Settlement configuration (repo legs, default policies).
+/// Settlement configuration for offline cash and conversion routing.
 #[derive(Debug, Clone, Default)]
 pub struct Settlement {
-    /// Repo defaults.
-    pub repo: Repo,
     /// Offline settlement retention policy.
     pub offline: Offline,
     /// Router configuration for XOR conversion.
     pub router: Router,
-}
-
-/// Repo governance defaults surfaced via configuration.
-#[derive(Debug, Clone)]
-pub struct Repo {
-    /// Default haircut, in basis points.
-    pub default_haircut_bps: u16,
-    /// Margin frequency expressed in seconds.
-    pub margin_frequency_secs: u64,
-    /// Whitelisted collateral definitions accepted by default.
-    pub eligible_collateral: Vec<AssetDefinitionId>,
-    /// Matrix describing which collateral definitions may substitute for a recorded pledge.
-    pub collateral_substitution_matrix: BTreeMap<AssetDefinitionId, Vec<AssetDefinitionId>>,
-}
-
-impl Default for Repo {
-    fn default() -> Self {
-        Self {
-            default_haircut_bps: defaults::settlement::repo::DEFAULT_HAIRCUT_BPS,
-            margin_frequency_secs: defaults::settlement::repo::DEFAULT_MARGIN_FREQUENCY_SECS,
-            eligible_collateral: Vec::new(),
-            collateral_substitution_matrix: BTreeMap::new(),
-        }
-    }
 }
 
 /// Kagemusha escrow and execution policy parameters.

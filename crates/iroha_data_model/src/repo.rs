@@ -1,8 +1,8 @@
 //! Repo and reverse-repo agreement data structures.
 //!
-//! These descriptors provide the Norito layout used by the forthcoming
-//! settlement instructions. They focus on deterministic encoding so the
-//! runtime and external fixtures can agree on policy and margin parameters.
+//! The recorded agreement is an immutable, one-shot economic contract. Exact
+//! consent-selected balance scopes and terminal settlement status are retained
+//! so maturity settlement cannot infer or substitute caller-controlled terms.
 
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
@@ -16,7 +16,10 @@ use norito::{
 };
 
 use crate::{
-    Identifiable, Name, asset::prelude::AssetDefinitionId, metadata::Metadata, prelude::AccountId,
+    Identifiable, Name,
+    asset::prelude::{AssetDefinitionId, AssetId},
+    metadata::Metadata,
+    prelude::AccountId,
 };
 use iroha_primitives::numeric::Quantity;
 
@@ -143,8 +146,19 @@ pub struct RepoAgreement {
     pub custodian: Option<AccountId>,
     /// Cash leg settled at repo open and unwind.
     pub cash_leg: RepoCashLeg,
+    /// Exact counterparty balance debited for cash at initiation.
+    ///
+    /// Its balance scope is also used for the initiator's repayment balance at
+    /// maturity. This value comes from the counterparty's exact on-chain
+    /// settlement consent rather than ambient balance discovery.
+    pub cash_source: AssetId,
     /// Collateral leg pledged for the duration of the repo.
     pub collateral_leg: RepoCollateralLeg,
+    /// Exact collateral balance held by the counterparty or custodian.
+    ///
+    /// Its balance scope is fixed by the collateral holder's maturity consent
+    /// before the agreement opens.
+    pub collateral_custody_asset: AssetId,
     /// Fixed rate (in basis points) agreed for the term.
     pub rate_bps: u16,
     /// Unix timestamp (milliseconds) for the agreed maturity.
@@ -155,6 +169,11 @@ pub struct RepoAgreement {
     pub last_margin_check_timestamp_ms: u64,
     /// Governance parameters applied to the agreement.
     pub governance: RepoGovernance,
+    /// Agreed settlement timestamp once this one-shot agreement is closed.
+    ///
+    /// A settled agreement remains on-chain as a tombstone so its identifier
+    /// can never be replayed.
+    pub settlement_timestamp_ms: Option<u64>,
 }
 
 impl RepoAgreement {
@@ -165,7 +184,9 @@ impl RepoAgreement {
         initiator: AccountId,
         counterparty: AccountId,
         cash_leg: RepoCashLeg,
+        cash_source: AssetId,
         collateral_leg: RepoCollateralLeg,
+        collateral_custody_asset: AssetId,
         rate_bps: u16,
         maturity_timestamp_ms: u64,
         initiated_timestamp_ms: u64,
@@ -178,13 +199,32 @@ impl RepoAgreement {
             counterparty,
             custodian,
             cash_leg,
+            cash_source,
             collateral_leg,
+            collateral_custody_asset,
             rate_bps,
             maturity_timestamp_ms,
             initiated_timestamp_ms,
             last_margin_check_timestamp_ms: initiated_timestamp_ms,
             governance,
+            settlement_timestamp_ms: None,
         }
+    }
+
+    /// Return whether the agreement is still open for margining or maturity settlement.
+    pub fn is_active(&self) -> bool {
+        self.settlement_timestamp_ms.is_none()
+    }
+
+    /// Close this agreement at its pre-agreed maturity.
+    ///
+    /// Returns `false` when the agreement was already settled.
+    pub fn settle(&mut self) -> bool {
+        if !self.is_active() {
+            return false;
+        }
+        self.settlement_timestamp_ms = Some(self.maturity_timestamp_ms);
+        true
     }
 
     /// Compute the next margin check timestamp after the provided moment.
@@ -302,10 +342,24 @@ mod tests {
         );
         RepoAgreement::new(
             "daily".parse().unwrap(),
-            initiator,
-            counterparty,
+            initiator.clone(),
+            counterparty.clone(),
             cash_leg,
+            AssetId::new(
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "usd".parse().unwrap(),
+                ),
+                counterparty.clone(),
+            ),
             collateral_leg,
+            AssetId::new(
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").unwrap(),
+                    "bond".parse().unwrap(),
+                ),
+                counterparty,
+            ),
             250,
             initiated_ms + 86_400_000,
             initiated_ms,
@@ -358,6 +412,17 @@ mod tests {
         assert!(!agreement.is_margin_check_due(129_999));
         assert!(agreement.is_margin_check_due(130_000));
         assert!(agreement.is_margin_check_due(130_001));
+    }
+
+    #[test]
+    fn settlement_status_is_one_way() {
+        let mut agreement = sample_agreement(10_000, 60);
+        assert!(agreement.is_active());
+        assert!(agreement.settle());
+        assert!(!agreement.is_active());
+        assert_eq!(agreement.settlement_timestamp_ms(), &Some(86_410_000));
+        assert!(!agreement.settle());
+        assert_eq!(agreement.settlement_timestamp_ms(), &Some(86_410_000));
     }
 
     #[test]

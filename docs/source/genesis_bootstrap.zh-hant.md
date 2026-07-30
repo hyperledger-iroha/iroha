@@ -24,8 +24,9 @@ translator: machine-google-reviewed
   尺寸上限 (`genesis.bootstrap_max_bytes`)。允許列表之外的請求收到 `NotAllowed`，並且
   由錯誤密鑰簽名的有效負載收到 `MismatchedPubkey`。
 - **請求者流程：** 當存儲為空並且 `genesis.file` 未設置時（並且
-  `genesis.bootstrap_enabled=true`)，節點使用可選的選項預檢受信任的對等點
-  `genesis.expected_hash`，然後獲取有效負載，通過`validate_genesis_block`驗證簽名，
+  `genesis.bootstrap_enabled=true`)，`genesis.expected_hash` 必須精確固定已簽署的創世區塊。
+  若檔案和雜湊均未設定，節點會在傳送任何請求之前回報啟動設定錯誤。隨後節點取得有效負載，
+  並透過 `validate_genesis_block` 驗證簽章，
   並在應用該塊之前將 `genesis.bootstrap.nrt` 與 Kura 一起保留。引導重試
   榮譽 `genesis.bootstrap_request_timeout`、`genesis.bootstrap_retry_interval` 和
   `genesis.bootstrap_max_attempts`。
@@ -34,5 +35,6 @@ translator: machine-google-reviewed
   跨對等方中止獲取；沒有響應者/超時回退到本地配置。
 - **操作員步驟：** 確保至少有一個受信任的對等點可以通過有效的創世到達，配置
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` 和重試旋鈕，以及
-  可選擇引腳 `expected_hash` 以避免接受不匹配的有效負載。持久有效負載可以是
+  啟用遠端引導前，必須在 `expected_hash` 中固定準確區塊。本機已簽署的 `genesis.file`
+  本身就是明確的製品，無需額外固定雜湊。持久有效負載可以是
   通過將 `genesis.file` 指向 `genesis.bootstrap.nrt` 在後續引導中重用。

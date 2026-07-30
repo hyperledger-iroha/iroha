@@ -12896,7 +12896,7 @@ where
                 if let Some(peer_id) = validator_peer_ids_by_account.get(&acct) {
                     return Some(peer_id.clone());
                 }
-                let peer_id = PeerId::from(acct.signatory().clone());
+                let peer_id = PeerId::from(acct.try_signatory()?.clone());
                 if !present_peers.contains(&peer_id) {
                     return None;
                 }
@@ -14067,6 +14067,40 @@ mod stake_snapshot_tests {
     }
 
     #[test]
+    fn council_multisig_member_without_peer_binding_is_ignored_without_unwinding() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        let keypair = crate::state::checked_keypair();
+        let peer = PeerId::from(keypair.public_key().clone());
+        let single_key_account = DMAccountId::of(keypair.public_key().clone());
+        let member =
+            iroha_data_model::account::MultisigMember::new(keypair.public_key().clone(), 1)
+                .expect("valid multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("valid multisig policy");
+        let multisig_account = DMAccountId::new_multisig(policy);
+
+        let mut world = state.world.block();
+        let _ = world.peers.get_mut().push(peer.clone());
+        seed_consensus_key(&mut world, &peer, ConsensusKeyStatus::Active, 0);
+        world.council.insert(
+            0,
+            CouncilState {
+                epoch: 0,
+                members: vec![multisig_account, single_key_account],
+                candidate_count: 2,
+                ..CouncilState::default()
+            },
+        );
+        world.commit();
+
+        let roster = <StateView as StakeSnapshot>::epoch_validator_peer_ids(&state.view(), 0)
+            .expect("single-key council member remains eligible");
+        assert_eq!(roster, vec![peer]);
+    }
+
+    #[test]
     fn council_explicit_peer_bindings_survive_topology_widening() {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -14085,8 +14119,8 @@ mod stake_snapshot_tests {
         let new_account = DMAccountId::of(new_account_key.public_key().clone());
         let old_peer = PeerId::from(old_peer_key.public_key().clone());
         let new_peer = PeerId::from(new_peer_key.public_key().clone());
-        assert_ne!(old_peer.public_key(), old_account.signatory());
-        assert_ne!(new_peer.public_key(), new_account.signatory());
+        assert_ne!(old_peer.public_key(), old_account.expect_single_signatory());
+        assert_ne!(new_peer.public_key(), new_account.expect_single_signatory());
 
         let mut wb = state.world.block();
         {
@@ -14174,7 +14208,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: active_validator.clone(),
-                peer_id: PeerId::from(active_validator.signatory().clone()),
+                peer_id: PeerId::from(active_validator.expect_single_signatory().clone()),
                 stake_account: active_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -14190,7 +14224,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: jailed_validator.clone(),
-                peer_id: PeerId::from(jailed_validator.signatory().clone()),
+                peer_id: PeerId::from(jailed_validator.expect_single_signatory().clone()),
                 stake_account: jailed_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(10_000_u32),
@@ -14308,7 +14342,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: present_validator.clone(),
-                peer_id: PeerId::from(present_validator.signatory().clone()),
+                peer_id: PeerId::from(present_validator.expect_single_signatory().clone()),
                 stake_account: present_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -14324,7 +14358,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: missing_validator.clone(),
-                peer_id: PeerId::from(missing_validator.signatory().clone()),
+                peer_id: PeerId::from(missing_validator.expect_single_signatory().clone()),
                 stake_account: missing_validator,
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
@@ -17389,6 +17423,20 @@ impl DetachedStateTransactionDelta {
                                 SmartContract(SmartContractParameter::ExecutionDepth)
                             )
                         }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputItems(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::SmartContract(x),
+                                SmartContract(SmartContractParameter::MaxOutputItems)
+                            )
+                        }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputBytes(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::SmartContract(x),
+                                SmartContract(SmartContractParameter::MaxOutputBytes)
+                            )
+                        }
                     },
                     iroha_data_model::parameter::Parameter::Executor(x) => match x {
                         iroha_data_model::parameter::SmartContractParameter::Fuel(_) => {
@@ -17410,6 +17458,20 @@ impl DetachedStateTransactionDelta {
                                 params,
                                 iroha_data_model::parameter::Parameter::Executor(x),
                                 Executor(SmartContractParameter::ExecutionDepth)
+                            )
+                        }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputItems(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Executor(x),
+                                Executor(SmartContractParameter::MaxOutputItems)
+                            )
+                        }
+                        iroha_data_model::parameter::SmartContractParameter::MaxOutputBytes(_) => {
+                            set_param_and_emit!(
+                                params,
+                                iroha_data_model::parameter::Parameter::Executor(x),
+                                Executor(SmartContractParameter::MaxOutputBytes)
                             )
                         }
                     },
@@ -26736,11 +26798,6 @@ impl State {
             query_projection_checkpoint: query_projection_checkpoint_journal,
         } = load_state_journals(&kura, None, true);
         let pipeline = iroha_config::parameters::actual::Pipeline {
-            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -57202,6 +57259,9 @@ fn replay_blocks_from_kura_range_inner(
         drop(view);
         maybe.ok_or_else(|| eyre!("genesis account not found in world state during replay"))?
     };
+    let genesis_signatory = genesis_account.try_signatory().ok_or_else(|| {
+        eyre!("genesis account in world state must use a single-key controller during replay")
+    })?;
     for bundle_entry in &bundle.entries {
         replay_timing.blocks = replay_timing.blocks.saturating_add(1);
         let ReplayBundleEntry::Full {
@@ -57258,7 +57318,7 @@ fn replay_blocks_from_kura_range_inner(
             }
             signature
                 .signature()
-                .verify_hash(genesis_account.signatory(), candidate.hash())
+                .verify_hash(genesis_signatory, candidate.hash())
                 .map_err(|error| eyre!(error))
                 .wrap_err_with(|| {
                     format!("failed to verify replayed genesis block #{height} signatures")
@@ -57625,7 +57685,6 @@ mod replay_validation_tests {
                 &mut voting_block,
                 false,
                 false,
-                false,
             )
             .unpack(|_| {})
             .map_err(|(_block, error)| eyre!(error))
@@ -57780,7 +57839,6 @@ mod replay_validation_tests {
                 state,
                 &mut voting_block,
                 false,
-                true,
                 true,
             )
         } else {
@@ -62217,6 +62275,7 @@ impl StateTransaction<'_, '_> {
             accounts,
             host_args,
         );
+        host.set_output_limits_from_parameters(self.world.parameters.get().smart_contract());
         host.set_generic_execution();
         host.set_prepared_contract_cache(prepared_contract_cache);
         host.set_amx_analysis(amx_analysis);
@@ -62679,6 +62738,9 @@ impl StateTransaction<'_, '_> {
                         accounts,
                         contract_call_context.prepared_argument_record().cloned(),
                     );
+                host.set_output_limits_from_parameters(
+                    self.world.parameters.get().smart_contract(),
+                );
                 host.set_prepared_contract_cache(summary.prepared_contract_cache());
                 host.hydrate_axt_state(self).map_err(|error| {
                     ValidationFail::InternalError(format!("invalid AXT policy snapshot: {error}"))
@@ -62921,6 +62983,9 @@ impl StateTransaction<'_, '_> {
                             accounts,
                             host_args,
                         );
+                            host.set_output_limits_from_parameters(
+                                self.world.parameters.get().smart_contract(),
+                            );
                             if let Some(record) = contract_call_context.prepared_argument_record() {
                                 host.set_entrypoint_argument_record(Some(record.clone()));
                             }
@@ -65547,11 +65612,6 @@ pub(crate) mod deserialize {
 
     fn default_pipeline() -> iroha_config::parameters::actual::Pipeline {
         iroha_config::parameters::actual::Pipeline {
-            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: iroha_config::parameters::defaults::pipeline::DYNAMIC_PREPASS,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,
@@ -66702,7 +66762,7 @@ seiyaku SequentialNfts {
                 let name = format!(
                     "nft_number_{}_for_{}",
                     expected_sequence,
-                    account.signatory()
+                    hex::encode(HashOf::new(account).as_ref())
                 )
                 .parse()
                 .expect("fixture account produces a valid NFT name");
@@ -69642,7 +69702,7 @@ seiyaku SequentialNfts {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -69658,7 +69718,7 @@ seiyaku SequentialNfts {
             PublicLaneValidatorRecord {
                 lane_id: mismatched_lane,
                 validator: mismatched_validator.clone(),
-                peer_id: PeerId::from(mismatched_validator.signatory().clone()),
+                peer_id: PeerId::from(mismatched_validator.expect_single_signatory().clone()),
                 stake_account: mismatched_validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -69752,7 +69812,7 @@ seiyaku SequentialNfts {
             &PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(2_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_u32),
@@ -77079,7 +77139,7 @@ seiyaku SequentialNfts {
         let retained_lane = LaneId::SINGLE;
         let stale_lane = LaneId::new(9);
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -77318,7 +77378,7 @@ seiyaku SequentialNfts {
         let stale_lane = LaneId::new(9);
         let retained_lane = LaneId::SINGLE;
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -79292,7 +79352,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 retired_lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -82605,7 +82665,7 @@ seiyaku SequentialNfts {
                 world.lane_relay_emergency_validators.insert(
                     lane_id,
                     LaneRelayEmergencyValidatorSet {
-                        peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                        peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                         expires_at_height: 100,
                         metadata: Metadata::default(),
                     },
@@ -83012,7 +83072,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 LaneId::new(1),
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -83667,7 +83727,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 retired_lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -84241,7 +84301,7 @@ seiyaku SequentialNfts {
         state_block.world.lane_relay_emergency_validators.insert(
             retired_lane_id,
             LaneRelayEmergencyValidatorSet {
-                peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                 expires_at_height: 10,
                 metadata: Metadata::default(),
             },
@@ -84910,7 +84970,7 @@ seiyaku SequentialNfts {
             block.lane_relay_emergency_validators.insert(
                 retired_lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -84918,7 +84978,7 @@ seiyaku SequentialNfts {
             block.lane_relay_emergency_validators.insert(
                 LaneId::SINGLE,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(BOB_ID.signatory().clone())],
+                    peers: vec![PeerId::from(BOB_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -88496,7 +88556,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 lane_id,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: epoch.saturating_add(10),
                     metadata: Metadata::default(),
                 },
@@ -90462,7 +90522,7 @@ seiyaku SequentialNfts {
         seed_da_pin_intent_world_indexes_for_test(&state, future_pin_intent.clone(), 5, 0);
         seed_da_pin_intent_world_indexes_for_test(&state, retained_pin_intent.clone(), 5, 1);
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -93305,7 +93365,7 @@ seiyaku SequentialNfts {
         wb.lane_relay_emergency_validators.insert(
             removed,
             LaneRelayEmergencyValidatorSet {
-                peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                 expires_at_height: 10,
                 metadata: Metadata::default(),
             },
@@ -93360,7 +93420,7 @@ seiyaku SequentialNfts {
         let added = LaneId::new(1);
         let stale_unknown = LaneId::new(9);
         let override_set = LaneRelayEmergencyValidatorSet {
-            peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+            peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
             expires_at_height: 10,
             metadata: Metadata::default(),
         };
@@ -94488,7 +94548,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 reset_lane,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -94699,7 +94759,7 @@ seiyaku SequentialNfts {
             wb.lane_relay_emergency_validators.insert(
                 reset_lane,
                 LaneRelayEmergencyValidatorSet {
-                    peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                    peers: vec![PeerId::from(ALICE_ID.expect_single_signatory().clone())],
                     expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
@@ -104254,7 +104314,7 @@ seiyaku SequentialNfts {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),
                 self_stake: iroha_primitives::numeric::Quantity::from(1_000_000_u32),

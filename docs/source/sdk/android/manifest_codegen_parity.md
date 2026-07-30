@@ -64,11 +64,12 @@ builders can stay aligned with the Rust data model.
 
 ### 3.1 Trading & Fee-Bearing Flows
 
-- **Repo instructions (`repo.rs`).** `RepoIsi`, `ReverseRepoIsi`, and
-  `RepoMarginCallIsi` encapsulate haircut governance plus cash/collateral legs
+- **Repo instructions (`repo.rs`).** `RepoIsi` carries the complete immutable
+  proposal, while `ReverseRepoIsi` carries only the agreement identifier and
+  settles the stored terms at maturity
   (`crates/iroha_data_model/src/isi/repo.rs`). Android codegen must emit
-  builders that expose every governance knob (`RepoGovernance`) and include
-  Norito examples for tri-party repos and unilateral unwind flows. Fixture plan:
+  builders for the proposal and the ID-only maturity instruction, with Norito
+  examples covering bilateral and tri-party owner-issued consent. Fixture plan:
   extend `scripts/export_norito_fixtures/src/main.rs` to drop repo-specific
   JSON into `fixtures/norito_rpc/manifest_repo/*.json` so SDK tests can replay
   the full lifecycle.

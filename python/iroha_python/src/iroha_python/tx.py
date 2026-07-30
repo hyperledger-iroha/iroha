@@ -1160,34 +1160,10 @@ class TransactionDraft:
     def repo_unwind(
         self,
         agreement_id: str,
-        initiator: str,
-        counterparty: str,
-        cash_leg: "RepoCashLeg",
-        collateral_leg: "RepoCollateralLeg",
-        *,
-        settlement_timestamp_ms: int,
     ) -> TransactionDraft:
-        """Append a `ReverseRepoIsi` instruction to unwind a repo agreement."""
+        """Settle a repo using only its immutable on-chain maturity terms."""
 
-        cash_payload: Dict[str, Any] = {
-            "asset_definition_id": cash_leg.asset_definition_id,
-            "quantity": _normalize_quantity(cash_leg.quantity),
-        }
-        collateral_payload: Dict[str, Any] = {
-            "asset_definition_id": collateral_leg.asset_definition_id,
-            "quantity": _normalize_quantity(collateral_leg.quantity),
-        }
-        if collateral_leg.metadata:
-            collateral_payload["metadata"] = _normalize_metadata(collateral_leg.metadata)
-
-        instruction = Instruction.repo_unwind(
-            agreement_id,
-            initiator,
-            counterparty,
-            cash_payload,
-            collateral_payload,
-            int(settlement_timestamp_ms),
-        )
+        instruction = Instruction.repo_unwind(agreement_id)
         self.add_instruction(instruction)
         return self
 

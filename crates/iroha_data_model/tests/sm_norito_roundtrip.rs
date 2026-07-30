@@ -68,6 +68,9 @@ mod tests {
         let (decoded, used) = <AccountId as norito::core::DecodeFromSlice>::decode_from_slice(&buf)
             .expect("decode AccountId");
         assert_eq!(used, buf.len());
-        assert_eq!(decoded.signatory().to_string(), pk.to_string());
+        assert_eq!(
+            decoded.expect_single_signatory().to_string(),
+            pk.to_string()
+        );
     }
 }

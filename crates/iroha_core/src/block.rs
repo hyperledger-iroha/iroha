@@ -3241,6 +3241,8 @@ pub enum SignatureVerificationError {
 pub enum InvalidGenesisError {
     /// Genesis block must be signed with genesis private key and not signed by any peer
     InvalidSignature,
+    /// Genesis authority must use a single-key account controller
+    GenesisAuthorityNotSingleKey,
     /// Genesis transaction must be authorized by genesis account
     UnexpectedAuthority,
     /// Genesis transactions must not contain errors
@@ -3289,9 +3291,12 @@ pub fn check_genesis_block(
     let [signature] = signatures.as_slice() else {
         return Err(InvalidGenesisError::InvalidSignature);
     };
+    let genesis_signatory = genesis_account
+        .try_signatory()
+        .ok_or(InvalidGenesisError::GenesisAuthorityNotSingleKey)?;
     signature
         .signature()
-        .verify_hash(genesis_account.signatory(), block.hash())
+        .verify_hash(genesis_signatory, block.hash())
         .map_err(|_| InvalidGenesisError::InvalidSignature)?;
 
     if block.header().height().get() != 1 || block.header().prev_block_hash().is_some() {
@@ -6571,7 +6576,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
-                false,
                 ConsensusValidationProfile::LegacyLive,
                 false,
                 None,
@@ -6605,7 +6609,6 @@ pub(crate) mod valid {
                 false,
                 None,
                 false,
-                false,
                 ConsensusValidationProfile::SignedGenesis { consensus_mode },
                 false,
                 None,
@@ -6626,7 +6629,6 @@ pub(crate) mod valid {
             voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
-            trust_replay_tx_signatures: bool,
         ) -> WithEvents<Result<(ValidBlock, StateBlock<'state>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -6639,7 +6641,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 skip_block_signatures,
-                trust_replay_tx_signatures,
                 ConsensusValidationProfile::Replay,
                 false,
                 None,
@@ -6659,8 +6660,9 @@ pub(crate) mod valid {
         /// authenticated height context and its parent CommitQC are the v2
         /// reconfiguration proof; malformed evidence is still rejected when
         /// a body carries it.
-        /// Transaction signatures, stateless checks, state-dependent
-        /// invariants, and deterministic execution all remain mandatory.
+        /// Non-genesis transaction signatures, stateless checks, state-dependent
+        /// invariants, and deterministic execution all remain mandatory. Genesis
+        /// retains its single authority block signature over the ordered intents.
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_sumeragi_v2_candidate_keep_voting_block<'state>(
             block: SignedBlock,
@@ -6684,7 +6686,6 @@ pub(crate) mod valid {
                 false,
                 None,
                 true,
-                false,
                 ConsensusValidationProfile::SumeragiV2 {
                     block_cadence,
                     context: validation_context,
@@ -6699,9 +6700,9 @@ pub(crate) mod valid {
         ///
         /// Callers must only use this after independently verifying that local validation roots
         /// and commit-certificate roots agree for the same block. The path still checks
-        /// state-dependent block invariants, transaction limits, duplicate detection, and
-        /// execution-context alignment, but trusts the already validated block and transaction
-        /// signatures so commit does not repeat that cryptographic work.
+        /// non-genesis transaction signatures, state-dependent block invariants,
+        /// transaction limits, duplicate detection, and execution-context alignment.
+        /// It skips only the block signature set authenticated by the commit certificate.
         #[cfg(test)]
         #[allow(clippy::too_many_arguments)]
         pub(crate) fn validate_prevalidated_commit_keep_voting_block_with_events_and_timing<
@@ -6728,7 +6729,6 @@ pub(crate) mod valid {
                 voting_block,
                 false,
                 Some(timings),
-                true,
                 true,
                 ConsensusValidationProfile::LegacyLive,
                 false,
@@ -6901,7 +6901,6 @@ pub(crate) mod valid {
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
-            trust_replay_tx_signatures: bool,
             validation_profile: ConsensusValidationProfile,
             allow_empty_block: bool,
             mut send_events: Option<&mut dyn FnMut(PipelineEventBox)>,
@@ -6988,16 +6987,6 @@ pub(crate) mod valid {
             let metrics = Some(&state.telemetry);
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
-            let cache_now_ms = block.header().creation_time().as_millis();
-            let cached_stateless_ok = cache_context.as_ref().map(|context| {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context.clone());
-                prepared_txs
-                    .iter()
-                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
-                    .collect::<Vec<_>>()
-            });
             let static_snapshot_start = Instant::now();
             if let Err(error) = Self::validate_static_with_snapshot(
                 &block,
@@ -7006,8 +6995,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                cached_stateless_ok.as_deref(),
-                trust_replay_tx_signatures,
                 metrics,
             ) {
                 let stateless_elapsed = stateless_start.elapsed();
@@ -7216,7 +7203,6 @@ pub(crate) mod valid {
                 soft_fork,
                 None,
                 false,
-                false,
                 ConsensusValidationProfile::LegacyLive,
                 false,
                 Some(&mut send_events),
@@ -7252,7 +7238,6 @@ pub(crate) mod valid {
                 voting_block,
                 soft_fork,
                 Some(timings),
-                false,
                 false,
                 ConsensusValidationProfile::LegacyLive,
                 false,
@@ -10116,8 +10101,6 @@ pub(crate) mod valid {
             static_data: &StaticValidationData,
             committed_heights: &[Option<NonZeroUsize>],
             prepared_txs: &[PreparedBlockTransaction],
-            cached_stateless_ok: Option<&[bool]>,
-            trust_replay_tx_signatures: bool,
             _metrics: MetricsRef<'_>,
         ) -> Result<(), BlockValidationError> {
             let _ = static_data.aggregate_lane;
@@ -10149,15 +10132,20 @@ pub(crate) mod valid {
             let mut prechecked_signature_results: Vec<
                 Option<Result<(), SignatureVerificationFail>>,
             > = vec![None; prepared_txs.len()];
+            // Genesis authenticates the ordered transaction intents once through the
+            // genesis-authority block signature. Per-transaction proof bytes are not
+            // an additional admission boundary.
             #[cfg(feature = "bls")]
-            Self::precheck_bls_transaction_signatures(
-                &signed_txs,
-                prepared_txs,
-                pipeline_cfg.signature_batch_max_bls,
-                &mut prechecked_signature_results,
-                _metrics,
-                static_data.aggregate_lane,
-            );
+            if !is_genesis_block {
+                Self::precheck_bls_transaction_signatures(
+                    &signed_txs,
+                    prepared_txs,
+                    pipeline_cfg.signature_batch_max_bls,
+                    &mut prechecked_signature_results,
+                    _metrics,
+                    static_data.aggregate_lane,
+                );
+            }
             let mut seen_hashes: HashSet<HashOf<SignedTransaction>> =
                 HashSet::with_capacity(signed_txs.len());
             let mut seen_sealed_commitments =
@@ -10257,11 +10245,6 @@ pub(crate) mod valid {
             use rayon::prelude::*;
 
             let mut ed25519_prechecked = vec![false; prepared_txs.len()];
-            if let Some(cached_stateless_ok) = cached_stateless_ok {
-                if cached_stateless_ok.len() != prepared_txs.len() {
-                    return Err(BlockValidationError::MerkleRootMismatch);
-                }
-            }
             let ed25519_batch_cap = pipeline_cfg.signature_batch_max_ed25519;
             if !is_genesis_block && ed25519_batch_cap > 0 {
                 struct Ed25519BatchItem {
@@ -10378,19 +10361,9 @@ pub(crate) mod valid {
                     .map(BlockValidationError::TransactionAccept);
                 }
 
-                let replay_signature_result = trust_replay_tx_signatures.then_some(Ok(()));
-                let stateless = if let Some(prechecked_signature_result) = replay_signature_result {
-                    AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
-                            tx,
-                            chain_id,
-                            max_clock_drift,
-                            tx_params,
-                            crypto_cfg.as_ref(),
-                            block_creation_time,
-                            Some(prechecked_signature_result),
-                            &prepared.metadata,
-                        )
-                } else if let Some(prechecked_signature_result) = prechecked_signature_result {
+                let stateless = if let Some(prechecked_signature_result) =
+                    prechecked_signature_result
+                {
                     AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                             tx,
                             chain_id,
@@ -10524,16 +10497,6 @@ pub(crate) mod valid {
             let metrics = Some(state.metrics());
             #[cfg(not(feature = "telemetry"))]
             let metrics = ();
-            let cache_now_ms = block.header().creation_time().as_millis();
-            let cached_stateless_ok = cache_context.as_ref().map(|context| {
-                let mut cache = state.stateless_validation_cache().lock();
-                cache.set_cap(cache_cap);
-                cache.ensure_context(context.clone());
-                prepared_txs
-                    .iter()
-                    .map(|prepared| cache.get_ok(&prepared.metadata.signed_hash, cache_now_ms))
-                    .collect::<Vec<_>>()
-            });
             Self::validate_static_with_snapshot(
                 block,
                 chain_id,
@@ -10541,8 +10504,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                cached_stateless_ok.as_deref(),
-                false,
                 metrics,
             )?;
             if let Some(context) = cache_context {
@@ -11516,12 +11477,14 @@ pub(crate) mod valid {
                 ))
             };
 
-            let sig_batch_start = if skip_stateless_checks {
+            // Static genesis admission already validated the block-authenticated intents.
+            // Do not spend execution-stage work on non-authoritative transaction proofs.
+            let sig_batch_start = if skip_stateless_checks || is_genesis_block {
                 None
             } else {
                 timings.as_ref().map(|_| Instant::now())
             };
-            if !skip_stateless_checks {
+            if !skip_stateless_checks && !is_genesis_block {
                 // Ed25519 deterministic micro-batching for stateless pre-pass.
                 {
                     fn flush_ed25519_precheck_batch<'a>(
@@ -11983,7 +11946,7 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 if let Some(start) = sig_batch_start {
                     timings.execution_tx_signature_batch_ms = to_ms(start.elapsed());
-                } else if skip_stateless_checks {
+                } else if skip_stateless_checks || is_genesis_block {
                     timings.execution_tx_signature_batch_ms = 0;
                 }
             }
@@ -19186,8 +19149,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                None,
-                false,
                 metrics,
             )
             .expect("static snapshot validation should succeed");
@@ -19799,8 +19760,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                None,
-                false,
                 metrics,
             )
             .expect_err("invalid tx signature should be rejected");
@@ -19894,8 +19853,6 @@ pub(crate) mod valid {
                 &static_data,
                 &committed_heights,
                 &prepared_txs,
-                None,
-                false,
                 metrics,
             )
             .expect_err("duplicate signed transaction hash should be rejected");
@@ -24442,6 +24399,8 @@ pub(crate) mod valid {
                 ["signature", "_", "override"].concat(),
                 ["signature", "_", "overrides"].concat(),
                 ["skip", "_tx", "_signature", "_validation"].concat(),
+                ["trust", "_replay", "_tx", "_signatures"].concat(),
+                ["cached", "_stateless", "_ok"].concat(),
             ];
             let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
             let mut pending = vec![src.clone()];
@@ -24547,7 +24506,7 @@ pub(crate) mod valid {
         }
 
         #[test]
-        fn validate_prevalidated_commit_keep_voting_block_trusts_validated_signatures() {
+        fn prevalidated_commit_skips_only_the_authenticated_block_signature() {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
             let state = State::new(World::new(), Arc::clone(&kura), query);
@@ -24652,12 +24611,72 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             assert!(
                 result.is_ok(),
-                "prevalidated commit execution should trust previously checked signatures"
+                "prevalidated commit execution may skip only the authenticated block signature"
             );
             assert!(events.is_empty(), "no rejection events expected");
             assert!(
                 timings.total_ms >= timings.execution_ms,
                 "prevalidated timing should still include execution"
+            );
+            drop(result);
+
+            let (invalid_authority, invalid_signer) =
+                gen_account_in("prevalidated-invalid-signature");
+            let (forged_authority, _) = gen_account_in("prevalidated-forged-authority");
+            let invalid_tx = TransactionBuilder::new_with_time_source(
+                state.chain_id.clone(),
+                invalid_authority,
+                &tx_time_source,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "invalid-prevalidated".to_owned())])
+            .sign(invalid_signer.private_key())
+            .with_authority(forged_authority);
+            let invalid_builder = BlockBuilder::new_with_time_source(
+                vec![AcceptedTransaction::new_unchecked(Cow::Owned(invalid_tx))],
+                block_time_source.clone(),
+            )
+            .chain(0, state.view().latest_block().as_deref());
+            let invalid_execution_context = default_test_execution_context(
+                &invalid_builder.0.transactions,
+                &invalid_builder.0.header,
+                topology.as_ref()[0].clone(),
+            );
+            let invalid_block = with_current_state_da_sidecars(
+                invalid_builder.with_execution_context(Some(invalid_execution_context)),
+                &state,
+            )
+            .sign(wrong_leader.private_key())
+            .unpack(|_| {});
+            let mut invalid_voting_block: Option<super::super::VotingBlock> = None;
+            let mut invalid_events = Vec::new();
+            let mut invalid_timings = ValidationTimings::new();
+            let invalid_result =
+                ValidBlock::validate_prevalidated_commit_keep_voting_block_with_events_and_timing(
+                    invalid_block.into(),
+                    &topology,
+                    &state.chain_id,
+                    &ALICE_ID,
+                    &block_time_source,
+                    &state,
+                    &mut invalid_voting_block,
+                    &mut invalid_timings,
+                    |event| invalid_events.push(event),
+                )
+                .unpack(|_| {});
+            let Err(error) = invalid_result else {
+                panic!("prevalidated commit must still verify every transaction signature");
+            };
+            assert!(matches!(
+                *error.1,
+                BlockValidationError::TransactionAccept(
+                    AcceptTransactionFail::SignatureVerification(_)
+                )
+            ));
+            assert_eq!(
+                invalid_events.len(),
+                1,
+                "signature rejection should emit exactly one block event"
             );
         }
 
@@ -24893,6 +24912,200 @@ pub(crate) mod valid {
             );
 
             assert!(check_genesis_block(&block, &genesis_account, &chain_id).is_ok());
+        }
+
+        #[test]
+        fn check_genesis_block_rejects_height_above_one() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let mut block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let mut header = block.header();
+            header.set_height(nonzero!(2_u64));
+            block.replace_header_for_testing(header);
+            let signature = BlockSignature::new(
+                0,
+                checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
+            );
+            block
+                .replace_signatures([signature].into_iter().collect())
+                .expect("replace signature after changing test header");
+
+            assert_eq!(
+                check_genesis_block(&block, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::InvalidHeader)
+            );
+        }
+
+        #[test]
+        fn check_genesis_block_rejects_parent_hash() {
+            use iroha_data_model::prelude::*;
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+            let tx = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let mut block = SignedBlock::genesis(
+                vec![tx],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let mut header = block.header();
+            header.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"not-a-genesis-parent",
+            ))));
+            block.replace_header_for_testing(header);
+            let signature = BlockSignature::new(
+                0,
+                checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
+            );
+            block
+                .replace_signatures([signature].into_iter().collect())
+                .expect("replace signature after changing test header");
+
+            assert_eq!(
+                check_genesis_block(&block, &genesis_account, &chain_id),
+                Err(InvalidGenesisError::InvalidHeader)
+            );
+        }
+
+        #[cfg(feature = "bls")]
+        #[test]
+        fn block_authenticated_genesis_ignores_invalid_per_transaction_bls_proof() {
+            use iroha_data_model::prelude::*;
+
+            let chain_id = ChainId::from("block-authenticated-bls-genesis");
+            let genesis_keypair =
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let unrelated_keypair =
+                crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+
+            let pop = iroha_crypto::bls_normal_pop_prove(genesis_keypair.private_key())
+                .expect("valid BLS proof of possession");
+            let mut metadata = Metadata::default();
+            metadata.insert(
+                "bls_pop".parse().expect("valid BLS PoP metadata key"),
+                iroha_primitives::json::Json::new(hex::encode_upper(pop)),
+            );
+            let mut transaction = TransactionBuilder::new(
+                chain_id.clone(),
+                genesis_account.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .with_metadata(metadata)
+            .sign(genesis_keypair.private_key());
+            transaction.set_signature(iroha_data_model::transaction::TransactionSignature(
+                SignatureOf::try_new(unrelated_keypair.private_key(), transaction.payload())
+                    .expect("unrelated BLS key can sign the fixture payload"),
+            ));
+            transaction
+                .verify_signature()
+                .expect_err("fixture transaction proof must not authorize the genesis account");
+
+            let block =
+                SignedBlock::genesis(vec![transaction], genesis_keypair.private_key(), None, None);
+            let world = World::with(
+                [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account)],
+                [Account::new(genesis_account.clone()).build(&genesis_account)],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let state = State::new_with_chain_for_testing(
+                world,
+                Arc::clone(&kura),
+                LiveQueryStore::start_test(),
+                chain_id.clone(),
+            );
+            install_test_lane_manifests_for_keypairs(
+                &state,
+                std::slice::from_ref(&genesis_keypair),
+            );
+            let mut crypto = iroha_config::parameters::actual::Crypto::default();
+            if !crypto.allowed_signing.contains(&Algorithm::BlsNormal) {
+                crypto.allowed_signing.push(Algorithm::BlsNormal);
+            }
+            state.set_crypto(crypto);
+            let block = with_current_state_confidential_features(
+                block,
+                &state,
+                &[(0, genesis_keypair.private_key())],
+            );
+            let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
+            let mut voting_block = None;
+
+            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+                block,
+                &topology,
+                &chain_id,
+                &genesis_account,
+                &TimeSource::new_system(),
+                &state,
+                &mut voting_block,
+                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
+            )
+            .unpack(|_| {});
+
+            result.expect(
+                "the genesis block signature authenticates the intent; its transaction proof is non-authoritative",
+            );
+        }
+
+        #[test]
+        fn check_genesis_block_rejects_multisig_authority_without_unwinding() {
+            use iroha_data_model::{
+                account::{MultisigMember, MultisigPolicy},
+                prelude::*,
+            };
+            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+            let transaction = TransactionBuilder::new(
+                chain_id.clone(),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+            let block = SignedBlock::genesis(
+                vec![transaction],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+                None,
+                None,
+            );
+            let member =
+                MultisigMember::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(), 1)
+                    .expect("valid member");
+            let multisig_genesis = AccountId::new_multisig(
+                MultisigPolicy::new(1, vec![member]).expect("valid policy"),
+            );
+
+            assert_eq!(
+                check_genesis_block(&block, &multisig_genesis, &chain_id),
+                Err(InvalidGenesisError::GenesisAuthorityNotSingleKey)
+            );
         }
 
         #[test]

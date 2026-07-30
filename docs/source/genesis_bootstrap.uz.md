@@ -24,8 +24,9 @@ Norito kodlangan bootstrap protokoli yordamida.
   o'lcham qopqog'i (`genesis.bootstrap_max_bytes`). Ruxsat etilgan ro'yxatdan tashqari so'rovlar `NotAllowed` oladi va
   noto'g'ri kalit bilan imzolangan foydali yuklar `MismatchedPubkey` ni oladi.
 - **So‘rovlar oqimi:** xotira bo‘sh va `genesis.file` o‘rnatilmaganda (va
-  `genesis.bootstrap_enabled=true`), tugun ishonchli tengdoshlarni ixtiyoriy ravishda oldindan ishlaydi.
-  `genesis.expected_hash`, keyin foydali yukni oladi, `validate_genesis_block` orqali imzolarni tasdiqlaydi,
+  `genesis.bootstrap_enabled=true`), `genesis.expected_hash` imzolangan genezis blokini aniq va
+  majburiy ravishda mahkamlashi kerak. Fayl ham, xesh ham bo‘lmasa, biror so‘rov yuborilishidan oldin
+  ishga tushirish konfiguratsiyasi xatosi yuz beradi. Keyin tugun foydali yukni oladi va `validate_genesis_block` orqali imzolarni tasdiqlaydi,
   va blokni qo'llashdan oldin Kura bilan birga `genesis.bootstrap.nrt` davom etadi. Bootstrap qayta urinishlari
   honor `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval` va
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ Norito kodlangan bootstrap protokoli yordamida.
   tengdoshlar bo'ylab olishni to'xtatish; mahalliy konfiguratsiyaga hech qanday javob beruvchilar/vaqt tugamaydi.
 - **Operator qadamlari:** hech bo'lmaganda bitta ishonchli tengdoshning haqiqiy kelib chiqishiga ishonch hosil qiling, sozlang
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` va qayta urinish tugmalari va
-  mos kelmaydigan foydali yuklarni qabul qilmaslik uchun ixtiyoriy ravishda `expected_hash` pinini qo'ying. Doimiy yuklamalar bo'lishi mumkin
+  masofaviy bootstrap-ni yoqishdan oldin aniq blokni `expected_hash`-ga mahkamlang. Mahalliy imzolangan
+  `genesis.file` o‘zi aniq artefakt bo‘lib, qo‘shimcha xesh talab qilmaydi. Doimiy yuklamalar bo'lishi mumkin
   `genesis.file` ni `genesis.bootstrap.nrt` ga ko'rsatib, keyingi botlarda qayta foydalaniladi.

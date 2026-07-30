@@ -524,7 +524,12 @@ fn ensure_bilateral_settlement_shape(
     Ok(())
 }
 
-fn ensure_bilateral_counterparty_consent(
+/// Resolve one exact balance authorized by an owner-issued bilateral consent.
+///
+/// Grant/revoke validation permits only `debited_asset.account()` to issue the
+/// capability. Callers additionally bind the capability to their own
+/// domain-separated complete-intent hash and a one-shot settlement identifier.
+pub(super) fn ensure_bilateral_counterparty_consent(
     stx: &StateTransaction<'_, '_>,
     authority: &AccountId,
     debited_account: &AccountId,

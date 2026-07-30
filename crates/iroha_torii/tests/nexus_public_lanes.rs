@@ -334,7 +334,7 @@ fn seed_public_lane_state(
     RegisterPublicLaneValidator {
         lane_id: LaneId::SINGLE,
         validator: validator.clone(),
-        peer_id: PeerId::from(validator.signatory().clone()),
+        peer_id: PeerId::from(validator.expect_single_signatory().clone()),
         stake_account: validator.clone(),
         initial_stake: iroha_primitives::numeric::Quantity::from(1000_u32),
         metadata,

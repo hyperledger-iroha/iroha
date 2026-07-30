@@ -444,8 +444,7 @@ mod tests {
         profile::{
             ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1, ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1,
             ZK_X509_DEEP_OPENING_BYTES_V1, ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1,
-            ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1, ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1,
-            ZK_X509_MAX_PROOF_BYTES_V1,
+            ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1, ZK_X509_MAX_PROOF_BYTES_V1,
         },
     };
 
@@ -1127,12 +1126,17 @@ mod tests {
     #[test]
     fn exact_maximum_envelope_includes_the_single_authoritative_outer_frame() {
         assert_eq!(ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1, 92);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 8_212_538);
+        assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 7_174_152);
+        assert_eq!(
+            ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
+            1_224_646
+        );
         let maximum_inner = ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
             + ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1
             + ZK_X509_DEEP_OPENING_BYTES_V1
             + ZK_X509_CA_CLAIM_ENVELOPE_BYTES_V1
-            + ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1
-            + ZK_X509_MAIN_FIXED_ORACLE_MAXIMUM_BYTES_V1;
+            + ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1;
         assert_eq!(
             maximum_inner as usize + ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1,
             ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize

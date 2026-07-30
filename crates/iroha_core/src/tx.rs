@@ -6575,7 +6575,7 @@ pub mod tests {
         let role_id: RoleId = format!(
             "MULTISIG_SIGNATORY/{}/{}",
             domain_id,
-            authority_id.signatory()
+            authority_id.expect_single_signatory()
         )
         .parse()
         .expect("static multisig role must parse");
@@ -8357,14 +8357,7 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             repo
         )));
-        let reverse = iroha_data_model::isi::repo::ReverseRepoIsi::new(
-            agreement_id.clone(),
-            counterparty.clone(),
-            authority.clone(),
-            cash_leg.clone(),
-            collateral_leg.clone(),
-            1_700_000_100_000,
-        );
+        let reverse = iroha_data_model::isi::repo::ReverseRepoIsi::new(agreement_id.clone());
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             reverse
         )));
@@ -13299,7 +13292,10 @@ pub mod tests {
     #[test]
     fn sandbox_accounts_are_deterministic() {
         for (name, public, _) in SANDBOX_ACCOUNT_KEYS {
-            assert_eq!(ACCOUNT[name].id.signatory().to_string(), *public);
+            assert_eq!(
+                ACCOUNT[name].id.expect_single_signatory().to_string(),
+                *public
+            );
         }
     }
 
@@ -13477,7 +13473,7 @@ pub mod tests {
     fn format_asset_id_for_snapshot(asset_id: &AssetId) -> String {
         let account = asset_id.account();
         let account_str = ACCOUNT_ALIAS_BY_ID.get(account).map_or_else(
-            || format!("{}@{}", account.signatory(), DOMAIN_STR),
+            || format!("{}@{}", account.expect_single_signatory(), DOMAIN_STR),
             |alias| format!("{alias}@{DOMAIN_STR}"),
         );
         if asset_id.definition().try_domain() == Some(&*DOMAIN) {

@@ -7217,59 +7217,18 @@ mod repo {
 
     #[derive(clap::Args, Debug)]
     pub struct Unwind {
-        /// Stable identifier assigned to the repo agreement lifecycle
+        /// Stable identifier to settle at maturity as any recorded participant
         #[arg(long)]
         pub agreement_id: RepoAgreementId,
-        /// Initiating account performing the unwind
-        #[arg(long)]
-        pub initiator: String,
-        /// Counterparty receiving the unwind settlement
-        #[arg(long)]
-        pub counterparty: String,
-        /// Cash asset definition identifier
-        #[arg(long)]
-        pub cash_asset: AssetDefinitionId,
-        /// Cash quantity returned at unwind (integer or decimal)
-        #[arg(long)]
-        pub cash_quantity: iroha_primitives::numeric::Quantity,
-        /// Collateral asset definition identifier
-        #[arg(long)]
-        pub collateral_asset: AssetDefinitionId,
-        /// Collateral quantity released at unwind (integer or decimal)
-        #[arg(long)]
-        pub collateral_quantity: iroha_primitives::numeric::Quantity,
-        /// Unix timestamp (milliseconds) when the unwind was agreed
-        #[arg(long)]
-        pub settlement_timestamp_ms: u64,
     }
 
     impl Unwind {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let initiator = resolve_account_id(context, &self.initiator)
-                .wrap_err("failed to resolve --initiator account")?;
-            let counterparty = resolve_account_id(context, &self.counterparty)
-                .wrap_err("failed to resolve --counterparty account")?;
-            let cash_leg = RepoCashLeg {
-                asset_definition_id: self.cash_asset,
-                quantity: self.cash_quantity,
-            };
-            let collateral_leg = RepoCollateralLeg {
-                asset_definition_id: self.collateral_asset,
-                quantity: self.collateral_quantity,
-                metadata: Metadata::default(),
-            };
-            let instruction = ReverseRepoIsi::new(
-                self.agreement_id,
-                initiator,
-                counterparty,
-                cash_leg,
-                collateral_leg,
-                self.settlement_timestamp_ms,
-            );
+            let instruction = ReverseRepoIsi::new(self.agreement_id);
             let instruction: RepoInstructionBox = instruction.into();
             context
                 .finish([InstructionBox::from(instruction)])
-                .wrap_err("Failed to unwind repo agreement")
+                .wrap_err("Failed to settle repo agreement at maturity")
         }
     }
 

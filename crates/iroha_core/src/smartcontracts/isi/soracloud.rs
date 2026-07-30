@@ -18583,7 +18583,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(ALICE_ID.signatory().clone()),
+                peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()),
                 stake_account: ALICE_ID.clone(),
                 total_stake: Quantity::from(1_000_u64),
                 self_stake: Quantity::from(1_000_u64),
@@ -18672,7 +18672,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(8),
                 validator: BOB_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(9_000_u64),
                 self_stake: Quantity::from(9_000_u64),
@@ -18693,7 +18693,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(8_000_u64),
                 self_stake: Quantity::from(8_000_u64),
@@ -18722,7 +18722,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: bonded.clone(),
                 self_stake: bonded.clone(),
@@ -18792,7 +18792,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id,
                 validator: validator.clone(),
-                peer_id: PeerId::from(validator.signatory().clone()),
+                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: bonded.clone(),
                 self_stake: bonded.clone(),
@@ -18877,7 +18877,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(3),
                 validator: BOB_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(9_000_u64),
                 self_stake: Quantity::from(9_000_u64),
@@ -18893,7 +18893,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(4),
                 validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.signatory().clone()),
+                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
                 stake_account: BOB_ID.clone(),
                 total_stake: Quantity::from(8_000_u64),
                 self_stake: Quantity::from(8_000_u64),

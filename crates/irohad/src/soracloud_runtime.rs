@@ -11917,6 +11917,7 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::HTMAbort => "htm_abort",
         VMError::NoritoInvalid => "norito_invalid",
         VMError::AbiTypeNotAllowed { .. } => "abi_type_not_allowed",
+        VMError::HostOutputBudgetExceeded { .. } => "host_output_budget_exceeded",
         VMError::AmxBudgetExceeded { .. } => "amx_budget_exceeded",
         VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
     }

@@ -23,6 +23,15 @@ use super::{
         decode_zk_x509_credential_envelope_v1,
     },
     der_air::ZkX509Rfc5280StatementV1,
+    fixed_algebraic::ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+    fixed_algebraic_p256::{
+        ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1, ZkX509P256FixedAlgebraicErrorV1,
+        zk_x509_p256_fixed_algebraic_schedule_v1,
+    },
+    fixed_algebraic_sha::{
+        ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1, ZkX509ShaFixedAlgebraicErrorV1,
+        zk_x509_sha_fixed_algebraic_schedule_v1,
+    },
     io_air::ZK_X509_IO_AIR_DESCRIPTOR_V1,
     main_assembly::{
         ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1,
@@ -30,17 +39,6 @@ use super::{
     },
     main_io::ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
     merkle::hash_frame_v1,
-    preprocessed_fixed::{
-        ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1,
-        ZK_X509_P256_LOG19_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1,
-        ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1,
-        ZK_X509_SHA_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1,
-        ZK_X509_SHA_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1,
-        ZkX509P256Log19PreprocessedFixedCertificateV1, ZkX509PreprocessedFixedErrorV1,
-        ZkX509ShaPreprocessedFixedCertificateV1,
-        pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1,
-        pinned_zk_x509_sha_preprocessed_fixed_certificate_v1,
-    },
     profile::{
         ZK_X509_CERTIFICATE_POLICY_REVISION_SCHEMA_V1, ZK_X509_CRL_PROFILE_V1,
         ZK_X509_CRL_REVISION_SCHEMA_V1, ZK_X509_CRL_SCOPE_PROFILE_V1, ZK_X509_ECDSA_RULES_V1,
@@ -51,7 +49,7 @@ use super::{
         ZkX509GovernanceV1, ZkX509RelationErrorV1, ZkX509RelationOutputV1,
         validate_reference_relation_v1,
     },
-    sha_call_bus_stark::ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
+    sha_call_bus_stark::{ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1, ZkX509ShaCallPublicShapeV1},
     sha256_air::ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
     sha256_word_air::ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
 };
@@ -59,70 +57,26 @@ use crate::privacy_state::{
     PrivacyZkX509AuthoritativeStateV1, validate_privacy_zk_x509_statement_state_v1,
 };
 
-const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.provisional-compiled-profile.v1";
-const RELEASE_COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha.zk-x509.release-compiled-profile.v1";
+const COMPILED_PROFILE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.zk-x509.compiled-profile.v1";
 const REFERENCE_PREPARATION_SCHEMA_V1: &[u8] = b"trusted-authoritative-state+trusted-block-time+taira-consensus-limits+exact-IRX509W1-private-witness+strict-reference-relation";
-const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 19;
-const RELEASE_COMPILED_PROFILE_FIELD_COUNT_V1: usize = 24;
+const COMPILED_PROFILE_FIELD_COUNT_V1: usize = 28;
+const SHA_DISCLOSURE_SHAPE_COUNT_V1: usize = 5;
 
-/// Frozen digest of the exact fail-closed native profile.
-///
-/// This digest binds the implemented subproof parameters and the explicit gap
-/// inventory. It is not an activation digest.
-pub(crate) const ZK_X509_PROVISIONAL_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
-    0x0f, 0x1b, 0x79, 0x24, 0xf2, 0xfc, 0xda, 0x03, 0x84, 0xe0, 0xfc, 0x20, 0xad, 0x68, 0x1d, 0xd0,
-    0x32, 0x17, 0xc9, 0xe0, 0x24, 0xa4, 0x5a, 0xd6, 0xf7, 0x40, 0x71, 0x29, 0x3d, 0xd3, 0xc1, 0x7f,
-];
+// Filled only after all six algebraic schedules have independent release KATs.
+// There is deliberately no provisional, root-bearing, or certificate-bearing
+// profile in the first-release protocol.
+const ZK_X509_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = None;
 
-// This second pin is intentionally absent until the fixed-oracle root and the
-// resulting 24-field release frame have both been independently reproduced.
-// The 19-field provisional digest above remains usable only by the isolated
-// fail-closed laboratory subproofs.
-const ZK_X509_RELEASE_COMPILED_PROFILE_DIGEST_V1: Option<[u8; 32]> = None;
-
-/// Exact certificate-bearing profile required by MAIN prover and verifier
-/// construction.
+/// Exact algebraic-schedule-bearing profile required by MAIN.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CompiledProfileV1 {
     digest: [u8; 32],
-    sha_preprocessed_fixed: ZkX509ShaPreprocessedFixedCertificateV1,
-    encoded_sha_preprocessed_fixed: [u8; ZK_X509_SHA_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1],
-    p256_log19_preprocessed_fixed: ZkX509P256Log19PreprocessedFixedCertificateV1,
-    encoded_p256_log19_preprocessed_fixed:
-        [u8; ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1],
 }
 
 impl ZkX509CompiledProfileV1 {
     /// Consensus transcript digest of the complete release manifest.
     pub(crate) const fn digest(self) -> [u8; 32] {
         self.digest
-    }
-
-    /// Verifier-owned fixed-oracle certificate bound by the manifest.
-    pub(crate) const fn sha_preprocessed_fixed(self) -> ZkX509ShaPreprocessedFixedCertificateV1 {
-        self.sha_preprocessed_fixed
-    }
-
-    /// Exact bytes committed as the final manifest field.
-    pub(crate) const fn encoded_sha_preprocessed_fixed(
-        self,
-    ) -> [u8; ZK_X509_SHA_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1] {
-        self.encoded_sha_preprocessed_fixed
-    }
-
-    /// Verifier-owned P-256 log19 fixed-oracle certificate.
-    pub(crate) const fn p256_log19_preprocessed_fixed(
-        self,
-    ) -> ZkX509P256Log19PreprocessedFixedCertificateV1 {
-        self.p256_log19_preprocessed_fixed
-    }
-
-    /// Exact P-256 log19 certificate bytes committed by the release manifest.
-    pub(crate) const fn encoded_p256_log19_preprocessed_fixed(
-        self,
-    ) -> [u8; ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1] {
-        self.encoded_p256_log19_preprocessed_fixed
     }
 }
 
@@ -193,14 +147,17 @@ pub(crate) enum ZkX509EngineErrorV1 {
     /// The complete main-plus-CA aggregate verifier has not been assembled.
     #[error("zk-X509 consensus credential verifier is not assembled")]
     ConsensusVerifierUnavailable,
-    /// Fixed preprocessing has no pinned root or its certificate is invalid.
+    /// The canonical SHA algebraic compiler or schedule rejected its profile.
     #[error(transparent)]
-    FixedPreprocessing(#[from] ZkX509PreprocessedFixedErrorV1),
-    /// The complete certificate-bearing release manifest has not been pinned.
-    #[error("zk-X509 certificate-bearing compiled profile is not release-pinned")]
+    ShaFixedAlgebraic(#[from] ZkX509ShaFixedAlgebraicErrorV1),
+    /// The canonical P-256 algebraic compiler or schedule rejected its profile.
+    #[error(transparent)]
+    P256FixedAlgebraic(#[from] ZkX509P256FixedAlgebraicErrorV1),
+    /// The complete 28-field release manifest has not been pinned.
+    #[error("zk-X509 compiled profile is not release-pinned")]
     CompiledProfileUnpinned,
-    /// Recomputed release-manifest digest differs from the consensus pin.
-    #[error("zk-X509 certificate-bearing compiled profile digest mismatch")]
+    /// Recomputed 28-field manifest digest differs from the consensus pin.
+    #[error("zk-X509 compiled profile digest mismatch")]
     CompiledProfileMismatch,
 }
 
@@ -296,7 +253,10 @@ pub(crate) fn require_complete_zk_x509_air_v1() -> Result<(), ZkX509EngineErrorV
     }
 }
 
-fn compiled_profile_fields_v1() -> [&'static [u8]; COMPILED_PROFILE_FIELD_COUNT_V1] {
+fn compiled_profile_fields_v1<'a>(
+    sha_schedule_digests: &'a [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1],
+    p256_schedule_digest: &'a [u8; 32],
+) -> [&'a [u8]; COMPILED_PROFILE_FIELD_COUNT_V1] {
     [
         ZK_X509_SUITE_V1,
         ZK_X509_SOURCE_PROFILE_V1,
@@ -317,81 +277,55 @@ fn compiled_profile_fields_v1() -> [&'static [u8]; COMPILED_PROFILE_FIELD_COUNT_
         ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
         ZK_X509_IO_AIR_DESCRIPTOR_V1,
         REFERENCE_PREPARATION_SCHEMA_V1,
+        ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+        ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1,
+        &sha_schedule_digests[0],
+        &sha_schedule_digests[1],
+        &sha_schedule_digests[2],
+        &sha_schedule_digests[3],
+        &sha_schedule_digests[4],
+        ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1,
+        p256_schedule_digest,
     ]
 }
 
-fn release_compiled_profile_fields_v1<'a>(
-    encoded_sha_certificate: &'a [u8; ZK_X509_SHA_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1],
-    encoded_p256_certificate: &'a [u8; ZK_X509_P256_LOG19_PREPROCESSED_FIXED_CERTIFICATE_BYTES_V1],
-) -> [&'a [u8]; RELEASE_COMPILED_PROFILE_FIELD_COUNT_V1] {
-    [
-        ZK_X509_SUITE_V1,
-        ZK_X509_SOURCE_PROFILE_V1,
-        ZK_X509_RFC5280_PROFILE_V1,
-        ZK_X509_CRL_PROFILE_V1,
-        ZK_X509_CRL_SCOPE_PROFILE_V1,
-        ZK_X509_TRUST_ANCHOR_REVISION_SCHEMA_V1,
-        ZK_X509_CERTIFICATE_POLICY_REVISION_SCHEMA_V1,
-        ZK_X509_CRL_REVISION_SCHEMA_V1,
-        ZK_X509_ECDSA_RULES_V1,
-        ZK_X509_STARK_PROFILE_DESCRIPTOR_V1,
-        ZK_X509_MAIN_ASSEMBLY_DESCRIPTOR_V1,
-        ZK_X509_MAIN_IO_DECLARATIONS_DESCRIPTOR_V1,
-        ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1,
-        ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1,
-        ZK_X509_SHA256_LOCAL_AIR_DESCRIPTOR_V1,
-        ZK_X509_SHA256_WORD_AIR_DESCRIPTOR_V1,
-        ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1,
-        ZK_X509_IO_AIR_DESCRIPTOR_V1,
-        REFERENCE_PREPARATION_SCHEMA_V1,
-        ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1,
-        ZK_X509_SHA_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1,
-        encoded_sha_certificate,
-        ZK_X509_P256_LOG19_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1,
-        encoded_p256_certificate,
-    ]
+fn compiled_profile_schedule_digests_v1()
+-> Result<([[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1], [u8; 32]), ZkX509EngineErrorV1> {
+    let mut sha = [[0_u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1];
+    for (disclosed_attributes, digest) in sha.iter_mut().enumerate() {
+        *digest = zk_x509_sha_fixed_algebraic_schedule_v1(ZkX509ShaCallPublicShapeV1 {
+            disclosed_attributes,
+        })?
+        .descriptor_digest_v1();
+    }
+    let p256 = zk_x509_p256_fixed_algebraic_schedule_v1()?.descriptor_digest_v1();
+    Ok((sha, p256))
 }
 
-/// Recompute the exact provisional compiled-profile digest.
-pub(crate) fn recompute_zk_x509_provisional_compiled_profile_digest_v1() -> [u8; 32] {
+/// Recompute the sole exact 28-field compiled-profile digest.
+pub(crate) fn recompute_zk_x509_compiled_profile_digest_v1() -> Result<[u8; 32], ZkX509EngineErrorV1>
+{
+    let (sha, p256) = compiled_profile_schedule_digests_v1()?;
     hash_frame_v1(
         COMPILED_PROFILE_DIGEST_DOMAIN_V1,
-        &compiled_profile_fields_v1(),
+        &compiled_profile_fields_v1(&sha, &p256),
     )
-    .expect("fixed compiled-profile fields are representable")
+    .map_err(|_| ZkX509EngineErrorV1::CompiledProfileMismatch)
 }
 
-/// Construct the sole complete certificate-bearing release profile.
+/// Construct the sole complete algebraic-schedule-bearing release profile.
 ///
-/// Root pinning and manifest-digest pinning are independent release checks.
-/// A MAIN constructor cannot succeed between those two ceremony steps.
+/// All six success-only verifier schedule caches must compile before the
+/// manifest digest is compared with its independent release pin.
 pub(crate) fn construct_zk_x509_compiled_profile_v1()
 -> Result<ZkX509CompiledProfileV1, ZkX509EngineErrorV1> {
-    let sha_preprocessed_fixed = pinned_zk_x509_sha_preprocessed_fixed_certificate_v1()?;
-    let encoded_sha_preprocessed_fixed = sha_preprocessed_fixed.encode_v1()?;
-    let p256_log19_preprocessed_fixed =
-        pinned_zk_x509_p256_log19_preprocessed_fixed_certificate_v1()?;
-    let encoded_p256_log19_preprocessed_fixed = p256_log19_preprocessed_fixed.encode_v1()?;
-    let digest = hash_frame_v1(
-        RELEASE_COMPILED_PROFILE_DIGEST_DOMAIN_V1,
-        &release_compiled_profile_fields_v1(
-            &encoded_sha_preprocessed_fixed,
-            &encoded_p256_log19_preprocessed_fixed,
-        ),
-    )
-    .expect("fixed release compiled-profile fields are representable");
-    let expected = ZK_X509_RELEASE_COMPILED_PROFILE_DIGEST_V1
-        .ok_or(ZkX509EngineErrorV1::CompiledProfileUnpinned)?;
+    let digest = recompute_zk_x509_compiled_profile_digest_v1()?;
+    let expected =
+        ZK_X509_COMPILED_PROFILE_DIGEST_V1.ok_or(ZkX509EngineErrorV1::CompiledProfileUnpinned)?;
     if digest != expected {
         return Err(ZkX509EngineErrorV1::CompiledProfileMismatch);
     }
-    Ok(ZkX509CompiledProfileV1 {
-        digest,
-        sha_preprocessed_fixed,
-        encoded_sha_preprocessed_fixed,
-        p256_log19_preprocessed_fixed,
-        encoded_p256_log19_preprocessed_fixed,
-    })
+    Ok(ZkX509CompiledProfileV1 { digest })
 }
 
 #[cfg(test)]
@@ -424,8 +358,12 @@ mod tests {
     }
 
     #[test]
-    fn compiled_profile_manifest_and_frame_are_exact_and_independently_pinned() {
-        let expected_fields: [&[u8]; COMPILED_PROFILE_FIELD_COUNT_V1] = [
+    fn compiled_profile_manifest_has_the_exact_28_field_order() {
+        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x31 + shape).expect("five shapes"); 32]);
+        let p256_digest = [0x41; 32];
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let original_fields: [&[u8]; 19] = [
             ZK_X509_SUITE_V1,
             ZK_X509_SOURCE_PROFILE_V1,
             ZK_X509_RFC5280_PROFILE_V1,
@@ -446,142 +384,79 @@ mod tests {
             ZK_X509_IO_AIR_DESCRIPTOR_V1,
             REFERENCE_PREPARATION_SCHEMA_V1,
         ];
-        assert_eq!(expected_fields.len(), 19);
-        assert_eq!(compiled_profile_fields_v1(), expected_fields);
+        assert_eq!(fields.len(), 28);
+        assert_eq!(&fields[..19], &original_fields);
+        assert_eq!(fields[19], ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
+        assert_eq!(
+            fields[20],
+            ZK_X509_SHA_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_V1
+        );
+        for (shape, digest) in sha_digests.iter().enumerate() {
+            assert_eq!(fields[21 + shape], digest);
+        }
+        assert_eq!(fields[26], ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1);
+        assert_eq!(fields[27], p256_digest);
         assert!(
-            expected_fields[12]
+            fields[12]
                 .windows(b"post-base-challenges=exact272-goldilocks-fields".len())
                 .any(|window| window == b"post-base-challenges=exact272-goldilocks-fields")
         );
         assert!(
-            expected_fields[16]
+            fields[16]
                 .windows(b"main-common-lde-log25".len())
                 .any(|window| window == b"main-common-lde-log25")
         );
         assert!(
-            !expected_fields[16]
+            !fields[16]
                 .windows(b"common-lde-log22".len())
                 .any(|window| window == b"common-lde-log22")
         );
-
-        let frame = independently_encode_compiled_profile_frame_v1(&expected_fields);
-        assert_eq!(frame.len(), 10_631);
-        let digest: [u8; 32] = Sha256::digest(frame).into();
-        assert_eq!(digest, ZK_X509_PROVISIONAL_COMPILED_PROFILE_DIGEST_V1);
-        assert_eq!(
-            digest,
-            recompute_zk_x509_provisional_compiled_profile_digest_v1()
-        );
     }
 
     #[test]
-    fn omitted_sha_call_descriptor_and_stale_digest_fail_closed() {
-        const STALE_PINNED_DIGEST_V1: [u8; 32] = [
-            0x21, 0xb9, 0x75, 0xe1, 0xec, 0x97, 0x8c, 0x6c, 0x67, 0xca, 0x95, 0xd6, 0xb9, 0x0d,
-            0x73, 0x67, 0x75, 0x2c, 0x3f, 0x7e, 0x87, 0x10, 0x25, 0x1f, 0x37, 0xc2, 0xcd, 0x31,
-            0xd6, 0x42, 0x98, 0x0b,
-        ];
-        const OMITTED_SHA_CALL_DIGEST_V1: [u8; 32] = [
-            0xa5, 0x6b, 0xc0, 0x86, 0xbc, 0xfb, 0x56, 0x35, 0x29, 0xdd, 0x51, 0x25, 0xb3, 0xdb,
-            0xa2, 0xf5, 0x17, 0xc0, 0xb7, 0xd8, 0x4a, 0x1c, 0x63, 0xf9, 0x37, 0xeb, 0x25, 0x91,
-            0xb0, 0x14, 0x3e, 0x2c,
-        ];
+    fn compiled_profile_binds_every_algebraic_field_and_its_order() {
+        let sha_digests: [[u8; 32]; SHA_DISCLOSURE_SHAPE_COUNT_V1] =
+            core::array::from_fn(|shape| [u8::try_from(0x51 + shape).expect("five shapes"); 32]);
+        let p256_digest = [0x61; 32];
+        let canonical_fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let canonical = independent_compiled_profile_digest_v1(&canonical_fields);
+        let owned = canonical_fields
+            .iter()
+            .map(|field| field.to_vec())
+            .collect::<Vec<_>>();
 
-        let canonical = compiled_profile_fields_v1();
-        let mut omitted = Vec::with_capacity(COMPILED_PROFILE_FIELD_COUNT_V1 - 1);
-        omitted.extend_from_slice(&canonical[..16]);
-        omitted.extend_from_slice(&canonical[17..]);
-        assert_eq!(omitted.len(), 18);
-        let omitted_digest = independent_compiled_profile_digest_v1(&omitted);
-        assert_eq!(omitted_digest, OMITTED_SHA_CALL_DIGEST_V1);
-        assert_ne!(
-            omitted_digest,
-            ZK_X509_PROVISIONAL_COMPILED_PROFILE_DIGEST_V1
-        );
-        assert_ne!(
-            STALE_PINNED_DIGEST_V1,
-            ZK_X509_PROVISIONAL_COMPILED_PROFILE_DIGEST_V1
-        );
-        assert_ne!(
-            STALE_PINNED_DIGEST_V1,
-            recompute_zk_x509_provisional_compiled_profile_digest_v1()
-        );
-    }
-
-    #[test]
-    fn certificate_bearing_release_manifest_binds_root_geometry_order_and_descriptors() {
-        let sha_certificate =
-            ZkX509ShaPreprocessedFixedCertificateV1::from_derived_root_v1([1; 32])
-                .expect("nonzero candidate root");
-        let p256_certificate =
-            ZkX509P256Log19PreprocessedFixedCertificateV1::from_derived_root_v1([2; 32])
-                .expect("nonzero P-256 candidate root");
-        let encoded_sha = sha_certificate
-            .encode_v1()
-            .expect("SHA candidate certificate");
-        let encoded_p256 = p256_certificate
-            .encode_v1()
-            .expect("P-256 candidate certificate");
-        let fields = release_compiled_profile_fields_v1(&encoded_sha, &encoded_p256);
-        assert_eq!(fields.len(), 24);
-        assert_eq!(fields[19], ZK_X509_PREPROCESSED_FIXED_DESCRIPTOR_V1);
-        assert_eq!(
-            fields[20],
-            ZK_X509_SHA_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1
-        );
-        assert_eq!(fields[21], encoded_sha);
-        assert_eq!(
-            fields[22],
-            ZK_X509_P256_LOG19_PREPROCESSED_FIXED_COLUMN_DESCRIPTOR_V1
-        );
-        assert_eq!(fields[23], encoded_p256);
-        let canonical = hash_frame_v1(RELEASE_COMPILED_PROFILE_DIGEST_DOMAIN_V1, &fields)
-            .expect("candidate release frame");
-
-        for byte in [9, 13, 17, 49] {
-            let mut changed = encoded_sha;
-            changed[byte] ^= 1;
-            let digest = hash_frame_v1(
-                RELEASE_COMPILED_PROFILE_DIGEST_DOMAIN_V1,
-                &release_compiled_profile_fields_v1(&changed, &encoded_p256),
-            )
-            .expect("mutated release frame");
+        for field in 19..COMPILED_PROFILE_FIELD_COUNT_V1 {
+            let mut changed = owned.clone();
+            changed[field][0] ^= 1;
+            let changed_fields = changed.iter().map(Vec::as_slice).collect::<Vec<_>>();
             assert_ne!(
-                digest, canonical,
-                "certificate byte {byte} must be transcript-bound"
+                independent_compiled_profile_digest_v1(&changed_fields),
+                canonical,
+                "manifest field {field} must be bound"
             );
         }
-        for byte in [9, 13, 19, 51] {
-            let mut changed = encoded_p256;
-            changed[byte] ^= 1;
-            let digest = hash_frame_v1(
-                RELEASE_COMPILED_PROFILE_DIGEST_DOMAIN_V1,
-                &release_compiled_profile_fields_v1(&encoded_sha, &changed),
-            )
-            .expect("mutated release frame");
-            assert_ne!(
-                digest, canonical,
-                "P-256 certificate byte {byte} must be transcript-bound"
-            );
-        }
+
+        let mut reordered = owned;
+        reordered.swap(21, 22);
+        let reordered_fields = reordered.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        assert_ne!(
+            independent_compiled_profile_digest_v1(&reordered_fields),
+            canonical,
+            "SHA disclosure-shape digest order must be bound"
+        );
     }
 
     #[test]
-    fn certificate_bearing_release_constructor_is_closed_until_both_pins_exist() {
+    fn compiled_profile_constructor_is_closed_until_the_manifest_pin_exists() {
         assert_eq!(
             construct_zk_x509_compiled_profile_v1(),
-            Err(ZkX509EngineErrorV1::FixedPreprocessing(
-                ZkX509PreprocessedFixedErrorV1::Unpinned
-            ))
+            Err(ZkX509EngineErrorV1::CompiledProfileUnpinned)
         );
     }
 
     #[test]
-    fn provisional_profile_and_gap_manifest_are_pinned_fail_closed() {
-        assert_eq!(
-            recompute_zk_x509_provisional_compiled_profile_digest_v1(),
-            ZK_X509_PROVISIONAL_COMPILED_PROFILE_DIGEST_V1
-        );
+    fn sole_profile_and_gap_manifest_are_fail_closed() {
+        assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_none());
         assert!(!zk_x509_air_gaps_v1().is_empty());
         assert_eq!(
             require_complete_zk_x509_air_v1(),

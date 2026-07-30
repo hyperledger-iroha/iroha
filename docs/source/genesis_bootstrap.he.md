@@ -24,8 +24,9 @@ translator: machine-google-reviewed
   מכסה גודל (`genesis.bootstrap_max_bytes`). בקשות מחוץ לרשימת ההיתרים מקבלים `NotAllowed`, ו
   מטענים החתומים על ידי מפתח שגוי מקבלים `MismatchedPubkey`.
 - **זרימת המבקשים:** כאשר האחסון ריק ו-`genesis.file` אינו מוגדר (ו
-  `genesis.bootstrap_enabled=true`), הצומת מבצע בדיקה מוקדמת של עמיתים מהימנים עם האפשרות האופציונלית
-  `genesis.expected_hash`, ואז מביא את המטען, מאמת חתימות באמצעות `validate_genesis_block`,
+  `genesis.bootstrap_enabled=true`), ‏`genesis.expected_hash` חייב להצמיד במדויק את בלוק הבראשית
+  החתום. היעדרם של הקובץ ושל הגיבוב הוא שגיאת תצורת הפעלה לפני שנשלחת בקשה כלשהי.
+  לאחר מכן הצומת מביא את המטען ומאמת חתימות באמצעות `validate_genesis_block`,
   ונמשך `genesis.bootstrap.nrt` לצד Kura לפני החלת הבלוק. Bootstrap מנסה שוב
   לכבד את `genesis.bootstrap_request_timeout`, `genesis.bootstrap_retry_interval`, ו
   `genesis.bootstrap_max_attempts`.
@@ -34,5 +35,6 @@ translator: machine-google-reviewed
   בין עמיתים לבטל את האחזור; אין מגיבים/פסקי זמן נופלים חזרה לתצורה המקומית.
 - **שלבי מפעיל:** ודא שלפחות עמית מהימן אחד נגיש עם התחלה חוקית, הגדר
   `bootstrap_allowlist`/`bootstrap_max_bytes`/`bootstrap_response_throttle` וכפתורי הניסיון החוזר, וכן
-  אופציונלי להצמיד את `expected_hash` כדי למנוע קבלת מטענים לא תואמים. מטענים מתמשכים יכולים להיות
+  הצמד את הבלוק המדויק ב-`expected_hash` לפני הפעלת אתחול מרוחק. `genesis.file` מקומי
+  וחתום הוא כבר פריט מפורש ואינו דורש גיבוב נוסף. מטענים מתמשכים יכולים להיות
   נעשה שימוש חוזר במגפיים הבאים על ידי הצבעה של `genesis.file` ל-`genesis.bootstrap.nrt`.

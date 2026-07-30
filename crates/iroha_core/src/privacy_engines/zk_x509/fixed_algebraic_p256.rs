@@ -11,7 +11,7 @@
 //! it never constructs a `2^19 * 404` native matrix, an LDE, an artifact,
 //! a Merkle tree, or proof-supplied fixed bytes.
 
-use std::vec::Vec;
+use std::{sync::OnceLock, vec::Vec};
 
 use thiserror::Error;
 
@@ -50,7 +50,7 @@ use crate::privacy_engines::transparent_stark::{
 
 /// Exact compact P-256 fixed-schedule semantics bound by the release profile.
 pub(crate) const ZK_X509_P256_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
+    b"zk-x509-p256-fixed-algebraic-v1-incompatible:native-log19:generator-coset-lde-log25:width404:six-schedules=certificate-arithmetic134+wallet-arithmetic134+certificate-execution46+wallet-execution46+certificate-sorted22+wallet-sorted22:aliases-exactly15=signatures0through4-times-arithmetic0+value-execution0+value-sorted1:signatures0through3-certificate-role:signature4-wallet-role:closed-value-free-topology-only:additive-affine+repeated-affine+sparse:operation-metadata-plan=min-exact-row-axis-vs-canonical-call-axis:row-axis-on-tie:call-segments=14x43+64x222+row-tail18:sorted-active-factors=725504-distinct-from-execution-logical-factors949312:sorted-equal-read-runs=min-exact-relative-factor-axis-vs-per-value-axis:relative-factor-axis-on-tie:no-native-matrix:no-lde-table:no-artifact:no-merkle:no-proof-fixed-bytes:first-release";
 
 const P256_COMPILER_DESCRIPTOR_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:zk-x509:p256-fixed-algebraic-compiler:v1";
@@ -89,10 +89,16 @@ const P256_FINAL_OPERATION_START_V1: usize =
     P256_VARIABLE_TABLE_OPERATIONS_V1 + P256_SCALAR_ROUNDS_V1 * P256_SCALAR_ROUND_OPERATIONS_V1;
 const P256_FINAL_OPERATIONS_V1: usize =
     P256_ARITHMETIC_OPERATIONS_V1 - P256_FINAL_OPERATION_START_V1;
-const P256_VALUE_BUS_ACTIVE_FACTORS_V1: usize =
+const P256_VALUE_BUS_LOGICAL_FACTORS_V1: usize =
     (P256_ARITHMETIC_OPERATIONS_V1 + P256_VALUE_BUS_ASSERTIONS_V1) * P256_VALUE_BUS_SEGMENT_ROWS_V1;
-const P256_VALUE_BUS_ACTIVE_PACKED_ROWS_V1: usize =
-    P256_VALUE_BUS_ACTIVE_FACTORS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+const P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1: usize =
+    P256_VALUE_BUS_LOGICAL_FACTORS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+const P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1: usize =
+    P256_ARITHMETIC_OPERATIONS_V1 * 3 * P256_VALUE_BUS_LIMBS_V1
+        + P256_INITIAL_VALUES_V1 * P256_VALUE_BUS_LIMBS_V1
+        + P256_VALUE_BUS_ASSERTIONS_V1 * 2 * P256_VALUE_BUS_LIMBS_V1;
+const P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1: usize =
+    P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1 / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
 
 // Native arithmetic fixed layout.
 const ARITH_KIND_MULTIPLY_V1: usize = 0;
@@ -155,8 +161,11 @@ const _: () = {
     assert!(P256_SCALAR_ROUND_OPERATIONS_V1 == 222);
     assert!(P256_FINAL_OPERATION_START_V1 == 14_810);
     assert!(P256_FINAL_OPERATIONS_V1 == 18);
-    assert!(P256_VALUE_BUS_ACTIVE_FACTORS_V1 == 949_312);
-    assert!(P256_VALUE_BUS_ACTIVE_PACKED_ROWS_V1 == 474_656);
+    assert!(P256_VALUE_BUS_LOGICAL_FACTORS_V1 == 949_312);
+    assert!(P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1 == 474_656);
+    assert!(P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1 == 725_504);
+    assert!(P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1 == 362_752);
+    assert!(P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1 < P256_VALUE_BUS_LOGICAL_FACTORS_V1);
     assert!(WALLET_ARITHMETIC_START_V1 == 134);
     assert!(CERTIFICATE_EXECUTION_START_V1 == 268);
     assert!(WALLET_EXECUTION_START_V1 == 314);
@@ -1346,7 +1355,7 @@ fn compile_execution_fixed_v1(
         push_contiguous_v1(
             builder,
             value_slot_column_v1(slice_start, slot, VALUE_PADDING_V1),
-            P256_VALUE_BUS_ACTIVE_PACKED_ROWS_V1,
+            P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1,
             P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
             F::ONE,
             F::ZERO,
@@ -1519,7 +1528,14 @@ fn compile_writer_fixed_v1(
         let slot = ordinal % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         let row = ordinal / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         active[slot].push((row, F::ONE));
-        addresses[slot].push((row, f_usize_v1(address)?));
+        // Algebraic point series contain only explicit nonzero cells. Writer
+        // address zero is nevertheless a valid active source: it is the first
+        // limb of verifier-owned constant value zero (`id = 0, limb = 0`).
+        // Leave that address cell implicit while retaining its active/event
+        // selectors above.
+        if address != 0 {
+            addresses[slot].push((row, f_usize_v1(address)?));
+        }
         let selector = match multiplicity {
             1 => 0,
             64 => 1,
@@ -1627,6 +1643,285 @@ fn compile_value_copy_fixed_v1(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum P256SortedRunAxisV1 {
+    RelativeFactor,
+    PerValue,
+}
+
+fn sorted_relative_factor_axis_atom_count_v1(
+    run_start: usize,
+    run_count: usize,
+    per_limb: usize,
+) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
+    if run_count == 0 || per_limb == 0 {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    checked_add_v1(run_start, run_count)?;
+    let block_factors = checked_mul_v1(P256_VALUE_BUS_LIMBS_V1, per_limb)?;
+    let id_atoms = if run_start == 0 && run_count == 1 {
+        0
+    } else {
+        block_factors
+    };
+    let nonzero_limb_atoms = checked_mul_v1(P256_VALUE_BUS_LIMBS_V1 - 1, per_limb)?;
+    checked_add_v1(
+        checked_add_v1(id_atoms, nonzero_limb_atoms)?,
+        2 * P256_VALUE_BUS_LIMBS_V1,
+    )
+}
+
+fn sorted_per_value_axis_atom_count_v1(
+    run_start: usize,
+    run_count: usize,
+    per_limb: usize,
+) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
+    if run_count == 0 || per_limb == 0 {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    checked_add_v1(run_start, run_count)?;
+    let limb_atoms_per_value = checked_mul_v1(
+        P256_VALUE_BUS_LIMBS_V1 - 1,
+        if per_limb == 1 { 1 } else { 2 },
+    )?;
+    let correction_atoms_per_value = if per_limb.is_multiple_of(2) { 2 } else { 4 };
+    let atoms_per_nonzero_value = checked_add_v1(
+        checked_add_v1(2, limb_atoms_per_value)?,
+        correction_atoms_per_value,
+    )?;
+    let mut atoms = checked_mul_v1(run_count, atoms_per_nonzero_value)?;
+    if run_start == 0 {
+        atoms = atoms
+            .checked_sub(2)
+            .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?;
+    }
+    Ok(atoms)
+}
+
+fn sorted_run_axis_v1(
+    run_start: usize,
+    run_count: usize,
+    per_limb: usize,
+) -> Result<P256SortedRunAxisV1, ZkX509P256FixedAlgebraicErrorV1> {
+    let relative = sorted_relative_factor_axis_atom_count_v1(run_start, run_count, per_limb)?;
+    let per_value = sorted_per_value_axis_atom_count_v1(run_start, run_count, per_limb)?;
+    if per_value < relative {
+        Ok(P256SortedRunAxisV1::PerValue)
+    } else {
+        Ok(P256SortedRunAxisV1::RelativeFactor)
+    }
+}
+
+fn emit_sorted_relative_factor_axis_run_v1(
+    builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
+    slice_start: usize,
+    logical_start: usize,
+    run_start: usize,
+    run_count: usize,
+    per_limb: usize,
+) -> Result<(), ZkX509P256FixedAlgebraicErrorV1> {
+    let expected_atoms = sorted_relative_factor_axis_atom_count_v1(run_start, run_count, per_limb)?;
+    if !logical_start.is_multiple_of(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    let block_factors = checked_mul_v1(P256_VALUE_BUS_LIMBS_V1, per_limb)?;
+    if !block_factors.is_multiple_of(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    let block_rows = block_factors / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+    let mut emitted = 0_usize;
+    for relative in 0..block_factors {
+        let logical = checked_add_v1(logical_start, relative)?;
+        let slot = logical % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        let row = logical / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        push_repeated_affine_v1(
+            builder,
+            value_slot_column_v1(slice_start, slot, VALUE_ID_V1),
+            row,
+            run_count,
+            block_rows,
+            f_usize_v1(run_start)?,
+            F::ONE,
+        )?;
+        if run_count > 1 || run_start != 0 {
+            emitted = checked_add_v1(emitted, 1)?;
+        }
+        let limb = relative / per_limb;
+        push_repeated_v1(
+            builder,
+            value_slot_column_v1(slice_start, slot, VALUE_LIMB_V1),
+            row,
+            run_count,
+            block_rows,
+            f_usize_v1(limb)?,
+        )?;
+        if limb != 0 {
+            emitted = checked_add_v1(emitted, 1)?;
+        }
+        if relative.is_multiple_of(per_limb) {
+            push_repeated_v1(
+                builder,
+                value_slot_column_v1(slice_start, slot, VALUE_ACCESS_V1),
+                row,
+                run_count,
+                block_rows,
+                negative_one_v1(),
+            )?;
+            emitted = checked_add_v1(emitted, 1)?;
+        }
+        if (relative + 1).is_multiple_of(per_limb) {
+            push_repeated_v1(
+                builder,
+                value_slot_column_v1(slice_start, slot, VALUE_EQUAL_NEXT_V1),
+                row,
+                run_count,
+                block_rows,
+                negative_one_v1(),
+            )?;
+            emitted = checked_add_v1(emitted, 1)?;
+        }
+    }
+    if emitted != expected_atoms {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    Ok(())
+}
+
+fn push_sorted_logical_stride_v1(
+    builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
+    slice_start: usize,
+    field: usize,
+    logical_first: usize,
+    count: usize,
+    logical_stride: usize,
+    value: F,
+) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
+    if count < 2 || logical_stride == 0 || value == F::ZERO {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    // Validate the complete logical progression before mutating the builder,
+    // including the second packed-slot series used by odd strides.
+    checked_add_v1(logical_first, checked_mul_v1(count - 1, logical_stride)?)?;
+    if logical_stride.is_multiple_of(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) {
+        let slot = logical_first % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        push_repeated_v1(
+            builder,
+            value_slot_column_v1(slice_start, slot, field),
+            logical_first / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1,
+            count,
+            logical_stride / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1,
+            value,
+        )?;
+        return Ok(1);
+    }
+    let mut atoms = 0_usize;
+    for occurrence_offset in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+        let occurrence_count =
+            (count + P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - 1 - occurrence_offset)
+                / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        if occurrence_count == 0 {
+            continue;
+        }
+        let first = checked_add_v1(
+            logical_first,
+            checked_mul_v1(occurrence_offset, logical_stride)?,
+        )?;
+        let slot = first % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
+        push_repeated_v1(
+            builder,
+            value_slot_column_v1(slice_start, slot, field),
+            first / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1,
+            occurrence_count,
+            logical_stride,
+            value,
+        )?;
+        atoms = checked_add_v1(atoms, 1)?;
+    }
+    Ok(atoms)
+}
+
+fn emit_sorted_per_value_axis_run_v1(
+    builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
+    slice_start: usize,
+    logical_start: usize,
+    logical_end: usize,
+    run_start: usize,
+    run_count: usize,
+    per_limb: usize,
+) -> Result<(), ZkX509P256FixedAlgebraicErrorV1> {
+    let expected_atoms = sorted_per_value_axis_atom_count_v1(run_start, run_count, per_limb)?;
+    if !logical_start.is_multiple_of(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    let block_factors = checked_mul_v1(P256_VALUE_BUS_LIMBS_V1, per_limb)?;
+    let expected_end = checked_add_v1(logical_start, checked_mul_v1(run_count, block_factors)?)?;
+    if logical_end != expected_end {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+
+    let mut emitted = 0_usize;
+    for value_offset in 0..run_count {
+        let id = checked_add_v1(run_start, value_offset)?;
+        let block_start =
+            checked_add_v1(logical_start, checked_mul_v1(value_offset, block_factors)?)?;
+        if id != 0 {
+            emitted = checked_add_v1(
+                emitted,
+                push_logical_constant_range_v1(
+                    builder,
+                    slice_start,
+                    VALUE_ID_V1,
+                    block_start,
+                    checked_add_v1(block_start, block_factors)?,
+                    f_usize_v1(id)?,
+                )?,
+            )?;
+        }
+        for limb in 1..P256_VALUE_BUS_LIMBS_V1 {
+            let limb_start = checked_add_v1(block_start, checked_mul_v1(limb, per_limb)?)?;
+            emitted = checked_add_v1(
+                emitted,
+                push_logical_constant_range_v1(
+                    builder,
+                    slice_start,
+                    VALUE_LIMB_V1,
+                    limb_start,
+                    checked_add_v1(limb_start, per_limb)?,
+                    f_usize_v1(limb)?,
+                )?,
+            )?;
+        }
+        emitted = checked_add_v1(
+            emitted,
+            push_sorted_logical_stride_v1(
+                builder,
+                slice_start,
+                VALUE_ACCESS_V1,
+                block_start,
+                P256_VALUE_BUS_LIMBS_V1,
+                per_limb,
+                negative_one_v1(),
+            )?,
+        )?;
+        emitted = checked_add_v1(
+            emitted,
+            push_sorted_logical_stride_v1(
+                builder,
+                slice_start,
+                VALUE_EQUAL_NEXT_V1,
+                checked_add_v1(block_start, per_limb - 1)?,
+                P256_VALUE_BUS_LIMBS_V1,
+                per_limb,
+                negative_one_v1(),
+            )?,
+        )?;
+    }
+    if emitted != expected_atoms {
+        return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
+    }
+    Ok(())
+}
+
 fn compile_sorted_fixed_v1(
     builder: &mut ZkX509FixedAlgebraicScheduleBuilderV1,
     slice_start: usize,
@@ -1653,7 +1948,7 @@ fn compile_sorted_fixed_v1(
     let active_factors = *prefix
         .last()
         .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)?;
-    if active_factors != P256_VALUE_BUS_ACTIVE_FACTORS_V1
+    if active_factors != P256_VALUE_BUS_SORTED_ACTIVE_FACTORS_V1
         || !active_factors.is_multiple_of(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1)
     {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
@@ -1688,8 +1983,10 @@ fn compile_sorted_fixed_v1(
         )?;
     }
 
-    // Maximal equal-read-count runs turn each relative factor position into
-    // one repeated-affine atom across consecutive SSA identifiers.
+    // For each maximal equal-read-count run, compare the exact established
+    // relative-factor transpose with an exact per-value transpose. The
+    // established representation wins ties, so this compression is canonical
+    // and cannot drift merely because another equivalent axis exists.
     let mut run_start = 0_usize;
     while run_start < metadata.len() {
         let per_limb = checked_add_v1(metadata[run_start].reads, 1)?;
@@ -1698,55 +1995,25 @@ fn compile_sorted_fixed_v1(
             run_end += 1;
         }
         let run_count = run_end - run_start;
-        let block_factors = checked_mul_v1(P256_VALUE_BUS_LIMBS_V1, per_limb)?;
-        let block_rows = block_factors / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         let logical_start = prefix[run_start];
-        if !logical_start.is_multiple_of(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1)
-            || block_factors % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 != 0
-        {
-            return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
-        }
-        for relative in 0..block_factors {
-            let logical = checked_add_v1(logical_start, relative)?;
-            let slot = logical % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
-            let row = logical / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
-            push_repeated_affine_v1(
+        match sorted_run_axis_v1(run_start, run_count, per_limb)? {
+            P256SortedRunAxisV1::RelativeFactor => emit_sorted_relative_factor_axis_run_v1(
                 builder,
-                value_slot_column_v1(slice_start, slot, VALUE_ID_V1),
-                row,
+                slice_start,
+                logical_start,
+                run_start,
                 run_count,
-                block_rows,
-                f_usize_v1(run_start)?,
-                F::ONE,
-            )?;
-            push_repeated_v1(
+                per_limb,
+            )?,
+            P256SortedRunAxisV1::PerValue => emit_sorted_per_value_axis_run_v1(
                 builder,
-                value_slot_column_v1(slice_start, slot, VALUE_LIMB_V1),
-                row,
+                slice_start,
+                logical_start,
+                prefix[run_end],
+                run_start,
                 run_count,
-                block_rows,
-                f_usize_v1(relative / per_limb)?,
-            )?;
-            if relative.is_multiple_of(per_limb) {
-                push_repeated_v1(
-                    builder,
-                    value_slot_column_v1(slice_start, slot, VALUE_ACCESS_V1),
-                    row,
-                    run_count,
-                    block_rows,
-                    negative_one_v1(),
-                )?;
-            }
-            if (relative + 1).is_multiple_of(per_limb) {
-                push_repeated_v1(
-                    builder,
-                    value_slot_column_v1(slice_start, slot, VALUE_EQUAL_NEXT_V1),
-                    row,
-                    run_count,
-                    block_rows,
-                    negative_one_v1(),
-                )?;
-            }
+                per_limb,
+            )?,
         }
         run_start = run_end;
     }
@@ -1788,7 +2055,7 @@ fn compile_sorted_metadata_field_v1(
         while end < metadata.len() && value_v1(metadata[end]) == value {
             end += 1;
         }
-        push_logical_constant_range_v1(
+        let _ = push_logical_constant_range_v1(
             builder,
             slice_start,
             field,
@@ -1808,10 +2075,14 @@ fn push_logical_constant_range_v1(
     logical_start: usize,
     logical_end: usize,
     value: F,
-) -> Result<(), ZkX509P256FixedAlgebraicErrorV1> {
+) -> Result<usize, ZkX509P256FixedAlgebraicErrorV1> {
     if logical_start >= logical_end {
         return Err(ZkX509P256FixedAlgebraicErrorV1::Topology);
     }
+    if value == F::ZERO {
+        return Ok(0);
+    }
+    let mut atoms = 0_usize;
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         let parity = logical_start % P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1;
         let adjustment = (slot + P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 - parity)
@@ -1830,8 +2101,9 @@ fn push_logical_constant_range_v1(
             value,
             F::ZERO,
         )?;
+        atoms = checked_add_v1(atoms, 1)?;
     }
-    Ok(())
+    Ok(atoms)
 }
 
 /// Digest of the stable P-256 structural compiler descriptor.
@@ -1886,12 +2158,32 @@ pub(crate) fn compile_zk_x509_p256_fixed_algebraic_schedule_v1()
     Ok(builder.finish_v1()?)
 }
 
+static ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1: OnceLock<ZkX509FixedAlgebraicScheduleV1> =
+    OnceLock::new();
+
+/// Borrow the canonical verifier-derived P-256 schedule.
+///
+/// Only a successful compilation is cached. A transient allocation failure or
+/// any fail-closed topology error therefore cannot poison the process-wide
+/// cell, while the raw compiler remains available for independent KAT
+/// reproduction.
+pub(crate) fn zk_x509_p256_fixed_algebraic_schedule_v1()
+-> Result<&'static ZkX509FixedAlgebraicScheduleV1, ZkX509P256FixedAlgebraicErrorV1> {
+    if let Some(schedule) = ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1.get() {
+        return Ok(schedule);
+    }
+    let schedule = compile_zk_x509_p256_fixed_algebraic_schedule_v1()?;
+    let _ = ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1.set(schedule);
+    ZK_X509_P256_FIXED_ALGEBRAIC_SCHEDULE_V1
+        .get()
+        .ok_or(ZkX509P256FixedAlgebraicErrorV1::Topology)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fmt::Write as _,
-        sync::OnceLock,
     };
 
     use super::*;
@@ -1922,59 +2214,225 @@ mod tests {
         (0, 0, 0, 0, 0);
     const P256_FIXED_ALGEBRAIC_UNIQUE_REPEAT_STRIDES_KAT_V1: &[u64] = &[];
 
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct P256DiagnosticStageCountV1 {
+        stage: &'static str,
+        atoms: usize,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct P256DiagnosticFailureV1 {
+        stage: &'static str,
+        combined_before: usize,
+        stage_atoms: Option<usize>,
+        error: ZkX509P256FixedAlgebraicErrorV1,
+    }
+
+    struct P256DiagnosticCompilationV1 {
+        schedule: ZkX509FixedAlgebraicScheduleV1,
+        stages: [P256DiagnosticStageCountV1; 6],
+    }
+
+    fn compile_diagnostic_stage_count_v1(
+        domain: ZkX509FixedAlgebraicDomainV1,
+        stage: &'static str,
+        compile: impl FnOnce(
+            &mut ZkX509FixedAlgebraicScheduleBuilderV1,
+        ) -> Result<(), ZkX509P256FixedAlgebraicErrorV1>,
+    ) -> Result<P256DiagnosticStageCountV1, P256DiagnosticFailureV1> {
+        let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
+            domain,
+            u16_v1(ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1).map_err(|error| {
+                P256DiagnosticFailureV1 {
+                    stage,
+                    combined_before: 0,
+                    stage_atoms: None,
+                    error,
+                }
+            })?,
+        )
+        .map_err(|error| P256DiagnosticFailureV1 {
+            stage,
+            combined_before: 0,
+            stage_atoms: None,
+            error: error.into(),
+        })?;
+        compile(&mut builder).map_err(|error| P256DiagnosticFailureV1 {
+            stage,
+            combined_before: 0,
+            stage_atoms: None,
+            error,
+        })?;
+        let schedule = builder
+            .finish_v1()
+            .map_err(|error| P256DiagnosticFailureV1 {
+                stage,
+                combined_before: 0,
+                stage_atoms: None,
+                error: error.into(),
+            })?;
+        Ok(P256DiagnosticStageCountV1 {
+            stage,
+            atoms: schedule.atoms_v1().len(),
+        })
+    }
+
     fn compile_diagnostic_schedule_v1()
-    -> Result<ZkX509FixedAlgebraicScheduleV1, (&'static str, ZkX509P256FixedAlgebraicErrorV1)> {
+    -> Result<P256DiagnosticCompilationV1, P256DiagnosticFailureV1> {
         let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
             ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
             ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
             F(GOLDILOCKS_GENERATOR_V1),
         )
-        .map_err(|error| ("domain", error.into()))?;
+        .map_err(|error| P256DiagnosticFailureV1 {
+            stage: "domain",
+            combined_before: 0,
+            stage_atoms: None,
+            error: error.into(),
+        })?;
         let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
             domain,
-            u16_v1(ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1).map_err(|error| ("width", error))?,
+            u16_v1(ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1).map_err(|error| {
+                P256DiagnosticFailureV1 {
+                    stage: "width",
+                    combined_before: 0,
+                    stage_atoms: None,
+                    error,
+                }
+            })?,
         )
-        .map_err(|error| ("builder", error.into()))?;
+        .map_err(|error| P256DiagnosticFailureV1 {
+            stage: "builder",
+            combined_before: 0,
+            stage_atoms: None,
+            error: error.into(),
+        })?;
         let certificate = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::CertificateOrCrl)
             .map_err(map_trace_error_v1)
-            .map_err(|error| ("certificate-topology", error))?;
+            .map_err(|error| P256DiagnosticFailureV1 {
+                stage: "certificate-topology",
+                combined_before: 0,
+                stage_atoms: None,
+                error,
+            })?;
         let wallet = compile_p256_ecdsa_topology_v1(P256EcdsaRoleV1::WalletOwnership)
             .map_err(map_trace_error_v1)
-            .map_err(|error| ("wallet-topology", error))?;
-        let certificate_metadata = compile_value_metadata_v1(&certificate)
-            .map_err(|error| ("certificate-metadata", error))?;
+            .map_err(|error| P256DiagnosticFailureV1 {
+                stage: "wallet-topology",
+                combined_before: 0,
+                stage_atoms: None,
+                error,
+            })?;
+        let certificate_metadata =
+            compile_value_metadata_v1(&certificate).map_err(|error| P256DiagnosticFailureV1 {
+                stage: "certificate-metadata",
+                combined_before: 0,
+                stage_atoms: None,
+                error,
+            })?;
         let wallet_metadata =
-            compile_value_metadata_v1(&wallet).map_err(|error| ("wallet-metadata", error))?;
+            compile_value_metadata_v1(&wallet).map_err(|error| P256DiagnosticFailureV1 {
+                stage: "wallet-metadata",
+                combined_before: 0,
+                stage_atoms: None,
+                error,
+            })?;
 
-        compile_arithmetic_fixed_v1(&mut builder, CERTIFICATE_ARITHMETIC_START_V1, &certificate)
-            .map_err(|error| ("certificate-arithmetic", error))?;
-        compile_arithmetic_fixed_v1(&mut builder, WALLET_ARITHMETIC_START_V1, &wallet)
-            .map_err(|error| ("wallet-arithmetic", error))?;
-        compile_execution_fixed_v1(
-            &mut builder,
-            CERTIFICATE_EXECUTION_START_V1,
-            &certificate,
-            &certificate_metadata,
-        )
-        .map_err(|error| ("certificate-execution", error))?;
-        compile_execution_fixed_v1(
-            &mut builder,
-            WALLET_EXECUTION_START_V1,
-            &wallet,
-            &wallet_metadata,
-        )
-        .map_err(|error| ("wallet-execution", error))?;
-        compile_sorted_fixed_v1(
-            &mut builder,
-            CERTIFICATE_SORTED_START_V1,
-            &certificate_metadata,
-        )
-        .map_err(|error| ("certificate-sorted", error))?;
-        compile_sorted_fixed_v1(&mut builder, WALLET_SORTED_START_V1, &wallet_metadata)
-            .map_err(|error| ("wallet-sorted", error))?;
-        builder
+        let stages = [
+            compile_diagnostic_stage_count_v1(domain, "certificate-arithmetic", |builder| {
+                compile_arithmetic_fixed_v1(builder, CERTIFICATE_ARITHMETIC_START_V1, &certificate)
+            })?,
+            compile_diagnostic_stage_count_v1(domain, "wallet-arithmetic", |builder| {
+                compile_arithmetic_fixed_v1(builder, WALLET_ARITHMETIC_START_V1, &wallet)
+            })?,
+            compile_diagnostic_stage_count_v1(domain, "certificate-execution", |builder| {
+                compile_execution_fixed_v1(
+                    builder,
+                    CERTIFICATE_EXECUTION_START_V1,
+                    &certificate,
+                    &certificate_metadata,
+                )
+            })?,
+            compile_diagnostic_stage_count_v1(domain, "wallet-execution", |builder| {
+                compile_execution_fixed_v1(
+                    builder,
+                    WALLET_EXECUTION_START_V1,
+                    &wallet,
+                    &wallet_metadata,
+                )
+            })?,
+            compile_diagnostic_stage_count_v1(domain, "certificate-sorted", |builder| {
+                compile_sorted_fixed_v1(builder, CERTIFICATE_SORTED_START_V1, &certificate_metadata)
+            })?,
+            compile_diagnostic_stage_count_v1(domain, "wallet-sorted", |builder| {
+                compile_sorted_fixed_v1(builder, WALLET_SORTED_START_V1, &wallet_metadata)
+            })?,
+        ];
+
+        let mut combined_before = 0_usize;
+        for (index, compile) in [
+            compile_arithmetic_fixed_v1(
+                &mut builder,
+                CERTIFICATE_ARITHMETIC_START_V1,
+                &certificate,
+            ),
+            compile_arithmetic_fixed_v1(&mut builder, WALLET_ARITHMETIC_START_V1, &wallet),
+            compile_execution_fixed_v1(
+                &mut builder,
+                CERTIFICATE_EXECUTION_START_V1,
+                &certificate,
+                &certificate_metadata,
+            ),
+            compile_execution_fixed_v1(
+                &mut builder,
+                WALLET_EXECUTION_START_V1,
+                &wallet,
+                &wallet_metadata,
+            ),
+            compile_sorted_fixed_v1(
+                &mut builder,
+                CERTIFICATE_SORTED_START_V1,
+                &certificate_metadata,
+            ),
+            compile_sorted_fixed_v1(&mut builder, WALLET_SORTED_START_V1, &wallet_metadata),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let stage = stages[index];
+            compile.map_err(|error| P256DiagnosticFailureV1 {
+                stage: stage.stage,
+                combined_before,
+                stage_atoms: Some(stage.atoms),
+                error,
+            })?;
+            combined_before =
+                combined_before
+                    .checked_add(stage.atoms)
+                    .ok_or(P256DiagnosticFailureV1 {
+                        stage: stage.stage,
+                        combined_before,
+                        stage_atoms: Some(stage.atoms),
+                        error: ZkX509P256FixedAlgebraicErrorV1::Resource,
+                    })?;
+        }
+        let schedule = builder
             .finish_v1()
-            .map_err(|error| ("canonical-finish", error.into()))
+            .map_err(|error| P256DiagnosticFailureV1 {
+                stage: "canonical-finish",
+                combined_before,
+                stage_atoms: None,
+                error: error.into(),
+            })?;
+        if schedule.atoms_v1().len() != combined_before {
+            return Err(P256DiagnosticFailureV1 {
+                stage: "stage-count-mismatch",
+                combined_before,
+                stage_atoms: Some(schedule.atoms_v1().len()),
+                error: ZkX509P256FixedAlgebraicErrorV1::Topology,
+            });
+        }
+        Ok(P256DiagnosticCompilationV1 { schedule, stages })
     }
 
     fn exact_maximum_116_query_work_score_v1(schedule: &ZkX509FixedAlgebraicScheduleV1) -> u64 {
@@ -2053,9 +2511,17 @@ mod tests {
 
     #[test]
     fn collect_exact_release_kats_or_report_stage_v1() {
-        let schedule = compile_diagnostic_schedule_v1().unwrap_or_else(|(stage, error)| {
-            panic!("P256_DIAGNOSTIC stage={stage} error={error:?}")
+        let compilation = compile_diagnostic_schedule_v1().unwrap_or_else(|failure| {
+            panic!(
+                "P256_DIAGNOSTIC stage={} combined_before={} stage_atoms={:?} cap={} error={:?}",
+                failure.stage,
+                failure.combined_before,
+                failure.stage_atoms,
+                ZK_X509_FIXED_ALGEBRAIC_MAX_ATOMS_V1,
+                failure.error,
+            )
         });
+        let schedule = compilation.schedule;
         let mut affine = 0_usize;
         let mut repeated = 0_usize;
         let mut sparse = 0_usize;
@@ -2077,9 +2543,10 @@ mod tests {
             }
         }
         println!(
-            "P256_KATS atom_count={} schedule_digest={} compiler_digest={} \
+            "P256_KATS stages={:?} atom_count={} schedule_digest={} compiler_digest={} \
              atom_profile=({affine},{repeated},{sparse},{repeated_terms},{maximum_repetition}) \
              unique_repeat_strides={:?} maximum_116_query_work={}",
+            compilation.stages,
             schedule.atoms_v1().len(),
             digest_hex_v1(schedule.descriptor_digest_v1()),
             digest_hex_v1(
@@ -2234,12 +2701,229 @@ mod tests {
         );
     }
 
+    fn isolated_sorted_run_schedule_v1(
+        axis: P256SortedRunAxisV1,
+        run_start: usize,
+        run_count: usize,
+        per_limb: usize,
+    ) -> ZkX509FixedAlgebraicScheduleV1 {
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release algebraic domain");
+        let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
+            domain,
+            u16_v1(P256_VALUE_BUS_STARK_FIXED_WIDTH_V1).expect("bounded sorted width"),
+        )
+        .expect("bounded sorted-run builder");
+        let block_factors = P256_VALUE_BUS_LIMBS_V1 * per_limb;
+        let logical_end = run_count * block_factors;
+        match axis {
+            P256SortedRunAxisV1::RelativeFactor => emit_sorted_relative_factor_axis_run_v1(
+                &mut builder,
+                0,
+                0,
+                run_start,
+                run_count,
+                per_limb,
+            )
+            .expect("valid relative-factor run"),
+            P256SortedRunAxisV1::PerValue => emit_sorted_per_value_axis_run_v1(
+                &mut builder,
+                0,
+                0,
+                logical_end,
+                run_start,
+                run_count,
+                per_limb,
+            )
+            .expect("valid per-value run"),
+        }
+        builder.finish_v1().expect("canonical isolated run")
+    }
+
+    #[test]
+    fn sorted_run_axis_uses_exact_costs_and_preserves_relative_ties_v1() {
+        assert_eq!(sorted_relative_factor_axis_atom_count_v1(7, 3, 1), Ok(63));
+        assert_eq!(sorted_per_value_axis_atom_count_v1(7, 3, 1), Ok(63));
+        assert_eq!(
+            sorted_run_axis_v1(7, 3, 1),
+            Ok(P256SortedRunAxisV1::RelativeFactor),
+            "the established axis must win exact ties"
+        );
+
+        assert_eq!(
+            sorted_run_axis_v1(7, 1, 1),
+            Ok(P256SortedRunAxisV1::PerValue)
+        );
+        assert_eq!(
+            sorted_run_axis_v1(7, 4, 1),
+            Ok(P256SortedRunAxisV1::RelativeFactor)
+        );
+        assert_eq!(sorted_relative_factor_axis_atom_count_v1(7, 2, 5), Ok(187));
+        assert_eq!(sorted_per_value_axis_atom_count_v1(7, 2, 5), Ok(72));
+        assert_eq!(
+            sorted_run_axis_v1(7, 2, 5),
+            Ok(P256SortedRunAxisV1::PerValue)
+        );
+
+        for malformed in [(0, 0, 1), (0, 1, 0)] {
+            assert_eq!(
+                sorted_run_axis_v1(malformed.0, malformed.1, malformed.2),
+                Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+            );
+        }
+        assert_eq!(
+            sorted_run_axis_v1(usize::MAX, 1, 1),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
+        );
+        assert_eq!(
+            sorted_run_axis_v1(0, 1, usize::MAX),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
+        );
+    }
+
+    #[test]
+    fn sorted_run_axes_are_native_row_equivalent_with_exact_savings_v1() {
+        let run_start = 7;
+        let run_count = 2;
+        let per_limb = 5;
+        let relative = isolated_sorted_run_schedule_v1(
+            P256SortedRunAxisV1::RelativeFactor,
+            run_start,
+            run_count,
+            per_limb,
+        );
+        let per_value = isolated_sorted_run_schedule_v1(
+            P256SortedRunAxisV1::PerValue,
+            run_start,
+            run_count,
+            per_limb,
+        );
+        assert_eq!(relative.atoms_v1().len(), 187);
+        assert_eq!(per_value.atoms_v1().len(), 72);
+
+        let logical_end = run_count * P256_VALUE_BUS_LIMBS_V1 * per_limb;
+        let mut relative_row = [F::ZERO; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1];
+        let mut per_value_row = [F::ZERO; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1];
+        for row in 0..=logical_end / P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+            relative
+                .native_row_v1(row as u64, &mut relative_row)
+                .expect("relative-factor native row");
+            per_value
+                .native_row_v1(row as u64, &mut per_value_row)
+                .expect("per-value native row");
+            assert_eq!(per_value_row, relative_row, "packed sorted row {row}");
+        }
+    }
+
+    #[test]
+    fn malformed_sorted_runs_fail_before_mutating_the_builder_v1() {
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release algebraic domain");
+        let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
+            domain,
+            u16_v1(P256_VALUE_BUS_STARK_FIXED_WIDTH_V1).expect("bounded sorted width"),
+        )
+        .expect("bounded adversarial builder");
+        builder
+            .push_sparse_v1(21, 1_000, F(123))
+            .expect("sentinel atom");
+
+        assert_eq!(
+            emit_sorted_relative_factor_axis_run_v1(&mut builder, 0, 1, 7, 2, 5),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            emit_sorted_relative_factor_axis_run_v1(&mut builder, 0, 0, 7, 0, 5),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            emit_sorted_per_value_axis_run_v1(&mut builder, 0, 0, 159, 7, 2, 5),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+        assert_eq!(
+            emit_sorted_per_value_axis_run_v1(&mut builder, 0, 0, 0, 7, 2, 0),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Topology)
+        );
+        for malformed in [
+            push_sorted_logical_stride_v1(&mut builder, 0, VALUE_ACCESS_V1, 0, 1, 1, F::ONE),
+            push_sorted_logical_stride_v1(&mut builder, 0, VALUE_ACCESS_V1, 0, 2, 0, F::ONE),
+            push_sorted_logical_stride_v1(&mut builder, 0, VALUE_ACCESS_V1, 0, 2, 1, F::ZERO),
+        ] {
+            assert_eq!(malformed, Err(ZkX509P256FixedAlgebraicErrorV1::Topology));
+        }
+        assert_eq!(
+            push_sorted_logical_stride_v1(
+                &mut builder,
+                0,
+                VALUE_ACCESS_V1,
+                usize::MAX - 1,
+                2,
+                2,
+                F::ONE,
+            ),
+            Err(ZkX509P256FixedAlgebraicErrorV1::Resource)
+        );
+
+        let schedule = builder.finish_v1().expect("sentinel-only schedule");
+        assert_eq!(schedule.atoms_v1().len(), 1);
+    }
+
+    #[test]
+    fn active_zero_writer_address_is_encoded_as_implicit_zero_v1() {
+        let sources =
+            compile_zk_x509_p256_external_cross_sources_v1(P256EcdsaRoleV1::CertificateOrCrl)
+                .expect("verifier-owned certificate sources");
+        assert!(
+            sources
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|source| source.writer_id == P256ValueIdV1(0) && source.writer_limb == 0),
+            "the release topology binds the first limb of constant value zero"
+        );
+
+        let domain = ZkX509FixedAlgebraicDomainV1::new_v1(
+            ZK_X509_MAX_NATIVE_TRACE_LOG2_V1,
+            ZK_X509_MAIN_COMMON_LDE_LOG2_V1,
+            F(GOLDILOCKS_GENERATOR_V1),
+        )
+        .expect("release algebraic domain");
+        let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
+            domain,
+            u16_v1(P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1).expect("bounded execution width"),
+        )
+        .expect("bounded writer schedule");
+        compile_writer_fixed_v1(
+            &mut builder,
+            0,
+            P256EcdsaRoleV1::CertificateOrCrl,
+            P256_INITIAL_VALUES_V1 + P256_ARITHMETIC_OPERATIONS_V1,
+        )
+        .expect("zero is a canonical active writer address");
+        let schedule = builder.finish_v1().expect("canonical writer schedule");
+
+        // Initial value zero, limb zero occupies logical ordinal 48, hence
+        // packed row 24 and slot zero.
+        let mut row = [F::ZERO; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1];
+        schedule
+            .native_row_v1(24, &mut row)
+            .expect("writer row is in the native domain");
+        assert_eq!(row[EXECUTION_WRITER_START_V1], F::ONE);
+        assert_eq!(row[EXECUTION_WRITER_START_V1 + 1], F::ONE);
+        assert_eq!(row[EXECUTION_WRITER_START_V1 + 2], F::ZERO);
+    }
+
     fn schedule_v1() -> &'static ZkX509FixedAlgebraicScheduleV1 {
-        static SCHEDULE: OnceLock<ZkX509FixedAlgebraicScheduleV1> = OnceLock::new();
-        SCHEDULE.get_or_init(|| {
-            compile_zk_x509_p256_fixed_algebraic_schedule_v1()
-                .expect("canonical structural P-256 algebraic schedule")
-        })
+        zk_x509_p256_fixed_algebraic_schedule_v1()
+            .expect("canonical cached structural P-256 algebraic schedule")
     }
 
     fn native_source_v1() -> &'static P256MainVerifierFixedSourceV1 {
@@ -2339,6 +3023,15 @@ mod tests {
     #[test]
     fn atom_count_and_descriptor_digest_are_exact_and_deterministic() {
         let first = schedule_v1();
+        assert!(
+            core::ptr::eq(first, schedule_v1())
+                && core::ptr::eq(
+                    first,
+                    zk_x509_p256_fixed_algebraic_schedule_v1()
+                        .expect("successful process-wide schedule cache"),
+                ),
+            "successful compilation is cached at one stable address"
+        );
         assert_eq!(
             zk_x509_p256_fixed_algebraic_compiler_descriptor_digest_v1(),
             Ok(P256_FIXED_ALGEBRAIC_COMPILER_DESCRIPTOR_DIGEST_KAT_V1)
@@ -2362,6 +3055,50 @@ mod tests {
             independently_compiled.descriptor_digest_v1(),
             first.descriptor_digest_v1()
         );
+    }
+
+    #[test]
+    fn sorted_active_extent_is_distinct_from_execution_logical_extent_v1() {
+        assert_eq!(P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1, 362_752);
+        assert_eq!(P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1, 474_656);
+        assert!(
+            P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1 < P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1
+        );
+
+        let mut last_active = [F::ZERO; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1];
+        schedule_v1()
+            .native_row_v1(
+                (P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1 - 1) as u64,
+                &mut last_active,
+            )
+            .expect("last sorted active row");
+        let mut first_padding = [F::ZERO; ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1];
+        schedule_v1()
+            .native_row_v1(
+                P256_VALUE_BUS_SORTED_ACTIVE_PACKED_ROWS_V1 as u64,
+                &mut first_padding,
+            )
+            .expect("first sorted padding row");
+        for slice_start in [CERTIFICATE_SORTED_START_V1, WALLET_SORTED_START_V1] {
+            for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
+                assert_eq!(
+                    last_active[value_slot_column_v1(slice_start, slot, VALUE_ACTIVE_V1)],
+                    F::ONE
+                );
+                assert_eq!(
+                    last_active[value_slot_column_v1(slice_start, slot, VALUE_PADDING_V1)],
+                    F::ZERO
+                );
+                assert_eq!(
+                    first_padding[value_slot_column_v1(slice_start, slot, VALUE_ACTIVE_V1)],
+                    F::ZERO
+                );
+                assert_eq!(
+                    first_padding[value_slot_column_v1(slice_start, slot, VALUE_PADDING_V1)],
+                    F::ONE
+                );
+            }
+        }
     }
 
     #[test]
@@ -2421,7 +3158,7 @@ mod tests {
             15 * 32,
             P256_INITIAL_VALUES_V1 * 32,
             P256_ARITHMETIC_OPERATIONS_V1 * 32,
-            P256_VALUE_BUS_ACTIVE_PACKED_ROWS_V1,
+            P256_VALUE_BUS_LOGICAL_PACKED_ROWS_V1,
             P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1 - 1,
         ] {
             insert_boundary(boundary);

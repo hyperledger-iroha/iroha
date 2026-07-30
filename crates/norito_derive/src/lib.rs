@@ -153,6 +153,47 @@ fn is_self_delimiting(ty: &syn::Type) -> bool {
     }
 }
 
+fn needs_packed_size(field: &syn::Field) -> bool {
+    let attrs = FieldAttr::parse(&field.attrs);
+    attrs.needs_size
+        || is_staged_wrapper(&field.ty)
+        || !(is_self_delimiting(&field.ty) || is_fixed_size(&field.ty).is_some())
+}
+
+fn packed_field_bitset(fields: &Fields) -> Vec<u8> {
+    let needs = match fields {
+        Fields::Named(named) => named
+            .named
+            .iter()
+            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .map(needs_packed_size)
+            .collect::<Vec<_>>(),
+        Fields::Unnamed(unnamed) => unnamed
+            .unnamed
+            .iter()
+            .filter(|field| !FieldAttr::parse(&field.attrs).skip)
+            .map(needs_packed_size)
+            .collect::<Vec<_>>(),
+        Fields::Unit => Vec::new(),
+    };
+
+    needs
+        .chunks(8)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .enumerate()
+                .fold(0_u8, |byte, (bit, needs_size)| {
+                    if *needs_size {
+                        byte | (1_u8 << bit)
+                    } else {
+                        byte
+                    }
+                })
+        })
+        .collect()
+}
+
 fn is_signature_like(ty: &syn::Type) -> bool {
     let _ = ty;
     false
@@ -1176,75 +1217,6 @@ fn derive_struct_serialize(
     }
     let packed_field_count: usize = packed_field_exprs.len();
 
-    // Classification helpers for packed-struct hybrid layout
-    fn is_fixed_size(ty: &syn::Type) -> Option<usize> {
-        match ty {
-            syn::Type::Path(tp) => {
-                let id = tp
-                    .path
-                    .segments
-                    .last()
-                    .map(|s| s.ident.to_string())
-                    .unwrap_or_default();
-                match id.as_str() {
-                    "u8" | "i8" | "bool" => Some(1),
-                    "u16" | "i16" => Some(2),
-                    "u32" | "i32" | "f32" => Some(4),
-                    "u64" | "i64" | "f64" | "usize" | "isize" => Some(8),
-                    "u128" | "i128" => Some(16),
-                    "NonZeroU16" => Some(2),
-                    "NonZeroU32" => Some(4),
-                    "NonZeroU64" => Some(8),
-                    _ => None,
-                }
-            }
-            syn::Type::Array(arr) => {
-                if let syn::Type::Path(tp) = &*arr.elem
-                    && tp.path.is_ident("u8")
-                {
-                    // [u8; N] is fixed-size N bytes
-                    // We can't compute to usize here easily; treat as fixed-size marker
-                    return Some(0); // marker; handled specially downstream
-                }
-                None
-            }
-            _ => None,
-        }
-    }
-
-    fn is_self_delimiting(ty: &syn::Type) -> bool {
-        match ty {
-            syn::Type::Path(tp) => {
-                let id = tp
-                    .path
-                    .segments
-                    .last()
-                    .map(|s| s.ident.to_string())
-                    .unwrap_or_default();
-                if matches!(id.as_str(), "String" | "Cow" | "PhantomData") {
-                    return true;
-                }
-                if matches!(
-                    id.as_str(),
-                    "Vec"
-                        | "VecDeque"
-                        | "LinkedList"
-                        | "BinaryHeap"
-                        | "HashMap"
-                        | "BTreeMap"
-                        | "HashSet"
-                        | "BTreeSet"
-                        | "Option"
-                        | "Result"
-                ) {
-                    return true;
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-
     fn is_u8_array(ty: &syn::Type) -> bool {
         matches!(
             ty,
@@ -1254,13 +1226,6 @@ fn derive_struct_serialize(
                     syn::Type::Path(tp) if tp.path.is_ident("u8")
                 )
         )
-    }
-
-    fn needs_packed_size(field: &syn::Field) -> bool {
-        let attrs = FieldAttr::parse(&field.attrs);
-        attrs.needs_size
-            || is_staged_wrapper(&field.ty)
-            || !(is_self_delimiting(&field.ty) || is_fixed_size(&field.ty).is_some())
     }
 
     let has_signature_like_field = match fields {
@@ -1615,23 +1580,7 @@ fn derive_struct_serialize(
             }
             Fields::Unit => {}
         }
-        let mut bytes: ::std::vec::Vec<u8> = ::std::vec::Vec::new();
-        let mut cur: u8 = 0;
-        let mut bit: u8 = 0;
-        for &need in needs.iter() {
-            if need {
-                cur |= 1u8 << bit;
-            }
-            bit += 1;
-            if bit == 8 {
-                bytes.push(cur);
-                cur = 0;
-                bit = 0;
-            }
-        }
-        if bit != 0 {
-            bytes.push(cur);
-        }
+        let bytes = packed_field_bitset(fields);
         let bitset_lit = quote! { [ #( #bytes ),* ] };
         // write sizes code: coalesce varint sizes into a single buffer
         let mut stmts: ::std::vec::Vec<TokenStream2> = ::std::vec::Vec::new();
@@ -1997,6 +1946,8 @@ fn derive_struct_deserialize(
     };
     let field_bitset_enabled_decode_named = field_bitset_enabled_decode.clone();
     let field_bitset_enabled_decode_unnamed = field_bitset_enabled_decode;
+    let expected_field_bitset = packed_field_bitset(fields);
+    let expected_field_bitset = quote! { [ #( #expected_field_bitset ),* ] };
 
     match fields {
         Fields::Named(_) => {
@@ -2239,41 +2190,31 @@ fn derive_struct_deserialize(
                 Fields::Named(named) => named
                     .named
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i, f)| {
+                    .filter_map(|f| {
                         let attrs = FieldAttr::parse(&f.attrs);
-                        if attrs.skip { return None; }
+                        if attrs.skip || !needs_packed_size(f) {
+                            return None;
+                        }
                         let name = f.ident.as_ref().unwrap();
-                        let bp_val: usize = named_bit_positions[i].expect("bitpos");
-                        Some(quote!{
-                            if (((*__bitset.get(#bp_val / 8).unwrap_or(&0)) >> ((#bp_val % 8) as u8)) & 1) != 0 {
-                                match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(__o)) } {
-                                    Ok((sz, hdr)) => {
-                                        __o += hdr;
-                                        #[cfg(debug_assertions)]
-                                        if norito::debug_trace_enabled() {
-                                            eprintln!(
-                                                "packed decode {}::{} size header={}",
-                                                stringify!(#ident),
-                                                stringify!(#name),
-                                                sz
-                                            );
-                                        }
-                                        __sizes.push(sz);
-                                    }
-                                    Err(err) => {
-                                        #[cfg(debug_assertions)]
-                                        if norito::debug_trace_enabled() {
-                                            eprintln!(
-                                                "packed decode {}::{} missing size header: {err:?}",
-                                                stringify!(#ident),
-                                                stringify!(#name)
-                                            );
-                                        }
-                                        return Err(err);
-                                    }
-                                }
+                        Some(quote! {
+                            let __size_payload = norito::core::payload_slice_from_ptr(ptr)?;
+                            let __size_bytes = __size_payload
+                                .get(__o..)
+                                .ok_or(norito::core::Error::LengthMismatch)?;
+                            let (sz, hdr) = norito::core::read_len_dyn_slice(__size_bytes)?;
+                            __o = __o
+                                .checked_add(hdr)
+                                .ok_or(norito::core::Error::LengthMismatch)?;
+                            #[cfg(debug_assertions)]
+                            if norito::debug_trace_enabled() {
+                                eprintln!(
+                                    "packed decode {}::{} size header={}",
+                                    stringify!(#ident),
+                                    stringify!(#name),
+                                    sz
+                                );
                             }
+                            __sizes.push(sz);
                         })
                     })
                     .collect(),
@@ -2372,6 +2313,10 @@ fn derive_struct_deserialize(
                                     ptr.wrapping_add(__o),
                                     __bitset_len,
                                 )?;
+                                let __expected_bitset: &[u8] = &#expected_field_bitset;
+                                if __bitset != __expected_bitset {
+                                    return Err(norito::core::Error::NonCanonicalEncoding);
+                                }
                                 if norito::debug_trace_enabled() {
                                     eprintln!(
                                         "decode struct {} bitset bytes={:?}",
@@ -2644,31 +2589,22 @@ fn derive_struct_deserialize(
                 Fields::Unnamed(unnamed) => unnamed
                     .unnamed
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i, f)| {
+                    .filter_map(|f| {
                         let attrs = FieldAttr::parse(&f.attrs);
-                        if attrs.skip { return None; }
-                        let bp_val: usize = unnamed_bit_positions[i].expect("ubitpos");
-                        Some(quote!{
-                            if (((*__bitset.get(#bp_val / 8).unwrap_or(&0)) >> ((#bp_val % 8) as u8)) & 1) != 0 {
-                                let (mut __sz, mut __hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(__o)) } {
-                                    Ok(res) => res,
-                                    Err(err) => return Err(err),
-                                };
-                                if __sz == 0 && __hdr == 1 {
-                                    let mut __fallback = [0u8; 8];
-                                    unsafe {
-                                        __fallback.copy_from_slice(::std::slice::from_raw_parts(ptr.add(__o), 8));
-                                    }
-                                    let __len64 = u64::from_le_bytes(__fallback) as usize;
-                                    if __len64 != 0 {
-                                        __sz = __len64;
-                                        __hdr = 8;
-                                    }
-                                }
-                                __o += __hdr;
-                                __sizes.push(__sz);
-                            }
+                        if attrs.skip || !needs_packed_size(f) {
+                            return None;
+                        }
+                        Some(quote! {
+                            let __size_payload = norito::core::payload_slice_from_ptr(ptr)?;
+                            let __size_bytes = __size_payload
+                                .get(__o..)
+                                .ok_or(norito::core::Error::LengthMismatch)?;
+                            let (__sz, __hdr) =
+                                norito::core::read_len_dyn_slice(__size_bytes)?;
+                            __o = __o
+                                .checked_add(__hdr)
+                                .ok_or(norito::core::Error::LengthMismatch)?;
+                            __sizes.push(__sz);
                         })
                     })
                     .collect(),
@@ -2738,6 +2674,10 @@ fn derive_struct_deserialize(
                                     ptr.wrapping_add(__o),
                                     __bitset_len,
                                 )?;
+                                let __expected_bitset: &[u8] = &#expected_field_bitset;
+                                if __bitset != __expected_bitset {
+                                    return Err(norito::core::Error::NonCanonicalEncoding);
+                                }
                                 __o += __bitset_len;
                                 // Read sizes for variable-length fields that are present
                                 let mut __sizes: ::std::vec::Vec<usize> = ::std::vec::Vec::new();
@@ -3606,6 +3546,29 @@ mod deserialize_codegen_tests {
     }
 
     #[test]
+    fn packed_field_bitset_matches_named_and_unnamed_layouts() {
+        let named: DeriveInput = syn::parse_quote! {
+            struct Named {
+                fixed: u32,
+                framed: Opaque,
+                self_delimiting: Vec<u8>,
+            }
+        };
+        let Data::Struct(named_data) = named.data else {
+            unreachable!("test input is a struct");
+        };
+        assert_eq!(packed_field_bitset(&named_data.fields), vec![0b0000_0010]);
+
+        let unnamed: DeriveInput = syn::parse_quote! {
+            struct Unnamed(u32, Opaque, Vec<u8>);
+        };
+        let Data::Struct(unnamed_data) = unnamed.data else {
+            unreachable!("test input is a struct");
+        };
+        assert_eq!(packed_field_bitset(&unnamed_data.fields), vec![0b0000_0010]);
+    }
+
+    #[test]
     fn archived_field_paths_delegate_copy_and_context_setup_to_core() {
         let struct_input: DeriveInput = syn::parse_quote! {
             struct Record {
@@ -3620,6 +3583,20 @@ mod deserialize_codegen_tests {
             &struct_input.generics,
             &struct_data.fields,
             &struct_input.attrs,
+            None,
+        ));
+
+        let tuple_input: DeriveInput = syn::parse_quote! {
+            struct Tuple(Opaque);
+        };
+        let Data::Struct(tuple_data) = &tuple_input.data else {
+            unreachable!("test input is a struct");
+        };
+        let tuple_expansion = compact(derive_struct_deserialize(
+            &tuple_input.ident,
+            &tuple_input.generics,
+            &tuple_data.fields,
+            &tuple_input.attrs,
             None,
         ));
 
@@ -3681,6 +3658,28 @@ mod deserialize_codegen_tests {
             struct_expansion.contains("payload_range_from_ptr(ptr.wrapping_add(__o),__bitset_len)"),
             "packed-struct bitsets must use the bounded payload helper"
         );
+        for expansion in [&struct_expansion, &tuple_expansion] {
+            assert!(
+                expansion.contains("NonCanonicalEncoding"),
+                "packed-struct decoders must validate the wire bitset"
+            );
+            assert!(
+                expansion.contains("payload_slice_from_ptr(ptr)"),
+                "size headers must be read from the bounded payload slice"
+            );
+            assert!(
+                expansion.contains("read_len_dyn_slice(__size_bytes)"),
+                "size headers must use the fallible slice decoder"
+            );
+            assert!(
+                !expansion.contains("try_read_len_ptr_unchecked"),
+                "generated size-header loops must not perform pointer reads"
+            );
+            assert!(
+                !expansion.contains("__fallback"),
+                "a compact zero length must never be reinterpreted as fixed-width"
+            );
+        }
         assert!(
             enum_expansion.contains("payload_range_from_ptr(ptr,4)"),
             "enum tags must use the bounded payload helper"

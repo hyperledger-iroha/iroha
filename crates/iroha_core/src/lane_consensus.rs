@@ -1213,6 +1213,7 @@ impl LanePayloadAvailabilityVoteV1 {
             self.body.validator_set_hash_version,
             self.body.validator_set_hash,
             self.body.validator_count,
+            self.body.min_quorum,
             validator_set,
         )
         .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
@@ -1241,6 +1242,7 @@ fn aggregate_lane_payload_availability_votes(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         &validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
@@ -1323,6 +1325,7 @@ pub(crate) fn validate_lane_payload_availability_qc(
         qc.validator_set_hash_version,
         qc.validator_set_hash,
         qc.body.validator_count,
+        qc.body.min_quorum,
         &qc.validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidAvailabilityBody)?;
@@ -1961,6 +1964,7 @@ pub(crate) fn aggregate_lane_drain_votes(
         body.intent.validator_set_hash_version,
         body.intent.validator_set_hash,
         body.intent.validator_count,
+        body.intent.min_quorum,
         &validator_set,
     )
     .map_err(|_| LaneDrainCertificateError::InvalidValidatorSet)?;
@@ -2037,6 +2041,7 @@ pub(crate) fn validate_lane_drain_certificate(
         body.intent.validator_set_hash_version,
         body.intent.validator_set_hash,
         body.intent.validator_count,
+        body.intent.min_quorum,
         &certificate.validator_set,
     )
     .map_err(|_| LaneDrainCertificateError::InvalidValidatorSet)?;
@@ -2127,6 +2132,7 @@ pub(crate) fn aggregate_lane_block_new_view_votes(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         &validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
@@ -2183,6 +2189,7 @@ pub(crate) fn validate_lane_block_new_view_certificate(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         &certificate.validator_set,
     )
     .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
@@ -2440,6 +2447,7 @@ impl LaneBlockNewViewVoteCache {
             vote.body.validator_set_hash_version,
             vote.body.validator_set_hash,
             vote.body.validator_count,
+            vote.body.min_quorum,
             validator_set,
         )
         .map_err(|_| LaneAutonomousArtifactError::InvalidNewViewBody)?;
@@ -5013,6 +5021,7 @@ pub fn validate_lane_block_proposal(
         descriptor.validator_set_hash_version,
         descriptor.validator_set_hash,
         descriptor.validator_count,
+        descriptor.min_quorum,
         &descriptor.validator_set,
     )
     .map_err(|err| match err {
@@ -5329,6 +5338,7 @@ fn validate_lane_block_validator_set(
         body.validator_set_hash_version,
         body.validator_set_hash,
         body.validator_count,
+        body.min_quorum,
         validator_set,
     )
 }
@@ -5337,6 +5347,7 @@ fn validate_lane_block_validator_set_fields(
     validator_set_hash_version: u16,
     validator_set_hash: HashOf<Vec<PeerId>>,
     validator_count: u32,
+    min_quorum: u32,
     validator_set: &[PeerId],
 ) -> Result<(), LaneBlockQcBuildError> {
     if validator_set.is_empty() {
@@ -5349,6 +5360,13 @@ fn validate_lane_block_validator_set_fields(
         .map_err(|_| LaneBlockQcBuildError::ValidatorCountMismatch)?;
     if actual_validator_count != validator_count {
         return Err(LaneBlockQcBuildError::ValidatorCountMismatch);
+    }
+    let expected_quorum = u32::try_from(
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+    )
+    .map_err(|_| LaneBlockQcBuildError::InvalidBody)?;
+    if min_quorum != expected_quorum {
+        return Err(LaneBlockQcBuildError::InvalidBody);
     }
     let mut canonical = validator_set.to_vec();
     canonical.sort();
@@ -6023,7 +6041,10 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_count: u32::try_from(validator_set.len()).expect("validator count fits"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(
+                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+            )
+            .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
         }
     }
@@ -6050,7 +6071,10 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_set: validator_set.to_vec(),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(
+                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+            )
+            .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
             descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
         };
@@ -6093,7 +6117,10 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
             validator_count: u32::try_from(validator_set.len()).expect("validator count"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(
+                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+            )
+            .expect("fixture quorum"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -6402,7 +6429,6 @@ mod tests {
         .expect("NewView body");
         let votes = keypairs
             .iter()
-            .take(2)
             .map(|keypair| {
                 LaneBlockNewViewVoteV1::new_signed(
                     body.clone(),
@@ -6420,7 +6446,7 @@ mod tests {
         .expect("NewView certificate");
         DurableLaneBlockNewViewCertificateV1 {
             certificate,
-            signer_pops: signer_pops(&keypairs[..2]),
+            signer_pops: signer_pops(keypairs),
         }
     }
 
@@ -6448,6 +6474,14 @@ mod tests {
                 chain_id_hash,
                 epoch,
                 &keypairs[1],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[2],
                 &keypairs,
             ),
         ];
@@ -6525,6 +6559,14 @@ mod tests {
                 chain_id_hash,
                 epoch,
                 &keypairs[1],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &payload.origin_proposal,
+                chain_id_hash,
+                epoch,
+                &keypairs[2],
                 &keypairs,
             ),
         ];
@@ -6669,6 +6711,14 @@ mod tests {
                 chain_id_hash,
                 epoch,
                 &keypairs[1],
+                &keypairs,
+            ),
+            signed_autonomous_prepare_vote(
+                &payload,
+                &target,
+                chain_id_hash,
+                epoch,
+                &keypairs[2],
                 &keypairs,
             ),
         ];
@@ -6821,7 +6871,7 @@ mod tests {
             Some(&availability_body)
         );
 
-        for keypair in keypairs.iter().take(2) {
+        for keypair in &keypairs {
             cache
                 .insert_vote(
                     signed_autonomous_prepare_vote(
@@ -7139,7 +7189,10 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_set: validator_set.to_vec(),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: 2,
+            min_quorum: u32::try_from(
+                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+            )
+            .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
             descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
         };
@@ -7615,21 +7668,23 @@ mod tests {
             checked_bls_keypair(1),
             checked_bls_keypair(2),
             checked_bls_keypair(3),
+            checked_bls_keypair(4),
         ];
         let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
         let vote_c = signed_vote(&body, &keys[2]);
+        let vote_d = signed_vote(&body, &keys[3]);
 
         let qc = aggregate_lane_block_votes_to_qc(
             body.clone(),
             validator_set.clone(),
-            &[vote_c.clone(), vote_a.clone()],
+            &[vote_c.clone(), vote_a.clone(), vote_d.clone()],
         )
         .expect("lane block QC");
 
-        let expected_signer_indices = [vote_a.signer, vote_c.signer]
+        let expected_signer_indices = [vote_a.signer, vote_c.signer, vote_d.signer]
             .into_iter()
             .map(|signer| {
                 validator_set
@@ -7659,9 +7714,11 @@ mod tests {
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
-        let qc = aggregate_lane_block_votes_to_qc(body, validator_set, &[vote_a, vote_c])
-            .expect("lane block QC");
+        let qc =
+            aggregate_lane_block_votes_to_qc(body, validator_set, &[vote_a, vote_b, vote_c])
+                .expect("lane block QC");
 
         validate_lane_block_qc(&qc).expect("QC ingress shape is valid");
     }
@@ -7677,11 +7734,12 @@ mod tests {
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
         let qc = aggregate_lane_block_votes_to_qc(
             body,
             validator_set.clone(),
-            &[vote_a.clone(), vote_c],
+            &[vote_a.clone(), vote_b, vote_c],
         )
         .expect("lane block QC");
         let pops = signer_pops(&keys);
@@ -7722,11 +7780,12 @@ mod tests {
         validator_set.sort();
         let body = vote_body(&validator_set);
         let vote_a = signed_vote(&body, &keys[0]);
+        let vote_b = signed_vote(&body, &keys[1]);
         let vote_c = signed_vote(&body, &keys[2]);
         let qc = aggregate_lane_block_votes_to_qc(
             body.clone(),
             validator_set.clone(),
-            &[vote_a, vote_c],
+            &[vote_a, vote_b, vote_c],
         )
         .expect("lane block QC");
 

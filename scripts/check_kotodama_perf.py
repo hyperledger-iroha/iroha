@@ -160,6 +160,11 @@ STATIC_REGRESSION_BENCHMARKS = tuple(
     for name in REGRESSION_BENCHMARKS
     if name not in {*QUANTITY_ROUND_BENCHMARKS, *TYPED_QUERY_BENCHMARKS}
 )
+CORE_RUNTIME_WARM_BENCHMARK = "kotodama_core_runtime_warm_add"
+CORE_RUNTIME_PREDECESSOR_CHECKOUT = ".checkout_runtime(GAS_LIMIT)"
+CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT = (
+    ".checkout_runtime(GAS_LIMIT, ivm::Memory::HEAP_MAX_SIZE)"
+)
 
 # Filled from the normalized native timed closures at `PREDECESSOR_SHA`.
 # Shared Criterion loops deliberately have one closure hash per identity; their
@@ -364,6 +369,38 @@ def _criterion_timed_closure(invocation: str, revision: str, context: str) -> st
     return " ".join(arguments[argument_index].split())
 
 
+def _canonicalize_comparable_timed_body(
+    name: str, body: str, revision: str
+) -> str:
+    """Normalize one API-only spelling while preserving workload identity."""
+
+    if name != CORE_RUNTIME_WARM_BENCHMARK:
+        return body
+    if body.count(".checkout_runtime(") != 1:
+        raise GateError(
+            f"{revision} {name} must contain exactly one runtime checkout"
+        )
+    if CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT in body:
+        if body.count(CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT) != 1:
+            raise GateError(
+                f"{revision} {name} explicit max-heap checkout must be unique"
+            )
+        return body.replace(
+            CORE_RUNTIME_EXPLICIT_MAX_CHECKOUT,
+            CORE_RUNTIME_PREDECESSOR_CHECKOUT,
+            1,
+        )
+    if CORE_RUNTIME_PREDECESSOR_CHECKOUT in body:
+        if body.count(CORE_RUNTIME_PREDECESSOR_CHECKOUT) != 1:
+            raise GateError(
+                f"{revision} {name} predecessor checkout must be unique"
+            )
+        return body
+    raise GateError(
+        f"{revision} {name} must use the predecessor-equivalent heap limit"
+    )
+
+
 def _quoted_identity_binding(text: str, name: str, revision: str) -> str:
     marker = f'"{name}"'
     if text.count(marker) != 1:
@@ -408,7 +445,10 @@ def _benchmark_timed_bodies_from_text(text: str, revision: str) -> dict[str, str
                 f"{revision} {name} Criterion declaration must be unique"
             )
         invocation = _criterion_invocation(text, marker, revision, name)
-        bodies[name] = _criterion_timed_closure(invocation, revision, name)
+        body = _criterion_timed_closure(invocation, revision, name)
+        bodies[name] = _canonicalize_comparable_timed_body(
+            name, body, revision
+        )
 
     quantity_anchor = text.index(f'"{QUANTITY_ROUND_BENCHMARKS[0]}"')
     quantity_invocation = _criterion_invocation(

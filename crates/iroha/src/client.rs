@@ -911,9 +911,14 @@ impl AccountOnboardingPlanReceiptV1 {
     pub fn verify(&self) -> bool {
         self.plan_hash == self.body.canonical_hash()
             && self
-                .signature
-                .verify(self.body.authority.signatory(), self.plan_hash.as_ref())
-                .is_ok()
+                .body
+                .authority
+                .try_signatory()
+                .is_some_and(|signatory| {
+                    self.signature
+                        .verify(signatory, self.plan_hash.as_ref())
+                        .is_ok()
+                })
     }
 }
 
@@ -25049,6 +25054,22 @@ mod tests {
             signature_hex: hex::encode_upper(receipt.signature.payload()),
             receipt_json: receipt,
         }
+    }
+
+    #[test]
+    fn account_onboarding_receipt_with_multisig_authority_fails_closed() {
+        let mut receipt = deterministic_account_onboarding_receipt_vector().receipt_json;
+        let member = iroha_data_model::account::MultisigMember::new(
+            receipt.body.authority.expect_single_signatory().clone(),
+            1,
+        )
+        .expect("valid multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
+            .expect("valid multisig policy");
+        receipt.body.authority = AccountId::new_multisig(policy);
+        receipt.plan_hash = receipt.body.canonical_hash();
+
+        assert!(!receipt.verify());
     }
 
     #[test]

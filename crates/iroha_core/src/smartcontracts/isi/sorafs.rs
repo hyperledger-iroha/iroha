@@ -7745,8 +7745,14 @@ mod sorafs_tests {
 
     #[test]
     fn sorafs_account_fixtures_are_distinct_valid_ed25519_identities() {
-        assert_eq!(alice().signatory().algorithm(), Algorithm::Ed25519);
-        assert_eq!(bob().signatory().algorithm(), Algorithm::Ed25519);
+        assert_eq!(
+            alice().expect_single_signatory().algorithm(),
+            Algorithm::Ed25519
+        );
+        assert_eq!(
+            bob().expect_single_signatory().algorithm(),
+            Algorithm::Ed25519
+        );
         assert_ne!(alice(), bob());
     }
 

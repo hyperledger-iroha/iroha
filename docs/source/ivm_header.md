@@ -115,7 +115,7 @@ closed.
 <!-- BEGIN GENERATED ABI HASHES -->
 | Policy | abi_hash (hex) |
 |---|---|
-| ABI v1 | 17c61cb3a6ee164213afe410169161def1d7025b84f0b9e385a93619a862513b |
+| ABI v1 | e2ca8bbdaec17330a417a248faacb6a01931245591e28e44bf3f83da98dde01f |
 <!-- END GENERATED ABI HASHES -->
 
 - ABI v1 is the sole first-release policy. Its `LDLIT`, `LDI64`, `JAL`, `JMP`, and

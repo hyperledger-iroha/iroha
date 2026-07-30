@@ -93,6 +93,8 @@ hex-literal = "1.1.0"
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
 default = ["halo2"]
+# Expose benchmark-only backend selection hooks. Production builds must leave
+# this disabled so field dispatch is immutable after hardware selection.
 bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []
@@ -179,6 +181,7 @@ harness = false
 name = "bench_field"
 path = "benches/bench_field.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "bench_registers_merkle"
@@ -219,6 +222,7 @@ harness = false
 name = "bench_bn254_cuda"
 path = "benches/bench_bn254_cuda.rs"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "bench_vm_aes"

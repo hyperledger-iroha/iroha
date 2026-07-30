@@ -352,7 +352,7 @@ mod tests {
         let config = Config::load(LoadPath::Default(file.path())).unwrap();
 
         assert_eq!(
-            config.account.signatory().to_string(),
+            config.account.expect_single_signatory().to_string(),
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
         );
     }

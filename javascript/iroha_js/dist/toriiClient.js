@@ -34414,18 +34414,40 @@ function normalizeRepoAgreement(entry, context) {
     `${context}.last_margin_check_timestamp_ms`,
     { allowZero: true },
   );
+  const settlementTimestampMs =
+    record.settlement_timestamp_ms === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          record.settlement_timestamp_ms,
+          `${context}.settlement_timestamp_ms`,
+          { allowZero: true },
+        );
+  const status = requireNonEmptyString(record.status, `${context}.status`);
+  const expectedStatus = settlementTimestampMs === null ? "active" : "settled";
+  if (status !== expectedStatus) {
+    throw new TypeError(
+      `${context}.status must agree with settlement_timestamp_ms (expected ${expectedStatus})`,
+    );
+  }
   return {
     id,
     initiator,
     counterparty,
     custodian,
     cashLeg: normalizeRepoLeg(record.cash_leg, `${context}.cash_leg`),
+    cashSource: requireNonEmptyString(record.cash_source, `${context}.cash_source`),
     collateralLeg: normalizeRepoLeg(record.collateral_leg, `${context}.collateral_leg`),
+    collateralCustodyAsset: requireNonEmptyString(
+      record.collateral_custody_asset,
+      `${context}.collateral_custody_asset`,
+    ),
     rateBps,
     maturityTimestampMs,
     initiatedTimestampMs,
     lastMarginCheckTimestampMs,
     governance: normalizeRepoGovernance(record.governance, `${context}.governance`),
+    settlementTimestampMs,
+    status,
   };
 }
 

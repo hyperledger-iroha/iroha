@@ -14,7 +14,7 @@ Status
 - Python (`iroha_python.gpu`) and Java (`CudaAccelerators`) bindings surface CUDA availability
   probes together with optional Poseidon helpers and BN254 single/batch wrappers, returning
   fallbacks when hardware support is missing so applications can branch deterministically.
-- Developers can compare CPU vs CUDA throughput locally via Criterion benches such as `crates/ivm/benches/bench_bn254_cuda.rs` (run with `cargo bench -p ivm --bench bench_bn254_cuda --features cuda`).
+- Developers can compare CPU vs CUDA throughput locally via Criterion benches such as `crates/ivm/benches/bench_bn254_cuda.rs` (run with `cargo bench -p ivm --bench bench_bn254_cuda --features bench,cuda`).
 
 ## PTX Build Process
 

@@ -528,11 +528,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             panic_on_duplicate_metrics: iroha_config::parameters::defaults::telemetry::PANIC_ON_DUPLICATE_METRICS,
         },
         pipeline: iroha_config::parameters::actual::Pipeline {
-            ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
-                enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
-                skip_replay: iroha_config::parameters::defaults::pipeline::ivm_proved::SKIP_REPLAY,
-                allowed_circuits: Vec::new(),
-            },
             dynamic_prepass: false,
             access_set_cache_enabled:
                 iroha_config::parameters::defaults::pipeline::ACCESS_SET_CACHE_ENABLED,

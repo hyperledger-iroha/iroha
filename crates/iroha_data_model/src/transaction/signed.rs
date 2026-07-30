@@ -3845,7 +3845,10 @@ mod tests {
         .with_metadata(Metadata::default())
         .sign(key_pair.private_key());
 
-        assert_eq!(tx.authority().signatory(), key_pair.public_key());
+        assert_eq!(
+            tx.authority().expect_single_signatory(),
+            key_pair.public_key()
+        );
 
         if let Executable::Instructions(v) = tx.instructions() {
             assert_eq!(v.len(), 1);
@@ -4464,7 +4467,7 @@ mod tests {
         let key_pair = iroha_crypto::KeyPair::from_private_key(private_key).unwrap();
         let authority = AccountId::new(stored_public_key.clone());
 
-        assert_ne!(authority.signatory(), key_pair.public_key());
+        assert_ne!(authority.expect_single_signatory(), key_pair.public_key());
         let error = TransactionBuilder::new(
             chain,
             authority.clone(),
@@ -4473,7 +4476,7 @@ mod tests {
         .try_sign(key_pair.private_key())
         .expect_err("signing must preserve and reject a mismatched authority");
         assert_eq!(error, TransactionSignatureError::AuthorityKeyMismatch);
-        assert_eq!(authority.signatory(), &stored_public_key);
+        assert_eq!(authority.expect_single_signatory(), &stored_public_key);
     }
 
     #[test]

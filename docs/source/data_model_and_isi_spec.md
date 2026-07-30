@@ -48,7 +48,7 @@ Events: Every entity has events emitted on mutations (create/delete/owner change
 ---
 
 ## Parameters (Chain Configuration)
-- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
+- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`, `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`, plus `custom: BTreeMap`.
 - Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
 - `smart_contract.memory` and `executor.memory` are exact IVM heap ceilings in
   bytes for contract and runtime-executor invocations respectively. ABI V1
@@ -57,6 +57,12 @@ Events: Every entity has events emitted on mutations (create/delete/owner change
   proved-execution derivation/replay, and executor runtimes all apply the
   current governed value; runtime caches include it in their identity so a
   parameter change cannot retain stale memory authority.
+- `smart_contract.max_output_items` and `smart_contract.max_output_bytes`
+  deterministically bound all effect artifacts retained by one contract,
+  generic-program, trigger, prepass, or proved-execution host. Exceeding either
+  limit traps the VM and rejects the transaction atomically; artifacts are
+  never silently omitted. Read-only tooling may impose a component-wise
+  stricter response cap, but cannot widen consensus limits.
 - `transaction.max_time_to_live_ms` is the deterministic upper bound for a
   signature-bound transaction lifetime. The first-release default is one day
   (`86_400_000` ms). Safe builders use a 100-second TTL when callers do not

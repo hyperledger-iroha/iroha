@@ -180,14 +180,18 @@ const REPO_AGREEMENT_FIELDS: &[QueryFieldSpec] = &[
     field("custodian", QueryFieldType::String),
     field("cash_leg.asset_definition_id", QueryFieldType::String),
     field("cash_leg.quantity", QueryFieldType::Number),
+    field("cash_source", QueryFieldType::String),
     field("collateral_leg.asset_definition_id", QueryFieldType::String),
     field("collateral_leg.quantity", QueryFieldType::Number),
+    field("collateral_custody_asset", QueryFieldType::String),
     field("rate_bps", QueryFieldType::Number),
     field("maturity_timestamp_ms", QueryFieldType::Number),
     field("initiated_timestamp_ms", QueryFieldType::Number),
     field("last_margin_check_timestamp_ms", QueryFieldType::Number),
     field("governance.haircut_bps", QueryFieldType::Number),
     field("governance.margin_frequency_secs", QueryFieldType::Number),
+    field("settlement_timestamp_ms", QueryFieldType::Number),
+    field("status", QueryFieldType::String),
 ];
 
 const DOMAIN_FIELDS: &[QueryFieldSpec] = &[field("id", QueryFieldType::String)];
